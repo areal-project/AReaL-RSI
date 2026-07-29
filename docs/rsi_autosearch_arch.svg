@@ -1,0 +1,141 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1900" height="1160" viewBox="0 0 1900 1160">
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#263238"/>
+    </marker>
+    <style>
+      .bg { fill: #f7f9fc; }
+      .panel { fill: #ffffff; stroke: #263238; stroke-width: 2; rx: 10; }
+      .agent { fill: #eef2ff; stroke: #4f46e5; stroke-width: 2.2; rx: 8; }
+      .control { fill: #ecfdf5; stroke: #047857; stroke-width: 2.2; rx: 8; }
+      .service { fill: #eff6ff; stroke: #2563eb; stroke-width: 2; rx: 8; }
+      .arena { fill: #fff7ed; stroke: #c2410c; stroke-width: 2; rx: 8; }
+      .memory { fill: #f0fdf4; stroke: #15803d; stroke-width: 2; rx: 8; }
+      .eval { fill: #fef2f2; stroke: #b91c1c; stroke-width: 2; rx: 8; }
+      .soft { fill: #f8fafc; stroke: #64748b; stroke-width: 1.6; rx: 8; }
+      .title { font: 700 30px Arial, Helvetica, sans-serif; fill: #111827; }
+      .h1 { font: 700 24px Arial, Helvetica, sans-serif; fill: #111827; }
+      .h2 { font: 700 20px Arial, Helvetica, sans-serif; fill: #111827; }
+      .txt { font: 16px Arial, Helvetica, sans-serif; fill: #263238; }
+      .small { font: 14px Arial, Helvetica, sans-serif; fill: #374151; }
+      .muted { font: 14px Arial, Helvetica, sans-serif; fill: #64748b; }
+      .line { stroke: #263238; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+      .dash { stroke: #64748b; stroke-width: 2; fill: none; stroke-dasharray: 7 6; marker-end: url(#arrow); }
+      .thin { stroke: #94a3b8; stroke-width: 1.6; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1900" height="1160"/>
+  <text class="title" x="60" y="58">AReaL-RSI Architecture</text>
+  <text class="txt" x="60" y="90">Conversational RSIAgent decides what to do; RSIController executes the deterministic training workflow.</text>
+
+  <rect class="panel" x="50" y="125" width="1800" height="965"/>
+  <text class="h1" x="80" y="165">Interactive Research Layer</text>
+  <text class="muted" x="80" y="190">natural-language interface, research strategy, confirmation, and explanation</text>
+
+  <rect class="soft" x="90" y="235" width="250" height="120"/>
+  <text class="h2" x="115" y="270">Human</text>
+  <text class="txt" x="115" y="302">intent</text>
+  <text class="txt" x="115" y="330">feedback</text>
+
+  <rect class="agent" x="435" y="215" width="360" height="165"/>
+  <text class="h2" x="465" y="252">RSIAgent</text>
+  <text class="txt" x="465" y="284">Chat interface</text>
+  <text class="txt" x="465" y="312">Research planning</text>
+  <text class="txt" x="465" y="340">Action proposal</text>
+  <text class="txt" x="465" y="368">Explain and ask confirmation</text>
+
+  <rect class="soft" x="900" y="205" width="270" height="95"/>
+  <text class="h2" x="925" y="240">Workflow Spec</text>
+  <text class="txt" x="925" y="272">steps, gates, contracts</text>
+
+  <rect class="soft" x="900" y="325" width="270" height="95"/>
+  <text class="h2" x="925" y="360">Run State</text>
+  <text class="txt" x="925" y="392">current step, jobs, status</text>
+
+  <rect class="memory" x="1250" y="235" width="290" height="145"/>
+  <text class="h2" x="1275" y="270">Memory / Artifacts</text>
+  <text class="txt" x="1275" y="302">ledger.jsonl</text>
+  <text class="txt" x="1275" y="330">insights.md</text>
+  <text class="txt" x="1275" y="358">datasets, metrics, ckpts</text>
+
+  <path class="line" d="M340 295 L435 295"/>
+  <path class="line" d="M435 325 L340 325"/>
+  <path class="thin" d="M900 252 L795 252"/>
+  <path class="thin" d="M900 372 L795 340"/>
+  <path class="thin" d="M1250 307 L795 307"/>
+
+  <rect class="panel" x="90" y="465" width="1675" height="545"/>
+  <text class="h1" x="120" y="505">Deterministic Execution Layer</text>
+  <text class="muted" x="120" y="530">idempotent workflow execution, async job management, resume, retry, and audit trail</text>
+
+  <rect class="control" x="435" y="575" width="360" height="150"/>
+  <text class="h2" x="465" y="612">RSIController</text>
+  <text class="txt" x="465" y="644">Execute structured actions</text>
+  <text class="txt" x="465" y="672">Persist run state</text>
+  <text class="txt" x="465" y="700">Resume / retry / stop</text>
+
+  <path class="line" d="M615 380 L615 575"/>
+  <text class="small" x="630" y="468">structured action</text>
+
+  <rect class="service" x="910" y="565" width="300" height="145"/>
+  <text class="h2" x="940" y="602">AReaL Service</text>
+  <text class="txt" x="940" y="634">Hosted inference endpoint</text>
+  <text class="txt" x="940" y="662">SFT / OPD training</text>
+  <text class="txt" x="940" y="690">Checkpoint update</text>
+
+  <rect class="arena" x="910" y="780" width="300" height="145"/>
+  <text class="h2" x="940" y="817">EnvArena Service</text>
+  <text class="txt" x="940" y="849">Env, Harness, Task</text>
+  <text class="txt" x="940" y="877">Eval / rollout jobs</text>
+  <text class="txt" x="940" y="905">Trajectory storage</text>
+
+  <rect class="service" x="1305" y="565" width="290" height="145"/>
+  <text class="h2" x="1335" y="602">ResearchAgent</text>
+  <text class="txt" x="1335" y="634">Traj filtering</text>
+  <text class="txt" x="1335" y="662">Experience synthesis</text>
+  <text class="txt" x="1335" y="690">Dataset construction</text>
+
+  <rect class="eval" x="1305" y="780" width="290" height="145"/>
+  <text class="h2" x="1335" y="817">Eval Firewall</text>
+  <text class="txt" x="1335" y="849">Safe metrics</text>
+  <text class="txt" x="1335" y="877">Accept / reject</text>
+  <text class="txt" x="1335" y="905">Private eval boundary</text>
+
+  <rect class="soft" x="160" y="595" width="210" height="110"/>
+  <text class="h2" x="185" y="632">Task Spec</text>
+  <text class="txt" x="185" y="664">task set</text>
+  <text class="txt" x="185" y="692">method, gates</text>
+
+  <rect class="soft" x="160" y="785" width="210" height="110"/>
+  <text class="h2" x="185" y="822">Service Registry</text>
+  <text class="txt" x="185" y="854">AReaL</text>
+  <text class="txt" x="185" y="882">EnvArena, ResearchAgent</text>
+
+  <path class="thin" d="M370 650 L435 650"/>
+  <path class="thin" d="M370 840 L435 690"/>
+
+  <path class="line" d="M795 635 L910 635"/>
+  <path class="line" d="M795 685 L910 840"/>
+  <path class="line" d="M1210 855 L1305 640"/>
+  <path class="line" d="M1305 665 L1210 665"/>
+  <path class="line" d="M1210 825 L1305 825"/>
+  <path class="dash" d="M1060 710 L1060 780"/>
+  <path class="dash" d="M1060 780 L1060 710"/>
+
+  <path class="dash" d="M1450 710 L1450 755 L775 755 L775 725"/>
+  <text class="small" x="1238" y="745">dataset</text>
+
+  <path class="thin" d="M795 705 L1250 360"/>
+  <path class="thin" d="M1210 635 L1250 330"/>
+  <path class="thin" d="M1210 860 L1250 350"/>
+  <path class="thin" d="M1595 860 L1640 860 L1640 420 L1540 340"/>
+
+  <text class="small" x="820" y="620">endpoint / train</text>
+  <text class="small" x="815" y="780">eval / rollout</text>
+  <text class="small" x="1118" y="740">registered endpoint</text>
+  <text class="small" x="1218" y="805">safe eval</text>
+
+  <rect class="soft" x="90" y="1030" width="1675" height="40"/>
+  <text class="txt" x="120" y="1056">Evolution path: AReaL-RSI can later become one AutoResearch task. Keep RSIAgent for strategy, keep RSIController for reliable execution.</text>
+</svg>

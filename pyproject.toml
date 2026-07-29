@@ -11,6 +11,9 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
+agent = [
+    "claude-agent-sdk>=0.2.128",
+]
 dev = [
     "pytest>=8",
 ]

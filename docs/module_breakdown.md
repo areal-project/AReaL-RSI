@@ -54,9 +54,10 @@ class RSIAgent:
 
 MVP behavior:
 
-- Rule-based intent mapping is acceptable.
+- Concrete scaffold is based on Claude Code SDK via `ClaudeCodeRSIAgent`.
 - It can support a small set of actions first: `run_iteration`, `get_status`, `analyze_trajs`, `accept_ckpt`, `stop`, `resume`.
 - It does not call AReaL or EnvArena directly.
+- It may be tested with fake Claude clients without installing the SDK.
 
 ## 3. RSIController
 
@@ -273,7 +274,8 @@ class ResearchAgent:
 
 MVP:
 
-- Implement deterministic dataset construction first.
+- Concrete scaffold is based on Claude Code SDK via `ClaudeCodeResearchAgent`.
+- Keep `MockResearchAgent` for deterministic local controller tests.
 - Store `experience` as a dataset example field.
 - Preserve `source_traj_ids`.
 - Log filtering decisions.

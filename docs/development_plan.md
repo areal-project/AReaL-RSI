@@ -42,6 +42,7 @@ Deliverables:
 - Python package skeleton.
 - `RSIController.run_iteration(...)`.
 - Mock `AReaLService`, `EnvArenaClient`, `ResearchAgent`, and `Memory`.
+- Claude Code SDK backed `RSIAgent` and `ResearchAgent` scaffolds with lazy optional imports.
 - Local run state persistence.
 - Unit tests for successful run, resume, and failure recording.
 
@@ -191,8 +192,8 @@ Build this first:
 2. `memory/ledger.py`: append/read JSONL events.
 3. `controller/run_state.py`: save/load run state.
 4. `services/*`: mock implementations.
-5. `controller/rsi_controller.py`: mock end-to-end loop.
-6. `agent/rsi_agent.py`: simple rule-based action generation.
+5. `controller/local_controller.py`: mock end-to-end loop.
+6. `agent/claude_code.py`: Claude Code SDK backed agent scaffold.
 7. Tests for the mock loop.
 
 This gives a stable integration shell before binding to real AReaL and EnvArena.

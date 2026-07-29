@@ -23,6 +23,16 @@ MemoryContext = dict[str, Any]
 
 `RSIAgent` is the user-facing coordinator.
 
+The concrete scaffold is `ClaudeCodeRSIAgent`, backed by the optional
+`claude-agent-sdk` dependency. The SDK is imported lazily so controller and
+mock-service tests do not require Claude credentials.
+
+Install agent support with:
+
+```bash
+pip install -e '.[agent]'
+```
+
 ```python
 class RSIAgent(Protocol):
     def chat(
@@ -152,6 +162,10 @@ class EnvArenaClient(Protocol):
 ```
 
 ### ResearchAgent
+
+The concrete scaffold is `ClaudeCodeResearchAgent`, also backed by
+`claude-agent-sdk`. The mock implementation remains available for local M1
+controller tests.
 
 ```python
 class ResearchAgent(Protocol):

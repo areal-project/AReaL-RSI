@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
-from areal_rsi.controller.run_state import RunState
 from areal_rsi.schemas.actions import Action, AgentResponse
 from areal_rsi.schemas.core import MemoryContext
+
+if TYPE_CHECKING:
+    from areal_rsi.controller.run_state import RunState
 
 
 class RSIAgent(Protocol):
@@ -26,7 +28,7 @@ class RSIAgent(Protocol):
     def propose_next_action(
         self,
         *,
-        run_state: RunState,
+        run_state: "RunState",
         memory_context: MemoryContext,
         workflow_spec: dict[str, Any],
     ) -> Action:

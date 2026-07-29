@@ -23,15 +23,18 @@ MemoryContext = dict[str, Any]
 
 `RSIAgent` is the user-facing coordinator.
 
-The concrete scaffold is `ClaudeCodeRSIAgent`, backed by the optional
-`claude-agent-sdk` dependency. The SDK is imported lazily so controller and
-mock-service tests do not require Claude credentials.
+The concrete scaffold is `OpenAIRSIAgent`, backed by the optional
+`openai` dependency. The SDK is imported lazily so controller and
+mock-service tests do not require OpenAI credentials.
 
 Install agent support with:
 
 ```bash
 pip install -e '.[agent]'
 ```
+
+For local tests and demos, `FakeRSIAgent` provides deterministic natural
+language to action mapping without OpenAI credentials.
 
 ```python
 class RSIAgent(Protocol):
@@ -163,8 +166,8 @@ class EnvArenaClient(Protocol):
 
 ### ResearchAgent
 
-The concrete scaffold is `ClaudeCodeResearchAgent`, also backed by
-`claude-agent-sdk`. The mock implementation remains available for local M1
+The concrete scaffold is `OpenAIResearchAgent`, also backed by
+`openai`. The mock implementation remains available for local M1
 controller tests.
 
 ```python
@@ -184,27 +187,6 @@ class ResearchAgent(Protocol):
         ...
 
     def choose_ckpt(self, train_runs: list[TrainRun], memory_context: MemoryContext) -> str:
-        ...
-```
-
-### EvalFirewall
-
-```python
-class EvalFirewall(Protocol):
-    def summarize(
-        self,
-        eval_result: dict[str, Any],
-        *,
-        policy: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        ...
-
-    def decide(
-        self,
-        baseline: dict[str, Any],
-        candidate: dict[str, Any],
-        gate: dict[str, Any],
-    ) -> dict[str, Any]:
         ...
 ```
 

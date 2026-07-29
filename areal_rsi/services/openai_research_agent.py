@@ -1,19 +1,19 @@
-"""Claude Code SDK backed ResearchAgent scaffold."""
+"""OpenAI SDK backed ResearchAgent scaffold."""
 
 from __future__ import annotations
 
 import json
 from typing import Any
 
-from areal_rsi.agent.claude_code import ClaudeCodeAgentConfig, ClaudeCodeClient, _extract_json_object
+from areal_rsi.agent.openai_agent import OpenAIAgentConfig, OpenAIClient, extract_json_object
 from areal_rsi.schemas.core import Dataset, MemoryContext, ModelRef, TrainRun, Traj
 
 
-class ClaudeCodeResearchAgent:
-    """ResearchAgent implementation scaffold backed by Claude Code SDK."""
+class OpenAIResearchAgent:
+    """ResearchAgent implementation scaffold backed by the OpenAI SDK."""
 
-    def __init__(self, client: ClaudeCodeClient | None = None, *, config: ClaudeCodeAgentConfig | None = None):
-        self.client = client or ClaudeCodeClient(config or default_research_agent_config())
+    def __init__(self, client: OpenAIClient | None = None, *, config: OpenAIAgentConfig | None = None):
+        self.client = client or OpenAIClient(config or default_research_agent_config())
 
     def generate_dataset(
         self,
@@ -40,7 +40,7 @@ class ClaudeCodeResearchAgent:
             f"config:\n{json.dumps(config or {}, ensure_ascii=False, default=repr)}"
         )
         response_text = self.client.complete_sync(prompt)
-        payload = _extract_json_object(response_text)
+        payload = extract_json_object(response_text)
         if "examples" not in payload:
             raise ValueError("ResearchAgent response must include `examples`.")
         return payload
@@ -53,20 +53,19 @@ class ClaudeCodeResearchAgent:
             f"memory_context:\n{json.dumps(memory_context, ensure_ascii=False, default=repr)}"
         )
         response_text = self.client.complete_sync(prompt)
-        payload = _extract_json_object(response_text)
+        payload = extract_json_object(response_text)
         if "ckpt" not in payload:
             raise ValueError("ResearchAgent checkpoint response must include `ckpt`.")
         return str(payload["ckpt"])
 
 
-def default_research_agent_config() -> ClaudeCodeAgentConfig:
-    return ClaudeCodeAgentConfig(
+def default_research_agent_config(model: str | None = None) -> OpenAIAgentConfig:
+    return OpenAIAgentConfig(
+        model=model,
         system_prompt=(
             "You are ResearchAgent, a worker agent for AReaL-RSI. "
             "Analyze EnvArena trajectories, synthesize concise reusable "
             "experience, and emit structured datasets. Do not talk to the "
             "human directly; return machine-readable JSON."
         ),
-        allowed_tools=[],
-        max_turns=3,
     )

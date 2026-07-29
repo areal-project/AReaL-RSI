@@ -1,6 +1,13 @@
 """Agent interfaces."""
 
-from .claude_code import ClaudeCodeAgentConfig, ClaudeCodeClient, ClaudeCodeRSIAgent
+from .fake import FakeRSIAgent
+from .openai_agent import OpenAIAgentConfig, OpenAIClient, OpenAIRSIAgent
 from .rsi_agent import RSIAgent
 
-__all__ = ["ClaudeCodeAgentConfig", "ClaudeCodeClient", "ClaudeCodeRSIAgent", "RSIAgent"]
+__all__ = [
+    "FakeRSIAgent",
+    "OpenAIAgentConfig",
+    "OpenAIClient",
+    "OpenAIRSIAgent",
+    "RSIAgent",
+]

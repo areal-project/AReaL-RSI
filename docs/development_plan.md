@@ -42,7 +42,7 @@ Deliverables:
 - Python package skeleton.
 - `RSIController.run_iteration(...)`.
 - Mock `AReaLService`, `EnvArenaClient`, `ResearchAgent`, and `Memory`.
-- Claude Code SDK backed `RSIAgent` and `ResearchAgent` scaffolds with lazy optional imports.
+- OpenAI SDK backed `RSIAgent` and `ResearchAgent` scaffolds with lazy optional imports.
 - Local run state persistence.
 - Unit tests for successful run, resume, and failure recording.
 
@@ -99,6 +99,14 @@ Acceptance:
 
 - A user can start a run, ask status, inspect failures, modify traj filtering, and accept/reject a checkpoint through conversational commands.
 
+The first CLI slice can land before full M4:
+
+```bash
+python -m areal_rsi.cli.main chat --backend fake "run ckpt_000 on swe_verified"
+python -m areal_rsi.cli.main chat --backend fake --execute --yes "run ckpt_000 on swe_verified"
+python -m areal_rsi.cli.main chat --backend openai "run ckpt_000 on swe_verified"
+```
+
 ### M5: OPD Path
 
 Goal: support on-policy distillation as a second training path.
@@ -123,7 +131,6 @@ Deliverables:
 
 - Task spec loader.
 - Service registry abstraction.
-- Eval Firewall interface.
 - Workflow executor abstraction.
 - Domain adapters for RSI, dataset search, reward search, and training recipe search.
 
@@ -165,7 +172,6 @@ areal_rsi/
     areal_service.py
     envarena_client.py
     research_agent.py
-    eval_firewall.py
   memory/
     memory.py
     ledger.py
@@ -193,7 +199,7 @@ Build this first:
 3. `controller/run_state.py`: save/load run state.
 4. `services/*`: mock implementations.
 5. `controller/local_controller.py`: mock end-to-end loop.
-6. `agent/claude_code.py`: Claude Code SDK backed agent scaffold.
+6. `agent/openai_agent.py`: OpenAI SDK backed agent scaffold.
 7. Tests for the mock loop.
 
 This gives a stable integration shell before binding to real AReaL and EnvArena.

@@ -20,8 +20,8 @@ The system keeps two roles separate:
 - `ResearchAgent`: trajectory-to-dataset worker agent. It analyzes EnvArena trajectories, synthesizes experience, and emits datasets.
 - `RSIController`: deterministic workflow executor. It runs jobs, persists state, supports resume/retry/stop, and records artifacts.
 
-Concrete agent scaffolds are backed by Claude Code SDK through the optional
-`claude-agent-sdk` dependency. Mock services remain available for local
+Concrete agent scaffolds are backed by OpenAI SDK through the optional
+`openai` dependency. Mock services remain available for local
 controller tests and demos.
 
 ## Documents
@@ -49,7 +49,19 @@ Build a minimal but recoverable loop:
 python -m areal_rsi.cli.main run-mock --ckpt ckpt_000 --task-set swe_verified
 ```
 
-Claude Code SDK support is optional:
+Chat can generate a structured action without executing it:
+
+```bash
+python -m areal_rsi.cli.main chat --backend fake "run ckpt_000 on swe_verified"
+```
+
+To execute a confirmed action in the local mock loop:
+
+```bash
+python -m areal_rsi.cli.main chat --backend fake --execute --yes "run ckpt_000 on swe_verified"
+```
+
+OpenAI SDK support is optional:
 
 ```bash
 pip install -e '.[agent]'

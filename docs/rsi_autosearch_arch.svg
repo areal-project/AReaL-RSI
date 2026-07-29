@@ -97,10 +97,10 @@
   <text class="txt" x="1335" y="690">Dataset construction</text>
 
   <rect class="eval" x="1305" y="780" width="290" height="145"/>
-  <text class="h2" x="1335" y="817">Eval Firewall</text>
-  <text class="txt" x="1335" y="849">Safe metrics</text>
-  <text class="txt" x="1335" y="877">Accept / reject</text>
-  <text class="txt" x="1335" y="905">Private eval boundary</text>
+  <text class="h2" x="1335" y="817">Evaluation Result</text>
+  <text class="txt" x="1335" y="849">EnvArena metrics</text>
+  <text class="txt" x="1335" y="877">Holdout trajectories</text>
+  <text class="txt" x="1335" y="905">Memory records</text>
 
   <rect class="soft" x="160" y="595" width="210" height="110"/>
   <text class="h2" x="185" y="632">Task Spec</text>

@@ -1,7 +1,7 @@
-from areal_rsi.agent.claude_code import ClaudeCodeRSIAgent
+from areal_rsi.agent.openai_agent import OpenAIRSIAgent
 
 
-class FakeClaudeClient:
+class FakeOpenAIClient:
     def complete_sync(self, prompt: str) -> str:
         return """
         {
@@ -25,8 +25,8 @@ class DummyMemory:
         return {"events": [], "insights": ""}
 
 
-def test_claude_rsi_agent_parses_structured_action():
-    agent = ClaudeCodeRSIAgent(client=FakeClaudeClient())
+def test_openai_rsi_agent_parses_structured_action():
+    agent = OpenAIRSIAgent(client=FakeOpenAIClient())
 
     response = agent.chat(
         "run one iteration",

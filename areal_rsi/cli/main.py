@@ -6,8 +6,10 @@ import argparse
 import json
 from pathlib import Path
 
+from areal_rsi.agent import FakeRSIAgent, OpenAIAgentConfig, OpenAIRSIAgent
 from areal_rsi.controller import LocalRSIController
 from areal_rsi.memory import Memory
+from areal_rsi.schemas.actions import Action, AgentResponse
 from areal_rsi.services import MockAReaLService, MockEnvArenaClient, MockResearchAgent
 
 
@@ -26,6 +28,16 @@ def build_parser() -> argparse.ArgumentParser:
     status = subparsers.add_parser("status", help="Print run state.")
     status.add_argument("run_id")
     status.add_argument("--run-root", default="runs")
+
+    chat = subparsers.add_parser("chat", help="Ask RSIAgent for an action.")
+    chat.add_argument("message", nargs="*", help="Message to send. If omitted, stdin is read.")
+    chat.add_argument("--backend", choices=["fake", "openai"], default="fake")
+    chat.add_argument("--model", help="OpenAI model for --backend openai. Defaults to OPENAI_MODEL or gpt-5-mini.")
+    chat.add_argument("--run-id")
+    chat.add_argument("--run-root", default="runs")
+    chat.add_argument("--execute", action="store_true", help="Execute returned actions with the local controller.")
+    chat.add_argument("--yes", action="store_true", help="Execute actions that require confirmation.")
+    chat.add_argument("--harness", default="mock_harness")
     return parser
 
 
@@ -46,6 +58,10 @@ def main(argv: list[str] | None = None) -> int:
         state = controller.get_status(args.run_id)
         print(json.dumps(state.to_dict(), indent=2, ensure_ascii=False, default=repr))
         return 0
+    if args.command == "chat":
+        result = _chat(args)
+        print(json.dumps(result, indent=2, ensure_ascii=False, default=repr))
+        return 0
     parser.print_help()
     return 0
 
@@ -65,6 +81,90 @@ def _run_mock(args: argparse.Namespace):
         task_set=args.task_set,
         method=args.method,
         harness_config={"harness": args.harness},
+    )
+
+
+def _chat(args: argparse.Namespace) -> dict:
+    message = " ".join(args.message).strip()
+    if not message:
+        import sys
+
+        message = sys.stdin.read().strip()
+    if not message:
+        raise SystemExit("chat message is required")
+
+    run_root = Path(args.run_root)
+    memory = Memory(run_root / "memory")
+    controller = _mock_controller(run_root, memory)
+    if args.backend == "fake":
+        agent = FakeRSIAgent()
+    else:
+        agent = OpenAIRSIAgent(config=OpenAIAgentConfig(system_prompt=_openai_rsi_system_prompt(), model=args.model))
+
+    response = agent.chat(
+        message,
+        run_id=args.run_id,
+        controller=controller,
+        memory=memory,
+        workflow_spec={"harness": args.harness},
+    )
+    payload = _agent_response_to_dict(response)
+    if args.execute:
+        payload["executions"] = [
+            _execute_chat_action(controller, action, allow_confirmed=args.yes)
+            for action in response.actions
+        ]
+    return payload
+
+
+def _mock_controller(run_root: Path, memory: Memory) -> LocalRSIController:
+    return LocalRSIController(
+        run_root=run_root,
+        areal=MockAReaLService(),
+        envarena=MockEnvArenaClient(),
+        research_agent=MockResearchAgent(),
+        memory=memory,
+    )
+
+
+def _execute_chat_action(controller: LocalRSIController, action: Action, *, allow_confirmed: bool) -> dict:
+    if action.requires_confirmation and not allow_confirmed:
+        return {
+            "action": _action_to_dict(action),
+            "executed": False,
+            "reason": "confirmation_required",
+        }
+    return {
+        "action": _action_to_dict(action),
+        "executed": True,
+        "result": controller.execute_action(action),
+    }
+
+
+def _agent_response_to_dict(response: AgentResponse) -> dict:
+    return {
+        "reply": response.reply,
+        "actions": [_action_to_dict(action) for action in response.actions],
+        "requires_confirmation": response.requires_confirmation,
+        "metadata": response.metadata,
+    }
+
+
+def _action_to_dict(action: Action) -> dict:
+    return {
+        "type": action.type,
+        "args": action.args,
+        "requires_confirmation": action.requires_confirmation,
+        "metadata": action.metadata,
+    }
+
+
+def _openai_rsi_system_prompt() -> str:
+    return (
+        "You are RSIAgent, the user-facing coordinator for AReaL-RSI. "
+        "Explain system state, propose structured actions, and ask for "
+        "confirmation before expensive or irreversible operations. Return "
+        "machine-readable JSON when asked for actions."
     )
 
 

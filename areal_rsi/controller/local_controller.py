@@ -38,7 +38,7 @@ class LocalRSIController:
 
     def execute_action(self, action: Action) -> dict[str, Any]:
         if action.type == "run_iteration":
-            state = self.run_iteration(**action.args)
+            state = self.run_iteration(**_normalize_run_iteration_args(action.args))
             return state.to_dict()
         if action.type == "get_status":
             return self.get_status(str(action.args["run_id"])).to_dict()
@@ -225,3 +225,12 @@ class LocalRSIController:
         if value is None:
             raise ValueError(f"{name} is required.")
         return value
+
+
+def _normalize_run_iteration_args(args: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(args)
+    if "harness_config" not in normalized and "harness" in normalized:
+        normalized["harness_config"] = {"harness": normalized.pop("harness")}
+    if "harness_config" not in normalized:
+        normalized["harness_config"] = {"harness": "mock_harness"}
+    return normalized

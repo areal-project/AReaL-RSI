@@ -12,7 +12,7 @@ dependencies = []
 
 [project.optional-dependencies]
 agent = [
-    "claude-agent-sdk>=0.2.128",
+    "openai>=2.0.0",
 ]
 dev = [
     "pytest>=8",

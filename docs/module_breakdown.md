@@ -10,7 +10,6 @@ Human
               -> EnvArenaClient
               -> ResearchAgent
               -> Memory
-              -> EvalFirewall
 ```
 
 `RSIAgent` is the strategy and conversation layer. `RSIController` is the deterministic execution layer.
@@ -54,10 +53,10 @@ class RSIAgent:
 
 MVP behavior:
 
-- Concrete scaffold is based on Claude Code SDK via `ClaudeCodeRSIAgent`.
+- Concrete scaffold is based on OpenAI SDK via `OpenAIRSIAgent`.
 - It can support a small set of actions first: `run_iteration`, `get_status`, `analyze_trajs`, `accept_ckpt`, `stop`, `resume`.
 - It does not call AReaL or EnvArena directly.
-- It may be tested with fake Claude clients without installing the SDK.
+- It may be tested with fake OpenAI clients without installing the SDK.
 
 ## 3. RSIController
 
@@ -274,7 +273,7 @@ class ResearchAgent:
 
 MVP:
 
-- Concrete scaffold is based on Claude Code SDK via `ClaudeCodeResearchAgent`.
+- Concrete scaffold is based on OpenAI SDK via `OpenAIResearchAgent`.
 - Keep `MockResearchAgent` for deterministic local controller tests.
 - Store `experience` as a dataset example field.
 - Preserve `source_traj_ids`.
@@ -326,31 +325,7 @@ Storage:
 - `insights.md`: human-readable accumulated lessons.
 - `artifacts/`: dataset, train config, metrics, eval reports.
 
-## 9. EvalFirewall
-
-Purpose:
-
-- Convert raw eval results into safe metrics and decisions.
-- Hide private eval details when needed.
-- Produce accept/reject recommendations.
-
-Core interface:
-
-```python
-class EvalFirewall:
-    def summarize(self, eval_result: dict, *, policy: dict | None = None) -> dict:
-        ...
-
-    def decide(self, baseline: dict, candidate: dict, gate: dict) -> dict:
-        ...
-```
-
-MVP:
-
-- Use simple metric deltas.
-- Keep this optional until the basic SFT loop works.
-
-## 10. CLI
+## 9. CLI
 
 Purpose:
 
@@ -368,7 +343,7 @@ areal-rsi stop <run_id>
 areal-rsi chat
 ```
 
-## 11. Testing Strategy
+## 10. Testing Strategy
 
 Unit tests:
 
@@ -386,7 +361,7 @@ Integration tests:
 
 Integration tests should be opt-in because real EnvArena/AReaL jobs may require external services and GPU resources.
 
-## 12. MVP Dependency Direction
+## 11. MVP Dependency Direction
 
 ```text
 schemas

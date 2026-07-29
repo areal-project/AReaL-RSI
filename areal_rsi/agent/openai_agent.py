@@ -1,12 +1,11 @@
-"""Claude Code SDK backed agent scaffolding."""
+"""OpenAI SDK backed agent scaffolding."""
 
 from __future__ import annotations
 
-import asyncio
 import json
+import os
 import re
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from areal_rsi.schemas.actions import Action, AgentResponse
@@ -17,74 +16,61 @@ if TYPE_CHECKING:
 
 
 @dataclass(slots=True)
-class ClaudeCodeAgentConfig:
-    """Configuration passed to Claude Code SDK query calls."""
+class OpenAIAgentConfig:
+    """Configuration passed to OpenAI Responses API calls."""
 
     system_prompt: str
-    allowed_tools: list[str] = field(default_factory=list)
-    disallowed_tools: list[str] = field(default_factory=list)
-    permission_mode: str | None = None
-    max_turns: int | None = 3
-    cwd: str | Path | None = None
     model: str | None = None
+    max_output_tokens: int = 2048
+    temperature: float | None = None
+
+    @property
+    def resolved_model(self) -> str:
+        return self.model or os.environ.get("OPENAI_MODEL", "gpt-5-mini")
 
 
-class ClaudeCodeClient:
-    """Small lazy wrapper around claude-agent-sdk.
+class OpenAIClient:
+    """Small lazy wrapper around the official OpenAI Python SDK."""
 
-    The dependency is optional so the rest of AReaL-RSI can run local mock
-    tests without requiring Claude credentials or the SDK package.
-    """
-
-    def __init__(self, config: ClaudeCodeAgentConfig):
+    def __init__(self, config: OpenAIAgentConfig):
         self.config = config
-
-    async def complete(self, prompt: str) -> str:
-        try:
-            from claude_agent_sdk import ClaudeAgentOptions, query
-        except ImportError as exc:
-            raise RuntimeError(
-                "Claude Code agent support requires the optional dependency "
-                "`claude-agent-sdk`. Install with `pip install -e '.[agent]'`."
-            ) from exc
-
-        options = ClaudeAgentOptions(**self._options_kwargs())
-        chunks: list[str] = []
-        async for message in query(prompt=prompt, options=options):
-            text = _message_text(message)
-            if text:
-                chunks.append(text)
-        return "\n".join(chunks).strip()
 
     def complete_sync(self, prompt: str) -> str:
         try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return asyncio.run(self.complete(prompt))
-        raise RuntimeError("complete_sync cannot be called from an active event loop; use complete().")
+            from openai import OpenAI, OpenAIError
+        except ImportError as exc:
+            raise RuntimeError(
+                "OpenAI agent support requires the optional dependency `openai`. "
+                "Install with `pip install -e '.[agent]'`."
+            ) from exc
 
-    def _options_kwargs(self) -> dict[str, Any]:
-        kwargs: dict[str, Any] = {"system_prompt": self.config.system_prompt}
-        if self.config.allowed_tools:
-            kwargs["allowed_tools"] = self.config.allowed_tools
-        if self.config.disallowed_tools:
-            kwargs["disallowed_tools"] = self.config.disallowed_tools
-        if self.config.permission_mode is not None:
-            kwargs["permission_mode"] = self.config.permission_mode
-        if self.config.max_turns is not None:
-            kwargs["max_turns"] = self.config.max_turns
-        if self.config.cwd is not None:
-            kwargs["cwd"] = str(self.config.cwd)
-        if self.config.model is not None:
-            kwargs["model"] = self.config.model
-        return kwargs
+        try:
+            client = OpenAI()
+        except OpenAIError as exc:
+            raise RuntimeError(
+                "OpenAI agent support requires OPENAI_API_KEY to be set in the environment "
+                "or an OpenAI client configuration accepted by the SDK."
+            ) from exc
+        kwargs: dict[str, Any] = {
+            "model": self.config.resolved_model,
+            "instructions": self.config.system_prompt,
+            "input": prompt,
+            "max_output_tokens": self.config.max_output_tokens,
+        }
+        if self.config.temperature is not None:
+            kwargs["temperature"] = self.config.temperature
+        response = client.responses.create(**kwargs)
+        text = getattr(response, "output_text", None)
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+        return _response_text_from_output(response)
 
 
-class ClaudeCodeRSIAgent:
-    """RSIAgent implementation scaffold backed by Claude Code SDK."""
+class OpenAIRSIAgent:
+    """RSIAgent implementation scaffold backed by the OpenAI SDK."""
 
-    def __init__(self, client: ClaudeCodeClient | None = None, *, config: ClaudeCodeAgentConfig | None = None):
-        self.client = client or ClaudeCodeClient(config or default_rsi_agent_config())
+    def __init__(self, client: OpenAIClient | None = None, *, config: OpenAIAgentConfig | None = None):
+        self.client = client or OpenAIClient(config or default_rsi_agent_config())
 
     def chat(
         self,
@@ -109,7 +95,7 @@ class ClaudeCodeRSIAgent:
             workflow_spec=workflow_spec,
         )
         response_text = self.client.complete_sync(prompt)
-        return _agent_response_from_text(response_text)
+        return agent_response_from_text(response_text)
 
     def propose_next_action(
         self,
@@ -124,9 +110,9 @@ class ClaudeCodeRSIAgent:
             workflow_spec=workflow_spec,
         )
         response_text = self.client.complete_sync(prompt)
-        response = _agent_response_from_text(response_text)
+        response = agent_response_from_text(response_text)
         if not response.actions:
-            raise ValueError("ClaudeCodeRSIAgent did not return any action.")
+            raise ValueError("OpenAIRSIAgent did not return any action.")
         return response.actions[0]
 
     def explain(
@@ -148,16 +134,15 @@ class ClaudeCodeRSIAgent:
         return self.client.complete_sync(prompt)
 
 
-def default_rsi_agent_config() -> ClaudeCodeAgentConfig:
-    return ClaudeCodeAgentConfig(
+def default_rsi_agent_config(model: str | None = None) -> OpenAIAgentConfig:
+    return OpenAIAgentConfig(
+        model=model,
         system_prompt=(
             "You are RSIAgent, the user-facing coordinator for AReaL-RSI. "
             "Explain system state, propose structured actions, and ask for "
             "confirmation before expensive or irreversible operations. Return "
             "machine-readable JSON when asked for actions."
         ),
-        allowed_tools=[],
-        max_turns=2,
     )
 
 
@@ -172,7 +157,9 @@ def _rsi_chat_prompt(
     return (
         "Convert the user request into a concise reply and structured actions.\n"
         "Return exactly one JSON object with keys: reply, actions, requires_confirmation, metadata.\n"
-        "Each action must have keys: type, args, requires_confirmation, metadata.\n\n"
+        "Each action must have keys: type, args, requires_confirmation, metadata.\n"
+        "Supported action types are: run_iteration, get_status, analyze_trajs, generate_dataset, "
+        "train, accept_ckpt, resume, stop.\n\n"
         f"User message:\n{message}\n\n"
         f"run_id:\n{run_id}\n\n"
         f"run_state:\n{json.dumps(run_state, ensure_ascii=False, default=repr)}\n\n"
@@ -213,8 +200,8 @@ def _rsi_explain_prompt(
     )
 
 
-def _agent_response_from_text(text: str) -> AgentResponse:
-    payload = _extract_json_object(text)
+def agent_response_from_text(text: str) -> AgentResponse:
+    payload = extract_json_object(text)
     actions = [
         Action(
             type=action["type"],
@@ -232,34 +219,34 @@ def _agent_response_from_text(text: str) -> AgentResponse:
     )
 
 
-def _extract_json_object(text: str) -> dict[str, Any]:
+def extract_json_object(text: str) -> dict[str, Any]:
     try:
         payload = json.loads(text)
     except json.JSONDecodeError:
         match = re.search(r"\{.*\}", text, flags=re.DOTALL)
         if not match:
-            raise ValueError(f"Claude response did not contain a JSON object: {text[:500]}")
+            raise ValueError(f"OpenAI response did not contain a JSON object: {text[:500]}")
         payload = json.loads(match.group(0))
     if not isinstance(payload, dict):
-        raise ValueError("Claude response JSON must be an object.")
+        raise ValueError("OpenAI response JSON must be an object.")
     return payload
 
 
-def _message_text(message: Any) -> str:
-    content = getattr(message, "content", None)
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts = []
-        for block in content:
-            text = getattr(block, "text", None)
-            if isinstance(text, str):
-                parts.append(text)
-        return "\n".join(parts)
-    text = getattr(message, "text", None)
-    if isinstance(text, str):
-        return text
-    return ""
+def _response_text_from_output(response: Any) -> str:
+    output = getattr(response, "output", None)
+    chunks: list[str] = []
+    if isinstance(output, list):
+        for item in output:
+            content = getattr(item, "content", None)
+            if isinstance(content, list):
+                for block in content:
+                    text = getattr(block, "text", None)
+                    if isinstance(text, str):
+                        chunks.append(text)
+    text = "\n".join(chunks).strip()
+    if not text:
+        raise ValueError("OpenAI response did not contain text output.")
+    return text
 
 
 def _to_jsonable(value: Any) -> Any:

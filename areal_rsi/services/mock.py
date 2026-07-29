@@ -212,33 +212,6 @@ class MockResearchAgent:
         return str(train_runs[-1]["ckpt"])
 
 
-class MockEvalFirewall:
-    """Simple metric-delta evaluator for local tests and demos."""
-
-    def summarize(self, eval_result: dict[str, Any], *, policy: dict[str, Any] | None = None) -> dict[str, Any]:
-        return {
-            "metrics": eval_result.get("metrics", {}),
-            "decision": "informational",
-            "risks": [],
-            "metadata": {"policy": policy or {}},
-        }
-
-    def decide(self, baseline: dict[str, Any], candidate: dict[str, Any], gate: dict[str, Any]) -> dict[str, Any]:
-        metric = gate.get("metric", "success_rate")
-        min_delta = float(gate.get("min_delta", 0.0))
-        baseline_score = float(baseline.get("metrics", {}).get(metric, 0.0))
-        candidate_score = float(candidate.get("metrics", {}).get(metric, 0.0))
-        delta = candidate_score - baseline_score
-        return {
-            "accepted": delta >= min_delta,
-            "metric": metric,
-            "baseline": baseline_score,
-            "candidate": candidate_score,
-            "delta": delta,
-            "risks": [] if delta >= min_delta else ["metric_gate_not_met"],
-        }
-
-
 def _filter_trajs(trajs: list[Traj], traj_filter: dict[str, Any]) -> list[Traj]:
     reward_lt = traj_filter.get("reward_lt")
     if reward_lt is None:

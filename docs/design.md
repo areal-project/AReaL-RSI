@@ -211,17 +211,6 @@ Memory 是 AReaL-RSI 迭代过程中的全局事件和产物记录系统。
 + Eval 过程：task set、metrics、失败类型、是否接受 ckpt。
 + Human feedback：用户对筛选策略、训练方法、ckpt 选择的干预。
 
-### 4.7 Eval Firewall
-Eval Firewall 是可选模块，但演进到通用 AutoResearch 时建议引入。
-
-它负责把“研究可见信息”和“评测私有信息”分开：
-
-+ public traj：ResearchAgent 可读取，用于生成 experience。
-+ diagnostic-safe report：返回聚合指标、失败类别、可用诊断。
-+ private eval dump：只允许 Eval Firewall 读取，不直接暴露给 ResearchAgent。
-
-第一版可以让 EnvArena eval result 直接承担这个角色；后续可以独立成 Eval Agent。
-
 ## 5. 整体训练过程
 ### 5.1 对话驱动入口
 用户通过 `RSIAgent` 发起或调整任务：
@@ -647,6 +636,5 @@ AutoResearch
 1. 把当前 `run_iteration(...)` 的入参抽成 task spec。
 2. 给 AReaL、EnvArena、ResearchAgent 包一层 service adapter。
 3. Memory 内部增加 `ledger.jsonl` 和 `insights.md`。
-4. 增加 Eval Firewall 的最小实现，输出 `{metrics, decision, risks}`。
-5. 把 `RSIController` 泛化成可执行不同 workflow 的 executor。
-6. 保留 `RSIAgent` 作为对话入口和策略层，后续可升级成更通用的 `AutoResearchAgent`。
+4. 把 `RSIController` 泛化成可执行不同 workflow 的 executor。
+5. 保留 `RSIAgent` 作为对话入口和策略层，后续可升级成更通用的 `AutoResearchAgent`。

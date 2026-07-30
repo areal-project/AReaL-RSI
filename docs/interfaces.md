@@ -144,13 +144,21 @@ class EnvClient(Protocol):
     def submit_eval(self, request: EvalRequest) -> EvalJob:
         ...
 
+    def get_eval_progress(self, job: EvalJob) -> dict:
+        ...
+
+    def get_eval_result(self, job: EvalJob) -> dict:
+        ...
+
     def get_trajs(self, job: EvalJob, include_messages: bool = False) -> list[Traj]:
         ...
 ```
 
-`EnvArenaClient` is the EnvArena-specific implementation. It additionally
-exposes registry asset discovery, BenchmarkJob monitoring, and trajectory
-detail APIs that are not required by the generic controller contract.
+`EnvClient` and `MockEnvClient` live in `areal_rsi.services.env_client`.
+`EnvArenaClient`, its configuration, and its generated SDK live under
+`areal_rsi.services.env_client.envarena`; it additionally
+exposes registry asset discovery, native BenchmarkJob summary/detail APIs, and
+trajectory-detail APIs that are not required by the generic controller contract.
 
 ### ResearchAgent
 

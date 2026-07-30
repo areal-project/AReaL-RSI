@@ -75,6 +75,10 @@ controller does not depend on generated implementation details. Copy and
 adjust the YAML example, then provide the bearer token through its configured
 environment variable:
 
+The platform-neutral contract and local mock live in
+`areal_rsi.services.env_client`; EnvArena's implementation and generated SDK
+live in `areal_rsi.services.env_client.envarena`.
+
 ```bash
 cp config/envarena.example.yaml config/envarena.yaml
 export ENVARENA_API_TOKEN='...'

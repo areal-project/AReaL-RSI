@@ -1,14 +1,15 @@
 """Service interface contracts."""
 
 from .areal import AReaLService, MockAReaLService
-from .env_client import EnvClient, MockEnvClient
-from .envarena import (
+from .env_client import (
+    EnvClient,
     EnvArenaClient,
     EnvArenaConfig,
     EnvArenaConfigurationError,
     EnvArenaError,
     EnvArenaHTTPError,
     EnvArenaVersionRef,
+    MockEnvClient,
 )
 from .research import MockResearchAgent, OpenAIResearchAgent, ResearchAgent
 

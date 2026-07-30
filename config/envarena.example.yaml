@@ -16,5 +16,5 @@ envarena:
     inbound_protos: [chat, responses]
 
   # Harness and Benchmark refs intentionally do not have client-wide defaults.
-  # Each evaluation must provide harness_config.harness_ref and either a
-  # Benchmark "key@version" task_set or explicit refs via submit_benchmark_job.
+  # Each evaluation must provide harness_config.harness_ref and a
+  # Benchmark "key@version" task_set via EnvArenaClient.submit_eval.

@@ -140,8 +140,8 @@ def test_gateway_assets_job_progress_result_and_trajectories_are_normalized():
     ))
 
     assert job["eval_job_id"] == "job_001"
-    assert client.get_job_summary("job_001")["job"]["status"] == "RUNNING"
-    assert client.get_job_result("job_001")["aggregate_score"] == 0.8
+    assert client.get_eval_progress(job)["job"]["status"] == "RUNNING"
+    assert client.get_eval_result(job)["aggregate_score"] == 0.8
     trajs = client.get_trajs(job, include_messages=True)
     assert trajs == [
         {
@@ -364,7 +364,7 @@ def test_submit_eval_can_reference_a_published_model_without_inline_secrets():
     }
 
 
-def test_get_trajs_omits_messages_without_inline_events_and_rollout_is_explicitly_rejected():
+def test_get_trajs_omits_messages_without_inline_events():
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/envarena/openapi/v1/jobs/job_003/tasks":
             return httpx.Response(200, json={"items": [{"task_id": "task-3", "status": "DONE", "score": 1.0}], "total": 1})
@@ -387,8 +387,6 @@ def test_get_trajs_omits_messages_without_inline_events_and_rollout_is_explicitl
 
     assert trajs[0]["reward"] == 1.0
     assert "messages" not in trajs[0]
-    with pytest.raises(NotImplementedError, match="no arbitrary offline task rollout"):
-        client.submit_rollout({}, [], {}, "eval")
 
 
 def test_non_json_and_transport_failures_are_normalized():

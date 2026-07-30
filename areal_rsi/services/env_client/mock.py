@@ -39,6 +39,21 @@ class MockEnvClient:
             metadata=dict(request.metadata),
         )
 
+    def get_eval_progress(self, job: EvalJob) -> dict[str, object]:
+        return {
+            "eval_job_id": job["eval_job_id"],
+            "status": job.get("status", "done"),
+            "progress": 100,
+            "task_counts": {"total": 3, "done": 3},
+        }
+
+    def get_eval_result(self, job: EvalJob) -> dict[str, object]:
+        return {
+            "eval_job_id": job["eval_job_id"],
+            "status": job.get("status", "done"),
+            "metrics": dict(job.get("metrics", {})),
+        }
+
     def get_trajs(self, job: EvalJob, include_messages: bool = False) -> list[Traj]:
         task_set = job.get("task_set", "mock_tasks")
         source = job.get("metadata", {}).get("source", "eval")

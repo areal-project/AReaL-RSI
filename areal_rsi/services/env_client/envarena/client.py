@@ -11,9 +11,9 @@ from typing import Any
 import httpx
 import yaml
 
-from areal_rsi.schemas.core import Endpoint, EvalJob, EvalRequest, ModelRef, Traj, TrajSource
+from areal_rsi.schemas.core import Endpoint, EvalJob, EvalRequest, ModelRef, Traj
 
-from ..env_client.base import EnvClient
+from ..base import EnvClient
 
 from .generated.api.jobs import post_openapi_v1_jobs
 from .generated.api.llm import post_openapi_v1_llm_models
@@ -339,6 +339,16 @@ class EnvArenaClient(EnvClient):
     def get_job_result(self, job_id: str) -> dict[str, Any]:
         return self._request_json("GET", f"/openapi/v1/jobs/{job_id}/result", operation="get job result")
 
+    def get_eval_progress(self, job: EvalJob) -> dict[str, Any]:
+        """Return EnvArena's current summary for a platform-neutral evaluation job."""
+
+        return self.get_job_summary(self._job_id(job))
+
+    def get_eval_result(self, job: EvalJob) -> dict[str, Any]:
+        """Return EnvArena's aggregate result for a platform-neutral evaluation job."""
+
+        return self.get_job_result(self._job_id(job))
+
     def list_job_tasks(self, job_id: str, *, status: str = "ALL") -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
         offset = 0
@@ -377,9 +387,7 @@ class EnvArenaClient(EnvClient):
         )
 
     def get_trajs(self, job: EvalJob, include_messages: bool = False) -> list[Traj]:
-        job_id = str(job.get("eval_job_id") or job.get("job_id") or "")
-        if not job_id:
-            raise EnvArenaConfigurationError("EvalJob has no eval_job_id/job_id.")
+        job_id = self._job_id(job)
         tasks = {str(task.get("task_id")): task for task in self.list_job_tasks(job_id)}
         model_ref = job.get("model_ref", {})
         model_name = str(model_ref.get("model_name") or model_ref.get("gateway_alias") or "")
@@ -408,19 +416,6 @@ class EnvArenaClient(EnvClient):
                 traj["messages"] = list(trajectory.get("events", []))
             trajs.append(traj)
         return trajs
-
-    def submit_rollout(
-        self,
-        model_ref: ModelRef,
-        tasks: list[dict[str, Any]],
-        harness_config: dict[str, Any],
-        source: TrajSource,
-        metadata: dict[str, Any] | None = None,
-    ) -> EvalJob:
-        raise NotImplementedError(
-            "EnvArena Control Plane has no arbitrary offline task rollout endpoint. "
-            "Use submit_eval with a published Benchmark or implement online Stream support separately."
-        )
 
     def _upsert_gateway_model(self, endpoint: Endpoint, *, alias: str | None = None) -> ModelRef:
         model_ref = str(endpoint.get("model_ref", ""))
@@ -489,16 +484,14 @@ class EnvArenaClient(EnvClient):
         path: str,
         *,
         params: Mapping[str, Any] | None = None,
-        json_body: Mapping[str, Any] | None = None,
         operation: str,
-        expected_statuses: set[int] | None = None,
     ) -> dict[str, Any]:
         try:
-            response = self._client.get_httpx_client().request(method, path, params=params, json=json_body)
+            response = self._client.get_httpx_client().request(method, path, params=params)
         except httpx.HTTPError as exc:
             raise EnvArenaError(f"EnvArena {operation} transport error: {exc}") from exc
         payload = self._decode_json(response, operation)
-        if response.status_code not in (expected_statuses or {200}):
+        if response.status_code != 200:
             raise EnvArenaHTTPError(operation, response.status_code, payload)
         if not isinstance(payload, dict):
             raise EnvArenaError(f"EnvArena {operation} returned a non-object JSON payload.")
@@ -526,3 +519,10 @@ class EnvArenaClient(EnvClient):
     @staticmethod
     def _as_version_ref(value: EnvArenaVersionRef | Mapping[str, Any] | str) -> EnvArenaVersionRef:
         return value if isinstance(value, EnvArenaVersionRef) else EnvArenaVersionRef.parse(value)
+
+    @staticmethod
+    def _job_id(job: EvalJob) -> str:
+        job_id = str(job.get("eval_job_id") or job.get("job_id") or "")
+        if not job_id:
+            raise EnvArenaConfigurationError("EvalJob has no eval_job_id/job_id.")
+        return job_id

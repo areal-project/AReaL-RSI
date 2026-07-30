@@ -196,7 +196,7 @@ MVP:
 Purpose:
 
 - Register AReaL inference endpoint.
-- Submit evaluation and rollout jobs.
+- Submit evaluation jobs.
 - Poll progress.
 - Fetch trajectories.
 
@@ -211,6 +211,12 @@ class EnvClient(Protocol):
         ...
 
     def submit_eval(self, request: EvalRequest) -> dict:
+        ...
+
+    def get_eval_progress(self, job: dict) -> dict:
+        ...
+
+    def get_eval_result(self, job: dict) -> dict:
         ...
 
     def get_trajs(self, job: dict, include_messages: bool = False) -> list[dict]:

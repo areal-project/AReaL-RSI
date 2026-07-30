@@ -1,14 +1,35 @@
-"""AReaL service contract."""
+"""AReaL service entry point with SFT training support."""
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from pathlib import Path
+from typing import Any
 
 from areal_rsi.schemas.core import Dataset, Endpoint, ModelRef, TrainMethod, TrainRun
 
+from .sft_wrapper import AReaLSFTConfig, AReaLSFTWrapper, ProcessRunner
 
-class AReaLService(Protocol):
-    """Hosts rollout endpoints and runs AReaL training jobs."""
+
+class AReaLServiceConfigurationError(RuntimeError):
+    """Raised when an unconfigured AReaL capability is requested."""
+
+
+class AReaLService:
+    """Hosts the existing AReaL API and executes configured SFT experiments."""
+
+    def __init__(self, sft_wrapper: AReaLSFTWrapper | None = None) -> None:
+        self._sft_wrapper = sft_wrapper
+
+    @classmethod
+    def from_sft_config(
+        cls,
+        config: AReaLSFTConfig,
+        *,
+        runner: ProcessRunner | None = None,
+    ) -> "AReaLService":
+        """Construct the service with the concrete SFT execution settings."""
+
+        return cls(AReaLSFTWrapper(config, runner=runner))
 
     def ensure_rollout_endpoint(self, ckpt: str, config: dict[str, Any] | None = None) -> Endpoint:
         """Start or reuse an AReaL-hosted inference endpoint."""
@@ -27,4 +48,49 @@ class AReaLService(Protocol):
         model_ref: ModelRef | None = None,
         harness_config: dict[str, Any] | None = None,
     ) -> TrainRun:
-        """Run SFT or OPD training and return checkpoint metadata."""
+        """Execute an SFT experiment selected by the existing ``train_config``.
+
+        ``config["experiment_config"]`` is the complete AReaL YAML. An
+        optional ``config["driver"]`` selects a non-default AReaL driver.
+        Model and dataset values remain owned by the YAML; the other original
+        train arguments are retained for controller compatibility.
+        """
+
+        del base_ckpt, dataset, envarena, model_ref, harness_config
+        if method != "sft":
+            raise AReaLServiceConfigurationError(
+                f"SFT is the only configured training method; received {method!r}."
+            )
+        experiment_config, driver = self._experiment_options(config)
+        return self._training_wrapper().run_experiment(experiment_config, driver=driver)
+
+    def submit_experiment(self, config: dict[str, Any]) -> dict[str, Any]:
+        """Submit the SFT experiment identified by ``train_config`` to Slurm."""
+
+        experiment_config, driver = self._experiment_options(config)
+        return self._training_wrapper().submit_experiment(experiment_config, driver=driver)
+
+    def get_experiment_artifacts(self, config: dict[str, Any]) -> dict[str, Any]:
+        """Return log and checkpoint paths for the configured SFT experiment."""
+
+        experiment_config, _ = self._experiment_options(config)
+        return self._training_wrapper().get_experiment_artifacts(experiment_config)
+
+    def _training_wrapper(self) -> AReaLSFTWrapper:
+        if self._sft_wrapper is None:
+            raise AReaLServiceConfigurationError(
+                "SFT is not configured. Initialize AReaLService with AReaLSFTConfig."
+            )
+        return self._sft_wrapper
+
+    @staticmethod
+    def _experiment_options(config: dict[str, Any]) -> tuple[str | Path, str | None]:
+        experiment_config = config.get("experiment_config")
+        if not isinstance(experiment_config, (str, Path)) or not str(experiment_config).strip():
+            raise AReaLServiceConfigurationError(
+                "train_config must contain a non-empty 'experiment_config' YAML path."
+            )
+        driver = config.get("driver")
+        if driver is not None and not isinstance(driver, str):
+            raise AReaLServiceConfigurationError("train_config['driver'] must be a string when set.")
+        return experiment_config, driver

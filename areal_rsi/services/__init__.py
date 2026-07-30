@@ -1,6 +1,16 @@
 """Service interface contracts."""
 
-from .areal import AReaLService, MockAReaLService
+from .areal import (
+    AReaLService,
+    AReaLServiceConfigurationError,
+    AReaLSFTConfig,
+    AReaLSFTConfigurationError,
+    AReaLSFTSubmissionError,
+    AReaLSFTTrainingError,
+    AReaLSlurmConfig,
+    AReaLSFTWrapper,
+    MockAReaLService,
+)
 from .env_client import (
     EnvClient,
     EnvArenaClient,
@@ -15,6 +25,13 @@ from .research import MockResearchAgent, OpenAIResearchAgent, ResearchAgent
 
 __all__ = [
     "AReaLService",
+    "AReaLServiceConfigurationError",
+    "AReaLSFTConfig",
+    "AReaLSFTConfigurationError",
+    "AReaLSFTSubmissionError",
+    "AReaLSFTTrainingError",
+    "AReaLSlurmConfig",
+    "AReaLSFTWrapper",
     "EnvClient",
     "EnvArenaConfig",
     "EnvArenaConfigurationError",

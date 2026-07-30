@@ -35,6 +35,14 @@ class OpenAIAgentConfig:
         return self.model or os.environ.get("OPENAI_MODEL", "gpt-5-mini")
 
 
+@dataclass(slots=True)
+class OpenAIToolResponse:
+    """Text plus optional action tool calls from a Responses API request."""
+
+    tool_calls: list[ActionToolCall]
+    text: str = ""
+
+
 class OpenAIClient:
     """Small lazy wrapper around the official OpenAI Python SDK."""
 
@@ -67,6 +75,23 @@ class OpenAIClient:
     ) -> list[ActionToolCall]:
         """Return function tool calls from the Responses API."""
 
+        return self.tool_response_sync(
+            prompt,
+            tools=tools,
+            tool_choice=tool_choice,
+            max_tool_calls=max_tool_calls,
+        ).tool_calls
+
+    def tool_response_sync(
+        self,
+        prompt: str,
+        *,
+        tools: list[dict[str, Any]],
+        tool_choice: str | dict[str, Any] = "auto",
+        max_tool_calls: int = 1,
+    ) -> OpenAIToolResponse:
+        """Return both text and function tool calls from the Responses API."""
+
         client = _openai_client()
         kwargs: dict[str, Any] = {
             "model": self.config.resolved_model,
@@ -81,7 +106,10 @@ class OpenAIClient:
         if self.config.temperature is not None:
             kwargs["temperature"] = self.config.temperature
         response = client.responses.create(**kwargs)
-        return _tool_calls_from_response(response)
+        return OpenAIToolResponse(
+            tool_calls=_tool_calls_from_response(response),
+            text=_response_text_from_output(response, allow_empty=True),
+        )
 
 
 class OpenAIRSIAgent:
@@ -101,8 +129,8 @@ class OpenAIRSIAgent:
     ) -> AgentResponse:
         run_state = None
         memory_context: MemoryContext = {}
-        if run_id and hasattr(controller, "get_status"):
-            run_state = controller.get_status(run_id)
+        if run_id:
+            run_state = _controller_run_state(controller, run_id)
         if hasattr(memory, "get_context"):
             memory_context = memory.get_context(run_id=run_id)
         prompt = _rsi_chat_prompt(
@@ -112,15 +140,20 @@ class OpenAIRSIAgent:
             memory_context=memory_context,
             workflow_spec=workflow_spec,
         )
-        tool_calls = self.client.tool_calls_sync(prompt, tools=rsi_action_tools())
-        if not tool_calls:
-            raise ValueError("OpenAIRSIAgent did not return an action tool call.")
-        actions = [action_from_tool_call(tool_call) for tool_call in tool_calls]
+        tool_response = _tool_response_from_client(self.client, prompt, tools=rsi_action_tools())
+        if not tool_response.tool_calls:
+            return AgentResponse(
+                reply=tool_response.text or "I am RSIAgent, the AReaL-RSI coordinator.",
+                actions=[],
+                requires_confirmation=False,
+                metadata={"tool_call_count": 0},
+            )
+        actions = [action_from_tool_call(tool_call) for tool_call in tool_response.tool_calls]
         return AgentResponse(
             reply=reply_for_actions(actions),
             actions=actions,
             requires_confirmation=any(action.requires_confirmation for action in actions),
-            metadata={"tool_call_count": len(tool_calls)},
+            metadata={"tool_call_count": len(tool_response.tool_calls)},
         )
 
     def propose_next_action(
@@ -152,7 +185,7 @@ class OpenAIRSIAgent:
         memory: object,
         question: str,
     ) -> str:
-        run_state = controller.get_status(run_id) if hasattr(controller, "get_status") else None
+        run_state = _controller_run_state(controller, run_id)
         memory_context = memory.get_context(run_id=run_id) if hasattr(memory, "get_context") else {}
         prompt = _rsi_explain_prompt(
             question=question,
@@ -168,8 +201,8 @@ def default_rsi_agent_config(model: str | None = None) -> OpenAIAgentConfig:
         model=model,
         system_prompt=(
             "You are RSIAgent, the user-facing coordinator for AReaL-RSI. "
-            "Explain system state and choose the appropriate action tool when "
-            "the user asks to run, inspect, resume, stop, or query an RSI run."
+            "Answer ordinary questions directly. Choose an action tool only "
+            "when the user asks to run, inspect details, resume, or stop an RSI run."
         ),
     )
 
@@ -183,14 +216,16 @@ def _rsi_chat_prompt(
     workflow_spec: dict[str, Any],
 ) -> str:
     return (
-        "Choose exactly one RSI action tool for the user request.\n"
+        "Choose an RSI action tool only when the user request needs one. "
+        "For greetings, identity questions, or general discussion, answer normally without a tool call.\n"
         "Use start_loop for goals that ask to improve a checkpoint or run an RSI loop.\n"
         "A base RSI config is already loaded and shown as workflow_spec. For start_loop, "
         "emit only config overrides inferred from the user message in args.overrides. "
         "Use dot paths such as run.initial_ckpt, env.task_set, run.max_iterations, "
         "run.method, and env.harness_config.harness. Do not repeat unchanged config fields.\n"
-        "Use get_status for brief progress queries, inspect_run for detailed run inspection, "
-        "resume_run to continue a stopped run, and stop_run to stop a run.\n"
+        "For brief progress or completion questions, answer from run_state and memory_context without a tool call. "
+        "Use inspect_run only for detailed run inspection or explicit state dumps. "
+        "Use resume_run to continue a stopped run, and stop_run to stop a run.\n"
         "Humans describe goals and constraints; workflow steps such as eval, train, and holdout_eval "
         "are internal and must not be represented as user actions.\n\n"
         f"User message:\n{message}\n\n"
@@ -246,6 +281,27 @@ def extract_json_object(text: str) -> dict[str, Any]:
     return payload
 
 
+def _tool_response_from_client(
+    client: Any,
+    prompt: str,
+    *,
+    tools: list[dict[str, Any]],
+) -> OpenAIToolResponse:
+    if hasattr(client, "tool_response_sync"):
+        return client.tool_response_sync(prompt, tools=tools)
+    return OpenAIToolResponse(tool_calls=client.tool_calls_sync(prompt, tools=tools))
+
+
+def _controller_run_state(controller: object, run_id: str) -> Any:
+    if hasattr(controller, "get_status"):
+        return controller.get_status(run_id)
+    if hasattr(controller, "_load_state"):
+        return controller._load_state(run_id)
+    if hasattr(controller, "inspect_run"):
+        return controller.inspect_run(run_id)
+    return None
+
+
 def _openai_client() -> Any:
     try:
         from openai import OpenAI, OpenAIError
@@ -294,7 +350,10 @@ def _field(value: Any, name: str) -> Any:
     return getattr(value, name, None)
 
 
-def _response_text_from_output(response: Any) -> str:
+def _response_text_from_output(response: Any, *, allow_empty: bool = False) -> str:
+    output_text = getattr(response, "output_text", None)
+    if isinstance(output_text, str) and output_text.strip():
+        return output_text.strip()
     output = getattr(response, "output", None)
     chunks: list[str] = []
     if isinstance(output, list):
@@ -307,6 +366,8 @@ def _response_text_from_output(response: Any) -> str:
                         chunks.append(text)
     text = "\n".join(chunks).strip()
     if not text:
+        if allow_empty:
+            return ""
         raise ValueError("OpenAI response did not contain text output.")
     return text
 

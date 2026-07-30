@@ -52,7 +52,7 @@ class RSIController(Protocol):
         """Run multiple RSI iterations under one run id."""
 
     def get_status(self, run_id: str) -> RunState:
-        """Return current run state."""
+        """Return current run state for internal readers and scripted queries."""
 
     def resume(self, run_id: str) -> RunState:
         """Resume an interrupted workflow."""

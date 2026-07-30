@@ -23,13 +23,20 @@ class FakeRSIAgent:
         workflow_spec: dict[str, Any],
     ) -> AgentResponse:
         normalized = message.lower()
-        if "status" in normalized or "进度" in message or "到哪" in message:
+        if normalized in {"hi", "hello", "hey"} or message in {"你好", "你是谁", "你是誰"}:
+            return AgentResponse(reply="我是 RSIAgent，负责协调 AReaL-RSI 运行。")
+        if _is_status_question(message, normalized):
             if not run_id:
-                return AgentResponse(reply="Please provide --run-id to query status.")
-            return AgentResponse(
-                reply=f"I will query status for {run_id}.",
-                actions=[Action(type="get_status", args={"run_id": run_id})],
-            )
+                return AgentResponse(reply="请先提供 run_id，或先启动一个 RSI 实验。")
+            state = _controller_run_state(controller, run_id)
+            if state is not None:
+                return AgentResponse(
+                    reply=(
+                        f"Run {run_id} 当前状态是 {_state_value(state, 'status')}，"
+                        f"iteration={_state_value(state, 'iteration')}，ckpt={_state_value(state, 'ckpt')}。"
+                    )
+                )
+            return AgentResponse(reply=f"Run {run_id} 的状态暂时无法读取。")
 
         if "base_config" in workflow_spec:
             overrides = _config_overrides_from_message(message, normalized)
@@ -75,7 +82,7 @@ class FakeRSIAgent:
         memory_context: MemoryContext,
         workflow_spec: dict[str, Any],
     ) -> Action:
-        return Action(type="get_status", args={"run_id": run_state.run_id})
+        return Action(type="inspect_run", args={"run_id": run_state.run_id})
 
     def explain(
         self,
@@ -85,10 +92,10 @@ class FakeRSIAgent:
         memory: object,
         question: str,
     ) -> str:
-        if hasattr(controller, "get_status"):
-            state = controller.get_status(run_id)
-            return f"Run {run_id} is {state.status} at step {state.current_step}."
-        return f"Run {run_id} cannot be inspected because controller has no get_status()."
+        state = _controller_run_state(controller, run_id)
+        if state is not None:
+            return f"Run {run_id} is {_state_value(state, 'status')} at step {_state_value(state, 'current_step')}."
+        return f"Run {run_id} cannot be inspected."
 
 
 def _extract_value(message: str, flag: str) -> str | None:
@@ -132,3 +139,30 @@ def _config_overrides_from_message(message: str, normalized: str) -> dict[str, A
     if max_iterations is not None:
         overrides["run.max_iterations"] = max_iterations
     return overrides
+
+
+def _is_status_question(message: str, normalized: str) -> bool:
+    return (
+        "status" in normalized
+        or "进度" in message
+        or "到哪" in message
+        or "状态" in message
+        or "跑完" in message
+        or "完成" in message
+    )
+
+
+def _controller_run_state(controller: object, run_id: str) -> Any:
+    if hasattr(controller, "get_status"):
+        return controller.get_status(run_id)
+    if hasattr(controller, "_load_state"):
+        return controller._load_state(run_id)
+    if hasattr(controller, "inspect_run"):
+        return controller.inspect_run(run_id)
+    return None
+
+
+def _state_value(state: Any, key: str) -> Any:
+    if isinstance(state, dict):
+        return state.get(key)
+    return getattr(state, key, None)

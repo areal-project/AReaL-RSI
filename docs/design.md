@@ -114,7 +114,9 @@ EnvArena Traj
 }
 ```
 
-Controller 是事实来源。用户问“现在跑到哪了”，`RSIAgent` 应调用 `controller.get_status(run_id)`，再把结构化状态翻译成人能读懂的回答。
+Controller 是事实来源。用户问“现在跑到哪了”这类简短状态问题时，
+`RSIAgent` 应基于当前 `run_state` 和 Memory 上下文直接回答；只有用户明确要
+查看完整 state / metadata / 运行详情时，才触发 `inspect_run` action。
 
 ### 4.3 AReaL
 #### Rollout Service
@@ -280,7 +282,6 @@ TrainMethod = Literal["sft", "opd"]
 TrajSource = Literal["eval", "research_validation", "opd"]
 ActionType = Literal[
     "start_loop",
-    "get_status",
     "inspect_run",
     "resume_run",
     "stop_run",
@@ -356,9 +357,6 @@ class RSIController:
         eval_gate: dict[str, Any] | None = None,
     ) -> RunState:
         """注册模型 -> 评测 -> 生成数据 -> 训练 -> holdout eval -> 写 Memory。"""
-
-    def get_status(self, run_id: str) -> RunState:
-        """返回当前 run state。"""
 
     def resume(self, run_id: str) -> RunState:
         """从持久化 state 恢复未完成 workflow。"""

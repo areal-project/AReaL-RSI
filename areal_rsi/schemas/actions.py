@@ -7,7 +7,6 @@ from typing import Any, Literal, TypeAlias
 
 ActionType: TypeAlias = Literal[
     "start_loop",
-    "get_status",
     "inspect_run",
     "resume_run",
     "stop_run",

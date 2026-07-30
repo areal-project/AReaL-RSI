@@ -62,12 +62,6 @@ def rsi_action_tools() -> list[dict[str, Any]]:
         },
         {
             "type": "function",
-            "name": "get_status",
-            "description": "Get a brief status snapshot for an RSI run.",
-            "parameters": run_id_schema,
-        },
-        {
-            "type": "function",
             "name": "inspect_run",
             "description": "Inspect detailed state and metadata for an RSI run.",
             "parameters": run_id_schema,
@@ -98,7 +92,7 @@ def rsi_action_tools() -> list[dict[str, Any]]:
 def action_from_tool_call(tool_call: ActionToolCall) -> Action:
     """Convert an action tool call into the local controller action contract."""
 
-    if tool_call.name not in {"start_loop", "get_status", "inspect_run", "resume_run", "stop_run"}:
+    if tool_call.name not in {"start_loop", "inspect_run", "resume_run", "stop_run"}:
         raise ValueError(f"Unsupported RSI action tool: {tool_call.name}")
     return Action(
         type=tool_call.name,
@@ -124,8 +118,6 @@ def reply_for_actions(actions: list[Action]) -> str:
                 f"on {action.args.get('task_set')}."
             )
         return "Prepared RSI loop from config."
-    if action.type == "get_status":
-        return f"Fetching status for run {action.args.get('run_id')}."
     if action.type == "inspect_run":
         return f"Inspecting run {action.args.get('run_id')}."
     if action.type == "resume_run":

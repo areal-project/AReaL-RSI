@@ -44,7 +44,6 @@ User-facing actions are goal/query/control commands only:
 ```python
 ActionType = Literal[
     "start_loop",
-    "get_status",
     "inspect_run",
     "resume_run",
     "stop_run",

@@ -56,8 +56,9 @@ MVP behavior:
 - Concrete scaffold is based on OpenAI SDK via `OpenAIRSIAgent`.
 - OpenAI-backed user commands are emitted through Responses API function
   tool calls, then converted into local `Action` objects.
-- It supports goal/query/control actions: `start_loop`, `get_status`,
-  `inspect_run`, `stop_run`, and `resume_run`.
+- It supports goal/control/detail actions: `start_loop`, `inspect_run`,
+  `stop_run`, and `resume_run`. Brief status questions are answered from
+  current run context without an action tool.
 - It does not expose internal workflow steps such as `eval`, `train`,
   or `generate_dataset` as user actions.
 - It does not call AReaL or EnvArena directly.
@@ -70,7 +71,7 @@ Purpose:
 - Execute structured actions.
 - Persist run state.
 - Manage async jobs.
-- Support resume, retry, and stop.
+- Support internal status reads plus resume, retry, and stop.
 - Ensure every important artifact is recorded.
 
 Core responsibilities:
@@ -345,7 +346,7 @@ Storage:
 Purpose:
 
 - Run mock and real iterations.
-- Inspect status.
+- Query status for scripts and inspect run details through chat or persisted state files.
 - Resume or stop runs.
 
 Initial commands:

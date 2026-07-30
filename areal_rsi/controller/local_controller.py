@@ -47,8 +47,6 @@ class LocalRSIController:
                 else self.run_loop(**_normalize_start_loop_args(action.args))
             )
             return state.to_dict()
-        if action.type == "get_status":
-            return self.get_status(str(action.args["run_id"])).to_dict()
         if action.type == "resume_run":
             return self.resume(str(action.args["run_id"])).to_dict()
         if action.type == "stop_run":
@@ -587,7 +585,7 @@ class LocalRSIController:
         )
 
     def get_status(self, run_id: str) -> RunState:
-        return RunState.load(self._state_path(run_id))
+        return self._load_state(run_id)
 
     def resume(self, run_id: str) -> RunState:
         return self.get_status(run_id)
@@ -610,6 +608,9 @@ class LocalRSIController:
             "ckpt": state.ckpt,
             "metadata": state.metadata,
         }
+
+    def _load_state(self, run_id: str) -> RunState:
+        return RunState.load(self._state_path(run_id))
 
     def _save_state(self, state: RunState) -> None:
         state.save(self._state_path(state.run_id))

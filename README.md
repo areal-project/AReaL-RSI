@@ -67,6 +67,14 @@ Chat can generate a structured action without executing it:
 python -m areal_rsi.cli.main chat --backend fake "run ckpt_000 on swe_verified"
 ```
 
+If no message is provided, `chat` starts an interactive REPL:
+
+```bash
+python -m areal_rsi.cli.main chat --backend openai --config config/rsi.example.yaml --execute --yes
+```
+
+Use `--stdin` when you want a single non-interactive message from stdin.
+
 To execute a confirmed action in the local mock loop:
 
 ```bash
@@ -81,10 +89,16 @@ python -m areal_rsi.cli.main chat --backend openai --config config/rsi.example.y
   "use ckpt_123 and run swe_verified for 2 iterations with sft"
 ```
 
-`chat` emits user-facing commands such as `start_loop`, `get_status`,
-`inspect_run`, `stop_run`, and `resume_run`. Internal workflow steps like
+`chat` emits user-facing commands such as `start_loop`, `inspect_run`,
+`stop_run`, and `resume_run`. Internal workflow steps like
 `eval`, `train`, and `holdout_eval` are recorded in `audit.jsonl` rather
 than exposed as chat actions.
+
+For scripted state queries, use the CLI status command:
+
+```bash
+python -m areal_rsi.cli.main status <run_id> --run-root runs
+```
 
 OpenAI SDK support is optional:
 

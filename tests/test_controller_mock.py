@@ -56,27 +56,6 @@ def test_local_controller_runs_mock_iteration(tmp_path):
     assert "holdout_summarized" in [event["title"] for event in memory_events]
 
 
-def test_local_controller_get_status_loads_state(tmp_path):
-    memory = Memory(tmp_path / "memory")
-    controller = LocalRSIController(
-        run_root=tmp_path / "runs",
-        areal=MockAReaLService(),
-        envarena=MockEnvClient(),
-        research_agent=MockResearchAgent(),
-        memory=memory,
-    )
-    state = controller.run_iteration(
-        ckpt="ckpt_000",
-        task_set="swe_verified",
-        harness_config={"harness": "mock"},
-    )
-
-    loaded = controller.get_status(state.run_id)
-
-    assert loaded.run_id == state.run_id
-    assert loaded.status == "waiting_for_acceptance"
-
-
 def test_execute_action_starts_loop_with_harness_shortcut(tmp_path):
     memory = Memory(tmp_path / "memory")
     controller = LocalRSIController(
@@ -176,6 +155,11 @@ def test_local_controller_runs_mock_loop(tmp_path):
 
     memory_events = read_ledger(tmp_path / "memory" / "ledger.jsonl")
     assert "loop_completed" in [event["title"] for event in memory_events]
+
+    status = controller.get_status(state.run_id)
+    assert status.run_id == state.run_id
+    assert status.status == "completed"
+    assert status.ckpt == state.ckpt
 
 
 def test_execute_action_starts_loop_from_config(tmp_path):

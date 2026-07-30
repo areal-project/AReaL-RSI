@@ -55,11 +55,25 @@ Run multiple mock RSI iterations under one `run_id`:
 python -m areal_rsi.cli.main run-loop-mock --ckpt ckpt_000 --task-set swe_verified --max-iterations 2
 ```
 
+Run from an RSI config file:
+
+```bash
+python -m areal_rsi.cli.main run --config config/rsi.example.yaml
+```
+
 Chat can generate a structured action without executing it:
 
 ```bash
 python -m areal_rsi.cli.main chat --backend fake "run ckpt_000 on swe_verified"
 ```
+
+If no message is provided, `chat` starts an interactive REPL:
+
+```bash
+python -m areal_rsi.cli.main chat --backend openai --config config/rsi.example.yaml --execute --yes
+```
+
+Use `--stdin` when you want a single non-interactive message from stdin.
 
 To execute a confirmed action in the local mock loop:
 
@@ -67,10 +81,24 @@ To execute a confirmed action in the local mock loop:
 python -m areal_rsi.cli.main chat --backend fake --execute --yes "run ckpt_000 on swe_verified"
 ```
 
-`chat` emits user-facing commands such as `start_loop`, `get_status`,
-`inspect_run`, `stop_run`, and `resume_run`. Internal workflow steps like
+Chat can also load a base config and let the user message override only the
+fields it mentions:
+
+```bash
+python -m areal_rsi.cli.main chat --backend openai --config config/rsi.example.yaml --execute --yes \
+  "use ckpt_123 and run swe_verified for 2 iterations with sft"
+```
+
+`chat` emits user-facing commands such as `start_loop`, `inspect_run`,
+`stop_run`, and `resume_run`. Internal workflow steps like
 `eval`, `train`, and `holdout_eval` are recorded in `audit.jsonl` rather
 than exposed as chat actions.
+
+For scripted state queries, use the CLI status command:
+
+```bash
+python -m areal_rsi.cli.main status <run_id> --run-root runs
+```
 
 OpenAI SDK support is optional:
 

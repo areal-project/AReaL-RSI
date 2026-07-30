@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from areal_rsi.config import RSIRunConfig
 from areal_rsi.controller.run_state import RunState
 from areal_rsi.memory.audit import AuditLogger
 from areal_rsi.memory.artifacts import ArtifactStore
@@ -39,10 +41,12 @@ class LocalRSIController:
 
     def execute_action(self, action: Action) -> dict[str, Any]:
         if action.type == "start_loop":
-            state = self.run_loop(**_normalize_start_loop_args(action.args))
+            state = (
+                self.run_from_config_action(action)
+                if "base_config" in action.metadata
+                else self.run_loop(**_normalize_start_loop_args(action.args))
+            )
             return state.to_dict()
-        if action.type == "get_status":
-            return self.get_status(str(action.args["run_id"])).to_dict()
         if action.type == "resume_run":
             return self.resume(str(action.args["run_id"])).to_dict()
         if action.type == "stop_run":
@@ -382,6 +386,7 @@ class LocalRSIController:
         envarena: EnvClient | None = None,
         research_agent: ResearchAgent | None = None,
         memory: Memory | None = None,
+        _run_id: str | None = None,
     ) -> RunState:
         """Run multiple RSI iterations under one run id."""
 
@@ -389,7 +394,7 @@ class LocalRSIController:
             raise ValueError("max_iterations must be >= 1.")
 
         memory = memory or self._require(self.memory, "Memory")
-        run_id = self._new_run_id()
+        run_id = _run_id or self._new_run_id()
         run_dir = self.run_root / run_id
         audit = AuditLogger(run_dir / "audit.jsonl")
         ckpt = initial_ckpt
@@ -527,8 +532,60 @@ class LocalRSIController:
         )
         return state
 
+    def run_config(
+        self,
+        config: RSIRunConfig,
+        *,
+        config_metadata: dict[str, Any] | None = None,
+    ) -> RunState:
+        """Run an RSI loop from a normalized run config."""
+
+        run_id = self._new_run_id()
+        run_dir = self.run_root / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        config_path = run_dir / "resolved_rsi_config.json"
+        config_path.write_text(json.dumps(config.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
+        config_metadata = config_metadata or {}
+        AuditLogger(run_dir / "audit.jsonl").record_event(
+            run_id=run_id,
+            event_type="run_config_resolved",
+            input=config_metadata,
+            output={
+                "resolved_config_path": str(config_path.relative_to(run_dir)),
+                "normalized_config": config.to_dict(),
+            },
+        )
+        state = self.run_loop(**config.to_run_loop_kwargs(), _run_id=run_id)
+        state.metadata = {
+            **state.metadata,
+            "resolved_config": str(config_path.relative_to(run_dir)),
+            "config": {
+                **config_metadata,
+                "resolved_config_path": str(config_path),
+            },
+        }
+        self._save_state(state)
+        return state
+
+    def run_from_config_action(self, action: Action) -> RunState:
+        """Execute a start_loop action against the base config in action metadata."""
+
+        base_config = action.metadata.get("base_config")
+        if not isinstance(base_config, RSIRunConfig):
+            raise ValueError("start_loop config execution requires an RSIRunConfig base_config.")
+        overrides = _start_loop_overrides(action.args)
+        resolved = base_config.with_overrides(overrides)
+        return self.run_config(
+            resolved,
+            config_metadata={
+                "base_config_path": str(base_config.source_path) if base_config.source_path else None,
+                "base_config_hash": base_config.source_hash,
+                "overrides": overrides,
+            },
+        )
+
     def get_status(self, run_id: str) -> RunState:
-        return RunState.load(self._state_path(run_id))
+        return self._load_state(run_id)
 
     def resume(self, run_id: str) -> RunState:
         return self.get_status(run_id)
@@ -551,6 +608,9 @@ class LocalRSIController:
             "ckpt": state.ckpt,
             "metadata": state.metadata,
         }
+
+    def _load_state(self, run_id: str) -> RunState:
+        return RunState.load(self._state_path(run_id))
 
     def _save_state(self, state: RunState) -> None:
         state.save(self._state_path(state.run_id))
@@ -623,6 +683,39 @@ def _normalize_start_loop_args(args: dict[str, Any]) -> dict[str, Any]:
         "eval_gate",
     }
     return {key: value for key, value in normalized.items() if key in allowed}
+
+
+def _start_loop_overrides(args: dict[str, Any]) -> dict[str, Any]:
+    overrides = dict(args.get("overrides") or {})
+    if not isinstance(overrides, dict):
+        raise ValueError("start_loop overrides must be a mapping.")
+    for alias in ("initial_ckpt", "ckpt", "checkpoint", "initial_checkpoint"):
+        if alias in args:
+            overrides["run.initial_ckpt"] = args[alias]
+            break
+    for alias in ("task_set", "dataset", "benchmark"):
+        if alias in args:
+            overrides["env.task_set"] = args[alias]
+            break
+    if "method" in args:
+        overrides["run.method"] = args["method"]
+    for alias in ("max_iterations", "iterations"):
+        if alias in args:
+            overrides["run.max_iterations"] = args[alias]
+            break
+    if "harness" in args:
+        overrides["env.harness_config.harness"] = args["harness"]
+    if "harness_config" in args:
+        overrides["env.harness_config"] = args["harness_config"]
+    if "train_config" in args:
+        overrides["train.config"] = args["train_config"]
+    if "stop_criteria" in args:
+        overrides["stop_criteria"] = args["stop_criteria"]
+    if "traj_filter" in args:
+        overrides["research.traj_filter"] = args["traj_filter"]
+    if isinstance(args.get("eval_gate"), dict) and "holdout_task_set" in args["eval_gate"]:
+        overrides["env.holdout_task_set"] = args["eval_gate"]["holdout_task_set"]
+    return overrides
 
 
 def _artifact_ref(run_dir: Path, path: Path) -> str:

@@ -29,10 +29,18 @@ def rsi_action_tools() -> list[dict[str, Any]]:
         {
             "type": "function",
             "name": "start_loop",
-            "description": "Start an RSI improvement loop for a checkpoint on a task set.",
+            "description": "Start an RSI loop from the loaded base config with optional user overrides.",
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "overrides": {
+                        "type": "object",
+                        "description": (
+                            "Dot-path config overrides inferred from the user request, "
+                            "for example run.initial_ckpt, env.task_set, run.max_iterations, run.method."
+                        ),
+                        "additionalProperties": True,
+                    },
                     "initial_ckpt": {"type": "string", "description": "Initial checkpoint to improve."},
                     "task_set": {"type": "string", "description": "EnvArena benchmark or task set name."},
                     "method": {"type": "string", "enum": ["sft", "opd"], "description": "Training method."},
@@ -48,15 +56,9 @@ def rsi_action_tools() -> list[dict[str, Any]]:
                         "additionalProperties": False,
                     },
                 },
-                "required": ["initial_ckpt", "task_set"],
+                "required": [],
                 "additionalProperties": False,
             },
-        },
-        {
-            "type": "function",
-            "name": "get_status",
-            "description": "Get a brief status snapshot for an RSI run.",
-            "parameters": run_id_schema,
         },
         {
             "type": "function",
@@ -90,7 +92,7 @@ def rsi_action_tools() -> list[dict[str, Any]]:
 def action_from_tool_call(tool_call: ActionToolCall) -> Action:
     """Convert an action tool call into the local controller action contract."""
 
-    if tool_call.name not in {"start_loop", "get_status", "inspect_run", "resume_run", "stop_run"}:
+    if tool_call.name not in {"start_loop", "inspect_run", "resume_run", "stop_run"}:
         raise ValueError(f"Unsupported RSI action tool: {tool_call.name}")
     return Action(
         type=tool_call.name,
@@ -107,12 +109,15 @@ def reply_for_actions(actions: list[Action]) -> str:
         return "No action selected."
     action = actions[0]
     if action.type == "start_loop":
-        return (
-            f"Prepared RSI loop for {action.args.get('initial_ckpt')} "
-            f"on {action.args.get('task_set')}."
-        )
-    if action.type == "get_status":
-        return f"Fetching status for run {action.args.get('run_id')}."
+        overrides = action.args.get("overrides")
+        if isinstance(overrides, dict) and overrides:
+            return f"Prepared RSI loop from config with {len(overrides)} override(s)."
+        if action.args.get("initial_ckpt") and action.args.get("task_set"):
+            return (
+                f"Prepared RSI loop for {action.args.get('initial_ckpt')} "
+                f"on {action.args.get('task_set')}."
+            )
+        return "Prepared RSI loop from config."
     if action.type == "inspect_run":
         return f"Inspecting run {action.args.get('run_id')}."
     if action.type == "resume_run":

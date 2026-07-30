@@ -44,7 +44,6 @@ User-facing actions are goal/query/control commands only:
 ```python
 ActionType = Literal[
     "start_loop",
-    "get_status",
     "inspect_run",
     "resume_run",
     "stop_run",
@@ -54,6 +53,26 @@ ActionType = Literal[
 Workflow steps such as `eval`, `generate_dataset`, `train`, and
 `holdout_eval` are internal controller steps and appear in audit logs, not
 in RSIAgent user actions.
+
+The preferred `start_loop` path loads a base RSI config first. RSIAgent then
+emits only dot-path config overrides inferred from the user message:
+
+```json
+{
+  "type": "start_loop",
+  "args": {
+    "overrides": {
+      "run.initial_ckpt": "ckpt_123",
+      "env.task_set": "swe_verified",
+      "run.max_iterations": 2
+    }
+  }
+}
+```
+
+The controller merges these overrides into the loaded config, writes
+`resolved_rsi_config.json` under the run directory, records
+`run_config_resolved` in audit, and executes the resolved config.
 
 ```python
 class RSIAgent(Protocol):

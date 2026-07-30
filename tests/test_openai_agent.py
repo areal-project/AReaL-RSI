@@ -1,5 +1,5 @@
 from areal_rsi.agent.action_tools import ActionToolCall, rsi_action_tools
-from areal_rsi.agent.openai_agent import OpenAIRSIAgent
+from areal_rsi.agent.openai_agent import OpenAIRSIAgent, OpenAIToolResponse
 
 
 class FakeOpenAIClient:
@@ -18,6 +18,11 @@ class FakeOpenAIClient:
                 arguments={"initial_ckpt": "ckpt_000", "task_set": "swe_verified"},
             )
         ]
+
+
+class FakeNoToolOpenAIClient:
+    def tool_response_sync(self, prompt: str, *, tools, tool_choice="auto", max_tool_calls=1):
+        return OpenAIToolResponse(tool_calls=[], text="我是 RSIAgent，负责协调 AReaL-RSI 流程。")
 
 
 class DummyMemory:
@@ -44,19 +49,35 @@ def test_openai_rsi_agent_uses_tool_call_for_action():
     assert client.tool_choice == "auto"
     assert [tool["name"] for tool in client.tools] == [
         "start_loop",
-        "get_status",
         "inspect_run",
         "resume_run",
         "stop_run",
     ]
 
 
+def test_openai_rsi_agent_allows_text_reply_without_tool_call():
+    agent = OpenAIRSIAgent(client=FakeNoToolOpenAIClient())
+
+    response = agent.chat(
+        "你是谁",
+        controller=object(),
+        memory=DummyMemory(),
+        workflow_spec={},
+    )
+
+    assert response.reply == "我是 RSIAgent，负责协调 AReaL-RSI 流程。"
+    assert response.actions == []
+    assert response.requires_confirmation is False
+    assert response.metadata == {"tool_call_count": 0}
+
+
 def test_rsi_action_tools_define_start_loop_schema():
     start_loop = rsi_action_tools()[0]
 
     assert start_loop["name"] == "start_loop"
-    assert start_loop["parameters"]["required"] == ["initial_ckpt", "task_set"]
+    assert start_loop["parameters"]["required"] == []
     assert start_loop["parameters"]["additionalProperties"] is False
+    assert "overrides" in start_loop["parameters"]["properties"]
     assert start_loop["parameters"]["properties"]["method"]["enum"] == ["sft", "opd"]
     assert start_loop["parameters"]["properties"]["max_iterations"]["minimum"] == 1
     assert start_loop["parameters"]["properties"]["harness_config"]["additionalProperties"] is False

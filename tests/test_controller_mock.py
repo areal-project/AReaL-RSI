@@ -1,3 +1,4 @@
+from areal_rsi.config import RSIRunConfig
 from areal_rsi.controller import LocalRSIController
 from areal_rsi.memory import Memory
 from areal_rsi.memory.ledger import read_ledger
@@ -53,27 +54,6 @@ def test_local_controller_runs_mock_iteration(tmp_path):
     memory_events = read_ledger(tmp_path / "memory" / "ledger.jsonl")
     assert "eval_summarized" in [event["title"] for event in memory_events]
     assert "holdout_summarized" in [event["title"] for event in memory_events]
-
-
-def test_local_controller_get_status_loads_state(tmp_path):
-    memory = Memory(tmp_path / "memory")
-    controller = LocalRSIController(
-        run_root=tmp_path / "runs",
-        areal=MockAReaLService(),
-        envarena=MockEnvClient(),
-        research_agent=MockResearchAgent(),
-        memory=memory,
-    )
-    state = controller.run_iteration(
-        ckpt="ckpt_000",
-        task_set="swe_verified",
-        harness_config={"harness": "mock"},
-    )
-
-    loaded = controller.get_status(state.run_id)
-
-    assert loaded.run_id == state.run_id
-    assert loaded.status == "waiting_for_acceptance"
 
 
 def test_execute_action_starts_loop_with_harness_shortcut(tmp_path):
@@ -175,3 +155,46 @@ def test_local_controller_runs_mock_loop(tmp_path):
 
     memory_events = read_ledger(tmp_path / "memory" / "ledger.jsonl")
     assert "loop_completed" in [event["title"] for event in memory_events]
+
+    status = controller.get_status(state.run_id)
+    assert status.run_id == state.run_id
+    assert status.status == "completed"
+    assert status.ckpt == state.ckpt
+
+
+def test_execute_action_starts_loop_from_config(tmp_path):
+    memory = Memory(tmp_path / "memory")
+    controller = LocalRSIController(
+        run_root=tmp_path / "runs",
+        areal=MockAReaLService(),
+        envarena=MockEnvClient(),
+        research_agent=MockResearchAgent(),
+        memory=memory,
+    )
+    base_config = RSIRunConfig.from_dict(
+        {
+            "run": {"initial_ckpt": "ckpt_000", "max_iterations": 3, "method": "sft"},
+            "env": {"task_set": "swe_verified", "harness_config": {"harness": "mock"}},
+        }
+    )
+
+    result = controller.execute_action(
+        Action(
+            type="start_loop",
+            args={"overrides": {"run.max_iterations": 1, "env.task_set": "swe_small"}},
+            metadata={"base_config": base_config},
+        )
+    )
+
+    assert result["status"] == "completed"
+    assert result["iteration"] == 1
+    assert result["metadata"]["task_set"] == "swe_small"
+    resolved_config = tmp_path / "runs" / result["run_id"] / "resolved_rsi_config.json"
+    assert resolved_config.exists()
+
+    audit_events = read_ledger(tmp_path / "runs" / result["run_id"] / "audit.jsonl")
+    assert audit_events[0]["event_type"] == "run_config_resolved"
+    assert audit_events[0]["input"]["overrides"] == {
+        "run.max_iterations": 1,
+        "env.task_set": "swe_small",
+    }

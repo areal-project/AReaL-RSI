@@ -36,6 +36,22 @@ pip install -e '.[agent]'
 For local tests and demos, `FakeRSIAgent` provides deterministic natural
 language to action mapping without OpenAI credentials.
 
+User-facing actions are goal/query/control commands only:
+
+```python
+ActionType = Literal[
+    "start_loop",
+    "get_status",
+    "inspect_run",
+    "resume_run",
+    "stop_run",
+]
+```
+
+Workflow steps such as `eval`, `generate_dataset`, `train`, and
+`holdout_eval` are internal controller steps and appear in audit logs, not
+in RSIAgent user actions.
+
 ```python
 class RSIAgent(Protocol):
     def chat(
@@ -89,6 +105,21 @@ class RSIController(Protocol):
         task_set: str,
         harness_config: dict[str, Any],
         method: TrainMethod = "sft",
+        train_config: dict[str, Any] | None = None,
+        traj_filter: dict[str, Any] | None = None,
+        eval_gate: dict[str, Any] | None = None,
+    ) -> RunState:
+        ...
+
+    def run_loop(
+        self,
+        initial_ckpt: str,
+        *,
+        task_set: str,
+        harness_config: dict[str, Any],
+        method: TrainMethod = "sft",
+        max_iterations: int = 3,
+        stop_criteria: dict[str, Any] | None = None,
         train_config: dict[str, Any] | None = None,
         traj_filter: dict[str, Any] | None = None,
         eval_gate: dict[str, Any] | None = None,
@@ -187,6 +218,75 @@ class ResearchAgent(Protocol):
 ```
 
 ## 5. Memory
+
+`AuditLogger` records machine-readable action facts for one run. It is owned by
+`RSIController`, not by service adapters or agents. The file location is
+`runs/<run_id>/audit.jsonl`.
+
+Each action writes a `started` event and either a `succeeded` or `failed`
+event. Large payloads stay in artifacts; audit rows store summaries and
+artifact paths.
+
+```python
+class AuditLogger:
+    def action(
+        self,
+        *,
+        run_id: str,
+        iteration: int,
+        step: str,
+        event_type: str = "workflow_step",
+        input: dict[str, Any] | None = None,
+        actor: str = "RSIController",
+        metadata: dict[str, Any] | None = None,
+    ) -> Iterator[AuditAction]:
+        ...
+
+    def record_event(
+        self,
+        *,
+        run_id: str,
+        event_type: str,
+        status: str = "succeeded",
+        iteration: int | None = None,
+        step: str | None = None,
+        input: dict[str, Any] | None = None,
+        output: dict[str, Any] | None = None,
+    ) -> None:
+        ...
+```
+
+Audit event shape:
+
+```json
+{
+  "schema_version": "audit.v1",
+  "run_id": "rsi_run_001",
+  "iteration": 1,
+  "action_id": "act_001_...",
+  "event_type": "workflow_step",
+  "step": "eval",
+  "status": "succeeded",
+  "input": {},
+  "output": {
+    "score": {
+      "mean_reward": 0.8
+    }
+  },
+  "artifacts": {
+    "eval_job": "artifacts/iter_001/eval_job.json"
+  },
+  "error": null
+}
+```
+
+Non-step events use the same envelope with distinct `event_type`, for
+example `user_goal_received` before the loop starts and `loop_decision`
+after each holdout evaluation.
+
+`Memory` records higher-level summaries, research observations, decisions,
+and human feedback. It is the context source for `RSIAgent` and
+`ResearchAgent`.
 
 ```python
 class Memory:

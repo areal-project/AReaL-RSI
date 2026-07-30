@@ -34,15 +34,18 @@ class FakeRSIAgent:
         ckpt = _extract_value(message, "--ckpt") or _extract_token(message, prefix="ckpt_") or "ckpt_000"
         task_set = _extract_value(message, "--task-set") or _extract_token(message, prefix="swe_") or "swe_verified"
         method = "opd" if "opd" in normalized else "sft"
+        max_iterations = _extract_int_value(message, "--max-iterations") or _extract_round_count(message) or 3
         return AgentResponse(
-            reply=f"I can run one {method} RSI iteration for {ckpt} on {task_set}.",
+            reply=f"I can start a {method} RSI loop for {ckpt} on {task_set}.",
             actions=[
                 Action(
-                    type="run_iteration",
+                    type="start_loop",
                     args={
-                        "ckpt": ckpt,
+                        "goal": f"Improve {ckpt} on {task_set}.",
+                        "initial_ckpt": ckpt,
                         "task_set": task_set,
                         "method": method,
+                        "max_iterations": max_iterations,
                         "harness_config": {"harness": workflow_spec.get("harness", "mock_harness")},
                     },
                     requires_confirmation=True,
@@ -58,8 +61,6 @@ class FakeRSIAgent:
         memory_context: MemoryContext,
         workflow_spec: dict[str, Any],
     ) -> Action:
-        if run_state.status == "waiting_for_acceptance":
-            return Action(type="accept_ckpt", args={"ckpt": run_state.ckpt}, requires_confirmation=True)
         return Action(type="get_status", args={"run_id": run_state.run_id})
 
     def explain(
@@ -79,6 +80,21 @@ class FakeRSIAgent:
 def _extract_value(message: str, flag: str) -> str | None:
     match = re.search(rf"{re.escape(flag)}\s+([^\s]+)", message)
     return match.group(1) if match else None
+
+
+def _extract_int_value(message: str, flag: str) -> int | None:
+    value = _extract_value(message, flag)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _extract_round_count(message: str) -> int | None:
+    match = re.search(r"\b(\d+)\s*(?:rounds?|iters?|iterations?|轮|次)\b", message, flags=re.IGNORECASE)
+    return int(match.group(1)) if match else None
 
 
 def _extract_token(message: str, *, prefix: str) -> str | None:

@@ -54,7 +54,10 @@ class RSIAgent:
 MVP behavior:
 
 - Concrete scaffold is based on OpenAI SDK via `OpenAIRSIAgent`.
-- It can support a small set of actions first: `run_iteration`, `get_status`, `analyze_trajs`, `accept_ckpt`, `stop`, `resume`.
+- It supports goal/query/control actions: `start_loop`, `get_status`,
+  `inspect_run`, `stop_run`, and `resume_run`.
+- It does not expose internal workflow steps such as `eval`, `train`,
+  or `generate_dataset` as user actions.
 - It does not call AReaL or EnvArena directly.
 - It may be tested with fake OpenAI clients without installing the SDK.
 
@@ -131,10 +134,10 @@ Suggested schema:
 ```json
 {
   "run_id": "rsi_run_001",
-  "iteration": 1,
+  "iteration": 2,
   "status": "running",
   "current_step": "collect_trajs",
-  "ckpt": "ckpt_000",
+  "ckpt": "ckpt_002",
   "endpoint": {},
   "model_ref": {},
   "eval_job": {},
@@ -150,9 +153,16 @@ Storage:
 
 ```text
 runs/<run_id>/state.json
-runs/<run_id>/ledger.jsonl
-runs/<run_id>/artifacts/
+runs/<run_id>/audit.jsonl
+runs/<run_id>/artifacts/iter_001/
+runs/<run_id>/artifacts/iter_002/
 ```
+
+`run_id` represents one RSI experiment. `iteration` represents the loop
+round inside that experiment. `run_iteration(...)` still runs one round for
+local tests and adapters; `run_loop(...)` calls the same round executor
+multiple times and records `metadata.iteration_results`,
+`metadata.accepted_ckpts`, and `metadata.final_ckpt`.
 
 ## 5. AReaLService
 
@@ -283,12 +293,24 @@ Dataset example:
 }
 ```
 
-## 8. Memory
+## 8. AuditLog And Memory
 
-Purpose:
+AuditLog purpose:
+
+- Record user goals, workflow steps, loop decisions, inputs, outputs,
+  artifacts, status, and errors.
+- Provide deterministic provenance for eval scores, datasets, train runs, and checkpoint decisions.
+- Keep large payloads in artifacts and store paths in `audit.jsonl`.
+
+AuditLog storage:
+
+- `runs/<run_id>/audit.jsonl`: append-only machine-readable events.
+- `runs/<run_id>/artifacts/`: full payloads referenced by audit events.
+
+Memory purpose:
 
 - Provide durable context for RSIAgent and ResearchAgent.
-- Record every important run event.
+- Record research summaries, observations, decisions, and human feedback.
 - Support debugging and checkpoint selection.
 
 Core interface:

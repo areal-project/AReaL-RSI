@@ -8,8 +8,8 @@ class FakeOpenAIClient:
           "reply": "Ready to run.",
           "actions": [
             {
-              "type": "run_iteration",
-              "args": {"ckpt": "ckpt_000", "task_set": "swe_verified"},
+              "type": "start_loop",
+              "args": {"initial_ckpt": "ckpt_000", "task_set": "swe_verified"},
               "requires_confirmation": true,
               "metadata": {}
             }
@@ -29,7 +29,7 @@ def test_openai_rsi_agent_parses_structured_action():
     agent = OpenAIRSIAgent(client=FakeOpenAIClient())
 
     response = agent.chat(
-        "run one iteration",
+        "improve ckpt_000",
         controller=object(),
         memory=DummyMemory(),
         workflow_spec={},
@@ -37,5 +37,5 @@ def test_openai_rsi_agent_parses_structured_action():
 
     assert response.reply == "Ready to run."
     assert response.requires_confirmation is True
-    assert response.actions[0].type == "run_iteration"
-    assert response.actions[0].args["ckpt"] == "ckpt_000"
+    assert response.actions[0].type == "start_loop"
+    assert response.actions[0].args["initial_ckpt"] == "ckpt_000"

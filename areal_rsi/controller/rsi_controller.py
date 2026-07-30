@@ -36,6 +36,21 @@ class RSIController(Protocol):
     ) -> RunState:
         """Run one deterministic RSI iteration."""
 
+    def run_loop(
+        self,
+        initial_ckpt: str,
+        *,
+        task_set: str,
+        harness_config: dict[str, Any],
+        method: TrainMethod = "sft",
+        max_iterations: int = 3,
+        stop_criteria: dict[str, Any] | None = None,
+        train_config: dict[str, Any] | None = None,
+        traj_filter: dict[str, Any] | None = None,
+        eval_gate: dict[str, Any] | None = None,
+    ) -> RunState:
+        """Run multiple RSI iterations under one run id."""
+
     def get_status(self, run_id: str) -> RunState:
         """Return current run state."""
 

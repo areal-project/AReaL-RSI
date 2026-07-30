@@ -25,6 +25,14 @@ def build_parser() -> argparse.ArgumentParser:
     run_mock.add_argument("--harness", default="mock_harness")
     run_mock.add_argument("--run-root", default="runs")
 
+    run_loop_mock = subparsers.add_parser("run-loop-mock", help="Run a local mock multi-iteration RSI loop.")
+    run_loop_mock.add_argument("--ckpt", default="ckpt_000")
+    run_loop_mock.add_argument("--task-set", default="swe_verified")
+    run_loop_mock.add_argument("--method", default="sft", choices=["sft", "opd"])
+    run_loop_mock.add_argument("--harness", default="mock_harness")
+    run_loop_mock.add_argument("--max-iterations", type=int, default=3)
+    run_loop_mock.add_argument("--run-root", default="runs")
+
     status = subparsers.add_parser("status", help="Print run state.")
     status.add_argument("run_id")
     status.add_argument("--run-root", default="runs")
@@ -51,6 +59,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "run-mock":
         state = _run_mock(args)
+        print(json.dumps(state.to_dict(), indent=2, ensure_ascii=False, default=repr))
+        return 0
+    if args.command == "run-loop-mock":
+        state = _run_loop_mock(args)
         print(json.dumps(state.to_dict(), indent=2, ensure_ascii=False, default=repr))
         return 0
     if args.command == "status":
@@ -81,6 +93,25 @@ def _run_mock(args: argparse.Namespace):
         task_set=args.task_set,
         method=args.method,
         harness_config={"harness": args.harness},
+    )
+
+
+def _run_loop_mock(args: argparse.Namespace):
+    run_root = Path(args.run_root)
+    memory = Memory(run_root / "memory")
+    controller = LocalRSIController(
+        run_root=run_root,
+        areal=MockAReaLService(),
+        envarena=MockEnvClient(),
+        research_agent=MockResearchAgent(),
+        memory=memory,
+    )
+    return controller.run_loop(
+        initial_ckpt=args.ckpt,
+        task_set=args.task_set,
+        method=args.method,
+        harness_config={"harness": args.harness},
+        max_iterations=args.max_iterations,
     )
 
 
@@ -162,9 +193,12 @@ def _action_to_dict(action: Action) -> dict:
 def _openai_rsi_system_prompt() -> str:
     return (
         "You are RSIAgent, the user-facing coordinator for AReaL-RSI. "
-        "Explain system state, propose structured actions, and ask for "
-        "confirmation before expensive or irreversible operations. Return "
-        "machine-readable JSON when asked for actions."
+        "Convert user goals and queries into structured user commands: "
+        "start_loop, get_status, inspect_run, resume_run, or stop_run. "
+        "Do not expose internal workflow steps such as eval, train, or "
+        "holdout_eval as user actions. Ask for confirmation before expensive "
+        "or irreversible operations. Return machine-readable JSON when asked "
+        "for actions."
     )
 
 

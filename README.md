@@ -49,6 +49,12 @@ Build a minimal but recoverable loop:
 python -m areal_rsi.cli.main run-mock --ckpt ckpt_000 --task-set swe_verified
 ```
 
+Run multiple mock RSI iterations under one `run_id`:
+
+```bash
+python -m areal_rsi.cli.main run-loop-mock --ckpt ckpt_000 --task-set swe_verified --max-iterations 2
+```
+
 Chat can generate a structured action without executing it:
 
 ```bash
@@ -60,6 +66,11 @@ To execute a confirmed action in the local mock loop:
 ```bash
 python -m areal_rsi.cli.main chat --backend fake --execute --yes "run ckpt_000 on swe_verified"
 ```
+
+`chat` emits user-facing commands such as `start_loop`, `get_status`,
+`inspect_run`, `stop_run`, and `resume_run`. Internal workflow steps like
+`eval`, `train`, and `holdout_eval` are recorded in `audit.jsonl` rather
+than exposed as chat actions.
 
 OpenAI SDK support is optional:
 

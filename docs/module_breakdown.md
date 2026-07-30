@@ -236,7 +236,7 @@ class EnvArenaClient:
 MVP:
 
 - Start with mock trajectories.
-- Then implement the real endpoints from the current EnvArena integration in AReaL.
+- Then implement a CLI-backed adapter using `arena --json`.
 - Keep a trajectory normalization function so downstream modules do not depend on raw API details.
 
 ## 7. ResearchAgent

@@ -50,6 +50,9 @@ Acceptance:
 
 - One command runs a full mock iteration and produces a run directory with state, ledger, dataset, train result, and eval result.
 
+Status: done for the current prototype. The local mock loop, OpenAI-backed chat
+scaffold, and tests are committed.
+
 ### M2: EnvArena Read/Eval Integration
 
 Goal: replace mock EnvArena with the real EnvArena API path.
@@ -66,6 +69,8 @@ Deliverables:
 Acceptance:
 
 - Given an existing AReaL-compatible endpoint, the controller can submit an EnvArena eval and fetch trajectories into Memory/artifacts.
+
+Status: next.
 
 ### M3: AReaL Inference And SFT Integration
 
@@ -169,9 +174,16 @@ areal_rsi/
     run_state.py
     workflow.py
   services/
-    areal_service.py
-    envarena_client.py
-    research_agent.py
+    areal/
+      service.py
+      mock.py
+    envarena/
+      client.py
+      mock.py
+    research/
+      agent.py
+      mock.py
+      openai_agent.py
   memory/
     memory.py
     ledger.py
@@ -197,7 +209,7 @@ Build this first:
 1. `schemas/core.py`: type aliases and minimal dataclasses.
 2. `memory/ledger.py`: append/read JSONL events.
 3. `controller/run_state.py`: save/load run state.
-4. `services/*`: mock implementations.
+4. `services/{areal,envarena,research}/`: mock implementations.
 5. `controller/local_controller.py`: mock end-to-end loop.
 6. `agent/openai_agent.py`: OpenAI SDK backed agent scaffold.
 7. Tests for the mock loop.
@@ -224,10 +236,10 @@ This gives a stable integration shell before binding to real AReaL and EnvArena.
 
 ## 9. Immediate Next Tasks
 
-1. Create the package skeleton.
-2. Define core schemas and action schemas.
-3. Implement Memory ledger.
-4. Implement mock services.
-5. Implement `RSIController.run_iteration(...)`.
-6. Add tests for the mock loop.
-7. Add a CLI command to run one mock iteration.
+1. Implement `EnvArenaCliClient` behind `EnvArenaClient`.
+2. Add JSON-envelope subprocess wrapper for `arena --json`.
+3. Map AReaL endpoint metadata to EnvArena `Model@v`.
+4. Map `task_set` and `harness_config` to published Benchmark/Harness refs.
+5. Submit and watch an EnvArena job.
+6. Normalize EnvArena trajectories into local `Traj`.
+7. Run one controller iteration with real EnvArena eval and mock training.

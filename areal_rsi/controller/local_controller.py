@@ -12,9 +12,9 @@ from areal_rsi.memory.artifacts import ArtifactStore
 from areal_rsi.memory.memory import Memory
 from areal_rsi.schemas.actions import Action
 from areal_rsi.schemas.core import TrainMethod
-from areal_rsi.services.areal_service import AReaLService
-from areal_rsi.services.envarena_client import EnvArenaClient
-from areal_rsi.services.research_agent import ResearchAgent
+from areal_rsi.services.areal import AReaLService
+from areal_rsi.services.envarena import EnvArenaClient
+from areal_rsi.services.research import ResearchAgent
 
 
 class LocalRSIController:

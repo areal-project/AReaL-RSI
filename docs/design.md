@@ -28,7 +28,7 @@ EnvArena Traj
 + 根据 Memory 和评测结果提出下一轮计划。
 + 选择 task set、traj filter、训练方法和 eval gate。
 + 将自然语言请求转成结构化 action。
-+ 在训练、接受 ckpt、切换策略等关键节点请求用户确认。
++ 在启动 loop、停止 run 等关键节点请求用户确认。
 
 ### 3.2 Controller 决定 How / When
 `RSIController` 负责执行固定、可恢复的 workflow：
@@ -42,16 +42,18 @@ EnvArena Traj
 + 支持 resume、retry、stop 和 status 查询。
 
 ### 3.3 自然语言只产生计划，不直接替代执行协议
-用户可以用自然语言表达需求，例如“先别训练，看看失败样本”，但系统内部应先转成结构化 action，再由 Controller 执行。
+用户可以用自然语言表达目标和约束，例如“用 ckpt_000 在 swe_verified 上最多跑 3 轮，提升小于 1% 就停”。系统内部应先转成结构化 user command，再由 Controller 执行。
 
 ```json
 {
-  "type": "analyze_trajs",
+  "type": "start_loop",
   "args": {
-    "run_id": "rsi_run_003",
-    "filter": {
-      "reward_lt": 1.0,
-      "exclude_tool_failures": true
+    "goal": "Improve ckpt_000 on swe_verified.",
+    "initial_ckpt": "ckpt_000",
+    "task_set": "swe_verified",
+    "max_iterations": 3,
+    "stop_criteria": {
+      "min_delta": 0.01
     }
   }
 }
@@ -228,12 +230,14 @@ Agent 生成结构化 action：
 
 ```json
 {
-  "type": "run_iteration",
+  "type": "start_loop",
   "requires_confirmation": true,
   "args": {
-    "ckpt": "ckpt_000",
+    "goal": "Improve ckpt_000 on swe_verified.",
+    "initial_ckpt": "ckpt_000",
     "task_set": "swe_verified",
     "method": "sft",
+    "max_iterations": 3,
     "harness_config": {
       "harness": "default"
     }
@@ -261,8 +265,8 @@ Agent 生成结构化 action：
     + OPD：基于 ResearchAgent dataset 或 selected tasks，调用 EnvArena 采集 on-policy teacher/student 轨迹，再做 distill。EnvArena 仍然调用 AReaL 托管的 endpoint。
 12. Trainer 产出 `ckpt_{k+1}` 和训练指标，写入 Memory。
 13. Controller 调 EnvArena 对新 ckpt 做 holdout eval，并把结果写入 Memory。
-14. RSIAgent 读取 eval result 和 Memory，向用户解释是否建议接受新 ckpt。
-15. 用户确认或配置自动 gate 后，进入下一轮。
+14. Controller 根据 stop criteria、holdout 结果和 Memory 做 loop decision。
+15. 如果 decision 是 continue，则自动进入下一轮；如果 stop，则写入最终状态。
 
 ## 6. Python 接口
 接口只保留模块之间的边界，第一版实现时所有对象都可以先用 `dict[str, Any]` 承载，不先抽复杂 dataclass。
@@ -275,14 +279,11 @@ from typing import Any, Literal
 TrainMethod = Literal["sft", "opd"]
 TrajSource = Literal["eval", "research_validation", "opd"]
 ActionType = Literal[
-    "run_iteration",
+    "start_loop",
     "get_status",
-    "analyze_trajs",
-    "generate_dataset",
-    "train",
-    "accept_ckpt",
-    "resume",
-    "stop",
+    "inspect_run",
+    "resume_run",
+    "stop_run",
 ]
 
 Endpoint = dict[str, Any]       # AReaL endpoint: model_ref/base_url/api_key/protocol/metadata
@@ -462,12 +463,14 @@ Action：
 
 ```json
 {
-  "type": "run_iteration",
+  "type": "start_loop",
   "requires_confirmation": true,
   "args": {
-    "ckpt": "ckpt_000",
+    "goal": "Improve ckpt_000 on swe_verified.",
+    "initial_ckpt": "ckpt_000",
     "task_set": "swe_verified",
-    "method": "sft"
+    "method": "sft",
+    "max_iterations": 3
   }
 }
 ```
@@ -483,57 +486,50 @@ EnvArena eval job 已提交，已完成 42 / 100 个任务。
 下一步会拉取轨迹并交给 ResearchAgent 生成 dataset。
 ```
 
-### 7.3 人工干预策略
+### 7.3 调整目标约束
 ```text
 User:
-先别训练，只看测试失败但 patch 思路基本正确的样本。
+下一次只关注 patch 过大的问题，最多跑 2 轮。
 
 RSIAgent:
-我会暂停训练前动作，只分析 near-miss 失败轨迹：
-reward 不满分、触及正确文件、排除工具失败和完全跑偏样本。
-分析完成后再确认是否生成 dataset。
+我会启动一个新的 RSI loop，把 focus 记录为 patch_scope_control，
+并把 max_iterations 设置为 2。内部仍由 ResearchAgent 筛选轨迹和生成数据。
 ```
 
 Action：
 
 ```json
 {
-  "type": "analyze_trajs",
+  "type": "start_loop",
   "args": {
-    "filter": {
-      "reward_lt": 1.0,
-      "touched_expected_file": true,
-      "exclude_error_types": [
-        "tool_failure",
-        "wrong_task_understanding",
-        "irrelevant_patch"
-      ]
+    "goal": "Reduce oversized patches.",
+    "initial_ckpt": "ckpt_001",
+    "task_set": "swe_verified",
+    "max_iterations": 2,
+    "constraints": {
+      "focus": "patch_scope_control"
     }
   }
 }
 ```
 
-### 7.4 接受 ckpt
+### 7.4 查看 loop 决策
 ```text
 RSIAgent:
-新 ckpt_001 在 holdout 上 success_rate 从 31.2% 提升到 34.1%，
-但 patch size 平均增加 11%。建议接受 ckpt_001，同时下一轮加入
-patch scope control 的 experience。
+iter_2 之后系统停止了：holdout 提升低于 min_delta=0.01。
+最终 ckpt 是 ckpt_002。详细证据见 audit.jsonl 的 loop_decision 事件。
 
 User:
-接受，但下一轮只优化 patch 过大的问题。
+为什么停止？
 ```
 
 Action：
 
 ```json
 {
-  "type": "accept_ckpt",
+  "type": "inspect_run",
   "args": {
-    "ckpt": "ckpt_001",
-    "next_loop_hint": {
-      "focus": "patch_scope_control"
-    }
+    "run_id": "rsi_run_001"
   }
 }
 ```

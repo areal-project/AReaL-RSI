@@ -36,6 +36,22 @@ pip install -e '.[agent]'
 For local tests and demos, `FakeRSIAgent` provides deterministic natural
 language to action mapping without OpenAI credentials.
 
+User-facing actions are goal/query/control commands only:
+
+```python
+ActionType = Literal[
+    "start_loop",
+    "get_status",
+    "inspect_run",
+    "resume_run",
+    "stop_run",
+]
+```
+
+Workflow steps such as `eval`, `generate_dataset`, `train`, and
+`holdout_eval` are internal controller steps and appear in audit logs, not
+in RSIAgent user actions.
+
 ```python
 class RSIAgent(Protocol):
     def chat(
@@ -218,12 +234,25 @@ class AuditLogger:
         *,
         run_id: str,
         iteration: int,
-        action_type: str,
         step: str,
+        event_type: str = "workflow_step",
         input: dict[str, Any] | None = None,
         actor: str = "RSIController",
         metadata: dict[str, Any] | None = None,
     ) -> Iterator[AuditAction]:
+        ...
+
+    def record_event(
+        self,
+        *,
+        run_id: str,
+        event_type: str,
+        status: str = "succeeded",
+        iteration: int | None = None,
+        step: str | None = None,
+        input: dict[str, Any] | None = None,
+        output: dict[str, Any] | None = None,
+    ) -> None:
         ...
 ```
 
@@ -235,8 +264,8 @@ Audit event shape:
   "run_id": "rsi_run_001",
   "iteration": 1,
   "action_id": "act_001_...",
-  "action_type": "eval",
-  "step": "submit_eval",
+  "event_type": "workflow_step",
+  "step": "eval",
   "status": "succeeded",
   "input": {},
   "output": {
@@ -250,6 +279,10 @@ Audit event shape:
   "error": null
 }
 ```
+
+Non-step events use the same envelope with distinct `event_type`, for
+example `user_goal_received` before the loop starts and `loop_decision`
+after each holdout evaluation.
 
 `Memory` records higher-level summaries, research observations, decisions,
 and human feedback. It is the context source for `RSIAgent` and

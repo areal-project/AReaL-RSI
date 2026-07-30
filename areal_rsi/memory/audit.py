@@ -21,14 +21,52 @@ class AuditLogger:
         self.path = Path(path)
         self._action_index = 0
 
+    def record_event(
+        self,
+        *,
+        run_id: str,
+        event_type: str,
+        status: str = "succeeded",
+        iteration: int | None = None,
+        step: str | None = None,
+        input: dict[str, Any] | None = None,
+        output: dict[str, Any] | None = None,
+        artifacts: dict[str, str | Path] | None = None,
+        actor: str = "RSIController",
+        metadata: dict[str, Any] | None = None,
+        error: dict[str, Any] | None = None,
+    ) -> None:
+        """Append a single audit event that has no start/end lifecycle."""
+
+        now = _utc_now()
+        self._append(
+            {
+                "schema_version": "audit.v1",
+                "event_id": f"evt_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}",
+                "run_id": run_id,
+                "iteration": iteration,
+                "event_type": event_type,
+                "step": step,
+                "status": status,
+                "actor": actor,
+                "started_at": now,
+                "ended_at": now,
+                "input": input or {},
+                "output": output or {},
+                "artifacts": {key: str(value) for key, value in (artifacts or {}).items()},
+                "metadata": metadata or {},
+                "error": error,
+            }
+        )
+
     @contextmanager
     def action(
         self,
         *,
         run_id: str,
         iteration: int,
-        action_type: str,
         step: str,
+        event_type: str = "workflow_step",
         input: dict[str, Any] | None = None,
         actor: str = "RSIController",
         metadata: dict[str, Any] | None = None,
@@ -40,7 +78,7 @@ class AuditLogger:
             action_id=self._new_action_id(),
             run_id=run_id,
             iteration=iteration,
-            action_type=action_type,
+            event_type=event_type,
             step=step,
             actor=actor,
             started_at=_utc_now(),
@@ -74,7 +112,7 @@ class AuditAction:
         action_id: str,
         run_id: str,
         iteration: int,
-        action_type: str,
+        event_type: str,
         step: str,
         actor: str,
         started_at: str,
@@ -85,7 +123,7 @@ class AuditAction:
         self.action_id = action_id
         self.run_id = run_id
         self.iteration = iteration
-        self.action_type = action_type
+        self.event_type = event_type
         self.step = step
         self.actor = actor
         self.started_at = started_at
@@ -111,7 +149,7 @@ class AuditAction:
             "run_id": self.run_id,
             "iteration": self.iteration,
             "action_id": self.action_id,
-            "action_type": self.action_type,
+            "event_type": self.event_type,
             "step": self.step,
             "status": status,
             "actor": self.actor,

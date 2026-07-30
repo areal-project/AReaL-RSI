@@ -8,7 +8,7 @@ The first prototype should optimize for a working closed loop, not a fully gener
 
 ## 2. Core Principles
 
-- `RSIAgent` decides what to do and why.
+- `RSIAgent` converts user goals and queries into user-facing commands.
 - `RSIController` decides how to execute it reliably.
 - Natural language should produce structured actions, not directly replace workflow execution.
 - EnvArena owns env, harness, task execution, trajectory storage, and evaluation progress.
@@ -148,7 +148,7 @@ Acceptance:
 ```text
 User
   -> RSIAgent.chat(...)
-  -> structured action: run_loop
+  -> structured action: start_loop
   -> RSIController.run_loop(...)
   -> AReaL.ensure_rollout_endpoint(ckpt)
   -> EnvArena.register_model(endpoint)

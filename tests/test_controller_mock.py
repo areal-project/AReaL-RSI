@@ -35,7 +35,7 @@ def test_local_controller_runs_mock_iteration(tmp_path):
 
     audit_events = read_ledger(audit_path)
     succeeded = [event for event in audit_events if event["status"] == "succeeded"]
-    assert [event["action_type"] for event in succeeded] == [
+    assert [event["step"] for event in succeeded] == [
         "ensure_rollout_endpoint",
         "register_model",
         "eval",
@@ -46,6 +46,7 @@ def test_local_controller_runs_mock_iteration(tmp_path):
         "holdout_eval",
         "record_decision_pending",
     ]
+    assert {event["event_type"] for event in succeeded} == {"workflow_step"}
     assert succeeded[3]["output"]["score"]["mean_reward"] == 0.5
     assert succeeded[5]["output"]["ckpt"] == "ckpt_000-sft-mock"
 
@@ -75,7 +76,7 @@ def test_local_controller_get_status_loads_state(tmp_path):
     assert loaded.status == "waiting_for_acceptance"
 
 
-def test_execute_action_accepts_harness_shortcut(tmp_path):
+def test_execute_action_starts_loop_with_harness_shortcut(tmp_path):
     memory = Memory(tmp_path / "memory")
     controller = LocalRSIController(
         run_root=tmp_path / "runs",
@@ -87,17 +88,18 @@ def test_execute_action_accepts_harness_shortcut(tmp_path):
 
     result = controller.execute_action(
         Action(
-            type="run_iteration",
+            type="start_loop",
             args={
                 "ckpt": "ckpt_000",
                 "task_set": "swe_verified",
                 "method": "sft",
                 "harness": "mock_harness",
+                "max_iterations": 1,
             },
         )
     )
 
-    assert result["status"] == "waiting_for_acceptance"
+    assert result["status"] == "completed"
     assert result["metadata"]["harness_config"] == {"harness": "mock_harness"}
 
 
@@ -135,8 +137,13 @@ def test_local_controller_runs_mock_loop(tmp_path):
 
     audit_events = read_ledger(tmp_path / "runs" / state.run_id / "audit.jsonl")
     succeeded = [event for event in audit_events if event["status"] == "succeeded"]
-    assert len(succeeded) == 18
-    assert {event["iteration"] for event in succeeded} == {1, 2}
+    workflow_steps = [event for event in succeeded if event["event_type"] == "workflow_step"]
+    loop_decisions = [event for event in succeeded if event["event_type"] == "loop_decision"]
+    user_goals = [event for event in succeeded if event["event_type"] == "user_goal_received"]
+    assert len(workflow_steps) == 18
+    assert {event["iteration"] for event in workflow_steps} == {1, 2}
+    assert len(loop_decisions) == 2
+    assert len(user_goals) == 1
 
     memory_events = read_ledger(tmp_path / "memory" / "ledger.jsonl")
     assert "loop_completed" in [event["title"] for event in memory_events]

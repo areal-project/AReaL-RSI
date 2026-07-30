@@ -67,6 +67,11 @@ To execute a confirmed action in the local mock loop:
 python -m areal_rsi.cli.main chat --backend fake --execute --yes "run ckpt_000 on swe_verified"
 ```
 
+`chat` emits user-facing commands such as `start_loop`, `get_status`,
+`inspect_run`, `stop_run`, and `resume_run`. Internal workflow steps like
+`eval`, `train`, and `holdout_eval` are recorded in `audit.jsonl` rather
+than exposed as chat actions.
+
 OpenAI SDK support is optional:
 
 ```bash

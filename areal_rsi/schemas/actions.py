@@ -6,15 +6,11 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, TypeAlias
 
 ActionType: TypeAlias = Literal[
-    "run_loop",
-    "run_iteration",
+    "start_loop",
     "get_status",
-    "analyze_trajs",
-    "generate_dataset",
-    "train",
-    "accept_ckpt",
-    "resume",
-    "stop",
+    "inspect_run",
+    "resume_run",
+    "stop_run",
 ]
 
 

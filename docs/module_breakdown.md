@@ -54,7 +54,10 @@ class RSIAgent:
 MVP behavior:
 
 - Concrete scaffold is based on OpenAI SDK via `OpenAIRSIAgent`.
-- It can support a small set of actions first: `run_iteration`, `get_status`, `analyze_trajs`, `accept_ckpt`, `stop`, `resume`.
+- It supports goal/query/control actions: `start_loop`, `get_status`,
+  `inspect_run`, `stop_run`, and `resume_run`.
+- It does not expose internal workflow steps such as `eval`, `train`,
+  or `generate_dataset` as user actions.
 - It does not call AReaL or EnvArena directly.
 - It may be tested with fake OpenAI clients without installing the SDK.
 
@@ -294,7 +297,8 @@ Dataset example:
 
 AuditLog purpose:
 
-- Record every controller action with input, output, artifacts, status, and errors.
+- Record user goals, workflow steps, loop decisions, inputs, outputs,
+  artifacts, status, and errors.
 - Provide deterministic provenance for eval scores, datasets, train runs, and checkpoint decisions.
 - Keep large payloads in artifacts and store paths in `audit.jsonl`.
 

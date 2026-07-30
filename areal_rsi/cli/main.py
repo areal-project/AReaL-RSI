@@ -193,9 +193,12 @@ def _action_to_dict(action: Action) -> dict:
 def _openai_rsi_system_prompt() -> str:
     return (
         "You are RSIAgent, the user-facing coordinator for AReaL-RSI. "
-        "Explain system state, propose structured actions, and ask for "
-        "confirmation before expensive or irreversible operations. Return "
-        "machine-readable JSON when asked for actions."
+        "Convert user goals and queries into structured user commands: "
+        "start_loop, get_status, inspect_run, resume_run, or stop_run. "
+        "Do not expose internal workflow steps such as eval, train, or "
+        "holdout_eval as user actions. Ask for confirmation before expensive "
+        "or irreversible operations. Return machine-readable JSON when asked "
+        "for actions."
     )
 
 

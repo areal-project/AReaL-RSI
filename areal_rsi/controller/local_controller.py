@@ -38,21 +38,20 @@ class LocalRSIController:
         self.memory = memory
 
     def execute_action(self, action: Action) -> dict[str, Any]:
-        if action.type == "run_loop":
-            state = self.run_loop(**_normalize_run_loop_args(action.args))
-            return state.to_dict()
-        if action.type == "run_iteration":
-            state = self.run_iteration(**_normalize_run_iteration_args(action.args))
+        if action.type == "start_loop":
+            state = self.run_loop(**_normalize_start_loop_args(action.args))
             return state.to_dict()
         if action.type == "get_status":
             return self.get_status(str(action.args["run_id"])).to_dict()
-        if action.type == "resume":
+        if action.type == "resume_run":
             return self.resume(str(action.args["run_id"])).to_dict()
-        if action.type == "stop":
+        if action.type == "stop_run":
             return self.stop(
                 str(action.args["run_id"]),
                 reason=action.args.get("reason"),
             ).to_dict()
+        if action.type == "inspect_run":
+            return self.inspect_run(str(action.args["run_id"]))
         raise ValueError(f"Unsupported action type: {action.type}")
 
     def run_iteration(
@@ -104,7 +103,6 @@ class LocalRSIController:
             with audit.action(
                 run_id=run_id,
                 iteration=state.iteration,
-                action_type="ensure_rollout_endpoint",
                 step="ensure_rollout_endpoint",
                 input={"ckpt": ckpt, "config": endpoint_config},
             ) as action:
@@ -120,7 +118,6 @@ class LocalRSIController:
             with audit.action(
                 run_id=run_id,
                 iteration=state.iteration,
-                action_type="register_model",
                 step="register_model",
                 input={"endpoint": _endpoint_summary(endpoint)},
             ) as action:
@@ -136,8 +133,7 @@ class LocalRSIController:
             with audit.action(
                 run_id=run_id,
                 iteration=state.iteration,
-                action_type="eval",
-                step="submit_eval",
+                step="eval",
                 input={
                     "model_ref": _model_ref_summary(model_ref),
                     "task_set": task_set,
@@ -164,7 +160,6 @@ class LocalRSIController:
             with audit.action(
                 run_id=run_id,
                 iteration=state.iteration,
-                action_type="collect_trajs",
                 step="collect_trajs",
                 input={"eval_job": _job_summary(eval_job), "include_messages": True},
             ) as action:
@@ -191,7 +186,6 @@ class LocalRSIController:
             with audit.action(
                 run_id=run_id,
                 iteration=state.iteration,
-                action_type="generate_dataset",
                 step="generate_dataset",
                 input={
                     "current_ckpt": ckpt,
@@ -232,7 +226,6 @@ class LocalRSIController:
             with audit.action(
                 run_id=run_id,
                 iteration=state.iteration,
-                action_type="train",
                 step="train",
                 input={
                     "base_ckpt": ckpt,
@@ -264,7 +257,6 @@ class LocalRSIController:
             with audit.action(
                 run_id=run_id,
                 iteration=state.iteration,
-                action_type="update_endpoint",
                 step="update_endpoint",
                 input={
                     "previous_endpoint": _endpoint_summary(endpoint),
@@ -293,7 +285,6 @@ class LocalRSIController:
             with audit.action(
                 run_id=run_id,
                 iteration=state.iteration,
-                action_type="holdout_eval",
                 step="holdout_eval",
                 input={
                     "model_ref": _model_ref_summary(model_ref),
@@ -349,7 +340,6 @@ class LocalRSIController:
             with audit.action(
                 run_id=run_id,
                 iteration=state.iteration,
-                action_type="record_decision_pending",
                 step="record_decision_pending",
                 input={"ckpt": next_ckpt, "holdout_score": holdout_score},
             ) as action:
@@ -400,11 +390,37 @@ class LocalRSIController:
 
         memory = memory or self._require(self.memory, "Memory")
         run_id = self._new_run_id()
+        run_dir = self.run_root / run_id
+        audit = AuditLogger(run_dir / "audit.jsonl")
         ckpt = initial_ckpt
         accepted_ckpts = [initial_ckpt]
         iteration_results: list[dict[str, Any]] = []
         previous_holdout_score: dict[str, Any] | None = None
         state: RunState | None = None
+        audit.record_event(
+            run_id=run_id,
+            event_type="user_goal_received",
+            input={
+                "goal": f"Improve {initial_ckpt} on {task_set}",
+                "initial_ckpt": initial_ckpt,
+                "task_set": task_set,
+                "method": method,
+                "max_iterations": max_iterations,
+                "harness_config": harness_config,
+                "stop_criteria": stop_criteria or {},
+                "train_config": train_config or {},
+                "traj_filter": traj_filter or {},
+                "eval_gate": eval_gate or {},
+            },
+            output={
+                "loop_spec": {
+                    "initial_ckpt": initial_ckpt,
+                    "task_set": task_set,
+                    "method": method,
+                    "max_iterations": max_iterations,
+                }
+            },
+        )
 
         for iteration in range(1, max_iterations + 1):
             loop_metadata = {
@@ -440,6 +456,21 @@ class LocalRSIController:
                 previous_holdout_score=previous_holdout_score,
                 stop_criteria=stop_criteria or {},
                 is_last_iteration=iteration == max_iterations,
+            )
+            audit.record_event(
+                run_id=run_id,
+                iteration=iteration,
+                event_type="loop_decision",
+                step="loop_decision",
+                input={
+                    "previous_ckpt": ckpt,
+                    "candidate_ckpt": candidate_ckpt,
+                    "previous_holdout_score": previous_holdout_score,
+                    "candidate_holdout_score": holdout_score,
+                    "stop_criteria": stop_criteria or {},
+                    "is_last_iteration": iteration == max_iterations,
+                },
+                output={"decision": decision},
             )
             iteration_result = {
                 "iteration": iteration,
@@ -510,6 +541,17 @@ class LocalRSIController:
             self._record(self.memory, "run_stopped", reason or "", state)
         return state
 
+    def inspect_run(self, run_id: str) -> dict[str, Any]:
+        state = self.get_status(run_id)
+        return {
+            "run_id": run_id,
+            "status": state.status,
+            "iteration": state.iteration,
+            "current_step": state.current_step,
+            "ckpt": state.ckpt,
+            "metadata": state.metadata,
+        }
+
     def _save_state(self, state: RunState) -> None:
         state.save(self._state_path(state.run_id))
 
@@ -558,10 +600,11 @@ def _normalize_run_iteration_args(args: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def _normalize_run_loop_args(args: dict[str, Any]) -> dict[str, Any]:
+def _normalize_start_loop_args(args: dict[str, Any]) -> dict[str, Any]:
     normalized = _normalize_run_iteration_args(args)
     if "initial_ckpt" not in normalized and "ckpt" in normalized:
         normalized["initial_ckpt"] = normalized.pop("ckpt")
+    normalized.pop("goal", None)
     return normalized
 
 

@@ -185,6 +185,10 @@ def _rsi_chat_prompt(
     return (
         "Choose exactly one RSI action tool for the user request.\n"
         "Use start_loop for goals that ask to improve a checkpoint or run an RSI loop.\n"
+        "A base RSI config is already loaded and shown as workflow_spec. For start_loop, "
+        "emit only config overrides inferred from the user message in args.overrides. "
+        "Use dot paths such as run.initial_ckpt, env.task_set, run.max_iterations, "
+        "run.method, and env.harness_config.harness. Do not repeat unchanged config fields.\n"
         "Use get_status for brief progress queries, inspect_run for detailed run inspection, "
         "resume_run to continue a stopped run, and stop_run to stop a run.\n"
         "Humans describe goals and constraints; workflow steps such as eval, train, and holdout_eval "

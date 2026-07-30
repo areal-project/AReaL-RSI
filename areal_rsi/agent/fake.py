@@ -31,6 +31,20 @@ class FakeRSIAgent:
                 actions=[Action(type="get_status", args={"run_id": run_id})],
             )
 
+        if "base_config" in workflow_spec:
+            overrides = _config_overrides_from_message(message, normalized)
+            return AgentResponse(
+                reply=f"I can start an RSI loop from config with {len(overrides)} override(s).",
+                actions=[
+                    Action(
+                        type="start_loop",
+                        args={"overrides": overrides},
+                        requires_confirmation=True,
+                    )
+                ],
+                requires_confirmation=True,
+            )
+
         ckpt = _extract_value(message, "--ckpt") or _extract_token(message, prefix="ckpt_") or "ckpt_000"
         task_set = _extract_value(message, "--task-set") or _extract_token(message, prefix="swe_") or "swe_verified"
         method = "opd" if "opd" in normalized else "sft"
@@ -100,3 +114,21 @@ def _extract_round_count(message: str) -> int | None:
 def _extract_token(message: str, *, prefix: str) -> str | None:
     match = re.search(rf"\b({re.escape(prefix)}[\w.-]+)\b", message)
     return match.group(1) if match else None
+
+
+def _config_overrides_from_message(message: str, normalized: str) -> dict[str, Any]:
+    overrides: dict[str, Any] = {}
+    ckpt = _extract_value(message, "--ckpt") or _extract_token(message, prefix="ckpt_")
+    task_set = _extract_value(message, "--task-set") or _extract_token(message, prefix="swe_")
+    max_iterations = _extract_int_value(message, "--max-iterations") or _extract_round_count(message)
+    if ckpt:
+        overrides["run.initial_ckpt"] = ckpt
+    if task_set:
+        overrides["env.task_set"] = task_set
+    if "opd" in normalized:
+        overrides["run.method"] = "opd"
+    elif "sft" in normalized:
+        overrides["run.method"] = "sft"
+    if max_iterations is not None:
+        overrides["run.max_iterations"] = max_iterations
+    return overrides

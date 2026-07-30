@@ -58,6 +58,46 @@ def test_chat_cli_executes_action_with_yes(tmp_path, capsys):
     assert execution["result"]["metadata"]["final_ckpt"] == "ckpt_000-sft-mock-sft-mock-sft-mock"
 
 
+def test_chat_cli_executes_action_from_config(tmp_path, capsys):
+    config_path = tmp_path / "rsi.yaml"
+    config_path.write_text(
+        """
+run:
+  initial_ckpt: ckpt_base
+  max_iterations: 3
+  method: sft
+env:
+  task_set: base_task
+  harness_config:
+    harness: config_harness
+""",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "chat",
+            "--config",
+            str(config_path),
+            "run for 2 iterations",
+            "--run-root",
+            str(tmp_path),
+            "--execute",
+            "--yes",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    result = payload["executions"][0]["result"]
+    assert result["status"] == "completed"
+    assert result["metadata"]["initial_ckpt"] == "ckpt_base"
+    assert result["metadata"]["task_set"] == "base_task"
+    assert result["metadata"]["harness_config"] == {"harness": "config_harness"}
+    assert result["iteration"] == 2
+    assert result["metadata"]["resolved_config"] == "resolved_rsi_config.json"
+
+
 def test_run_loop_mock_cli(tmp_path, capsys):
     exit_code = main(
         [
@@ -78,3 +118,38 @@ def test_run_loop_mock_cli(tmp_path, capsys):
     assert payload["status"] == "completed"
     assert payload["iteration"] == 2
     assert payload["metadata"]["final_ckpt"] == "ckpt_000-sft-mock-sft-mock"
+
+
+def test_run_config_cli(tmp_path, capsys):
+    config_path = tmp_path / "rsi.yaml"
+    config_path.write_text(
+        """
+run:
+  initial_ckpt: ckpt_cfg
+  max_iterations: 1
+  method: sft
+env:
+  task_set: cfg_task
+  harness_config:
+    harness: cfg_harness
+""",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "run",
+            "--config",
+            str(config_path),
+            "--run-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "completed"
+    assert payload["iteration"] == 1
+    assert payload["metadata"]["initial_ckpt"] == "ckpt_cfg"
+    assert payload["metadata"]["task_set"] == "cfg_task"
+    assert payload["metadata"]["resolved_config"] == "resolved_rsi_config.json"

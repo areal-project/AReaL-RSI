@@ -55,8 +55,9 @@ def test_rsi_action_tools_define_start_loop_schema():
     start_loop = rsi_action_tools()[0]
 
     assert start_loop["name"] == "start_loop"
-    assert start_loop["parameters"]["required"] == ["initial_ckpt", "task_set"]
+    assert start_loop["parameters"]["required"] == []
     assert start_loop["parameters"]["additionalProperties"] is False
+    assert "overrides" in start_loop["parameters"]["properties"]
     assert start_loop["parameters"]["properties"]["method"]["enum"] == ["sft", "opd"]
     assert start_loop["parameters"]["properties"]["max_iterations"]["minimum"] == 1
     assert start_loop["parameters"]["properties"]["harness_config"]["additionalProperties"] is False

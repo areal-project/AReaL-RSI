@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from areal_rsi.agent import FakeRSIAgent, OpenAIAgentConfig, OpenAIRSIAgent
+from areal_rsi.config import RSIRunConfig
 from areal_rsi.controller import LocalRSIController
 from areal_rsi.memory import Memory
 from areal_rsi.schemas.actions import Action, AgentResponse
@@ -17,6 +18,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="areal-rsi")
     parser.add_argument("--version", action="store_true", help="Print version and exit.")
     subparsers = parser.add_subparsers(dest="command")
+
+    run = subparsers.add_parser("run", help="Run an RSI loop from a config file.")
+    run.add_argument("--config", required=True, help="Path to RSI config YAML/JSON.")
+    run.add_argument("--run-root", default="runs")
 
     run_mock = subparsers.add_parser("run-mock", help="Run one local mock RSI iteration.")
     run_mock.add_argument("--ckpt", default="ckpt_000")
@@ -46,6 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     chat.add_argument("--execute", action="store_true", help="Execute returned actions with the local controller.")
     chat.add_argument("--yes", action="store_true", help="Execute actions that require confirmation.")
     chat.add_argument("--harness", default="mock_harness")
+    chat.add_argument("--config", help="Base RSI config loaded before interpreting start_loop.")
     return parser
 
 
@@ -59,6 +65,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "run-mock":
         state = _run_mock(args)
+        print(json.dumps(state.to_dict(), indent=2, ensure_ascii=False, default=repr))
+        return 0
+    if args.command == "run":
+        state = _run_config(args)
         print(json.dumps(state.to_dict(), indent=2, ensure_ascii=False, default=repr))
         return 0
     if args.command == "run-loop-mock":
@@ -96,6 +106,21 @@ def _run_mock(args: argparse.Namespace):
     )
 
 
+def _run_config(args: argparse.Namespace):
+    run_root = Path(args.run_root)
+    memory = Memory(run_root / "memory")
+    controller = _mock_controller(run_root, memory)
+    config = RSIRunConfig.load(args.config)
+    return controller.run_config(
+        config,
+        config_metadata={
+            "base_config_path": str(config.source_path) if config.source_path else None,
+            "base_config_hash": config.source_hash,
+            "overrides": {},
+        },
+    )
+
+
 def _run_loop_mock(args: argparse.Namespace):
     run_root = Path(args.run_root)
     memory = Memory(run_root / "memory")
@@ -127,6 +152,7 @@ def _chat(args: argparse.Namespace) -> dict:
     run_root = Path(args.run_root)
     memory = Memory(run_root / "memory")
     controller = _mock_controller(run_root, memory)
+    base_config = RSIRunConfig.load(args.config) if args.config else None
     if args.backend == "fake":
         agent = FakeRSIAgent()
     else:
@@ -137,12 +163,12 @@ def _chat(args: argparse.Namespace) -> dict:
         run_id=args.run_id,
         controller=controller,
         memory=memory,
-        workflow_spec={"harness": args.harness},
+        workflow_spec=_workflow_spec(args.harness, base_config),
     )
     payload = _agent_response_to_dict(response)
     if args.execute:
         payload["executions"] = [
-            _execute_chat_action(controller, action, allow_confirmed=args.yes)
+            _execute_chat_action(controller, action, allow_confirmed=args.yes, base_config=base_config)
             for action in response.actions
         ]
     return payload
@@ -158,17 +184,31 @@ def _mock_controller(run_root: Path, memory: Memory) -> LocalRSIController:
     )
 
 
-def _execute_chat_action(controller: LocalRSIController, action: Action, *, allow_confirmed: bool) -> dict:
+def _execute_chat_action(
+    controller: LocalRSIController,
+    action: Action,
+    *,
+    allow_confirmed: bool,
+    base_config: RSIRunConfig | None = None,
+) -> dict:
     if action.requires_confirmation and not allow_confirmed:
         return {
             "action": _action_to_dict(action),
             "executed": False,
             "reason": "confirmation_required",
         }
+    executable_action = action
+    if base_config is not None and action.type == "start_loop":
+        executable_action = Action(
+            type=action.type,
+            args=action.args,
+            requires_confirmation=action.requires_confirmation,
+            metadata={**action.metadata, "base_config": base_config},
+        )
     return {
         "action": _action_to_dict(action),
         "executed": True,
-        "result": controller.execute_action(action),
+        "result": controller.execute_action(executable_action),
     }
 
 
@@ -188,6 +228,15 @@ def _action_to_dict(action: Action) -> dict:
         "requires_confirmation": action.requires_confirmation,
         "metadata": action.metadata,
     }
+
+
+def _workflow_spec(harness: str, base_config: RSIRunConfig | None) -> dict:
+    spec = {"harness": harness}
+    if base_config is not None:
+        spec["base_config"] = base_config.to_dict()
+        spec["base_config_path"] = str(base_config.source_path) if base_config.source_path else None
+        spec["base_config_hash"] = base_config.source_hash
+    return spec
 
 
 def _openai_rsi_system_prompt() -> str:

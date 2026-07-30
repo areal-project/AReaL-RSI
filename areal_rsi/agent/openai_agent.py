@@ -158,7 +158,7 @@ def _rsi_chat_prompt(
         "Convert the user request into a concise reply and structured actions.\n"
         "Return exactly one JSON object with keys: reply, actions, requires_confirmation, metadata.\n"
         "Each action must have keys: type, args, requires_confirmation, metadata.\n"
-        "Supported action types are: run_iteration, get_status, analyze_trajs, generate_dataset, "
+        "Supported action types are: run_loop, run_iteration, get_status, analyze_trajs, generate_dataset, "
         "train, accept_ckpt, resume, stop.\n\n"
         f"User message:\n{message}\n\n"
         f"run_id:\n{run_id}\n\n"

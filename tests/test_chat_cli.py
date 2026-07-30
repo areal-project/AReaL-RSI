@@ -55,3 +55,25 @@ def test_chat_cli_executes_action_with_yes(tmp_path, capsys):
     assert execution["executed"] is True
     assert execution["result"]["status"] == "waiting_for_acceptance"
     assert execution["result"]["ckpt"] == "ckpt_000-sft-mock"
+
+
+def test_run_loop_mock_cli(tmp_path, capsys):
+    exit_code = main(
+        [
+            "run-loop-mock",
+            "--ckpt",
+            "ckpt_000",
+            "--task-set",
+            "swe_verified",
+            "--max-iterations",
+            "2",
+            "--run-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "completed"
+    assert payload["iteration"] == 2
+    assert payload["metadata"]["final_ckpt"] == "ckpt_000-sft-mock-sft-mock"

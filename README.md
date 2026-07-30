@@ -49,6 +49,12 @@ Build a minimal but recoverable loop:
 python -m areal_rsi.cli.main run-mock --ckpt ckpt_000 --task-set swe_verified
 ```
 
+Run multiple mock RSI iterations under one `run_id`:
+
+```bash
+python -m areal_rsi.cli.main run-loop-mock --ckpt ckpt_000 --task-set swe_verified --max-iterations 2
+```
+
 Chat can generate a structured action without executing it:
 
 ```bash

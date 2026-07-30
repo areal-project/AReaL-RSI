@@ -148,8 +148,8 @@ Acceptance:
 ```text
 User
   -> RSIAgent.chat(...)
-  -> structured action: run_iteration
-  -> RSIController.run_iteration(...)
+  -> structured action: run_loop
+  -> RSIController.run_loop(...)
   -> AReaL.ensure_rollout_endpoint(ckpt)
   -> EnvArena.register_model(endpoint)
   -> EnvArena.submit_eval(EvalRequest(...))
@@ -159,6 +159,7 @@ User
   -> AReaL.update_rollout_endpoint(next_ckpt)
   -> EnvArena.submit_eval(EvalRequest(...))
   -> Memory.record(...)
+  -> accept/stop and continue with next ckpt
   -> RSIAgent.explain(...)
 ```
 

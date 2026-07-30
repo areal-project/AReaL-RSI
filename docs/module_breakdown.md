@@ -131,10 +131,10 @@ Suggested schema:
 ```json
 {
   "run_id": "rsi_run_001",
-  "iteration": 1,
+  "iteration": 2,
   "status": "running",
   "current_step": "collect_trajs",
-  "ckpt": "ckpt_000",
+  "ckpt": "ckpt_002",
   "endpoint": {},
   "model_ref": {},
   "eval_job": {},
@@ -150,9 +150,16 @@ Storage:
 
 ```text
 runs/<run_id>/state.json
-runs/<run_id>/ledger.jsonl
-runs/<run_id>/artifacts/
+runs/<run_id>/audit.jsonl
+runs/<run_id>/artifacts/iter_001/
+runs/<run_id>/artifacts/iter_002/
 ```
+
+`run_id` represents one RSI experiment. `iteration` represents the loop
+round inside that experiment. `run_iteration(...)` still runs one round for
+local tests and adapters; `run_loop(...)` calls the same round executor
+multiple times and records `metadata.iteration_results`,
+`metadata.accepted_ckpts`, and `metadata.final_ckpt`.
 
 ## 5. AReaLService
 
@@ -283,12 +290,23 @@ Dataset example:
 }
 ```
 
-## 8. Memory
+## 8. AuditLog And Memory
 
-Purpose:
+AuditLog purpose:
+
+- Record every controller action with input, output, artifacts, status, and errors.
+- Provide deterministic provenance for eval scores, datasets, train runs, and checkpoint decisions.
+- Keep large payloads in artifacts and store paths in `audit.jsonl`.
+
+AuditLog storage:
+
+- `runs/<run_id>/audit.jsonl`: append-only machine-readable events.
+- `runs/<run_id>/artifacts/`: full payloads referenced by audit events.
+
+Memory purpose:
 
 - Provide durable context for RSIAgent and ResearchAgent.
-- Record every important run event.
+- Record research summaries, observations, decisions, and human feedback.
 - Support debugging and checkpoint selection.
 
 Core interface:

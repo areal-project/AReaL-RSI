@@ -8,6 +8,12 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from areal_rsi.agent.action_tools import (
+    ActionToolCall,
+    action_from_tool_call,
+    reply_for_actions,
+    rsi_action_tools,
+)
 from areal_rsi.schemas.actions import Action, AgentResponse
 from areal_rsi.schemas.core import MemoryContext
 
@@ -36,21 +42,7 @@ class OpenAIClient:
         self.config = config
 
     def complete_sync(self, prompt: str) -> str:
-        try:
-            from openai import OpenAI, OpenAIError
-        except ImportError as exc:
-            raise RuntimeError(
-                "OpenAI agent support requires the optional dependency `openai`. "
-                "Install with `pip install -e '.[agent]'`."
-            ) from exc
-
-        try:
-            client = OpenAI()
-        except OpenAIError as exc:
-            raise RuntimeError(
-                "OpenAI agent support requires OPENAI_API_KEY to be set in the environment "
-                "or an OpenAI client configuration accepted by the SDK."
-            ) from exc
+        client = _openai_client()
         kwargs: dict[str, Any] = {
             "model": self.config.resolved_model,
             "instructions": self.config.system_prompt,
@@ -64,6 +56,32 @@ class OpenAIClient:
         if isinstance(text, str) and text.strip():
             return text.strip()
         return _response_text_from_output(response)
+
+    def tool_calls_sync(
+        self,
+        prompt: str,
+        *,
+        tools: list[dict[str, Any]],
+        tool_choice: str | dict[str, Any] = "auto",
+        max_tool_calls: int = 1,
+    ) -> list[ActionToolCall]:
+        """Return function tool calls from the Responses API."""
+
+        client = _openai_client()
+        kwargs: dict[str, Any] = {
+            "model": self.config.resolved_model,
+            "instructions": self.config.system_prompt,
+            "input": prompt,
+            "tools": tools,
+            "tool_choice": tool_choice,
+            "parallel_tool_calls": False,
+            "max_tool_calls": max_tool_calls,
+            "max_output_tokens": self.config.max_output_tokens,
+        }
+        if self.config.temperature is not None:
+            kwargs["temperature"] = self.config.temperature
+        response = client.responses.create(**kwargs)
+        return _tool_calls_from_response(response)
 
 
 class OpenAIRSIAgent:
@@ -94,8 +112,16 @@ class OpenAIRSIAgent:
             memory_context=memory_context,
             workflow_spec=workflow_spec,
         )
-        response_text = self.client.complete_sync(prompt)
-        return agent_response_from_text(response_text)
+        tool_calls = self.client.tool_calls_sync(prompt, tools=rsi_action_tools())
+        if not tool_calls:
+            raise ValueError("OpenAIRSIAgent did not return an action tool call.")
+        actions = [action_from_tool_call(tool_call) for tool_call in tool_calls]
+        return AgentResponse(
+            reply=reply_for_actions(actions),
+            actions=actions,
+            requires_confirmation=any(action.requires_confirmation for action in actions),
+            metadata={"tool_call_count": len(tool_calls)},
+        )
 
     def propose_next_action(
         self,
@@ -109,11 +135,14 @@ class OpenAIRSIAgent:
             memory_context=memory_context,
             workflow_spec=workflow_spec,
         )
-        response_text = self.client.complete_sync(prompt)
-        response = agent_response_from_text(response_text)
-        if not response.actions:
-            raise ValueError("OpenAIRSIAgent did not return any action.")
-        return response.actions[0]
+        tool_calls = self.client.tool_calls_sync(
+            prompt,
+            tools=rsi_action_tools(),
+            tool_choice="required",
+        )
+        if not tool_calls:
+            raise ValueError("OpenAIRSIAgent did not return an action tool call.")
+        return action_from_tool_call(tool_calls[0])
 
     def explain(
         self,
@@ -139,9 +168,8 @@ def default_rsi_agent_config(model: str | None = None) -> OpenAIAgentConfig:
         model=model,
         system_prompt=(
             "You are RSIAgent, the user-facing coordinator for AReaL-RSI. "
-            "Explain system state, propose structured actions, and ask for "
-            "confirmation before expensive or irreversible operations. Return "
-            "machine-readable JSON when asked for actions."
+            "Explain system state and choose the appropriate action tool when "
+            "the user asks to run, inspect, resume, stop, or query an RSI run."
         ),
     )
 
@@ -155,12 +183,12 @@ def _rsi_chat_prompt(
     workflow_spec: dict[str, Any],
 ) -> str:
     return (
-        "Convert the user request into a concise reply and structured actions.\n"
-        "Return exactly one JSON object with keys: reply, actions, requires_confirmation, metadata.\n"
-        "Each action must have keys: type, args, requires_confirmation, metadata.\n"
-        "Supported action types are: start_loop, get_status, inspect_run, resume_run, stop_run.\n"
+        "Choose exactly one RSI action tool for the user request.\n"
+        "Use start_loop for goals that ask to improve a checkpoint or run an RSI loop.\n"
+        "Use get_status for brief progress queries, inspect_run for detailed run inspection, "
+        "resume_run to continue a stopped run, and stop_run to stop a run.\n"
         "Humans describe goals and constraints; workflow steps such as eval, train, and holdout_eval "
-        "are internal and must not be returned as user actions.\n\n"
+        "are internal and must not be represented as user actions.\n\n"
         f"User message:\n{message}\n\n"
         f"run_id:\n{run_id}\n\n"
         f"run_state:\n{json.dumps(run_state, ensure_ascii=False, default=repr)}\n\n"
@@ -176,9 +204,9 @@ def _rsi_next_action_prompt(
     workflow_spec: dict[str, Any],
 ) -> str:
     return (
-        "Propose the next AReaL-RSI action.\n"
-        "Return exactly one JSON object with keys: reply, actions, requires_confirmation, metadata.\n"
-        "The actions list must contain exactly one action.\n\n"
+        "Choose exactly one RSI action tool for the next step.\n"
+        "Workflow steps such as eval, train, and holdout_eval are internal and must not be "
+        "represented as user actions.\n\n"
         f"run_state:\n{json.dumps(run_state, ensure_ascii=False, default=repr)}\n\n"
         f"memory_context:\n{json.dumps(memory_context, ensure_ascii=False, default=repr)}\n\n"
         f"workflow_spec:\n{json.dumps(workflow_spec, ensure_ascii=False, default=repr)}"
@@ -201,25 +229,6 @@ def _rsi_explain_prompt(
     )
 
 
-def agent_response_from_text(text: str) -> AgentResponse:
-    payload = extract_json_object(text)
-    actions = [
-        Action(
-            type=action["type"],
-            args=action.get("args", {}),
-            requires_confirmation=bool(action.get("requires_confirmation", False)),
-            metadata=action.get("metadata", {}),
-        )
-        for action in payload.get("actions", [])
-    ]
-    return AgentResponse(
-        reply=str(payload.get("reply", "")),
-        actions=actions,
-        requires_confirmation=bool(payload.get("requires_confirmation", any(a.requires_confirmation for a in actions))),
-        metadata=payload.get("metadata", {}),
-    )
-
-
 def extract_json_object(text: str) -> dict[str, Any]:
     try:
         payload = json.loads(text)
@@ -231,6 +240,54 @@ def extract_json_object(text: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("OpenAI response JSON must be an object.")
     return payload
+
+
+def _openai_client() -> Any:
+    try:
+        from openai import OpenAI, OpenAIError
+    except ImportError as exc:
+        raise RuntimeError(
+            "OpenAI agent support requires the optional dependency `openai`. "
+            "Install with `pip install -e '.[agent]'`."
+        ) from exc
+
+    try:
+        return OpenAI()
+    except OpenAIError as exc:
+        raise RuntimeError(
+            "OpenAI agent support requires OPENAI_API_KEY to be set in the environment "
+            "or an OpenAI client configuration accepted by the SDK."
+        ) from exc
+
+
+def _tool_calls_from_response(response: Any) -> list[ActionToolCall]:
+    output = getattr(response, "output", None)
+    if output is None and isinstance(response, dict):
+        output = response.get("output")
+    calls: list[ActionToolCall] = []
+    if not isinstance(output, list):
+        return calls
+    for item in output:
+        item_type = _field(item, "type")
+        if item_type != "function_call":
+            continue
+        name = _field(item, "name")
+        arguments = _field(item, "arguments")
+        if not isinstance(name, str):
+            raise ValueError("OpenAI function call did not include a tool name.")
+        if not isinstance(arguments, str):
+            raise ValueError(f"OpenAI function call {name} did not include JSON arguments.")
+        payload = json.loads(arguments)
+        if not isinstance(payload, dict):
+            raise ValueError(f"OpenAI function call {name} arguments must be a JSON object.")
+        calls.append(ActionToolCall(name=name, arguments=payload))
+    return calls
+
+
+def _field(value: Any, name: str) -> Any:
+    if isinstance(value, dict):
+        return value.get(name)
+    return getattr(value, name, None)
 
 
 def _response_text_from_output(response: Any) -> str:

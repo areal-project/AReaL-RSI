@@ -602,10 +602,27 @@ def _normalize_run_iteration_args(args: dict[str, Any]) -> dict[str, Any]:
 
 def _normalize_start_loop_args(args: dict[str, Any]) -> dict[str, Any]:
     normalized = _normalize_run_iteration_args(args)
-    if "initial_ckpt" not in normalized and "ckpt" in normalized:
-        normalized["initial_ckpt"] = normalized.pop("ckpt")
+    for alias in ("ckpt", "checkpoint", "initial_checkpoint"):
+        if "initial_ckpt" not in normalized and alias in normalized:
+            normalized["initial_ckpt"] = normalized.pop(alias)
+    for alias in ("dataset", "benchmark"):
+        if "task_set" not in normalized and alias in normalized:
+            normalized["task_set"] = normalized.pop(alias)
+    if "max_iterations" not in normalized and "iterations" in normalized:
+        normalized["max_iterations"] = normalized.pop("iterations")
     normalized.pop("goal", None)
-    return normalized
+    allowed = {
+        "initial_ckpt",
+        "task_set",
+        "harness_config",
+        "method",
+        "max_iterations",
+        "stop_criteria",
+        "train_config",
+        "traj_filter",
+        "eval_gate",
+    }
+    return {key: value for key, value in normalized.items() if key in allowed}
 
 
 def _artifact_ref(run_dir: Path, path: Path) -> str:

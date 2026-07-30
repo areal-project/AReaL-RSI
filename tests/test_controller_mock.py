@@ -103,6 +103,34 @@ def test_execute_action_starts_loop_with_harness_shortcut(tmp_path):
     assert result["metadata"]["harness_config"] == {"harness": "mock_harness"}
 
 
+def test_execute_action_starts_loop_with_checkpoint_alias(tmp_path):
+    memory = Memory(tmp_path / "memory")
+    controller = LocalRSIController(
+        run_root=tmp_path / "runs",
+        areal=MockAReaLService(),
+        envarena=MockEnvClient(),
+        research_agent=MockResearchAgent(),
+        memory=memory,
+    )
+
+    result = controller.execute_action(
+        Action(
+            type="start_loop",
+            args={
+                "checkpoint": "ckpt_000",
+                "dataset": "swe_verified",
+                "method": "sft",
+                "harness": "mock_harness",
+                "iterations": 1,
+                "notes": "ignored user-facing context",
+            },
+        )
+    )
+
+    assert result["status"] == "completed"
+    assert result["metadata"]["initial_ckpt"] == "ckpt_000"
+
+
 def test_local_controller_runs_mock_loop(tmp_path):
     memory = Memory(tmp_path / "memory")
     controller = LocalRSIController(

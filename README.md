@@ -130,3 +130,56 @@ Alibaba Cloud PyPI mirror:
 ```bash
 bash scripts/generate_envarena_client.sh
 ```
+
+## AReaL SFT Service
+
+`AReaLService` delegates SFT execution to `AReaLSFTWrapper`, so callers do not
+need to use the wrapper directly. The supplied AReaL YAML controls the model,
+datasets, scheduler (`local`, `ray`, or `slurm`), engine, resources, artifact
+root, and checkpoint policy. Configure only the execution environment in
+Python, then put the experiment YAML path in the existing `train_config`:
+
+```python
+from areal_rsi.services import AReaLService, AReaLSFTConfig
+
+areal = AReaLService.from_sft_config(AReaLSFTConfig(
+    command=("areal",),
+    working_directory="/path/to/AReaL",
+))
+
+train_config = {"experiment_config": "/path/to/gsm8k-sft.yaml"}
+run = areal.train("/models/base", {"examples": []}, "sft", train_config)
+artifacts = areal.get_experiment_artifacts(train_config)
+```
+
+The wrapper invokes `areal train run --config ... --driver ...`, returns the
+latest AReaL checkpoint, and captures output under the trial log directory.
+The driver defaults to `examples.math.gsm8k_sft:main`; set `"driver"` in
+`train_config` only when a particular experiment needs an override.
+
+For the tested containerized Slurm/SPMD route, configure `AReaLSlurmConfig`.
+`render_sbatch_script()` lets a caller inspect the script; `write_sbatch_script()`
+persists it; `submit_experiment()` performs both persistence and `sbatch --parsable`
+submission. Submission is asynchronous and therefore returns a job record, not
+a completed `TrainRun` checkpoint.
+
+```python
+from areal_rsi.services import AReaLService, AReaLSFTConfig, AReaLSlurmConfig
+
+areal = AReaLService.from_sft_config(AReaLSFTConfig(
+    working_directory="/storage/openpsi/users/xuruida.xrd/AReaL",
+    slurm=AReaLSlurmConfig(
+        image="/storage/openpsi/images/areal-dev-20260508.sif",
+        offline_datasets=True,
+    ),
+))
+
+job = areal.submit_experiment({"experiment_config": "/path/to/gsm8k-sft.yaml"})
+print(job["job_id"], job["script_path"])
+```
+
+The generated job launches one `torchrun` process per allocated node and
+requires `scheduler.type: null`, which is the SPMD path. The experiment YAML
+provides `cluster.n_nodes`, `cluster.n_gpus_per_node`, and `cluster.fileroot`.
+The wrapper creates per-run cache and Slurm-log directories below that root.
+Do not put credentials in `container_environment`; inject them at job runtime.

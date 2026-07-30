@@ -1,15 +1,15 @@
-"""Mock EnvArena client implementation."""
+"""Deterministic generic environment client for local tests and demos."""
 
 from __future__ import annotations
 
 from collections import defaultdict
 from typing import Any
 
-from areal_rsi.schemas.core import Endpoint, EvalJob, ModelRef, Traj
+from areal_rsi.schemas.core import Endpoint, EvalJob, EvalRequest, ModelRef, Traj
 
 
-class MockEnvArenaClient:
-    """Deterministic EnvArena client used by local tests and demos."""
+class MockEnvClient:
+    """Deterministic EnvClient implementation used by local tests and demos."""
 
     def __init__(self) -> None:
         self._job_counts: defaultdict[str, int] = defaultdict(int)
@@ -30,38 +30,14 @@ class MockEnvArenaClient:
         updated["metadata"] = {**updated.get("metadata", {}), "updated_by": "mock"}
         return updated
 
-    def submit_eval(
-        self,
-        model_ref: ModelRef,
-        task_set: str,
-        harness_config: dict[str, Any],
-        metadata: dict[str, Any] | None = None,
-    ) -> EvalJob:
+    def submit_eval(self, request: EvalRequest) -> EvalJob:
         return self._new_job(
             prefix="eval",
-            model_ref=model_ref,
-            task_set=task_set,
-            harness_config=harness_config,
-            metadata=metadata,
+            model_ref=request.model_ref,
+            task_set=request.task_set,
+            harness_config=dict(request.harness_config),
+            metadata=dict(request.metadata),
         )
-
-    def submit_rollout(
-        self,
-        model_ref: ModelRef,
-        tasks: list[dict[str, Any]],
-        harness_config: dict[str, Any],
-        source: str,
-        metadata: dict[str, Any] | None = None,
-    ) -> EvalJob:
-        job = self._new_job(
-            prefix="rollout",
-            model_ref=model_ref,
-            task_set="custom_tasks",
-            harness_config=harness_config,
-            metadata={**(metadata or {}), "source": source, "tasks": tasks},
-        )
-        job["num_tasks"] = len(tasks)
-        return job
 
     def get_trajs(self, job: EvalJob, include_messages: bool = False) -> list[Traj]:
         task_set = job.get("task_set", "mock_tasks")

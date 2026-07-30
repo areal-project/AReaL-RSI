@@ -8,7 +8,7 @@ from areal_rsi.controller.run_state import RunState
 from areal_rsi.schemas.actions import Action
 from areal_rsi.schemas.core import TrainMethod
 from areal_rsi.services.areal import AReaLService
-from areal_rsi.services.envarena import EnvArenaClient
+from areal_rsi.services.env_client import EnvClient
 from areal_rsi.services.research import ResearchAgent
 from areal_rsi.memory.memory import Memory
 
@@ -24,7 +24,7 @@ class RSIController(Protocol):
         ckpt: str,
         *,
         areal: AReaLService,
-        envarena: EnvArenaClient,
+        envarena: EnvClient,
         research_agent: ResearchAgent,
         memory: Memory,
         task_set: str,

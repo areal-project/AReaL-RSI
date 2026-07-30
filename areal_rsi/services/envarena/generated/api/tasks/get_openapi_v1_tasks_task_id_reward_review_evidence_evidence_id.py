@@ -1,0 +1,189 @@
+from http import HTTPStatus
+from io import BytesIO
+from typing import Any
+from urllib.parse import quote
+
+import httpx
+
+from ...client import AuthenticatedClient, Client
+from ...models.error import Error
+from ...types import File, Response
+
+
+def _get_kwargs(
+    task_id: str,
+    evidence_id: str,
+) -> dict[str, Any]:
+
+    _kwargs: dict[str, Any] = {
+        "method": "get",
+        "url": "/openapi/v1/tasks/{task_id}/reward-review/evidence/{evidence_id}".format(
+            task_id=quote(str(task_id), safe=""),
+            evidence_id=quote(str(evidence_id), safe=""),
+        ),
+    }
+
+    return _kwargs
+
+
+def _parse_response(
+    *, client: AuthenticatedClient | Client, response: httpx.Response
+) -> Error | File:
+    if response.status_code == 200:
+        response_200 = File(payload=BytesIO(response.content))
+
+        return response_200
+
+    if response.status_code == 404:
+        response_404 = Error.from_dict(response.json())
+
+        return response_404
+
+    response_default = Error.from_dict(response.json())
+
+    return response_default
+
+
+def _build_response(
+    *, client: AuthenticatedClient | Client, response: httpx.Response
+) -> Response[Error | File]:
+    return Response(
+        status_code=HTTPStatus(response.status_code),
+        content=response.content,
+        headers=response.headers,
+        parsed=_parse_response(client=client, response=response),
+    )
+
+
+def sync_detailed(
+    task_id: str,
+    evidence_id: str,
+    *,
+    client: AuthenticatedClient | Client,
+) -> Response[Error | File]:
+    """Stream one declared X2Env Reward evidence file
+
+     Streams only a file referenced by the current structured X2Env Reward review. evidence_id is an
+    opaque value returned by reward-review; callers cannot use this route to request arbitrary sandbox
+    paths.
+
+    Args:
+        task_id (str):
+        evidence_id (str):
+
+    Raises:
+        errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
+        httpx.TimeoutException: If the request takes longer than Client.timeout.
+
+    Returns:
+        Response[Error | File]
+    """
+
+    kwargs = _get_kwargs(
+        task_id=task_id,
+        evidence_id=evidence_id,
+    )
+
+    response = client.get_httpx_client().request(
+        **kwargs,
+    )
+
+    return _build_response(client=client, response=response)
+
+
+def sync(
+    task_id: str,
+    evidence_id: str,
+    *,
+    client: AuthenticatedClient | Client,
+) -> Error | File | None:
+    """Stream one declared X2Env Reward evidence file
+
+     Streams only a file referenced by the current structured X2Env Reward review. evidence_id is an
+    opaque value returned by reward-review; callers cannot use this route to request arbitrary sandbox
+    paths.
+
+    Args:
+        task_id (str):
+        evidence_id (str):
+
+    Raises:
+        errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
+        httpx.TimeoutException: If the request takes longer than Client.timeout.
+
+    Returns:
+        Error | File
+    """
+
+    return sync_detailed(
+        task_id=task_id,
+        evidence_id=evidence_id,
+        client=client,
+    ).parsed
+
+
+async def asyncio_detailed(
+    task_id: str,
+    evidence_id: str,
+    *,
+    client: AuthenticatedClient | Client,
+) -> Response[Error | File]:
+    """Stream one declared X2Env Reward evidence file
+
+     Streams only a file referenced by the current structured X2Env Reward review. evidence_id is an
+    opaque value returned by reward-review; callers cannot use this route to request arbitrary sandbox
+    paths.
+
+    Args:
+        task_id (str):
+        evidence_id (str):
+
+    Raises:
+        errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
+        httpx.TimeoutException: If the request takes longer than Client.timeout.
+
+    Returns:
+        Response[Error | File]
+    """
+
+    kwargs = _get_kwargs(
+        task_id=task_id,
+        evidence_id=evidence_id,
+    )
+
+    response = await client.get_async_httpx_client().request(**kwargs)
+
+    return _build_response(client=client, response=response)
+
+
+async def asyncio(
+    task_id: str,
+    evidence_id: str,
+    *,
+    client: AuthenticatedClient | Client,
+) -> Error | File | None:
+    """Stream one declared X2Env Reward evidence file
+
+     Streams only a file referenced by the current structured X2Env Reward review. evidence_id is an
+    opaque value returned by reward-review; callers cannot use this route to request arbitrary sandbox
+    paths.
+
+    Args:
+        task_id (str):
+        evidence_id (str):
+
+    Raises:
+        errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
+        httpx.TimeoutException: If the request takes longer than Client.timeout.
+
+    Returns:
+        Error | File
+    """
+
+    return (
+        await asyncio_detailed(
+            task_id=task_id,
+            evidence_id=evidence_id,
+            client=client,
+        )
+    ).parsed

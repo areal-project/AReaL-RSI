@@ -41,7 +41,7 @@ Deliverables:
 
 - Python package skeleton.
 - `RSIController.run_iteration(...)`.
-- Mock `AReaLService`, `EnvArenaClient`, `ResearchAgent`, and `Memory`.
+- Mock `AReaLService`, `EnvClient`, `ResearchAgent`, and `Memory`.
 - OpenAI SDK backed `RSIAgent` and `ResearchAgent` scaffolds with lazy optional imports.
 - Local run state persistence.
 - Unit tests for successful run, resume, and failure recording.
@@ -152,12 +152,12 @@ User
   -> RSIController.run_iteration(...)
   -> AReaL.ensure_rollout_endpoint(ckpt)
   -> EnvArena.register_model(endpoint)
-  -> EnvArena.submit_eval(model_ref, task_set)
+  -> EnvArena.submit_eval(EvalRequest(...))
   -> EnvArena.get_trajs(eval_job)
   -> ResearchAgent.generate_dataset(trajs, memory_context, ckpt)
   -> AReaL.train(base_ckpt, dataset, method=sft)
   -> AReaL.update_rollout_endpoint(next_ckpt)
-  -> EnvArena.submit_eval(model_ref, holdout_task_set)
+  -> EnvArena.submit_eval(EvalRequest(...))
   -> Memory.record(...)
   -> RSIAgent.explain(...)
 ```
@@ -174,12 +174,15 @@ areal_rsi/
     run_state.py
     workflow.py
   services/
+    env_client/
+      base.py
+      mock.py
     areal/
       service.py
       mock.py
     envarena/
       client.py
-      mock.py
+      generated/
     research/
       agent.py
       mock.py

@@ -10,7 +10,7 @@ from areal_rsi.agent import FakeRSIAgent, OpenAIAgentConfig, OpenAIRSIAgent
 from areal_rsi.controller import LocalRSIController
 from areal_rsi.memory import Memory
 from areal_rsi.schemas.actions import Action, AgentResponse
-from areal_rsi.services import MockAReaLService, MockEnvArenaClient, MockResearchAgent
+from areal_rsi.services import MockAReaLService, MockEnvClient, MockResearchAgent
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -72,7 +72,7 @@ def _run_mock(args: argparse.Namespace):
     controller = LocalRSIController(
         run_root=run_root,
         areal=MockAReaLService(),
-        envarena=MockEnvArenaClient(),
+        envarena=MockEnvClient(),
         research_agent=MockResearchAgent(),
         memory=memory,
     )
@@ -121,7 +121,7 @@ def _mock_controller(run_root: Path, memory: Memory) -> LocalRSIController:
     return LocalRSIController(
         run_root=run_root,
         areal=MockAReaLService(),
-        envarena=MockEnvArenaClient(),
+        envarena=MockEnvClient(),
         research_agent=MockResearchAgent(),
         memory=memory,
     )

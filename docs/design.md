@@ -344,7 +344,7 @@ class RSIController:
         ckpt: str,
         *,
         areal: "AReaLService",
-        envarena: "EnvArenaClient",
+        envarena: "EnvClient",
         research_agent: "ResearchAgent",
         memory: "Memory",
         task_set: str,
@@ -383,45 +383,33 @@ class AReaLService:
         method: TrainMethod,
         config: dict[str, Any],
         *,
-        envarena: "EnvArenaClient | None" = None,
+        envarena: "EnvClient | None" = None,
         model_ref: ModelRef | None = None,
         harness_config: dict[str, Any] | None = None,
     ) -> TrainRun:
         """执行 SFT 或 OPD；OPD 通过 EnvArena 采集 on-policy traj。"""
 ```
 
-### 6.5 EnvArena Client
+### 6.5 Environment Client
 
 ```python
-class EnvArenaClient:
+class EnvClient(Protocol):
     def register_model(self, endpoint: Endpoint) -> ModelRef:
         """注册 AReaL inference endpoint，返回 EnvArena 模型引用。"""
 
     def update_model(self, model_ref: ModelRef, endpoint: Endpoint) -> ModelRef:
         """AReaL endpoint/ckpt 变化后，更新 EnvArena 注册。"""
 
-    def submit_eval(
-        self,
-        model_ref: ModelRef,
-        task_set: str,
-        harness_config: dict[str, Any],
-        metadata: dict[str, Any] | None = None,
-    ) -> EvalJob:
+    def submit_eval(self, request: EvalRequest) -> EvalJob:
         """提交评测任务。"""
 
-    def submit_rollout(
-        self,
-        model_ref: ModelRef,
-        tasks: list[dict[str, Any]],
-        harness_config: dict[str, Any],
-        source: TrajSource,
-        metadata: dict[str, Any] | None = None,
-    ) -> EvalJob:
-        """提交 ResearchAgent 验证或 OPD 需要的 rollout。"""
-
     def get_trajs(self, job: EvalJob, include_messages: bool = False) -> list[Traj]:
-        """获取 eval/rollout 产出的轨迹。"""
+        """获取评测产出的轨迹。"""
 ```
+
+`EnvArenaClient(EnvClient)` is the concrete EnvArena control-plane adapter.
+Its registry, Job status/result, and detailed trajectory APIs remain
+EnvArena-specific rather than becoming controller requirements.
 
 ### 6.6 ResearchAgent
 
@@ -433,7 +421,7 @@ class ResearchAgent:
         memory_context: MemoryContext,
         current_ckpt: str,
         *,
-        envarena: EnvArenaClient | None = None,
+        envarena: EnvClient | None = None,
         model_ref: ModelRef | None = None,
         harness_config: dict[str, Any] | None = None,
         traj_filter: dict[str, Any] | None = None,
@@ -565,12 +553,12 @@ def run_iteration(
     endpoint = areal.ensure_rollout_endpoint(ckpt, config={"backend": "areal"})
     model_ref = envarena.register_model(endpoint)
 
-    eval_job = envarena.submit_eval(
+    eval_job = envarena.submit_eval(EvalRequest(
         model_ref=model_ref,
         task_set=task_set,
         harness_config=harness_config,
         metadata={"source": "eval"},
-    )
+    ))
     state.save(step="submit_eval", eval_job=eval_job)
 
     trajs = envarena.get_trajs(eval_job, include_messages=True)
@@ -602,12 +590,12 @@ def run_iteration(
     endpoint = areal.update_rollout_endpoint(endpoint, next_ckpt)
     model_ref = envarena.update_model(model_ref, endpoint)
 
-    holdout_job = envarena.submit_eval(
+    holdout_job = envarena.submit_eval(EvalRequest(
         model_ref=model_ref,
         task_set=f"{task_set}_holdout",
         harness_config=harness_config,
         metadata={"source": "holdout_eval"},
-    )
+    ))
     holdout_trajs = envarena.get_trajs(holdout_job)
 
     memory.record(

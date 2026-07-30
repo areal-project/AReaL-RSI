@@ -1,6 +1,19 @@
-"""EnvArena client contract and implementations."""
+"""EnvArena control-plane client and generated SDK."""
 
-from .client import EnvArenaClient
-from .mock import MockEnvArenaClient
+from .client import (
+    EnvArenaClient,
+    EnvArenaConfig,
+    EnvArenaConfigurationError,
+    EnvArenaError,
+    EnvArenaHTTPError,
+    EnvArenaVersionRef,
+)
 
-__all__ = ["EnvArenaClient", "MockEnvArenaClient"]
+__all__ = [
+    "EnvArenaClient",
+    "EnvArenaConfig",
+    "EnvArenaConfigurationError",
+    "EnvArenaError",
+    "EnvArenaHTTPError",
+    "EnvArenaVersionRef",
+]

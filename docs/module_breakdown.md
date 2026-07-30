@@ -7,7 +7,7 @@ Human
   <-> RSIAgent
         -> RSIController
               -> AReaLService
-              -> EnvArenaClient
+              -> EnvClient
               -> ResearchAgent
               -> Memory
 ```
@@ -191,7 +191,7 @@ MVP:
 - Implement mock service first.
 - Real SFT integration comes before OPD.
 
-## 6. EnvArenaClient
+## 6. EnvClient and EnvArenaClient
 
 Purpose:
 
@@ -203,30 +203,14 @@ Purpose:
 Core interface:
 
 ```python
-class EnvArenaClient:
+class EnvClient(Protocol):
     def register_model(self, endpoint: dict) -> dict:
         ...
 
     def update_model(self, model_ref: dict, endpoint: dict) -> dict:
         ...
 
-    def submit_eval(
-        self,
-        model_ref: dict,
-        task_set: str,
-        harness_config: dict,
-        metadata: dict | None = None,
-    ) -> dict:
-        ...
-
-    def submit_rollout(
-        self,
-        model_ref: dict,
-        tasks: list[dict],
-        harness_config: dict,
-        source: str,
-        metadata: dict | None = None,
-    ) -> dict:
+    def submit_eval(self, request: EvalRequest) -> dict:
         ...
 
     def get_trajs(self, job: dict, include_messages: bool = False) -> list[dict]:
@@ -235,9 +219,10 @@ class EnvArenaClient:
 
 MVP:
 
-- Start with mock trajectories.
-- Then implement a CLI-backed adapter using `arena --json`.
-- Keep a trajectory normalization function so downstream modules do not depend on raw API details.
+- `MockEnvClient` implements the generic local workflow contract.
+- `EnvArenaClient` implements the generic contract plus EnvArena-specific
+  asset discovery, BenchmarkJob, and trajectory-detail APIs.
+- Keep trajectory normalization so downstream modules do not depend on raw API details.
 
 ## 7. ResearchAgent
 

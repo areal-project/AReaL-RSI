@@ -1,7 +1,7 @@
 from areal_rsi.controller import LocalRSIController
 from areal_rsi.memory import Memory
 from areal_rsi.schemas.actions import Action
-from areal_rsi.services import MockAReaLService, MockEnvArenaClient, MockResearchAgent
+from areal_rsi.services import MockAReaLService, MockEnvClient, MockResearchAgent
 
 
 def test_local_controller_runs_mock_iteration(tmp_path):
@@ -9,7 +9,7 @@ def test_local_controller_runs_mock_iteration(tmp_path):
     controller = LocalRSIController(
         run_root=tmp_path / "runs",
         areal=MockAReaLService(),
-        envarena=MockEnvArenaClient(),
+        envarena=MockEnvClient(),
         research_agent=MockResearchAgent(),
         memory=memory,
     )
@@ -34,7 +34,7 @@ def test_local_controller_get_status_loads_state(tmp_path):
     controller = LocalRSIController(
         run_root=tmp_path / "runs",
         areal=MockAReaLService(),
-        envarena=MockEnvArenaClient(),
+        envarena=MockEnvClient(),
         research_agent=MockResearchAgent(),
         memory=memory,
     )
@@ -55,7 +55,7 @@ def test_execute_action_accepts_harness_shortcut(tmp_path):
     controller = LocalRSIController(
         run_root=tmp_path / "runs",
         areal=MockAReaLService(),
-        envarena=MockEnvArenaClient(),
+        envarena=MockEnvClient(),
         research_agent=MockResearchAgent(),
         memory=memory,
     )

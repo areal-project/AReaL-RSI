@@ -54,6 +54,8 @@ class RSIAgent:
 MVP behavior:
 
 - Concrete scaffold is based on OpenAI SDK via `OpenAIRSIAgent`.
+- OpenAI-backed user commands are emitted through Responses API function
+  tool calls, then converted into local `Action` objects.
 - It supports goal/query/control actions: `start_loop`, `get_status`,
   `inspect_run`, `stop_run`, and `resume_run`.
 - It does not expose internal workflow steps such as `eval`, `train`,

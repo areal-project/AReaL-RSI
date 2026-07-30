@@ -26,6 +26,9 @@ MemoryContext = dict[str, Any]
 The concrete scaffold is `OpenAIRSIAgent`, backed by the optional
 `openai` dependency. The SDK is imported lazily so controller and
 mock-service tests do not require OpenAI credentials.
+For user-facing commands, `OpenAIRSIAgent` uses OpenAI Responses API
+function tools and converts returned tool calls into local `Action`
+objects. It does not parse free-form JSON text for RSI control actions.
 
 Install agent support with:
 

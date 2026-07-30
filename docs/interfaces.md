@@ -83,7 +83,7 @@ class RSIController(Protocol):
         ckpt: str,
         *,
         areal: AReaLService,
-        envarena: EnvArenaClient,
+        envarena: EnvClient,
         research_agent: ResearchAgent,
         memory: Memory,
         task_set: str,
@@ -131,38 +131,34 @@ class AReaLService(Protocol):
         ...
 ```
 
-### EnvArenaClient
+### EnvClient
 
 ```python
-class EnvArenaClient(Protocol):
+class EnvClient(Protocol):
     def register_model(self, endpoint: Endpoint) -> ModelRef:
         ...
 
     def update_model(self, model_ref: ModelRef, endpoint: Endpoint) -> ModelRef:
         ...
 
-    def submit_eval(
-        self,
-        model_ref: ModelRef,
-        task_set: str,
-        harness_config: dict[str, Any],
-        metadata: dict[str, Any] | None = None,
-    ) -> EvalJob:
+    def submit_eval(self, request: EvalRequest) -> EvalJob:
         ...
 
-    def submit_rollout(
-        self,
-        model_ref: ModelRef,
-        tasks: list[dict[str, Any]],
-        harness_config: dict[str, Any],
-        source: TrajSource,
-        metadata: dict[str, Any] | None = None,
-    ) -> EvalJob:
+    def get_eval_progress(self, job: EvalJob) -> dict:
+        ...
+
+    def get_eval_result(self, job: EvalJob) -> dict:
         ...
 
     def get_trajs(self, job: EvalJob, include_messages: bool = False) -> list[Traj]:
         ...
 ```
+
+`EnvClient` and `MockEnvClient` live in `areal_rsi.services.env_client`.
+`EnvArenaClient`, its configuration, and its generated SDK live under
+`areal_rsi.services.env_client.envarena`; it additionally
+exposes registry asset discovery, native BenchmarkJob summary/detail APIs, and
+trajectory-detail APIs that are not required by the generic controller contract.
 
 ### ResearchAgent
 

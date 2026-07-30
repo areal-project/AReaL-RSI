@@ -66,3 +66,56 @@ OpenAI SDK support is optional:
 ```bash
 pip install -e '.[agent]'
 ```
+
+## EnvArena Control Plane Client
+
+The real EnvArena adapter is generated from
+`docs/envarena-openapi.yaml`, then wrapped by `EnvArenaClient` so the
+controller does not depend on generated implementation details. Copy and
+adjust the YAML example, then provide the bearer token through its configured
+environment variable:
+
+The platform-neutral contract and local mock live in
+`areal_rsi.services.env_client`; EnvArena's implementation and generated SDK
+live in `areal_rsi.services.env_client.envarena`.
+
+```bash
+cp config/envarena.example.yaml config/envarena.yaml
+export ENVARENA_API_TOKEN='...'
+```
+
+```python
+from areal_rsi.services import EnvArenaClient
+
+client = EnvArenaClient.from_yaml("config/envarena.yaml")
+benchmarks = client.list_benchmarks()
+skills = client.list_skills()
+```
+
+The adapter supports gateway-model upsert, benchmark/skill/harness discovery,
+BenchmarkJob submission, job summary/result lookup, and trajectory retrieval.
+Set the control-plane address with `control_base_url` or, preferably for
+deployment-specific configuration, `control_base_url_env` (default:
+`ENVARENA_CONTROL_BASE_URL`). The value may be either the service root or end
+in `/openapi/v1`.
+
+Harness and Benchmark versions are evaluation inputs, not global client
+defaults. Construct an `EvalRequest` with `harness_config["harness_ref"]` and
+a `"benchmark@version"` task set, then pass it to `submit_eval`.
+
+```python
+from areal_rsi.schemas import EvalRequest
+
+job = client.submit_eval(EvalRequest(
+    model_ref={"registry_ref": {"key": "your-model", "version": "1.0.0"}},
+    task_set="your-benchmark@1.0.0",
+    harness_config={"harness_ref": {"key": "your-harness", "version": "1.0.0"}},
+))
+```
+
+After updating the OpenAPI file, regenerate the vendored SDK with the configured
+Alibaba Cloud PyPI mirror:
+
+```bash
+bash scripts/generate_envarena_client.sh
+```

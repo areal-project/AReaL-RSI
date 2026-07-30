@@ -11,9 +11,9 @@ from areal_rsi.controller.run_state import RunState
 from areal_rsi.memory.artifacts import ArtifactStore
 from areal_rsi.memory.memory import Memory
 from areal_rsi.schemas.actions import Action
-from areal_rsi.schemas.core import TrainMethod
+from areal_rsi.schemas.core import EvalRequest, TrainMethod
 from areal_rsi.services.areal import AReaLService
-from areal_rsi.services.envarena import EnvArenaClient
+from areal_rsi.services.env_client import EnvClient
 from areal_rsi.services.research import ResearchAgent
 
 
@@ -25,7 +25,7 @@ class LocalRSIController:
         run_root: str | Path = "runs",
         *,
         areal: AReaLService | None = None,
-        envarena: EnvArenaClient | None = None,
+        envarena: EnvClient | None = None,
         research_agent: ResearchAgent | None = None,
         memory: Memory | None = None,
     ):
@@ -62,12 +62,12 @@ class LocalRSIController:
         traj_filter: dict[str, Any] | None = None,
         eval_gate: dict[str, Any] | None = None,
         areal: AReaLService | None = None,
-        envarena: EnvArenaClient | None = None,
+        envarena: EnvClient | None = None,
         research_agent: ResearchAgent | None = None,
         memory: Memory | None = None,
     ) -> RunState:
         areal = areal or self._require(self.areal, "AReaLService")
-        envarena = envarena or self._require(self.envarena, "EnvArenaClient")
+        envarena = envarena or self._require(self.envarena, "EnvClient")
         research_agent = research_agent or self._require(self.research_agent, "ResearchAgent")
         memory = memory or self._require(self.memory, "Memory")
 
@@ -98,12 +98,12 @@ class LocalRSIController:
             self._save_state(state)
             artifacts.write_json("model_ref.json", model_ref)
 
-            eval_job = envarena.submit_eval(
+            eval_job = envarena.submit_eval(EvalRequest(
                 model_ref=model_ref,
                 task_set=task_set,
                 harness_config=harness_config,
                 metadata={"run_id": run_id, "source": "eval"},
-            )
+            ))
             state.mark_step("submit_eval", eval_job=eval_job)
             self._save_state(state)
             artifacts.write_json("eval_job.json", eval_job)
@@ -150,12 +150,12 @@ class LocalRSIController:
             artifacts.write_json("updated_model_ref.json", model_ref)
 
             holdout_task_set = str((eval_gate or {}).get("holdout_task_set", f"{task_set}_holdout"))
-            holdout_job = envarena.submit_eval(
+            holdout_job = envarena.submit_eval(EvalRequest(
                 model_ref=model_ref,
                 task_set=holdout_task_set,
                 harness_config=harness_config,
                 metadata={"run_id": run_id, "source": "holdout_eval"},
-            )
+            ))
             holdout_trajs = envarena.get_trajs(holdout_job, include_messages=False)
             state.mark_step("holdout_eval", holdout_job=holdout_job)
             self._save_state(state)

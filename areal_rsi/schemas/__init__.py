@@ -4,6 +4,7 @@ from .actions import Action, ActionType, AgentResponse
 from .core import (
     Dataset,
     Endpoint,
+    EvalRequest,
     EvalJob,
     MemoryContext,
     ModelRef,
@@ -19,6 +20,7 @@ __all__ = [
     "AgentResponse",
     "Dataset",
     "Endpoint",
+    "EvalRequest",
     "EvalJob",
     "MemoryContext",
     "ModelRef",

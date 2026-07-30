@@ -6,7 +6,8 @@ EnvArena without forcing early, brittle dataclass schemas.
 
 from __future__ import annotations
 
-from typing import Any, Literal, TypeAlias
+from dataclasses import dataclass, field
+from typing import Any, Literal, Mapping, TypeAlias
 
 TrainMethod: TypeAlias = Literal["sft", "opd"]
 TrajSource: TypeAlias = Literal["eval", "research_validation", "opd"]
@@ -19,3 +20,17 @@ Dataset: TypeAlias = dict[str, Any]
 TrainRun: TypeAlias = dict[str, Any]
 MemoryContext: TypeAlias = dict[str, Any]
 Metadata: TypeAlias = dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class EvalRequest:
+    """Structured evaluation submission shared by all environment clients.
+
+    ``task_set`` and ``harness_config`` remain platform-neutral at this layer.
+    Concrete clients validate and encode them for their own evaluation API.
+    """
+
+    model_ref: ModelRef
+    task_set: str
+    harness_config: Mapping[str, Any] = field(default_factory=dict)
+    metadata: Mapping[str, Any] = field(default_factory=dict)

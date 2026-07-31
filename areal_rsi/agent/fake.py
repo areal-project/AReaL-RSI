@@ -53,18 +53,23 @@ class FakeRSIAgent:
             )
 
         ckpt = _extract_value(message, "--ckpt") or _extract_token(message, prefix="ckpt_") or "ckpt_000"
-        task_set = _extract_value(message, "--task-set") or _extract_token(message, prefix="swe_") or "swe_verified"
+        benchmark = (
+            _extract_value(message, "--benchmark")
+            or _extract_value(message, "--task-set")
+            or _extract_token(message, prefix="swe_")
+            or "swe_verified"
+        )
         method = "opd" if "opd" in normalized else "sft"
         max_iterations = _extract_int_value(message, "--max-iterations") or _extract_round_count(message) or 3
         return AgentResponse(
-            reply=f"I can start a {method} RSI loop for {ckpt} on {task_set}.",
+            reply=f"I can start a {method} RSI loop for {ckpt} on {benchmark}.",
             actions=[
                 Action(
                     type="start_loop",
                     args={
-                        "goal": f"Improve {ckpt} on {task_set}.",
+                        "goal": f"Improve {ckpt} on {benchmark}.",
                         "initial_ckpt": ckpt,
-                        "task_set": task_set,
+                        "benchmark": benchmark,
                         "method": method,
                         "max_iterations": max_iterations,
                         "harness_config": {"harness": workflow_spec.get("harness", "mock_harness")},
@@ -126,12 +131,16 @@ def _extract_token(message: str, *, prefix: str) -> str | None:
 def _config_overrides_from_message(message: str, normalized: str) -> dict[str, Any]:
     overrides: dict[str, Any] = {}
     ckpt = _extract_value(message, "--ckpt") or _extract_token(message, prefix="ckpt_")
-    task_set = _extract_value(message, "--task-set") or _extract_token(message, prefix="swe_")
+    benchmark = (
+        _extract_value(message, "--benchmark")
+        or _extract_value(message, "--task-set")
+        or _extract_token(message, prefix="swe_")
+    )
     max_iterations = _extract_int_value(message, "--max-iterations") or _extract_round_count(message)
     if ckpt:
         overrides["run.initial_ckpt"] = ckpt
-    if task_set:
-        overrides["env.task_set"] = task_set
+    if benchmark:
+        overrides["env.benchmark"] = benchmark
     if "opd" in normalized:
         overrides["run.method"] = "opd"
     elif "sft" in normalized:

@@ -35,13 +35,12 @@ controller tests and demos.
 
 Build a minimal but recoverable loop:
 
-1. Register an AReaL inference endpoint in EnvArena.
-2. Submit an EnvArena evaluation and collect trajectories.
-3. Generate a dataset from trajectories.
-4. Run AReaL SFT training.
-5. Run holdout evaluation for the new checkpoint.
-6. Record the run in Memory.
-7. Let RSIAgent explain the run and propose the next action.
+1. Submit an EnvArena evaluation for the current model path and collect trajectories.
+2. Generate a dataset from trajectories.
+3. Run AReaL SFT training.
+4. Run holdout evaluation for the new checkpoint.
+5. Record the run in Memory.
+6. Let RSIAgent explain the run and propose the next action.
 
 ## Local Mock Loop
 
@@ -131,24 +130,30 @@ benchmarks = client.list_benchmarks()
 skills = client.list_skills()
 ```
 
-The adapter supports gateway-model upsert, benchmark/skill/harness discovery,
-BenchmarkJob submission, job summary/result lookup, and trajectory retrieval.
+The adapter's platform-neutral contract is the evaluation lifecycle:
+`submit_eval`, `get_eval_progress`, `get_eval_result`, and `get_trajs`.
 Set the control-plane address with `control_base_url` or, preferably for
 deployment-specific configuration, `control_base_url_env` (default:
 `ENVARENA_CONTROL_BASE_URL`). The value may be either the service root or end
-in `/openapi/v1`.
+in `/openapi/v1`. `envarena.job_config` can define defaults such as
+`sample_numbers`, `concurrency_policy`, `tags`, `model_parameters`, and
+`model_env`; values in each `EvalRequest.job_config` override those defaults.
 
-Harness and Benchmark versions are evaluation inputs, not global client
-defaults. Construct an `EvalRequest` with `harness_config["harness_ref"]` and
-a `"benchmark@version"` task set, then pass it to `submit_eval`.
+Model, benchmark, harness, and skill are evaluation inputs, not global client
+defaults. `model` and `skill` are asset configs with `type: "ref"` for an
+existing Arena asset or `type: "new"` when the client should create/register or
+start it from the remaining fields. `benchmark` and `harness` are existing
+Arena refs only. `benchmark` is the old task set concept.
 
 ```python
 from areal_rsi.schemas import EvalRequest
 
 job = client.submit_eval(EvalRequest(
-    model_ref={"registry_ref": {"key": "your-model", "version": "1.0.0"}},
-    task_set="your-benchmark@1.0.0",
-    harness_config={"harness_ref": {"key": "your-harness", "version": "1.0.0"}},
+    model={"type": "ref", "registry_ref": {"key": "your-model", "version": "1.0.0"}},
+    benchmark="your-benchmark@1.0.0",
+    harness={"key": "your-harness", "version": "1.0.0"},
+    skill={"type": "ref", "ref": "your-skill@1.0.0"},
+    job_config={"sample_numbers": 3, "tags": ["rsi"]},
 ))
 ```
 
@@ -165,8 +170,7 @@ bash scripts/generate_envarena_client.sh
 need to use the wrapper directly. The supplied AReaL YAML controls model, data,
 engine, resources, artifact root, and checkpoint policy. The service config
 only selects a scheduler (`local` or `slurm`), environment variables, optional
-Slurm settings, the command that starts the training YAML, and static rollout
-endpoint responses used by the controller to register checkpoints with EnvArena.
+Slurm settings, and the command that starts the training YAML.
 
 ```python
 from areal_rsi.services import AReaLService

@@ -1,22 +1,6 @@
 # Deployment settings for AReaLService. Model, data, and training resources
 # remain in the AReaL training YAML passed through train_config_path.
 areal:
-  # Static endpoint responses used by the controller to register the current
-  # and newly trained checkpoints with EnvArena.
-  rollout:
-    ensure_rollout_endpoint:
-      model_ref: ckpt_000
-      base_url: https://your-areal-rollout.example/v1
-      protocol: openai-compatible
-      metadata:
-        state: ready
-    update_rollout_endpoint:
-      model_ref: ckpt_next
-      base_url: https://your-areal-rollout.example/v1
-      protocol: openai-compatible
-      metadata:
-        state: updated
-
   sft:
     # The complete command that accepts `--config <training-yaml>`.
     # Use a different command/entrypoint here for a different AReaL driver.

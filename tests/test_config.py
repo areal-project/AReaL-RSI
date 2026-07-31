@@ -8,7 +8,7 @@ def test_rsi_config_loads_yaml_and_applies_overrides(tmp_path):
 run:
   initial_ckpt: ckpt_000
 env:
-  task_set: swe_verified
+  benchmark: swe_verified
 """,
         encoding="utf-8",
     )
@@ -27,12 +27,12 @@ env:
     assert config.data["env"]["harness_config"] == {"harness": "custom_harness"}
     assert config.to_run_loop_kwargs() == {
         "initial_ckpt": "ckpt_000",
-        "task_set": "swe_verified",
+        "benchmark": "swe_verified",
         "harness_config": {"harness": "custom_harness"},
         "method": "sft",
         "max_iterations": 2,
         "stop_criteria": {},
         "train_config": {"epochs": 1},
         "traj_filter": None,
-        "eval_gate": {"holdout_task_set": "swe_verified_holdout"},
+        "eval_gate": {"holdout_benchmark": "swe_verified_holdout"},
     }

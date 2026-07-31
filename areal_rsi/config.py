@@ -48,14 +48,14 @@ class RSIRunConfig:
         env = self.data["env"]
         return {
             "initial_ckpt": run["initial_ckpt"],
-            "task_set": env["task_set"],
+            "benchmark": env["benchmark"],
             "harness_config": env["harness_config"],
             "method": run.get("method", "sft"),
             "max_iterations": int(run.get("max_iterations", 3)),
             "stop_criteria": self.data.get("stop_criteria", {}),
             "train_config": self.data.get("train", {}).get("config"),
             "traj_filter": self.data.get("research", {}).get("traj_filter"),
-            "eval_gate": {"holdout_task_set": env["holdout_task_set"]},
+            "eval_gate": {"holdout_benchmark": env["holdout_benchmark"]},
         }
 
     def to_dict(self) -> dict[str, Any]:
@@ -78,9 +78,13 @@ def normalize_rsi_config(data: dict[str, Any]) -> dict[str, Any]:
     run.setdefault("max_iterations", 3)
     if "initial_ckpt" not in run:
         raise ValueError("RSI config requires run.initial_ckpt.")
-    if "task_set" not in env:
-        raise ValueError("RSI config requires env.task_set.")
-    env.setdefault("holdout_task_set", f"{env['task_set']}_holdout")
+    if "benchmark" not in env and "task_set" in env:
+        env["benchmark"] = env.pop("task_set")
+    if "benchmark" not in env:
+        raise ValueError("RSI config requires env.benchmark.")
+    if "holdout_benchmark" not in env and "holdout_task_set" in env:
+        env["holdout_benchmark"] = env.pop("holdout_task_set")
+    env.setdefault("holdout_benchmark", f"{env['benchmark']}_holdout")
     env.setdefault("harness_config", {"harness": "mock_harness"})
     train.setdefault("config", {"epochs": 1})
     research.setdefault("traj_filter", None)
@@ -119,6 +123,10 @@ def _load_mapping(path: Path, raw: bytes) -> dict[str, Any]:
 def _set_dot_path(data: dict[str, Any], path: str, value: Any) -> None:
     if not path or ".." in path:
         raise ValueError(f"Invalid override path: {path!r}")
+    path = {
+        "env.task_set": "env.benchmark",
+        "env.holdout_task_set": "env.holdout_benchmark",
+    }.get(path, path)
     parts = path.split(".")
     cursor = data
     for part in parts[:-1]:

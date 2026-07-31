@@ -5,9 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from areal_rsi.schemas.core import Dataset, Endpoint, ModelRef, TrainMethod, TrainRun
+from areal_rsi.schemas.core import Dataset, ModelRef, TrainMethod, TrainRun
 
-from .mock import MockAReaLRolloutWrapper
 from .sft_wrapper import AReaLSFTConfig, AReaLSFTWrapper, ProcessRunner
 
 
@@ -16,45 +15,23 @@ class AReaLServiceConfigurationError(RuntimeError):
 
 
 class AReaLService:
-    """Hosts configured AReaL SFT training and rollout endpoint capabilities."""
+    """Hosts the configured AReaL SFT training capability."""
 
     def __init__(
         self,
         sft_config: AReaLSFTConfig | None = None,
         *,
-        rollout_wrapper: MockAReaLRolloutWrapper | None = None,
         runner: ProcessRunner | None = None,
     ) -> None:
         self._sft_wrapper = (
             AReaLSFTWrapper(sft_config, runner=runner) if sft_config is not None else None
         )
-        self._rollout_wrapper = rollout_wrapper
 
     @classmethod
     def from_yaml(cls, path: str | Path, *, runner: ProcessRunner | None = None) -> "AReaLService":
-        """Construct the service from a YAML containing ``areal.sft`` and ``areal.rollout``."""
+        """Construct the service from a YAML containing ``areal.sft``."""
 
-        return cls(
-            sft_config=AReaLSFTConfig.from_yaml(path),
-            rollout_wrapper=MockAReaLRolloutWrapper.from_yaml(path),
-            runner=runner,
-        )
-
-    @classmethod
-    def from_mock_rollout_config(cls, path: str | Path) -> "AReaLService":
-        """Construct a serving-only service backed by configured endpoint responses."""
-
-        return cls(rollout_wrapper=MockAReaLRolloutWrapper.from_yaml(path))
-
-    def ensure_rollout_endpoint(self, ckpt: str, config: dict[str, Any] | None = None) -> Endpoint:
-        """Return the configured rollout endpoint."""
-
-        return self._serving_wrapper().ensure_rollout_endpoint(ckpt, config)
-
-    def update_rollout_endpoint(self, endpoint: Endpoint, ckpt: str) -> Endpoint:
-        """Return the configured endpoint-update response."""
-
-        return self._serving_wrapper().update_rollout_endpoint(endpoint, ckpt)
+        return cls(sft_config=AReaLSFTConfig.from_yaml(path), runner=runner)
 
     def train(
         self,
@@ -115,14 +92,6 @@ class AReaLService:
                 "SFT is not configured. Initialize AReaLService with AReaLSFTConfig."
             )
         return self._sft_wrapper
-
-    def _serving_wrapper(self) -> MockAReaLRolloutWrapper:
-        if self._rollout_wrapper is None:
-            raise AReaLServiceConfigurationError(
-                "Rollout serving is not configured. Initialize AReaLService with "
-                "a rollout wrapper or service YAML containing areal.rollout."
-            )
-        return self._rollout_wrapper
 
     @staticmethod
     def _launch_options(

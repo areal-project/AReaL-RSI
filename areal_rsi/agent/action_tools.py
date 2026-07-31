@@ -37,12 +37,12 @@ def rsi_action_tools() -> list[dict[str, Any]]:
                         "type": "object",
                         "description": (
                             "Dot-path config overrides inferred from the user request, "
-                            "for example run.initial_ckpt, env.task_set, run.max_iterations, run.method."
+                            "for example run.initial_ckpt, env.benchmark, run.max_iterations, run.method."
                         ),
                         "additionalProperties": True,
                     },
                     "initial_ckpt": {"type": "string", "description": "Initial checkpoint to improve."},
-                    "task_set": {"type": "string", "description": "EnvArena benchmark or task set name."},
+                    "benchmark": {"type": "string", "description": "EnvArena benchmark ref or name."},
                     "method": {"type": "string", "enum": ["sft", "opd"], "description": "Training method."},
                     "max_iterations": {
                         "type": "integer",
@@ -112,10 +112,11 @@ def reply_for_actions(actions: list[Action]) -> str:
         overrides = action.args.get("overrides")
         if isinstance(overrides, dict) and overrides:
             return f"Prepared RSI loop from config with {len(overrides)} override(s)."
-        if action.args.get("initial_ckpt") and action.args.get("task_set"):
+        benchmark = action.args.get("benchmark", action.args.get("task_set"))
+        if action.args.get("initial_ckpt") and benchmark:
             return (
                 f"Prepared RSI loop for {action.args.get('initial_ckpt')} "
-                f"on {action.args.get('task_set')}."
+                f"on {benchmark}."
             )
         return "Prepared RSI loop from config."
     if action.type == "inspect_run":

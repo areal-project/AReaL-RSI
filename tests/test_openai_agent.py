@@ -15,7 +15,7 @@ class FakeOpenAIClient:
         return [
             ActionToolCall(
                 name="start_loop",
-                arguments={"initial_ckpt": "ckpt_000", "task_set": "swe_verified"},
+                arguments={"initial_ckpt": "ckpt_000", "benchmark": "swe_verified"},
             )
         ]
 
@@ -80,4 +80,6 @@ def test_rsi_action_tools_define_start_loop_schema():
     assert "overrides" in start_loop["parameters"]["properties"]
     assert start_loop["parameters"]["properties"]["method"]["enum"] == ["sft", "opd"]
     assert start_loop["parameters"]["properties"]["max_iterations"]["minimum"] == 1
+    assert "benchmark" in start_loop["parameters"]["properties"]
+    assert "task_set" not in start_loop["parameters"]["properties"]
     assert start_loop["parameters"]["properties"]["harness_config"]["additionalProperties"] is False

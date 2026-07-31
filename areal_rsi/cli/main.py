@@ -33,14 +33,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_mock = subparsers.add_parser("run-mock", help="Run one local mock RSI iteration.")
     run_mock.add_argument("--ckpt", default="ckpt_000")
-    run_mock.add_argument("--task-set", default="swe_verified")
+    run_mock.add_argument("--benchmark", "--task-set", dest="benchmark", default="swe_verified")
     run_mock.add_argument("--method", default="sft", choices=["sft", "opd"])
     run_mock.add_argument("--harness", default="mock_harness")
     run_mock.add_argument("--run-root", default="runs")
 
     run_loop_mock = subparsers.add_parser("run-loop-mock", help="Run a local mock multi-iteration RSI loop.")
     run_loop_mock.add_argument("--ckpt", default="ckpt_000")
-    run_loop_mock.add_argument("--task-set", default="swe_verified")
+    run_loop_mock.add_argument("--benchmark", "--task-set", dest="benchmark", default="swe_verified")
     run_loop_mock.add_argument("--method", default="sft", choices=["sft", "opd"])
     run_loop_mock.add_argument("--harness", default="mock_harness")
     run_loop_mock.add_argument("--max-iterations", type=int, default=3)
@@ -110,7 +110,7 @@ def _run_mock(args: argparse.Namespace):
     )
     return controller.run_iteration(
         ckpt=args.ckpt,
-        task_set=args.task_set,
+        benchmark=args.benchmark,
         method=args.method,
         harness_config={"harness": args.harness},
     )
@@ -143,7 +143,7 @@ def _run_loop_mock(args: argparse.Namespace):
     )
     return controller.run_loop(
         initial_ckpt=args.ckpt,
-        task_set=args.task_set,
+        benchmark=args.benchmark,
         method=args.method,
         harness_config={"harness": args.harness},
         max_iterations=args.max_iterations,

@@ -6,15 +6,23 @@ envarena:
   token_env: ENVARENA_API_TOKEN
   timeout_seconds: 30
   verify_ssl: true
+  # Used by the current mocked model-instance startup path. Once EnvArena
+  # supports starting models directly from model paths, this should map to the
+  # server-returned instance/model name.
+  model_instance_name_prefix: areal-rsi-
 
-  gateway:
-    # Defaults used when registering an AReaL endpoint as an EnvArena gateway
-    # route. model_ref "ckpt-001" becomes "areal-rsi-ckpt-001" by default.
-    model_alias_prefix: areal-rsi-
-    # Applied only when the endpoint does not provide inbound_protos itself.
-    # List only protocols that the AReaL endpoint actually supports.
-    inbound_protos: [chat, responses]
+  # Defaults merged into every EvalRequest.job_config. Per-request values
+  # override these defaults; nested mappings such as concurrency_policy merge
+  # field-by-field.
+  job_config:
+    sample_numbers: 1
+    concurrency_policy:
+      max_parallel: 1
+      max_retries: 0
+      retry_backoff_seconds: 30
+    tags: []
 
   # Harness and Benchmark refs intentionally do not have client-wide defaults.
-  # Each evaluation must provide harness_config.harness_ref and a
-  # Benchmark "key@version" task_set via EnvArenaClient.submit_eval.
+  # Each evaluation must provide model, benchmark, harness, and optional skill
+  # inputs via
+  # EnvArenaClient.submit_eval.

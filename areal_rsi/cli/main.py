@@ -12,7 +12,14 @@ from areal_rsi.config import RSIRunConfig
 from areal_rsi.controller import LocalRSIController
 from areal_rsi.memory import Memory
 from areal_rsi.schemas.actions import Action, AgentResponse
-from areal_rsi.services import MockAReaLService, MockEnvClient, MockResearchAgent
+from areal_rsi.services import (
+    AReaLService,
+    EnvArenaClient,
+    MockAReaLService,
+    MockEnvClient,
+    MockResearchAgent,
+    OpenAIResearchAgent,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -112,8 +119,8 @@ def _run_mock(args: argparse.Namespace):
 def _run_config(args: argparse.Namespace):
     run_root = Path(args.run_root)
     memory = Memory(run_root / "memory")
-    controller = _mock_controller(run_root, memory)
     config = RSIRunConfig.load(args.config)
+    controller = _controller_from_rsi_config(config, run_root, memory)
     return controller.run_config(
         config,
         config_metadata={
@@ -147,8 +154,12 @@ def _chat(args: argparse.Namespace) -> dict | None:
     message = " ".join(args.message).strip()
     run_root = Path(args.run_root)
     memory = Memory(run_root / "memory")
-    controller = _mock_controller(run_root, memory)
     base_config = RSIRunConfig.load(args.config) if args.config else None
+    controller = (
+        _controller_from_rsi_config(base_config, run_root, memory)
+        if base_config is not None
+        else _mock_controller(run_root, memory)
+    )
     agent = _build_agent(args)
     if not message:
         if args.stdin:
@@ -281,6 +292,74 @@ def _mock_controller(run_root: Path, memory: Memory) -> LocalRSIController:
         research_agent=MockResearchAgent(),
         memory=memory,
     )
+
+
+def _controller_from_rsi_config(
+    config: RSIRunConfig,
+    run_root: Path,
+    memory: Memory,
+) -> LocalRSIController:
+    """Compose configured services at the CLI boundary before running a loop."""
+
+    services = config.data.get("services", {})
+    if not isinstance(services, dict):
+        raise ValueError("RSI config services section must be a mapping.")
+    areal_spec = _service_spec(services, "areal")
+    envarena_spec = _service_spec(services, "envarena")
+    research_spec = _service_spec(services, "research")
+
+    areal_config_path = _service_config_path(config, "areal", areal_spec)
+    if areal_config_path is None:
+        areal = MockAReaLService()
+    else:
+        areal = AReaLService.from_yaml(areal_config_path)
+
+    envarena_config_path = _service_config_path(config, "envarena", envarena_spec)
+    envarena = (
+        EnvArenaClient.from_yaml(envarena_config_path)
+        if envarena_config_path is not None
+        else MockEnvClient()
+    )
+    research_agent = _research_agent_from_spec(research_spec)
+    return LocalRSIController(
+        run_root=run_root,
+        areal=areal,
+        envarena=envarena,
+        research_agent=research_agent,
+        memory=memory,
+    )
+
+
+def _service_spec(services: dict[str, object], name: str) -> dict[str, object]:
+    value = services.get(name, {})
+    if not isinstance(value, dict):
+        raise ValueError(f"RSI config services.{name} must be a mapping.")
+    return value
+
+
+def _service_config_path(
+    config: RSIRunConfig,
+    service_name: str,
+    service_spec: dict[str, object],
+) -> Path | None:
+    value = service_spec.get("config_path")
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"RSI config services.{service_name}.config_path must be a non-empty string.")
+    path = Path(value).expanduser()
+    if not path.is_absolute() and config.source_path is not None:
+        path = config.source_path.parent / path
+    return path
+
+
+def _research_agent_from_spec(spec: dict[str, object]):
+    backend = str(spec.get("backend", "mock"))
+    if backend == "mock":
+        return MockResearchAgent()
+    if backend == "openai":
+        return OpenAIResearchAgent()
+    raise ValueError(f"Unsupported research service backend: {backend!r}.")
 
 
 def _execute_chat_action(

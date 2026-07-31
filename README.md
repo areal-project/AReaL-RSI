@@ -162,52 +162,49 @@ bash scripts/generate_envarena_client.sh
 ## AReaL SFT Service
 
 `AReaLService` delegates SFT execution to `AReaLSFTWrapper`, so callers do not
-need to use the wrapper directly. The supplied AReaL YAML controls the model,
-datasets, scheduler (`local`, `ray`, or `slurm`), engine, resources, artifact
-root, and checkpoint policy. Configure only the execution environment in
-Python, then put the experiment YAML path in the existing `train_config`:
+need to use the wrapper directly. The supplied AReaL YAML controls model, data,
+engine, resources, artifact root, and checkpoint policy. The service config
+only selects a scheduler (`local` or `slurm`), environment variables, optional
+Slurm settings, the command that starts the training YAML, and static rollout
+endpoint responses used by the controller to register checkpoints with EnvArena.
 
 ```python
-from areal_rsi.services import AReaLService, AReaLSFTConfig
+from areal_rsi.services import AReaLService
 
-areal = AReaLService.from_sft_config(AReaLSFTConfig(
-    command=("areal",),
-    working_directory="/path/to/AReaL",
-))
+areal = AReaLService.from_yaml("/path/to/areal.yaml")
 
-train_config = {"experiment_config": "/path/to/gsm8k-sft.yaml"}
+train_config = {"train_config_path": "/path/to/gsm8k-sft.yaml"}
 run = areal.train("/models/base", {"examples": []}, "sft", train_config)
 artifacts = areal.get_experiment_artifacts(train_config)
 ```
 
-The wrapper invokes `areal train run --config ... --driver ...`, returns the
-latest AReaL checkpoint, and captures output under the trial log directory.
-The driver defaults to `examples.math.gsm8k_sft:main`; set `"driver"` in
-`train_config` only when a particular experiment needs an override.
+The wrapper invokes the configured command followed by `--config ...`, returns
+the latest AReaL checkpoint for a local run, and captures output under the
+trial log directory. Choose a different driver or entrypoint by changing the
+configured command (or the per-request `command`), not by adding a driver field
+to the wrapper.
 
-For the tested containerized Slurm/SPMD route, configure `AReaLSlurmConfig`.
-`render_sbatch_script()` lets a caller inspect the script; `write_sbatch_script()`
-persists it; `submit_experiment()` performs both persistence and `sbatch --parsable`
-submission. Submission is asynchronous and therefore returns a job record, not
-a completed `TrainRun` checkpoint.
+For the tested containerized Slurm/SPMD route, configure the optional
+`areal.sft.slurm` section in that same service YAML.
+`start_experiment()` performs both script generation and `sbatch --parsable`
+submission when `scheduler_type` is `slurm`. Submission is asynchronous and
+therefore returns a job record, not a completed `TrainRun` checkpoint.
 
 ```python
-from areal_rsi.services import AReaLService, AReaLSFTConfig, AReaLSlurmConfig
+from areal_rsi.services import AReaLService
 
-areal = AReaLService.from_sft_config(AReaLSFTConfig(
-    working_directory="/storage/openpsi/users/xuruida.xrd/AReaL",
-    slurm=AReaLSlurmConfig(
-        image="/storage/openpsi/images/areal-dev-20260508.sif",
-        offline_datasets=True,
-    ),
-))
+areal = AReaLService.from_yaml("/path/to/areal.yaml")
 
-job = areal.submit_experiment({"experiment_config": "/path/to/gsm8k-sft.yaml"})
+job = areal.start_experiment(
+    {
+        "train_config_path": "/path/to/gsm8k-sft.yaml",
+        "scheduler_type": "slurm",
+    }
+)
 print(job["job_id"], job["script_path"])
 ```
 
-The generated job launches one `torchrun` process per allocated node and
-requires `scheduler.type: null`, which is the SPMD path. The experiment YAML
-provides `cluster.n_nodes`, `cluster.n_gpus_per_node`, and `cluster.fileroot`.
+The generated job launches one `torchrun` process per allocated node. The
+experiment YAML provides `cluster.n_nodes`, `cluster.n_gpus_per_node`, and `cluster.fileroot`.
 The wrapper creates per-run cache and Slurm-log directories below that root.
 Do not put credentials in `container_environment`; inject them at job runtime.

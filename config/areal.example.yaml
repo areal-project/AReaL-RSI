@@ -1,0 +1,36 @@
+# Deployment settings for AReaLService. Model, data, and training resources
+# remain in the AReaL training YAML passed through train_config_path.
+areal:
+  # Static endpoint responses used by the controller to register the current
+  # and newly trained checkpoints with EnvArena.
+  rollout:
+    ensure_rollout_endpoint:
+      model_ref: ckpt_000
+      base_url: https://your-areal-rollout.example/v1
+      protocol: openai-compatible
+      metadata:
+        state: ready
+    update_rollout_endpoint:
+      model_ref: ckpt_next
+      base_url: https://your-areal-rollout.example/v1
+      protocol: openai-compatible
+      metadata:
+        state: updated
+
+  sft:
+    # The complete command that accepts `--config <training-yaml>`.
+    # Use a different command/entrypoint here for a different AReaL driver.
+    commands: [areal, train, run]
+    scheduler_type: local
+    environment_variables: {}
+    # Required only when scheduler_type is slurm.
+    # slurm:
+    #   image: /path/to/areal.sif
+    #   working_directory: /path/to/AReaL
+    #   partition: gpu
+    #   account: your-account
+    #   cpus_per_task: 64
+    #   memory: 400G
+    #   time_limit: "04:00:00"
+    #   bind_paths: [/storage]
+    #   container_environment: {}

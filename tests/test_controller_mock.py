@@ -18,7 +18,7 @@ def test_local_controller_runs_mock_iteration(tmp_path):
 
     state = controller.run_iteration(
         ckpt="ckpt_000",
-        task_set="swe_verified",
+        benchmark="swe_verified",
         harness_config={"harness": "mock"},
         method="sft",
     )
@@ -68,7 +68,7 @@ def test_execute_action_starts_loop_with_harness_shortcut(tmp_path):
             type="start_loop",
             args={
                 "ckpt": "ckpt_000",
-                "task_set": "swe_verified",
+                "benchmark": "swe_verified",
                 "method": "sft",
                 "harness": "mock_harness",
                 "max_iterations": 1,
@@ -95,7 +95,7 @@ def test_execute_action_starts_loop_with_checkpoint_alias(tmp_path):
             type="start_loop",
             args={
                 "checkpoint": "ckpt_000",
-                "dataset": "swe_verified",
+                "benchmark": "swe_verified",
                 "method": "sft",
                 "harness": "mock_harness",
                 "iterations": 1,
@@ -120,7 +120,7 @@ def test_local_controller_runs_mock_loop(tmp_path):
 
     state = controller.run_loop(
         initial_ckpt="ckpt_000",
-        task_set="swe_verified",
+        benchmark="swe_verified",
         harness_config={"harness": "mock"},
         method="sft",
         max_iterations=2,
@@ -171,21 +171,21 @@ def test_execute_action_starts_loop_from_config(tmp_path):
     base_config = RSIRunConfig.from_dict(
         {
             "run": {"initial_ckpt": "ckpt_000", "max_iterations": 3, "method": "sft"},
-            "env": {"task_set": "swe_verified", "harness_config": {"harness": "mock"}},
+            "env": {"benchmark": "swe_verified", "harness_config": {"harness": "mock"}},
         }
     )
 
     result = controller.execute_action(
         Action(
             type="start_loop",
-            args={"overrides": {"run.max_iterations": 1, "env.task_set": "swe_small"}},
+            args={"overrides": {"run.max_iterations": 1, "env.benchmark": "swe_small"}},
             metadata={"base_config": base_config},
         )
     )
 
     assert result["status"] == "completed"
     assert result["iteration"] == 1
-    assert result["metadata"]["task_set"] == "swe_small"
+    assert result["metadata"]["benchmark"] == "swe_small"
     resolved_config = tmp_path / "runs" / result["run_id"] / "resolved_rsi_config.json"
     assert resolved_config.exists()
 
@@ -193,5 +193,5 @@ def test_execute_action_starts_loop_from_config(tmp_path):
     assert audit_events[0]["event_type"] == "run_config_resolved"
     assert audit_events[0]["input"]["overrides"] == {
         "run.max_iterations": 1,
-        "env.task_set": "swe_small",
+        "env.benchmark": "swe_small",
     }

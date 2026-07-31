@@ -17,19 +17,18 @@ class MockEnvClient:
 
     def submit_eval(self, request: EvalRequest) -> EvalJob:
         model_name = _asset_label(request.model, "mock_ckpt")
-        dataset_name = _asset_label(request.dataset, "mock_tasks")
-        harness_name = _asset_label(request.harness, "mock_harness")
+        benchmark_name = _ref_label(request.benchmark, "mock_benchmark")
+        harness_name = _ref_label(request.harness, "mock_harness")
         return self._new_job(
             prefix="eval",
             model_ref={"model_name": model_name, "model_ref": model_name},
-            task_set=dataset_name,
+            benchmark=benchmark_name,
             harness_config={"harness": harness_name},
             assets={
                 "model": dict(request.model),
-                "dataset": dict(request.dataset),
-                "harness": dict(request.harness),
+                "benchmark": _asset_dict(request.benchmark),
+                "harness": _asset_dict(request.harness),
                 **({"skill": dict(request.skill)} if request.skill is not None else {}),
-                **({"reward": dict(request.reward)} if request.reward is not None else {}),
             },
             job_config=dict(request.job_config),
             metadata=dict(request.metadata),
@@ -51,7 +50,7 @@ class MockEnvClient:
         }
 
     def get_trajs(self, job: EvalJob, include_messages: bool = False) -> list[Traj]:
-        task_set = job.get("task_set", "mock_tasks")
+        benchmark = job.get("benchmark", job.get("task_set", "mock_benchmark"))
         source = job.get("metadata", {}).get("source", "eval")
         model_ref = job.get("model_ref", {}).get("model_ref", "mock_ckpt")
         rewards = [1.0, 0.0, 0.5]
@@ -59,7 +58,7 @@ class MockEnvClient:
         for index, reward in enumerate(rewards):
             traj: Traj = {
                 "traj_id": f"{job['eval_job_id']}_traj_{index}",
-                "task_id": f"{task_set}_task_{index}",
+                "task_id": f"{benchmark}_task_{index}",
                 "model_ref": model_ref,
                 "harness_id": job.get("harness_config", {}).get("harness", "mock_harness"),
                 "reward": reward,
@@ -67,7 +66,7 @@ class MockEnvClient:
                 "metadata": {
                     "source": source,
                     "eval_job_id": job["eval_job_id"],
-                    "task_set": task_set,
+                    "benchmark": benchmark,
                 },
             }
             if include_messages:
@@ -84,7 +83,7 @@ class MockEnvClient:
         *,
         prefix: str,
         model_ref: dict[str, Any],
-        task_set: str,
+        benchmark: str,
         harness_config: dict[str, Any],
         assets: dict[str, Any],
         job_config: dict[str, Any],
@@ -96,7 +95,7 @@ class MockEnvClient:
             "eval_job_id": job_id,
             "status": "done",
             "model_ref": model_ref,
-            "task_set": task_set,
+            "benchmark": benchmark,
             "harness_config": harness_config,
             "assets": assets,
             "job_config": job_config,
@@ -112,7 +111,17 @@ def _asset_label(config: Mapping[str, Any], default: str) -> str:
         return str(config["ref"])
     if config.get("key") is not None and config.get("version") is not None:
         return f"{config['key']}@{config['version']}"
-    for name in ("model_name", "runtime_model_name", "model_path", "key", "name", "harness", "dataset"):
+    for name in ("model_name", "runtime_model_name", "model_path", "key", "name", "harness", "benchmark"):
         if config.get(name) is not None:
             return str(config[name])
     return default
+
+
+def _ref_label(config: Mapping[str, Any] | str, default: str) -> str:
+    if isinstance(config, str):
+        return config
+    return _asset_label(config, default)
+
+
+def _asset_dict(config: Mapping[str, Any] | str) -> dict[str, Any]:
+    return {"ref": config} if isinstance(config, str) else dict(config)

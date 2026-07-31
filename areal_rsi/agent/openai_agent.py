@@ -221,7 +221,7 @@ def _rsi_chat_prompt(
         "Use start_loop for goals that ask to improve a checkpoint or run an RSI loop.\n"
         "A base RSI config is already loaded and shown as workflow_spec. For start_loop, "
         "emit only config overrides inferred from the user message in args.overrides. "
-        "Use dot paths such as run.initial_ckpt, env.task_set, run.max_iterations, "
+        "Use dot paths such as run.initial_ckpt, env.benchmark, run.max_iterations, "
         "run.method, and env.harness_config.harness. Do not repeat unchanged config fields.\n"
         "For brief progress or completion questions, answer from run_state and memory_context without a tool call. "
         "Use inspect_run only for detailed run inspection or explicit state dumps. "

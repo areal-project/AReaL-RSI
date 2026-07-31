@@ -11,6 +11,18 @@ envarena:
   # server-returned instance/model name.
   model_instance_name_prefix: areal-rsi-
 
+  # Defaults merged into every EvalRequest.job_config. Per-request values
+  # override these defaults; nested mappings such as concurrency_policy merge
+  # field-by-field.
+  job_config:
+    sample_numbers: 1
+    concurrency_policy:
+      max_parallel: 1
+      max_retries: 0
+      retry_backoff_seconds: 30
+    tags: []
+
   # Harness and Benchmark refs intentionally do not have client-wide defaults.
-  # Each evaluation must provide model/dataset/harness asset configs via
+  # Each evaluation must provide model, benchmark, harness, and optional skill
+  # inputs via
   # EnvArenaClient.submit_eval.

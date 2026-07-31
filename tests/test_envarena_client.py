@@ -13,12 +13,13 @@ from areal_rsi.services import (
 )
 
 
-def _client(handler) -> EnvArenaClient:
+def _client(handler, *, job_config: dict | None = None) -> EnvArenaClient:
     return EnvArenaClient(
         EnvArenaConfig(
             control_base_url="https://arena.example.test/envarena/openapi/v1",
             api_token="test-token",
             model_instance_name_prefix="areal-rsi-",
+            job_config=job_config or {},
         ),
         transport=httpx.MockTransport(handler),
     )
@@ -31,6 +32,13 @@ def test_config_loads_environment_values_and_normalizes_generated_sdk_base_url(t
 envarena:
   control_base_url_env: ARENA_CONTROL_URL
   token_env: ARENA_TOKEN
+  job_config:
+    sample_numbers: 2
+    concurrency_policy:
+      max_parallel: 8
+      max_retries: 1
+      retry_backoff_seconds: 10
+    tags: [default]
 """,
         encoding="utf-8",
     )
@@ -46,6 +54,15 @@ envarena:
     assert config.sdk_base_url == "https://arena.example.test/envarena"
     assert config.api_token == "secret"
     assert config.model_instance_name_prefix == "areal-rsi-"
+    assert config.job_config == {
+        "sample_numbers": 2,
+        "concurrency_policy": {
+            "max_parallel": 8,
+            "max_retries": 1,
+            "retry_backoff_seconds": 10,
+        },
+        "tags": ["default"],
+    }
 
 
 def test_eval_with_model_path_starts_mock_model_instance_and_collects_results():
@@ -104,8 +121,8 @@ def test_eval_with_model_path_starts_mock_model_instance_and_collects_results():
             "type": "new",
             "model_path": "ckpt_001",
         },
-        dataset={"type": "ref", "ref": "swe_verified@1.0.0"},
-        harness={"type": "ref", "ref": {"key": "swe-harness", "version": "1.0.0"}},
+        benchmark="swe_verified@1.0.0",
+        harness={"key": "swe-harness", "version": "1.0.0"},
         metadata={"run_id": "run_001", "source": "eval"},
     ))
 
@@ -153,18 +170,25 @@ def test_eval_with_model_path_starts_mock_model_instance_and_collects_results():
 def test_submit_eval_requires_explicit_published_harness_and_benchmark_refs():
     client = _client(lambda request: pytest.fail(f"Unexpected request: {request.url}"))
 
-    with pytest.raises(EnvArenaConfigurationError, match="harnesses ref assets require"):
+    with pytest.raises(EnvArenaConfigurationError, match="harness refs require"):
         client.submit_eval(EvalRequest(
             model={"type": "ref", "model_name": "model"},
-            dataset={"type": "ref", "ref": "benchmark@1.0.0"},
-            harness={"type": "ref"},
+            benchmark="benchmark@1.0.0",
+            harness={},
         ))
 
-    with pytest.raises(EnvArenaConfigurationError, match="benchmarks ref assets require"):
+    with pytest.raises(EnvArenaConfigurationError, match="benchmark must be an existing Arena ref"):
         client.submit_eval(EvalRequest(
             model={"type": "ref", "model_name": "model"},
-            dataset={"type": "ref", "ref": "benchmark"},
-            harness={"type": "ref", "ref": {"key": "harness", "version": "1.0.0"}},
+            benchmark={"type": "new", "key": "benchmark", "version": "1.0.0", "spec": {}},
+            harness={"key": "harness", "version": "1.0.0"},
+        ))
+
+    with pytest.raises(EnvArenaConfigurationError, match="harness must be an existing Arena ref"):
+        client.submit_eval(EvalRequest(
+            model={"type": "ref", "model_name": "model"},
+            benchmark="benchmark@1.0.0",
+            harness={"type": "new", "key": "harness", "version": "1.0.0", "spec": {}},
         ))
 
 
@@ -264,8 +288,8 @@ def test_submit_eval_can_use_existing_runtime_model_and_encode_runtime_config():
     client = _client(handler)
     job = client.submit_eval(EvalRequest(
         model={"type": "ref", "model_name": "stable-alias"},
-        dataset={"type": "ref", "ref": "benchmark@2.0.0"},
-        harness={"type": "ref", "ref": {"key": "harness", "version": "1.2.0"}},
+        benchmark="benchmark@2.0.0",
+        harness={"key": "harness", "version": "1.2.0"},
         job_config={
             "job_id": "run-42",
             "sample_numbers": 3,
@@ -282,6 +306,53 @@ def test_submit_eval_can_use_existing_runtime_model_and_encode_runtime_config():
     assert job["status"] == "PENDING"
 
 
+def test_submit_eval_merges_default_job_config_from_client_config():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path == "/envarena/openapi/v1/jobs":
+            payload = json.loads(request.content)
+            assert payload["sample_numbers"] == 5
+            assert payload["concurrency_policy"] == {
+                "max_parallel": 8,
+                "max_retries": 2,
+                "retry_backoff_seconds": 30,
+            }
+            assert payload["tags"] == ["request"]
+            assert payload["model"]["parameters"] == {"temperature": 0.2, "top_p": 0.9}
+            return httpx.Response(202, json={"job_id": "job-defaults", "task_ids": []})
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    client = _client(
+        handler,
+        job_config={
+            "sample_numbers": 5,
+            "concurrency_policy": {
+                "max_parallel": 8,
+                "max_retries": 0,
+                "retry_backoff_seconds": 30,
+            },
+            "tags": ["default"],
+            "model_parameters": {"temperature": 0.2},
+        },
+    )
+    job = client.submit_eval(EvalRequest(
+        model={"type": "ref", "model_name": "stable-alias"},
+        benchmark="benchmark@2.0.0",
+        harness="harness@1.2.0",
+        job_config={
+            "concurrency_policy": {"max_retries": 2},
+            "tags": ["request"],
+            "model_parameters": {"top_p": 0.9},
+        },
+    ))
+
+    assert job["eval_job_id"] == "job-defaults"
+    assert job["job_config"]["concurrency_policy"] == {
+        "max_parallel": 8,
+        "max_retries": 2,
+        "retry_backoff_seconds": 30,
+    }
+
+
 def test_submit_eval_can_reference_a_published_model_without_inline_secrets():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"
@@ -293,8 +364,8 @@ def test_submit_eval_can_reference_a_published_model_without_inline_secrets():
 
     job = _client(handler).submit_eval(EvalRequest(
         model={"type": "ref", "registry_ref": {"key": "DeepSeek-V4-Pro", "version": "1.0.2"}},
-        dataset={"type": "ref", "ref": "benchmark@2.0.0"},
-        harness={"type": "ref", "ref": "harness@1.2.0"},
+        benchmark="benchmark@2.0.0",
+        harness="harness@1.2.0",
     ))
 
     assert job["model_ref"] == {
@@ -304,7 +375,7 @@ def test_submit_eval_can_reference_a_published_model_without_inline_secrets():
     }
 
 
-def test_submit_eval_can_create_new_registry_assets_for_dataset_harness_skill_and_reward():
+def test_submit_eval_can_create_new_skill_and_use_existing_benchmark_and_harness_refs():
     seen: list[tuple[str, str, dict]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -319,53 +390,18 @@ def test_submit_eval_can_create_new_registry_assets_for_dataset_harness_skill_an
             return httpx.Response(201, json={})
         if path == "/envarena/openapi/v1/skills/skill-rsi/versions/1.0.0/publish":
             return httpx.Response(200, json={})
-        if path == "/envarena/openapi/v1/rewards":
-            assert payload["key"] == "reward-rsi"
-            return httpx.Response(201, json={})
-        if path == "/envarena/openapi/v1/rewards/reward-rsi/versions":
-            assert payload == {"version": "1.0.0", "spec": {"kind": "python"}}
-            return httpx.Response(201, json={})
-        if path == "/envarena/openapi/v1/rewards/reward-rsi/versions/1.0.0/publish":
-            return httpx.Response(200, json={})
-        if path == "/envarena/openapi/v1/benchmarks":
-            assert payload["key"] == "dataset-rsi"
-            return httpx.Response(201, json={})
-        if path == "/envarena/openapi/v1/benchmarks/dataset-rsi/versions":
-            assert payload["spec"]["reward_ref"] == {"key": "reward-rsi", "version": "1.0.0"}
-            return httpx.Response(201, json={})
-        if path == "/envarena/openapi/v1/benchmarks/dataset-rsi/versions/1.0.0/publish":
-            return httpx.Response(200, json={})
-        if path == "/envarena/openapi/v1/harnesses":
-            assert payload["key"] == "harness-rsi"
-            return httpx.Response(201, json={})
-        if path == "/envarena/openapi/v1/harnesses/harness-rsi/versions":
-            assert payload["spec"]["skill_refs"] == [{"key": "skill-rsi", "version": "1.0.0"}]
-            return httpx.Response(201, json={})
-        if path == "/envarena/openapi/v1/harnesses/harness-rsi/versions/1.0.0/publish":
-            return httpx.Response(200, json={})
         if path == "/envarena/openapi/v1/jobs":
-            assert payload["benchmark_ref"] == {"key": "dataset-rsi", "version": "1.0.0"}
+            assert payload["benchmark_ref"] == {"key": "benchmark-rsi", "version": "1.0.0"}
             assert payload["harness_ref"] == {"key": "harness-rsi", "version": "1.0.0"}
             assert payload["model"] == {"model_name": "stable-alias"}
+            assert "skill_ref" not in payload
             return httpx.Response(202, json={"job_id": "job-created-assets", "task_ids": []})
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
     job = _client(handler).submit_eval(EvalRequest(
         model={"type": "ref", "model_name": "stable-alias"},
-        dataset={
-            "type": "new",
-            "key": "dataset-rsi",
-            "version": "1.0.0",
-            "name": "RSI Dataset",
-            "spec": {"env_refs": []},
-        },
-        harness={
-            "type": "new",
-            "key": "harness-rsi",
-            "version": "1.0.0",
-            "name": "RSI Harness",
-            "spec": {"agent": {"kind": "mock"}},
-        },
+        benchmark={"key": "benchmark-rsi", "version": "1.0.0"},
+        harness={"key": "harness-rsi", "version": "1.0.0"},
         skill={
             "type": "new",
             "key": "skill-rsi",
@@ -373,19 +409,13 @@ def test_submit_eval_can_create_new_registry_assets_for_dataset_harness_skill_an
             "name": "RSI Skill",
             "spec": {"manifest": {"name": "skill-rsi"}},
         },
-        reward={
-            "type": "new",
-            "key": "reward-rsi",
-            "version": "1.0.0",
-            "name": "RSI Reward",
-            "spec": {"kind": "python"},
-        },
     ))
 
     assert job["eval_job_id"] == "job-created-assets"
+    assert job["assets"]["benchmark"] == {"key": "benchmark-rsi", "version": "1.0.0"}
     assert job["assets"]["skill"] == {"key": "skill-rsi", "version": "1.0.0"}
-    assert job["assets"]["reward"] == {"key": "reward-rsi", "version": "1.0.0"}
-    assert len(seen) == 13
+    assert "reward" not in job["assets"]
+    assert len(seen) == 4
 
 
 def test_get_trajs_omits_messages_without_inline_events():

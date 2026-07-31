@@ -16,6 +16,7 @@ EvalAssetConfigType: TypeAlias = Literal["new", "ref"]
 ModelRef: TypeAlias = dict[str, Any]
 EvalJob: TypeAlias = dict[str, Any]
 EvalAssetConfig: TypeAlias = Mapping[str, Any]
+EvalRegistryRef: TypeAlias = str | Mapping[str, Any]
 Traj: TypeAlias = dict[str, Any]
 Dataset: TypeAlias = dict[str, Any]
 TrainRun: TypeAlias = dict[str, Any]
@@ -27,25 +28,27 @@ Metadata: TypeAlias = dict[str, Any]
 class EvalRequest:
     """Structured evaluation submission shared by all environment clients.
 
-    ``model``, ``dataset``, ``harness``, ``skill``, and ``reward`` are asset
-    configs. Each config must contain ``type``:
+    ``model`` and ``skill`` are asset configs. Each config must contain
+    ``type``:
 
     - ``{"type": "ref", ...}`` means use an existing Arena asset reference.
     - ``{"type": "new", ...}`` means the client should create/register the
       asset from the remaining fields before submitting the evaluation.
 
-    Concrete clients validate which fields they need. The common fields for a
-    registry-backed asset are ``ref`` or ``{key, version}`` for refs and
+    ``benchmark`` and ``harness`` are existing Arena refs only, expressed as
+    ``"key@version"``, ``{key, version}``, or ``{"ref": ...}``.
+    ``benchmark`` is the evaluation task set.
+
+    Concrete clients validate which fields they need. New skill configs use
     ``key``, ``version``, ``name``, ``spec``, optional ``tags``, optional
-    ``metadata``, and optional ``publish`` for new registry assets. New model
-    configs may instead provide ``model_path`` when the environment client
-    should start a model instance for evaluation.
+    ``metadata``, and optional ``publish``. New model configs may instead
+    provide ``model_path`` when the environment client should start a model
+    instance for evaluation.
     """
 
     model: EvalAssetConfig
-    dataset: EvalAssetConfig
-    harness: EvalAssetConfig
+    benchmark: EvalRegistryRef
+    harness: EvalRegistryRef
     skill: EvalAssetConfig | None = None
-    reward: EvalAssetConfig | None = None
     job_config: Mapping[str, Any] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)

@@ -5,7 +5,8 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -65,6 +66,7 @@ class EnvArenaConfig:
     timeout_seconds: float = 30.0
     verify_ssl: bool = True
     model_instance_name_prefix: str = "areal-rsi-"
+    job_config: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.control_base_url.strip():
@@ -75,6 +77,9 @@ class EnvArenaConfig:
             raise EnvArenaConfigurationError("timeout_seconds must be positive.")
         if not self.model_instance_name_prefix.strip():
             raise EnvArenaConfigurationError("model_instance_name_prefix must be non-empty.")
+        if not isinstance(self.job_config, Mapping):
+            raise EnvArenaConfigurationError("envarena.job_config must be a mapping when set.")
+        object.__setattr__(self, "job_config", deepcopy(dict(self.job_config)))
 
     @property
     def sdk_base_url(self) -> str:
@@ -116,6 +121,7 @@ class EnvArenaConfig:
             timeout_seconds=float(section.get("timeout_seconds", 30)),
             verify_ssl=bool(section.get("verify_ssl", True)),
             model_instance_name_prefix=str(section.get("model_instance_name_prefix", "areal-rsi-")),
+            job_config=section.get("job_config", {}),
         )
 
 
@@ -277,7 +283,7 @@ class EnvArenaClient(EnvClient):
                 "runtime_model_name": inline_model_name or registry_model.key,
                 **({"registry_ref": registry_model.to_dict()} if registry_model is not None else {}),
             },
-            "task_set": benchmark.key,
+            "benchmark": benchmark.key,
             "benchmark_ref": benchmark.to_dict(),
             "harness_ref": harness.to_dict(),
             "harness_config": {"harness_ref": harness.to_dict()},
@@ -289,14 +295,13 @@ class EnvArenaClient(EnvClient):
         }
 
     def submit_eval(self, request: EvalRequest) -> EvalJob:
-        job_config = dict(request.job_config)
+        job_config = self._merge_job_config(self.config.job_config, request.job_config)
         skill_ref = self._resolve_optional_registry_asset("skills", request.skill)
-        reward_ref = self._resolve_optional_registry_asset("rewards", request.reward)
-        dataset_ref = self._resolve_dataset_asset(request.dataset, reward_ref=reward_ref)
-        harness_ref = self._resolve_harness_asset(request.harness, skill_ref=skill_ref)
+        benchmark_ref = self._resolve_registry_ref("benchmarks", request.benchmark, "benchmark")
+        harness_ref = self._resolve_registry_ref("harnesses", request.harness, "harness")
         model = self._resolve_model_asset(request.model)
         return self._submit_benchmark_job(
-            benchmark_ref=dataset_ref,
+            benchmark_ref=benchmark_ref,
             harness_ref=harness_ref,
             model_name=model.get("model_name") or None,
             model_ref=model.get("registry_ref"),
@@ -309,13 +314,27 @@ class EnvArenaClient(EnvClient):
             model_env=job_config.get("model_env") or model.get("env"),
             assets={
                 "model": model["asset"],
-                "dataset": dataset_ref.to_dict(),
+                "benchmark": benchmark_ref.to_dict(),
                 "harness": harness_ref.to_dict(),
                 **({"skill": skill_ref.to_dict()} if skill_ref is not None else {}),
-                **({"reward": reward_ref.to_dict()} if reward_ref is not None else {}),
             },
             job_config=job_config,
         )
+
+    @staticmethod
+    def _merge_job_config(
+        defaults: Mapping[str, Any],
+        overrides: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        merged = deepcopy(dict(defaults))
+        for key, value in overrides.items():
+            if isinstance(value, Mapping) and isinstance(merged.get(key), Mapping):
+                nested = deepcopy(dict(merged[key]))
+                nested.update(dict(value))
+                merged[key] = nested
+            else:
+                merged[key] = deepcopy(value)
+        return merged
 
     def _resolve_optional_registry_asset(
         self, collection: str, config: Mapping[str, Any] | None
@@ -327,27 +346,29 @@ class EnvArenaClient(EnvClient):
             return self._registry_ref_from_asset(asset, collection)
         return self._create_registry_asset(collection, asset)
 
-    def _resolve_dataset_asset(
-        self, config: Mapping[str, Any], *, reward_ref: EnvArenaVersionRef | None
+    def _resolve_registry_ref(
+        self,
+        collection: str,
+        config: EnvArenaVersionRef | Mapping[str, Any] | str,
+        asset_name: str,
     ) -> EnvArenaVersionRef:
-        asset = self._asset_config(config, "dataset")
-        if asset["type"] == "ref":
-            return self._registry_ref_from_asset(asset, "benchmarks")
-        spec = self._asset_spec(asset, "dataset")
-        if reward_ref is not None and "reward_ref" not in spec:
-            spec["reward_ref"] = reward_ref.to_dict()
-        return self._create_registry_asset("benchmarks", asset, spec=spec)
-
-    def _resolve_harness_asset(
-        self, config: Mapping[str, Any], *, skill_ref: EnvArenaVersionRef | None
-    ) -> EnvArenaVersionRef:
-        asset = self._asset_config(config, "harness")
-        if asset["type"] == "ref":
-            return self._registry_ref_from_asset(asset, "harnesses")
-        spec = self._asset_spec(asset, "harness")
-        if skill_ref is not None and "skill_refs" not in spec:
-            spec["skill_refs"] = [skill_ref.to_dict()]
-        return self._create_registry_asset("harnesses", asset, spec=spec)
+        if isinstance(config, EnvArenaVersionRef):
+            return config
+        if isinstance(config, str):
+            return self._as_version_ref(config)
+        if not isinstance(config, Mapping):
+            raise EnvArenaConfigurationError(f"{asset_name} must be an Arena ref.")
+        if config.get("type") == "new":
+            raise EnvArenaConfigurationError(f"{asset_name} must be an existing Arena ref; type='new' is not supported.")
+        asset = dict(config)
+        if asset.get("type") == "ref":
+            return self._registry_ref_from_asset(asset, collection)
+        ref = self._optional_registry_ref_from_asset(asset)
+        if ref is None:
+            raise EnvArenaConfigurationError(
+                f"{asset_name} refs require ref, registry_ref, or key/version."
+            )
+        return ref
 
     def _resolve_model_asset(self, config: Mapping[str, Any]) -> dict[str, Any]:
         asset = self._asset_config(config, "model")

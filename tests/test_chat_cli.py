@@ -20,7 +20,7 @@ def test_fake_agent_generates_start_loop_action():
     assert response.requires_confirmation is True
     assert response.actions[0].type == "start_loop"
     assert response.actions[0].args["initial_ckpt"] == "ckpt_123"
-    assert response.actions[0].args["task_set"] == "swe_verified"
+    assert response.actions[0].args["benchmark"] == "swe_verified"
     assert response.actions[0].args["max_iterations"] == 2
 
 
@@ -51,7 +51,7 @@ envarena:
 run:
   initial_ckpt: ckpt_000
 env:
-  task_set: swe_verified
+  benchmark: swe_verified
 services:
   areal:
     config_path: areal.yaml
@@ -120,7 +120,7 @@ run:
   max_iterations: 3
   method: sft
 env:
-  task_set: base_task
+  benchmark: base_task
   harness_config:
     harness: config_harness
 """,
@@ -145,7 +145,7 @@ env:
     result = payload["executions"][0]["result"]
     assert result["status"] == "completed"
     assert result["metadata"]["initial_ckpt"] == "ckpt_base"
-    assert result["metadata"]["task_set"] == "base_task"
+    assert result["metadata"]["benchmark"] == "base_task"
     assert result["metadata"]["harness_config"] == {"harness": "config_harness"}
     assert result["iteration"] == 2
     assert result["metadata"]["resolved_config"] == "resolved_rsi_config.json"
@@ -259,7 +259,7 @@ run:
   max_iterations: 1
   method: sft
 env:
-  task_set: cfg_task
+  benchmark: cfg_task
   harness_config:
     harness: cfg_harness
 """,
@@ -281,5 +281,5 @@ env:
     assert payload["status"] == "completed"
     assert payload["iteration"] == 1
     assert payload["metadata"]["initial_ckpt"] == "ckpt_cfg"
-    assert payload["metadata"]["task_set"] == "cfg_task"
+    assert payload["metadata"]["benchmark"] == "cfg_task"
     assert payload["metadata"]["resolved_config"] == "resolved_rsi_config.json"

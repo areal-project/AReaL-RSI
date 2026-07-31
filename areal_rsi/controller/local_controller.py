@@ -62,8 +62,9 @@ class LocalRSIController:
         self,
         ckpt: str,
         *,
-        task_set: str,
         harness_config: dict[str, Any],
+        benchmark: Any | None = None,
+        task_set: Any | None = None,
         method: TrainMethod = "sft",
         train_config: dict[str, Any] | None = None,
         traj_filter: dict[str, Any] | None = None,
@@ -81,6 +82,7 @@ class LocalRSIController:
         envarena = envarena or self._require(self.envarena, "EnvClient")
         research_agent = research_agent or self._require(self.research_agent, "ResearchAgent")
         memory = memory or self._require(self.memory, "Memory")
+        benchmark = _resolve_benchmark_arg(benchmark, task_set)
 
         run_id = _run_id or self._new_run_id()
         run_dir = self.run_root / run_id
@@ -93,14 +95,14 @@ class LocalRSIController:
             status="running",
             metadata={
                 **(_loop_metadata or {}),
-                "task_set": task_set,
+                "benchmark": _benchmark_summary(benchmark),
                 "method": method,
                 "harness_config": harness_config,
                 "base_ckpt": ckpt,
             },
         )
         self._save_state(state)
-        self._record(memory, "iteration_started", f"ckpt={ckpt}, task_set={task_set}, method={method}", state)
+        self._record(memory, "iteration_started", f"ckpt={ckpt}, benchmark={_benchmark_summary(benchmark)}, method={method}", state)
 
         try:
             model_ref = _model_ref_from_path(ckpt)
@@ -111,7 +113,7 @@ class LocalRSIController:
                 step="eval",
                 input={
                     "model_ref": _model_ref_summary(model_ref),
-                    "task_set": task_set,
+                    "benchmark": _benchmark_summary(benchmark),
                     "harness_config": harness_config,
                     "source": "eval",
                 },
@@ -119,10 +121,9 @@ class LocalRSIController:
                 eval_job = envarena.submit_eval(
                     EvalRequest(
                         model=_model_asset_config(ckpt),
-                        dataset=_dataset_asset_config(task_set),
-                        harness=_harness_asset_config(harness_config),
+                        benchmark=_benchmark_ref_config(benchmark),
+                        harness=_harness_ref_config(harness_config),
                         skill=_optional_asset_config(harness_config, "skill"),
-                        reward=_optional_asset_config(harness_config, "reward"),
                         job_config=_eval_job_config(harness_config),
                         metadata={"run_id": run_id, "source": "eval"},
                     )
@@ -156,9 +157,9 @@ class LocalRSIController:
             self._record(
                 memory,
                 "eval_summarized",
-                f"ckpt={ckpt}, task_set={task_set}, score={eval_score.get('mean_reward')}, num_trajs={len(trajs)}",
+                f"ckpt={ckpt}, benchmark={_benchmark_summary(benchmark)}, score={eval_score.get('mean_reward')}, num_trajs={len(trajs)}",
                 state,
-                extra_metadata={"score": eval_score, "task_set": task_set},
+                extra_metadata={"score": eval_score, "benchmark": _benchmark_summary(benchmark)},
             )
 
             with audit.action(
@@ -234,14 +235,14 @@ class LocalRSIController:
 
             model_ref = _model_ref_from_path(next_ckpt)
 
-            holdout_task_set = str((eval_gate or {}).get("holdout_task_set", f"{task_set}_holdout"))
+            holdout_benchmark = _holdout_benchmark(benchmark, eval_gate)
             with audit.action(
                 run_id=run_id,
                 iteration=state.iteration,
                 step="holdout_eval",
                 input={
                     "model_ref": _model_ref_summary(model_ref),
-                    "task_set": holdout_task_set,
+                    "benchmark": _benchmark_summary(holdout_benchmark),
                     "harness_config": harness_config,
                     "source": "holdout_eval",
                 },
@@ -249,10 +250,9 @@ class LocalRSIController:
                 holdout_job = envarena.submit_eval(
                     EvalRequest(
                         model=_model_asset_config(next_ckpt),
-                        dataset=_dataset_asset_config(holdout_task_set),
-                        harness=_harness_asset_config(harness_config),
+                        benchmark=_benchmark_ref_config(holdout_benchmark),
+                        harness=_harness_ref_config(harness_config),
                         skill=_optional_asset_config(harness_config, "skill"),
-                        reward=_optional_asset_config(harness_config, "reward"),
                         job_config=_eval_job_config(harness_config),
                         metadata={"run_id": run_id, "source": "holdout_eval"},
                     )
@@ -286,11 +286,11 @@ class LocalRSIController:
                 memory,
                 "holdout_summarized",
                 (
-                    f"ckpt={next_ckpt}, task_set={holdout_task_set}, "
+                    f"ckpt={next_ckpt}, benchmark={_benchmark_summary(holdout_benchmark)}, "
                     f"score={holdout_score.get('mean_reward')}, num_trajs={len(holdout_trajs)}"
                 ),
                 state,
-                extra_metadata={"score": holdout_score, "task_set": holdout_task_set},
+                extra_metadata={"score": holdout_score, "benchmark": _benchmark_summary(holdout_benchmark)},
             )
 
             with audit.action(
@@ -326,8 +326,9 @@ class LocalRSIController:
         self,
         initial_ckpt: str,
         *,
-        task_set: str,
         harness_config: dict[str, Any],
+        benchmark: Any | None = None,
+        task_set: Any | None = None,
         method: TrainMethod = "sft",
         max_iterations: int = 3,
         stop_criteria: dict[str, Any] | None = None,
@@ -344,6 +345,7 @@ class LocalRSIController:
 
         if max_iterations < 1:
             raise ValueError("max_iterations must be >= 1.")
+        benchmark = _resolve_benchmark_arg(benchmark, task_set)
 
         memory = memory or self._require(self.memory, "Memory")
         run_id = _run_id or self._new_run_id()
@@ -358,9 +360,9 @@ class LocalRSIController:
             run_id=run_id,
             event_type="user_goal_received",
             input={
-                "goal": f"Improve {initial_ckpt} on {task_set}",
+                "goal": f"Improve {initial_ckpt} on {_benchmark_summary(benchmark)}",
                 "initial_ckpt": initial_ckpt,
-                "task_set": task_set,
+                "benchmark": _benchmark_summary(benchmark),
                 "method": method,
                 "max_iterations": max_iterations,
                 "harness_config": harness_config,
@@ -372,7 +374,7 @@ class LocalRSIController:
             output={
                 "loop_spec": {
                     "initial_ckpt": initial_ckpt,
-                    "task_set": task_set,
+                    "benchmark": _benchmark_summary(benchmark),
                     "method": method,
                     "max_iterations": max_iterations,
                 }
@@ -390,7 +392,7 @@ class LocalRSIController:
             }
             state = self.run_iteration(
                 ckpt=ckpt,
-                task_set=task_set,
+                benchmark=benchmark,
                 harness_config=harness_config,
                 method=method,
                 train_config=train_config,
@@ -617,14 +619,15 @@ def _normalize_start_loop_args(args: dict[str, Any]) -> dict[str, Any]:
     for alias in ("ckpt", "checkpoint", "initial_checkpoint"):
         if "initial_ckpt" not in normalized and alias in normalized:
             normalized["initial_ckpt"] = normalized.pop(alias)
-    for alias in ("dataset", "benchmark"):
-        if "task_set" not in normalized and alias in normalized:
-            normalized["task_set"] = normalized.pop(alias)
+    for alias in ("task_set", "dataset", "benchmark"):
+        if "benchmark" not in normalized and alias in normalized:
+            normalized["benchmark"] = normalized.pop(alias)
     if "max_iterations" not in normalized and "iterations" in normalized:
         normalized["max_iterations"] = normalized.pop("iterations")
     normalized.pop("goal", None)
     allowed = {
         "initial_ckpt",
+        "benchmark",
         "task_set",
         "harness_config",
         "method",
@@ -645,9 +648,9 @@ def _start_loop_overrides(args: dict[str, Any]) -> dict[str, Any]:
         if alias in args:
             overrides["run.initial_ckpt"] = args[alias]
             break
-    for alias in ("task_set", "dataset", "benchmark"):
+    for alias in ("benchmark", "task_set", "dataset"):
         if alias in args:
-            overrides["env.task_set"] = args[alias]
+            overrides["env.benchmark"] = args[alias]
             break
     if "method" in args:
         overrides["run.method"] = args["method"]
@@ -665,8 +668,11 @@ def _start_loop_overrides(args: dict[str, Any]) -> dict[str, Any]:
         overrides["stop_criteria"] = args["stop_criteria"]
     if "traj_filter" in args:
         overrides["research.traj_filter"] = args["traj_filter"]
-    if isinstance(args.get("eval_gate"), dict) and "holdout_task_set" in args["eval_gate"]:
-        overrides["env.holdout_task_set"] = args["eval_gate"]["holdout_task_set"]
+    if isinstance(args.get("eval_gate"), dict):
+        if "holdout_benchmark" in args["eval_gate"]:
+            overrides["env.holdout_benchmark"] = args["eval_gate"]["holdout_benchmark"]
+        elif "holdout_task_set" in args["eval_gate"]:
+            overrides["env.holdout_benchmark"] = args["eval_gate"]["holdout_task_set"]
     return overrides
 
 
@@ -682,24 +688,52 @@ def _model_asset_config(model_path: str) -> dict[str, Any]:
     return {"type": "new", "model_path": model_path}
 
 
-def _dataset_asset_config(task_set: Any) -> dict[str, Any]:
-    if isinstance(task_set, dict):
-        return dict(task_set)
-    return {"type": "ref", "ref": str(task_set)}
+def _resolve_benchmark_arg(benchmark: Any | None, task_set: Any | None) -> Any:
+    resolved = benchmark if benchmark is not None else task_set
+    if resolved is None:
+        raise ValueError("benchmark is required.")
+    return resolved
 
 
-def _harness_asset_config(harness_config: dict[str, Any]) -> dict[str, Any]:
+def _benchmark_ref_config(benchmark: Any) -> dict[str, Any] | str:
+    if isinstance(benchmark, dict):
+        return dict(benchmark)
+    return str(benchmark)
+
+
+def _harness_ref_config(harness_config: dict[str, Any]) -> dict[str, Any] | str:
     if isinstance(harness_config.get("harness_asset"), dict):
         return dict(harness_config["harness_asset"])
     if isinstance(harness_config.get("harness_config"), dict):
         return dict(harness_config["harness_config"])
     if "harness_ref" in harness_config:
-        return {"type": "ref", "ref": harness_config["harness_ref"]}
+        return harness_config["harness_ref"]
     if "harness" in harness_config:
-        return {"type": "ref", "ref": harness_config["harness"]}
+        return harness_config["harness"]
     if harness_config.get("type") in {"new", "ref"}:
         return dict(harness_config)
-    return {"type": "ref", "ref": "mock_harness"}
+    return "mock_harness"
+
+
+def _benchmark_summary(benchmark: Any) -> Any:
+    if isinstance(benchmark, dict):
+        if "ref" in benchmark:
+            return benchmark["ref"]
+        if "registry_ref" in benchmark:
+            return benchmark["registry_ref"]
+        if "key" in benchmark and "version" in benchmark:
+            return f"{benchmark['key']}@{benchmark['version']}"
+        return dict(benchmark)
+    return str(benchmark)
+
+
+def _holdout_benchmark(benchmark: Any, eval_gate: dict[str, Any] | None) -> Any:
+    gate = eval_gate or {}
+    if "holdout_benchmark" in gate:
+        return gate["holdout_benchmark"]
+    if "holdout_task_set" in gate:
+        return gate["holdout_task_set"]
+    return f"{_benchmark_summary(benchmark)}_holdout"
 
 
 def _optional_asset_config(harness_config: dict[str, Any], name: str) -> dict[str, Any] | None:
@@ -749,7 +783,7 @@ def _job_summary(job: dict[str, Any]) -> dict[str, Any]:
         "eval_job_id": job.get("eval_job_id"),
         "job_id": job.get("job_id"),
         "status": job.get("status"),
-        "task_set": job.get("task_set"),
+        "benchmark": job.get("benchmark"),
         "metrics": job.get("metrics", {}),
         "metadata": job.get("metadata", {}),
     }

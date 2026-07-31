@@ -135,24 +135,24 @@ The adapter's platform-neutral contract is the evaluation lifecycle:
 Set the control-plane address with `control_base_url` or, preferably for
 deployment-specific configuration, `control_base_url_env` (default:
 `ENVARENA_CONTROL_BASE_URL`). The value may be either the service root or end
-in `/openapi/v1`.
+in `/openapi/v1`. `envarena.job_config` can define defaults such as
+`sample_numbers`, `concurrency_policy`, `tags`, `model_parameters`, and
+`model_env`; values in each `EvalRequest.job_config` override those defaults.
 
-Model, dataset, harness, skill, and reward are evaluation inputs, not global
-client defaults. Each input is an asset config with `type: "ref"` for an
-existing Arena asset or `type: "new"` when the client should create/register it
-from the remaining fields. Dataset maps to EnvArena Benchmark refs; skill refs
-are injected into new Harness specs and reward refs are injected into new
-Benchmark specs.
+Model, benchmark, harness, and skill are evaluation inputs, not global client
+defaults. `model` and `skill` are asset configs with `type: "ref"` for an
+existing Arena asset or `type: "new"` when the client should create/register or
+start it from the remaining fields. `benchmark` and `harness` are existing
+Arena refs only. `benchmark` is the old task set concept.
 
 ```python
 from areal_rsi.schemas import EvalRequest
 
 job = client.submit_eval(EvalRequest(
     model={"type": "ref", "registry_ref": {"key": "your-model", "version": "1.0.0"}},
-    dataset={"type": "ref", "ref": "your-benchmark@1.0.0"},
-    harness={"type": "ref", "ref": {"key": "your-harness", "version": "1.0.0"}},
+    benchmark="your-benchmark@1.0.0",
+    harness={"key": "your-harness", "version": "1.0.0"},
     skill={"type": "ref", "ref": "your-skill@1.0.0"},
-    reward={"type": "ref", "ref": "your-reward@1.0.0"},
     job_config={"sample_numbers": 3, "tags": ["rsi"]},
 ))
 ```

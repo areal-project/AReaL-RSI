@@ -10,6 +10,9 @@ from .areal import (
     AReaLSlurmConfig,
     AReaLSFTWrapper,
     MockAReaLService,
+    MockAReaLRolloutConfig,
+    MockAReaLRolloutConfigurationError,
+    MockAReaLRolloutWrapper,
 )
 from .env_client import (
     EnvClient,
@@ -40,6 +43,9 @@ __all__ = [
     "EnvArenaHTTPError",
     "EnvArenaVersionRef",
     "MockAReaLService",
+    "MockAReaLRolloutConfig",
+    "MockAReaLRolloutConfigurationError",
+    "MockAReaLRolloutWrapper",
     "MockEnvClient",
     "MockResearchAgent",
     "OpenAIResearchAgent",

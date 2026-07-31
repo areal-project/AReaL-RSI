@@ -1,0 +1,23 @@
+# Static responses for the mock rollout capability in AReaLService.
+# Copy this file and replace every endpoint field with the values required by
+# the caller under test.  The responses are returned as configured; checkpoint
+# arguments are intentionally ignored.
+areal:
+  rollout:
+    ensure_rollout_endpoint:
+      model_ref: mock-model@1
+      base_url: https://mock-rollout.example/v1
+      api_key: mock-rollout-key
+      protocol: openai-compatible
+      metadata:
+        provider: mock
+        state: ready
+
+    update_rollout_endpoint:
+      model_ref: mock-model@2
+      base_url: https://mock-rollout.example/v1
+      api_key: mock-rollout-key
+      protocol: openai-compatible
+      metadata:
+        provider: mock
+        state: updated

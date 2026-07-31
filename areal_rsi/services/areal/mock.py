@@ -2,9 +2,91 @@
 
 from __future__ import annotations
 
+import copy
+from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
+import yaml
+
 from areal_rsi.schemas.core import Dataset, Endpoint, ModelRef, TrainMethod, TrainRun
+
+
+class MockAReaLRolloutConfigurationError(ValueError):
+    """Raised when a mock rollout YAML does not define endpoint responses."""
+
+
+@dataclass(frozen=True, slots=True)
+class MockAReaLRolloutConfig:
+    """Configured endpoint responses for the rollout part of ``AReaLService``."""
+
+    ensure_rollout_endpoint: Mapping[str, Any]
+    update_rollout_endpoint: Mapping[str, Any]
+
+    @classmethod
+    def from_yaml(cls, path: str | Path) -> "MockAReaLRolloutConfig":
+        """Load the ``areal.rollout`` section of a mock service YAML file."""
+
+        config_path = Path(path)
+        try:
+            value = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        except OSError as error:
+            raise MockAReaLRolloutConfigurationError(
+                f"Unable to read mock rollout config: {config_path}"
+            ) from error
+        except yaml.YAMLError as error:
+            raise MockAReaLRolloutConfigurationError(
+                f"Invalid YAML in mock rollout config: {config_path}"
+            ) from error
+        if not isinstance(value, Mapping):
+            raise MockAReaLRolloutConfigurationError("Mock rollout config must be a YAML mapping.")
+        areal = value.get("areal")
+        rollout = areal.get("rollout") if isinstance(areal, Mapping) else None
+        if not isinstance(rollout, Mapping):
+            raise MockAReaLRolloutConfigurationError(
+                "Mock rollout config must contain an 'areal.rollout' mapping."
+            )
+        return cls(
+            ensure_rollout_endpoint=_endpoint_response(rollout, "ensure_rollout_endpoint"),
+            update_rollout_endpoint=_endpoint_response(rollout, "update_rollout_endpoint"),
+        )
+
+
+class MockAReaLRolloutWrapper:
+    """Return rollout endpoint responses supplied by ``MockAReaLRolloutConfig``."""
+
+    def __init__(self, config: MockAReaLRolloutConfig) -> None:
+        self.config = config
+
+    @classmethod
+    def from_yaml(cls, path: str | Path) -> "MockAReaLRolloutWrapper":
+        """Construct the mock wrapper from ``config/mock.example.yaml``-style YAML."""
+
+        return cls(MockAReaLRolloutConfig.from_yaml(path))
+
+    def ensure_rollout_endpoint(
+        self, ckpt: str, config: dict[str, Any] | None = None
+    ) -> Endpoint:
+        """Return the configured response for rollout endpoint startup."""
+
+        del ckpt, config
+        return copy.deepcopy(dict(self.config.ensure_rollout_endpoint))
+
+    def update_rollout_endpoint(self, endpoint: Endpoint, ckpt: str) -> Endpoint:
+        """Return the configured response for rollout endpoint replacement."""
+
+        del endpoint, ckpt
+        return copy.deepcopy(dict(self.config.update_rollout_endpoint))
+
+
+def _endpoint_response(rollout: Mapping[str, Any], name: str) -> Mapping[str, Any]:
+    value = rollout.get(name)
+    if not isinstance(value, Mapping):
+        raise MockAReaLRolloutConfigurationError(
+            f"Mock rollout config field 'areal.rollout.{name}' must be a mapping."
+        )
+    return dict(value)
 
 
 class MockAReaLService:

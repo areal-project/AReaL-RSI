@@ -7,6 +7,7 @@ from typing import Any
 
 from areal_rsi.schemas.core import Dataset, Endpoint, ModelRef, TrainMethod, TrainRun
 
+from .mock import MockAReaLRolloutWrapper
 from .sft_wrapper import AReaLSFTConfig, AReaLSFTWrapper, ProcessRunner
 
 
@@ -15,10 +16,16 @@ class AReaLServiceConfigurationError(RuntimeError):
 
 
 class AReaLService:
-    """Hosts the existing AReaL API and executes configured SFT experiments."""
+    """Hosts configured AReaL SFT training and mock rollout capabilities."""
 
-    def __init__(self, sft_wrapper: AReaLSFTWrapper | None = None) -> None:
+    def __init__(
+        self,
+        sft_wrapper: AReaLSFTWrapper | None = None,
+        *,
+        rollout_wrapper: MockAReaLRolloutWrapper | None = None,
+    ) -> None:
         self._sft_wrapper = sft_wrapper
+        self._rollout_wrapper = rollout_wrapper
 
     @classmethod
     def from_sft_config(
@@ -31,11 +38,21 @@ class AReaLService:
 
         return cls(AReaLSFTWrapper(config, runner=runner))
 
+    @classmethod
+    def from_mock_rollout_config(cls, path: str | Path) -> "AReaLService":
+        """Construct a serving-only service backed by configured mock responses."""
+
+        return cls(rollout_wrapper=MockAReaLRolloutWrapper.from_yaml(path))
+
     def ensure_rollout_endpoint(self, ckpt: str, config: dict[str, Any] | None = None) -> Endpoint:
-        """Start or reuse an AReaL-hosted inference endpoint."""
+        """Return the configured mock rollout endpoint."""
+
+        return self._serving_wrapper().ensure_rollout_endpoint(ckpt, config)
 
     def update_rollout_endpoint(self, endpoint: Endpoint, ckpt: str) -> Endpoint:
-        """Update an existing rollout endpoint to serve a new checkpoint."""
+        """Return the configured mock endpoint-update response."""
+
+        return self._serving_wrapper().update_rollout_endpoint(endpoint, ckpt)
 
     def train(
         self,
@@ -82,6 +99,14 @@ class AReaLService:
                 "SFT is not configured. Initialize AReaLService with AReaLSFTConfig."
             )
         return self._sft_wrapper
+
+    def _serving_wrapper(self) -> MockAReaLRolloutWrapper:
+        if self._rollout_wrapper is None:
+            raise AReaLServiceConfigurationError(
+                "Rollout serving is not configured. Initialize AReaLService with "
+                "a MockAReaLRolloutWrapper or mock rollout config."
+            )
+        return self._rollout_wrapper
 
     @staticmethod
     def _experiment_options(config: dict[str, Any]) -> tuple[str | Path, str | None]:

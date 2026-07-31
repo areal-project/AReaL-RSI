@@ -1,11 +1,6 @@
 """AReaL service contract and implementations."""
 
-from .mock import (
-    MockAReaLService,
-    MockAReaLRolloutConfig,
-    MockAReaLRolloutConfigurationError,
-    MockAReaLRolloutWrapper,
-)
+from .mock import MockAReaLService
 from .service import AReaLService, AReaLServiceConfigurationError
 from .sft_wrapper import (
     AReaLSFTConfig,
@@ -26,7 +21,4 @@ __all__ = [
     "AReaLSlurmConfig",
     "AReaLSFTWrapper",
     "MockAReaLService",
-    "MockAReaLRolloutConfig",
-    "MockAReaLRolloutConfigurationError",
-    "MockAReaLRolloutWrapper",
 ]

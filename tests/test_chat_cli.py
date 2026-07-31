@@ -29,13 +29,6 @@ def test_rsi_config_initializes_configured_services_from_relative_paths(tmp_path
     areal_config.write_text(
         f"""
 areal:
-  rollout:
-    ensure_rollout_endpoint:
-      model_ref: model@initial
-      base_url: https://rollout.example.test/v1
-    update_rollout_endpoint:
-      model_ref: model@updated
-      base_url: https://rollout.example.test/v1
   sft:
     scheduler_type: local
     commands: [areal, train, run]

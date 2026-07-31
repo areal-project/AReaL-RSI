@@ -103,36 +103,7 @@ class LocalRSIController:
         self._record(memory, "iteration_started", f"ckpt={ckpt}, task_set={task_set}, method={method}", state)
 
         try:
-            endpoint_config = {"backend": "mock-or-adapter"}
-            with audit.action(
-                run_id=run_id,
-                iteration=state.iteration,
-                step="ensure_rollout_endpoint",
-                input={"ckpt": ckpt, "config": endpoint_config},
-            ) as action:
-                endpoint = areal.ensure_rollout_endpoint(ckpt, config=endpoint_config)
-                state.mark_step("ensure_rollout_endpoint", endpoint=endpoint)
-                self._save_state(state)
-                endpoint_path = artifacts.write_json("endpoint.json", endpoint)
-                action.set_output(
-                    {"endpoint": _endpoint_summary(endpoint)},
-                    artifacts={"endpoint": _artifact_ref(run_dir, endpoint_path)},
-                )
-
-            with audit.action(
-                run_id=run_id,
-                iteration=state.iteration,
-                step="register_model",
-                input={"endpoint": _endpoint_summary(endpoint)},
-            ) as action:
-                model_ref = envarena.register_model(endpoint)
-                state.mark_step("register_model", model_ref=model_ref)
-                self._save_state(state)
-                model_ref_path = artifacts.write_json("model_ref.json", model_ref)
-                action.set_output(
-                    {"model_ref": _model_ref_summary(model_ref)},
-                    artifacts={"model_ref": _artifact_ref(run_dir, model_ref_path)},
-                )
+            model_ref = _model_ref_from_path(ckpt)
 
             with audit.action(
                 run_id=run_id,
@@ -147,9 +118,12 @@ class LocalRSIController:
             ) as action:
                 eval_job = envarena.submit_eval(
                     EvalRequest(
-                        model_ref=model_ref,
-                        task_set=task_set,
-                        harness_config=harness_config,
+                        model=_model_asset_config(ckpt),
+                        dataset=_dataset_asset_config(task_set),
+                        harness=_harness_asset_config(harness_config),
+                        skill=_optional_asset_config(harness_config, "skill"),
+                        reward=_optional_asset_config(harness_config, "reward"),
+                        job_config=_eval_job_config(harness_config),
                         metadata={"run_id": run_id, "source": "eval"},
                     )
                 )
@@ -248,7 +222,8 @@ class LocalRSIController:
                     model_ref=model_ref,
                     harness_config=harness_config,
                 )
-                state.mark_step("train", train_run=train_run)
+                next_ckpt = str(train_run["ckpt"])
+                state.mark_step("train", train_run=train_run, ckpt=next_ckpt)
                 self._save_state(state)
                 train_run_path = artifacts.write_json("train_run.json", train_run)
                 action.set_output(
@@ -257,33 +232,7 @@ class LocalRSIController:
                 )
             self._record(memory, "train_finished", str(_train_summary(train_run)), state)
 
-            next_ckpt = str(train_run["ckpt"])
-            with audit.action(
-                run_id=run_id,
-                iteration=state.iteration,
-                step="update_endpoint",
-                input={
-                    "previous_endpoint": _endpoint_summary(endpoint),
-                    "previous_model_ref": _model_ref_summary(model_ref),
-                    "next_ckpt": next_ckpt,
-                },
-            ) as action:
-                endpoint = areal.update_rollout_endpoint(endpoint, next_ckpt)
-                model_ref = envarena.update_model(model_ref, endpoint)
-                state.mark_step("update_endpoint", ckpt=next_ckpt, endpoint=endpoint, model_ref=model_ref)
-                self._save_state(state)
-                updated_endpoint_path = artifacts.write_json("updated_endpoint.json", endpoint)
-                updated_model_ref_path = artifacts.write_json("updated_model_ref.json", model_ref)
-                action.set_output(
-                    {
-                        "endpoint": _endpoint_summary(endpoint),
-                        "model_ref": _model_ref_summary(model_ref),
-                    },
-                    artifacts={
-                        "endpoint": _artifact_ref(run_dir, updated_endpoint_path),
-                        "model_ref": _artifact_ref(run_dir, updated_model_ref_path),
-                    },
-                )
+            model_ref = _model_ref_from_path(next_ckpt)
 
             holdout_task_set = str((eval_gate or {}).get("holdout_task_set", f"{task_set}_holdout"))
             with audit.action(
@@ -299,9 +248,12 @@ class LocalRSIController:
             ) as action:
                 holdout_job = envarena.submit_eval(
                     EvalRequest(
-                        model_ref=model_ref,
-                        task_set=holdout_task_set,
-                        harness_config=harness_config,
+                        model=_model_asset_config(next_ckpt),
+                        dataset=_dataset_asset_config(holdout_task_set),
+                        harness=_harness_asset_config(harness_config),
+                        skill=_optional_asset_config(harness_config, "skill"),
+                        reward=_optional_asset_config(harness_config, "reward"),
+                        job_config=_eval_job_config(harness_config),
                         metadata={"run_id": run_id, "source": "holdout_eval"},
                     )
                 )
@@ -722,19 +674,70 @@ def _artifact_ref(run_dir: Path, path: Path) -> str:
     return str(path.relative_to(run_dir))
 
 
-def _endpoint_summary(endpoint: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "model_ref": endpoint.get("model_ref"),
-        "base_url": endpoint.get("base_url"),
-        "protocol": endpoint.get("protocol"),
-        "metadata": endpoint.get("metadata", {}),
-    }
+def _model_ref_from_path(model_path: str) -> dict[str, Any]:
+    return {"model_path": model_path, "metadata": {}}
+
+
+def _model_asset_config(model_path: str) -> dict[str, Any]:
+    return {"type": "new", "model_path": model_path}
+
+
+def _dataset_asset_config(task_set: Any) -> dict[str, Any]:
+    if isinstance(task_set, dict):
+        return dict(task_set)
+    return {"type": "ref", "ref": str(task_set)}
+
+
+def _harness_asset_config(harness_config: dict[str, Any]) -> dict[str, Any]:
+    if isinstance(harness_config.get("harness_asset"), dict):
+        return dict(harness_config["harness_asset"])
+    if isinstance(harness_config.get("harness_config"), dict):
+        return dict(harness_config["harness_config"])
+    if "harness_ref" in harness_config:
+        return {"type": "ref", "ref": harness_config["harness_ref"]}
+    if "harness" in harness_config:
+        return {"type": "ref", "ref": harness_config["harness"]}
+    if harness_config.get("type") in {"new", "ref"}:
+        return dict(harness_config)
+    return {"type": "ref", "ref": "mock_harness"}
+
+
+def _optional_asset_config(harness_config: dict[str, Any], name: str) -> dict[str, Any] | None:
+    config_key = f"{name}_config"
+    asset_key = f"{name}_asset"
+    ref_key = f"{name}_ref"
+    if isinstance(harness_config.get(asset_key), dict):
+        return dict(harness_config[asset_key])
+    if isinstance(harness_config.get(config_key), dict):
+        return dict(harness_config[config_key])
+    if harness_config.get(ref_key) is not None:
+        return {"type": "ref", "ref": harness_config[ref_key]}
+    return None
+
+
+def _eval_job_config(harness_config: dict[str, Any]) -> dict[str, Any]:
+    job_config: dict[str, Any] = {}
+    for field_name in (
+        "job_id",
+        "sample_numbers",
+        "concurrency_policy",
+        "tags",
+        "model_parameters",
+        "model_env",
+    ):
+        if field_name in harness_config:
+            job_config[field_name] = harness_config[field_name]
+    if isinstance(harness_config.get("job_config"), dict):
+        job_config.update(harness_config["job_config"])
+    return job_config
 
 
 def _model_ref_summary(model_ref: dict[str, Any]) -> dict[str, Any]:
     return {
         "env_model_id": model_ref.get("env_model_id"),
         "model_ref": model_ref.get("model_ref"),
+        "model_path": model_ref.get("model_path"),
+        "model_name": model_ref.get("model_name"),
         "key": model_ref.get("key"),
         "version": model_ref.get("version"),
         "metadata": model_ref.get("metadata", {}),

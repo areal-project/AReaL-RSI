@@ -37,19 +37,16 @@ def test_local_controller_runs_mock_iteration(tmp_path):
     audit_events = read_ledger(audit_path)
     succeeded = [event for event in audit_events if event["status"] == "succeeded"]
     assert [event["step"] for event in succeeded] == [
-        "ensure_rollout_endpoint",
-        "register_model",
         "eval",
         "collect_trajs",
         "generate_dataset",
         "train",
-        "update_endpoint",
         "holdout_eval",
         "record_decision_pending",
     ]
     assert {event["event_type"] for event in succeeded} == {"workflow_step"}
-    assert succeeded[3]["output"]["score"]["mean_reward"] == 0.5
-    assert succeeded[5]["output"]["ckpt"] == "ckpt_000-sft-mock"
+    assert succeeded[1]["output"]["score"]["mean_reward"] == 0.5
+    assert succeeded[3]["output"]["ckpt"] == "ckpt_000-sft-mock"
 
     memory_events = read_ledger(tmp_path / "memory" / "ledger.jsonl")
     assert "eval_summarized" in [event["title"] for event in memory_events]
@@ -148,7 +145,7 @@ def test_local_controller_runs_mock_loop(tmp_path):
     workflow_steps = [event for event in succeeded if event["event_type"] == "workflow_step"]
     loop_decisions = [event for event in succeeded if event["event_type"] == "loop_decision"]
     user_goals = [event for event in succeeded if event["event_type"] == "user_goal_received"]
-    assert len(workflow_steps) == 18
+    assert len(workflow_steps) == 12
     assert {event["iteration"] for event in workflow_steps} == {1, 2}
     assert len(loop_decisions) == 2
     assert len(user_goals) == 1

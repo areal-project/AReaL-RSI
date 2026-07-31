@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Mapping
 from typing import Any
 
-from areal_rsi.schemas.core import Endpoint, EvalJob, EvalRequest, ModelRef, Traj
+from areal_rsi.schemas.core import EvalJob, EvalRequest, Traj
 
 
 class MockEnvClient:
@@ -14,28 +15,23 @@ class MockEnvClient:
     def __init__(self) -> None:
         self._job_counts: defaultdict[str, int] = defaultdict(int)
 
-    def register_model(self, endpoint: Endpoint) -> ModelRef:
-        model_ref = endpoint.get("model_ref", "unknown")
-        return {
-            "env_model_id": f"env_{model_ref}",
-            "model_ref": model_ref,
-            "endpoint": endpoint,
-            "metadata": {"registered_by": "mock"},
-        }
-
-    def update_model(self, model_ref: ModelRef, endpoint: Endpoint) -> ModelRef:
-        updated = dict(model_ref)
-        updated["model_ref"] = endpoint.get("model_ref", updated.get("model_ref"))
-        updated["endpoint"] = endpoint
-        updated["metadata"] = {**updated.get("metadata", {}), "updated_by": "mock"}
-        return updated
-
     def submit_eval(self, request: EvalRequest) -> EvalJob:
+        model_name = _asset_label(request.model, "mock_ckpt")
+        dataset_name = _asset_label(request.dataset, "mock_tasks")
+        harness_name = _asset_label(request.harness, "mock_harness")
         return self._new_job(
             prefix="eval",
-            model_ref=request.model_ref,
-            task_set=request.task_set,
-            harness_config=dict(request.harness_config),
+            model_ref={"model_name": model_name, "model_ref": model_name},
+            task_set=dataset_name,
+            harness_config={"harness": harness_name},
+            assets={
+                "model": dict(request.model),
+                "dataset": dict(request.dataset),
+                "harness": dict(request.harness),
+                **({"skill": dict(request.skill)} if request.skill is not None else {}),
+                **({"reward": dict(request.reward)} if request.reward is not None else {}),
+            },
+            job_config=dict(request.job_config),
             metadata=dict(request.metadata),
         )
 
@@ -87,9 +83,11 @@ class MockEnvClient:
         self,
         *,
         prefix: str,
-        model_ref: ModelRef,
+        model_ref: dict[str, Any],
         task_set: str,
         harness_config: dict[str, Any],
+        assets: dict[str, Any],
+        job_config: dict[str, Any],
         metadata: dict[str, Any] | None,
     ) -> EvalJob:
         self._job_counts[prefix] += 1
@@ -100,6 +98,21 @@ class MockEnvClient:
             "model_ref": model_ref,
             "task_set": task_set,
             "harness_config": harness_config,
+            "assets": assets,
+            "job_config": job_config,
             "metrics": {"success_rate": 0.5, "num_tasks": 3},
             "metadata": metadata or {},
         }
+
+
+def _asset_label(config: Mapping[str, Any], default: str) -> str:
+    if config.get("ref") is not None:
+        if isinstance(config["ref"], Mapping) and config["ref"].get("key") and config["ref"].get("version"):
+            return f"{config['ref']['key']}@{config['ref']['version']}"
+        return str(config["ref"])
+    if config.get("key") is not None and config.get("version") is not None:
+        return f"{config['key']}@{config['version']}"
+    for name in ("model_name", "runtime_model_name", "model_path", "key", "name", "harness", "dataset"):
+        if config.get(name) is not None:
+            return str(config[name])
+    return default

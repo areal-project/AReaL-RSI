@@ -21,7 +21,6 @@ class RunState:
     iteration: int = 0
     status: RunStatus = "created"
     current_step: str | None = None
-    endpoint: dict[str, Any] | None = None
     model_ref: dict[str, Any] | None = None
     eval_job: dict[str, Any] | None = None
     train_run: dict[str, Any] | None = None

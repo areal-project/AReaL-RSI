@@ -4,17 +4,11 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from areal_rsi.schemas.core import Endpoint, EvalJob, EvalRequest, ModelRef, Traj
+from areal_rsi.schemas.core import EvalJob, EvalRequest, Traj
 
 
 class EnvClient(Protocol):
     """Minimal environment interface required by the RSI controller."""
-
-    def register_model(self, endpoint: Endpoint) -> ModelRef:
-        """Register an AReaL inference endpoint with the environment platform."""
-
-    def update_model(self, model_ref: ModelRef, endpoint: Endpoint) -> ModelRef:
-        """Update an existing environment model after an endpoint or checkpoint change."""
 
     def submit_eval(self, request: EvalRequest) -> EvalJob:
         """Submit an evaluation run."""

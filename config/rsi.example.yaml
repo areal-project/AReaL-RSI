@@ -1,30 +1,5 @@
-run:
-  initial_ckpt: ckpt_000
-  max_iterations: 3
-  method: sft
-
-env:
-  task_set: swe_verified
-  holdout_task_set: swe_verified_holdout
-  harness_config:
-    harness: mock_harness
-
 services:
   areal:
-    backend: mock
+    config_path: areal.example.yaml
   envarena:
-    backend: mock
-  research:
-    backend: mock
-
-research:
-  traj_filter: null
-  dataset:
-    format: sft
-    include_experience: true
-
-train:
-  config:
-    epochs: 1
-
-stop_criteria: {}
+    config_path: envarena.example.yaml

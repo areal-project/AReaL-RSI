@@ -28,13 +28,15 @@ areal:
       base_url: https://mock.example/updated
       metadata:
         state: updated
+  sft:
+    commands: [areal, train, run]
 """.lstrip(),
         encoding="utf-8",
     )
 
 
 def test_mock_rollout_wrapper_returns_configured_endpoint_responses(tmp_path: Path):
-    config_path = tmp_path / "mock.yaml"
+    config_path = tmp_path / "areal.yaml"
     _write_config(config_path)
     wrapper = MockAReaLRolloutWrapper.from_yaml(config_path)
 
@@ -51,16 +53,17 @@ def test_mock_rollout_wrapper_returns_configured_endpoint_responses(tmp_path: Pa
     assert wrapper.ensure_rollout_endpoint("ignored")["metadata"]["state"] == "ready"
 
 
-def test_areal_service_loads_mock_rollout_config(tmp_path: Path):
-    config_path = tmp_path / "mock.yaml"
+def test_areal_service_loads_rollout_and_sft_config_from_one_yaml(tmp_path: Path):
+    config_path = tmp_path / "areal.yaml"
     _write_config(config_path)
-    service = AReaLService.from_mock_rollout_config(config_path)
+    service = AReaLService.from_yaml(config_path)
 
     endpoint = service.ensure_rollout_endpoint("/models/one")
     updated = service.update_rollout_endpoint(endpoint, "/models/two")
 
     assert endpoint["model_ref"] == "model@initial"
     assert updated["model_ref"] == "model@updated"
+    assert service._sft_wrapper is not None
 
 
 def test_mock_rollout_config_requires_both_endpoint_responses(tmp_path: Path):

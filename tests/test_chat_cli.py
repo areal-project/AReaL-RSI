@@ -1,7 +1,10 @@
 import json
 
 from areal_rsi.agent import FakeRSIAgent
-from areal_rsi.cli.main import main
+from areal_rsi.cli.main import _controller_from_rsi_config, main
+from areal_rsi.config import RSIRunConfig
+from areal_rsi.memory import Memory
+from areal_rsi.services import AReaLService, EnvArenaClient, MockResearchAgent
 
 
 def test_fake_agent_generates_start_loop_action():
@@ -19,6 +22,63 @@ def test_fake_agent_generates_start_loop_action():
     assert response.actions[0].args["initial_ckpt"] == "ckpt_123"
     assert response.actions[0].args["task_set"] == "swe_verified"
     assert response.actions[0].args["max_iterations"] == 2
+
+
+def test_rsi_config_initializes_configured_services_from_relative_paths(tmp_path, monkeypatch):
+    areal_config = tmp_path / "areal.yaml"
+    areal_config.write_text(
+        f"""
+areal:
+  rollout:
+    ensure_rollout_endpoint:
+      model_ref: model@initial
+      base_url: https://rollout.example.test/v1
+    update_rollout_endpoint:
+      model_ref: model@updated
+      base_url: https://rollout.example.test/v1
+  sft:
+    scheduler_type: local
+    commands: [areal, train, run]
+    environment_variables: {{}}
+""".lstrip(),
+        encoding="utf-8",
+    )
+    envarena_config = tmp_path / "envarena.yaml"
+    envarena_config.write_text(
+        """
+envarena:
+  control_base_url_env: ARENA_CONTROL_URL
+  token_env: ARENA_TOKEN
+""".lstrip(),
+        encoding="utf-8",
+    )
+    rsi_config = tmp_path / "rsi.yaml"
+    rsi_config.write_text(
+        """
+run:
+  initial_ckpt: ckpt_000
+env:
+  task_set: swe_verified
+services:
+  areal:
+    config_path: areal.yaml
+  envarena:
+    config_path: envarena.yaml
+  research:
+    backend: mock
+""".lstrip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ARENA_CONTROL_URL", "https://arena.example.test/openapi/v1")
+    monkeypatch.setenv("ARENA_TOKEN", "token")
+
+    controller = _controller_from_rsi_config(
+        RSIRunConfig.load(rsi_config), tmp_path / "runs", Memory(tmp_path / "memory")
+    )
+
+    assert isinstance(controller.areal, AReaLService)
+    assert isinstance(controller.envarena, EnvArenaClient)
+    assert isinstance(controller.research_agent, MockResearchAgent)
 
 
 def test_chat_cli_does_not_execute_confirmed_action_by_default(tmp_path, capsys):

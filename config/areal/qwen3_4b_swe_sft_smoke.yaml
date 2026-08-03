@@ -1,0 +1,109 @@
+# One-step, one-node SWE-SFT bring-up for a dense Qwen3 checkpoint.
+#
+# The Researcher copies this template per iteration and binds actor.path and
+# train_dataset.path to the current checkpoint and generated SFT JSONL.
+# This template deliberately trains only one step: it validates checkpoint
+# loading, SWE preprocessing, distributed SFT, and checkpoint saving without
+# turning an end-to-end integration test into a full training campaign.
+experiment_name: qwen3-4b-swe-sft-smoke
+trial_name: one-step
+
+seed: 1
+enable_offload: false
+total_train_epochs: 1
+total_train_steps: 1
+tokenizer_path: ${actor.path}
+
+cluster:
+  n_nodes: 1
+  n_gpus_per_node: 1
+  fileroot: /storage/openpsi/rsi-experiments
+  name_resolve:
+    type: nfs
+    nfs_record_root: /storage/openpsi/rsi-experiments/name_resolve/${experiment_name}
+
+scheduler:
+  type: null
+
+actor:
+  backend: fsdp:d1p1t1
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  path: /storage/openpsi/models/Qwen__Qwen3-4B
+  init_from_scratch: false
+  gradient_checkpointing: true
+  dtype: bfloat16
+  mb_spec:
+    max_tokens_per_mb: 32768
+  optimizer:
+    type: adam
+    lr: 2.0e-5
+    weight_decay: 0.05
+    beta1: 0.9
+    beta2: 0.95
+    eps: 1.0e-5
+    lr_scheduler_type: constant
+    gradient_clipping: 1.0
+  scheduling_spec:
+    - task_type: worker
+      port_count: 2
+      gpu: 1
+      cpu: 4
+      mem: 32
+      cmd: python3 -m areal.infra.rpc.rpc_server
+      env_vars: {}
+
+swe:
+  split_mode: trajectory
+  filter_errors: true
+  strip_all_thinking: false
+  pre_split: false
+  num_proc: 16
+  filter_empty_tool_calls: false
+  filter_bare_text_tool_calls: false
+  truncate_task_notifications: false
+  cleanup_processed_dataset: false
+  parse_tool_call_args: false
+  dump_samples: 0
+
+train_dataset:
+  batch_size: 1
+  shuffle: true
+  pin_memory: true
+  num_workers: 4
+  drop_last: false
+  path: /storage/openpsi/users/shenxujie.sxj/datasets/swe_data/sft_data/ring/split/stage3_swe_engineering/claude-opus-4.6.jsonl
+  type: sft
+  max_length: 32768
+
+saver:
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  fileroot: ${cluster.fileroot}
+  freq_epochs: null
+  freq_steps: 1
+  freq_secs: null
+
+recover:
+  mode: disabled
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  fileroot: ${cluster.fileroot}
+  freq_epochs: null
+  freq_steps: null
+  freq_secs: null
+
+evaluator:
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  fileroot: ${cluster.fileroot}
+  freq_epochs: null
+  freq_steps: null
+  freq_secs: null
+
+stats_logger:
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  fileroot: ${cluster.fileroot}
+  wandb:
+    mode: disabled

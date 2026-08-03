@@ -46,6 +46,16 @@ class RSIRunConfig:
     def to_run_loop_kwargs(self) -> dict[str, Any]:
         run = self.data["run"]
         env = self.data["env"]
+        train_config = copy.deepcopy(self.data.get("train", {}).get("config"))
+        if isinstance(train_config, dict) and self.source_path is not None:
+            for field_name in ("train_config_path", "experiment_config"):
+                value = train_config.get(field_name)
+                if isinstance(value, str) and value.strip():
+                    path = Path(value).expanduser()
+                    if not path.is_absolute():
+                        train_config[field_name] = str(
+                            (self.source_path.parent / path).resolve()
+                        )
         return {
             "initial_ckpt": run["initial_ckpt"],
             "benchmark": env["benchmark"],
@@ -53,7 +63,7 @@ class RSIRunConfig:
             "method": run.get("method", "sft"),
             "max_iterations": int(run.get("max_iterations", 3)),
             "stop_criteria": self.data.get("stop_criteria", {}),
-            "train_config": self.data.get("train", {}).get("config"),
+            "train_config": train_config,
             "traj_filter": self.data.get("research", {}).get("traj_filter"),
             "eval_gate": {"holdout_benchmark": env["holdout_benchmark"]},
         }

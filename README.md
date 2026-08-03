@@ -20,9 +20,15 @@ The system keeps two roles separate:
 - `ResearchAgent`: trajectory-to-dataset worker agent. It analyzes EnvArena trajectories, synthesizes experience, and emits datasets.
 - `RSIController`: deterministic workflow executor. It runs jobs, persists state, supports resume/retry/stop, and records artifacts.
 
-Concrete agent scaffolds are backed by OpenAI SDK through the optional
-`openai` dependency. Mock services remain available for local
-controller tests and demos.
+The conversational RSIAgent has an OpenAI SDK scaffold. The worker ResearchAgent
+also has a Claude Agent SDK implementation that uses one resumable Claude Code
+session per iteration, reads one task trajectory file at a time, and writes the
+iteration SFT JSONL and complete AReaL training YAML. Mock services remain
+available for deterministic controller tests and demos.
+
+One user command starts a **Run**. Each eval → research → train → holdout eval
+round inside that Run is one **iteration**. The config key
+`run.max_iterations` limits the number of iterations in that Run.
 
 ## Documents
 
@@ -39,8 +45,8 @@ Build a minimal but recoverable loop:
 2. Generate a dataset from trajectories.
 3. Run AReaL SFT training.
 4. Run holdout evaluation for the new checkpoint.
-5. Record the run in Memory.
-6. Let RSIAgent explain the run and propose the next action.
+5. Record each iteration in Run-scoped Memory.
+6. Let RSIAgent explain the Run.
 
 ## Local Mock Loop
 
@@ -48,7 +54,7 @@ Build a minimal but recoverable loop:
 python -m areal_rsi.cli.main run-mock --ckpt ckpt_000 --task-set swe_verified
 ```
 
-Run multiple mock RSI iterations under one `run_id`:
+Run one mock Run containing two iterations:
 
 ```bash
 python -m areal_rsi.cli.main run-loop-mock --ckpt ckpt_000 --task-set swe_verified --max-iterations 2
@@ -99,11 +105,45 @@ For scripted state queries, use the CLI status command:
 python -m areal_rsi.cli.main status <run_id> --run-root runs
 ```
 
+Each Run is physically isolated under the run root:
+
+```text
+<run_root>/
+  run_<timestamp>/
+    state.json
+    audit.jsonl
+    resolved_rsi_config.json
+    memory/
+      ledger.jsonl
+    artifacts/
+      iter_001/
+        research/
+      iter_002/
+        ...
+```
+
+Researcher receives only the current iteration's trajectories/workspace plus
+the current Run's materialized `memory.json`. It is explicitly instructed not
+to inspect sibling or previous Run directories. A new Researcher session is
+created for every iteration; history crosses iterations only through that
+Run's Memory.
+
 OpenAI SDK support is optional:
 
 ```bash
 pip install -e '.[agent]'
 ```
+
+Claude ResearchAgent support is optional:
+
+```bash
+pip install -e '.[researcher]'
+```
+
+`config/rsi.example.yaml` currently combines real AReaL Slurm training and the
+Claude ResearchAgent with `MockEnvClient`. Checkpoint-backed model startup in
+EnvArena is intentionally mocked until its control-plane API is available. The
+mock trajectories retain the same checkpoint path passed to the ResearchAgent.
 
 ## EnvArena Control Plane Client
 
@@ -193,6 +233,8 @@ For the tested containerized Slurm/SPMD route, configure the optional
 `start_experiment()` performs both script generation and `sbatch --parsable`
 submission when `scheduler_type` is `slurm`. Submission is asynchronous and
 therefore returns a job record, not a completed `TrainRun` checkpoint.
+The RSI controller polls the Slurm job and resolves the latest declared AReaL
+checkpoint before continuing to holdout evaluation.
 
 ```python
 from areal_rsi.services import AReaLService

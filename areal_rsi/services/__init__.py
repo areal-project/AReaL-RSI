@@ -21,11 +21,22 @@ from .env_client import (
     EnvArenaVersionRef,
     MockEnvClient,
 )
-from .research import MockResearchAgent, OpenAIResearchAgent, ResearchAgent
+from .research import (
+    ClaudeResearchAgent,
+    ClaudeResearchConfig,
+    MockResearchAgent,
+    OpenAIResearchAgent,
+    ResearchAgent,
+    SFTFormatError,
+    TrajectoryWorkspace,
+    validate_sft_jsonl,
+)
 
 __all__ = [
     "AReaLService",
     "AReaLServiceConfigurationError",
+    "ClaudeResearchAgent",
+    "ClaudeResearchConfig",
     "AReaLSFTConfig",
     "AReaLSFTConfigurationError",
     "AReaLSFTSubmissionError",
@@ -44,4 +55,7 @@ __all__ = [
     "MockResearchAgent",
     "OpenAIResearchAgent",
     "ResearchAgent",
+    "SFTFormatError",
+    "TrajectoryWorkspace",
+    "validate_sft_jsonl",
 ]

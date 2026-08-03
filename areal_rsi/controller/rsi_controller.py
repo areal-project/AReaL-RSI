@@ -49,13 +49,13 @@ class RSIController(Protocol):
         traj_filter: dict[str, Any] | None = None,
         eval_gate: dict[str, Any] | None = None,
     ) -> RunState:
-        """Run multiple RSI iterations under one run id."""
+        """Run one user-started Run containing multiple RSI iterations."""
 
     def get_status(self, run_id: str) -> RunState:
-        """Return current run state for internal readers and scripted queries."""
+        """Return one user-started Run state."""
 
     def resume(self, run_id: str) -> RunState:
-        """Resume an interrupted workflow."""
+        """Read resumable state for a Run."""
 
     def stop(self, run_id: str, reason: str | None = None) -> RunState:
-        """Stop a workflow and record the reason."""
+        """Stop a Run and record the reason."""

@@ -15,7 +15,7 @@ SECRET_KEY_PARTS = ("api_key", "apikey", "auth", "authorization", "password", "s
 
 
 class AuditLogger:
-    """Records action input/output/error events for a single run."""
+    """Records action input/output/error events for a single Run."""
 
     def __init__(self, path: str | Path):
         self.path = Path(path)

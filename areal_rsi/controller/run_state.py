@@ -14,7 +14,7 @@ RunStatus = Literal["created", "running", "waiting_for_acceptance", "completed",
 
 @dataclass(slots=True)
 class RunState:
-    """Source of truth for a single RSI workflow run."""
+    """Source of truth for one user-started Run containing multiple iterations."""
 
     run_id: str
     ckpt: str

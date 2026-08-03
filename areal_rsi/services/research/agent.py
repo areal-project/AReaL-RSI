@@ -25,4 +25,4 @@ class ResearchAgent(Protocol):
         """Generate a dataset with experience fields from trajectories."""
 
     def choose_ckpt(self, train_runs: list[TrainRun], memory_context: MemoryContext) -> str:
-        """Choose the checkpoint for the next RSI iteration."""
+        """Choose the checkpoint for the next iteration in the current Run."""

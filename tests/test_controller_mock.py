@@ -1,4 +1,5 @@
 from areal_rsi.config import RSIRunConfig
+import areal_rsi.controller.local_controller as controller_module
 from areal_rsi.controller import LocalRSIController
 from areal_rsi.memory import Memory
 from areal_rsi.memory.ledger import read_ledger
@@ -7,13 +8,12 @@ from areal_rsi.services import MockAReaLService, MockEnvClient, MockResearchAgen
 
 
 def test_local_controller_runs_mock_iteration(tmp_path):
-    memory = Memory(tmp_path / "memory")
     controller = LocalRSIController(
         run_root=tmp_path / "runs",
         areal=MockAReaLService(),
         envarena=MockEnvClient(),
         research_agent=MockResearchAgent(),
-        memory=memory,
+        memory=Memory(tmp_path / "legacy-global-memory"),
     )
 
     state = controller.run_iteration(
@@ -26,12 +26,15 @@ def test_local_controller_runs_mock_iteration(tmp_path):
     assert state.status == "waiting_for_acceptance"
     assert state.ckpt == "ckpt_000-sft-mock"
     assert "record_decision_pending" in state.completed_steps
-    assert (tmp_path / "runs" / state.run_id / "state.json").exists()
-    assert (tmp_path / "runs" / state.run_id / "artifacts" / "dataset.json").exists()
-    assert (tmp_path / "runs" / state.run_id / "audit.jsonl").exists()
-    assert (tmp_path / "memory" / "ledger.jsonl").exists()
+    run_dir = tmp_path / "runs" / state.run_id
+    assert state.iteration == 1
+    assert (run_dir / "state.json").exists()
+    assert (run_dir / "artifacts" / "dataset.json").exists()
+    assert (run_dir / "audit.jsonl").exists()
+    assert (run_dir / "memory" / "ledger.jsonl").exists()
+    assert not (tmp_path / "legacy-global-memory" / "ledger.jsonl").exists()
 
-    audit_path = tmp_path / "runs" / state.run_id / "audit.jsonl"
+    audit_path = run_dir / "audit.jsonl"
     assert "mock-api-key" not in audit_path.read_text(encoding="utf-8")
 
     audit_events = read_ledger(audit_path)
@@ -48,9 +51,18 @@ def test_local_controller_runs_mock_iteration(tmp_path):
     assert succeeded[1]["output"]["score"]["mean_reward"] == 0.5
     assert succeeded[3]["output"]["ckpt"] == "ckpt_000-sft-mock"
 
-    memory_events = read_ledger(tmp_path / "memory" / "ledger.jsonl")
+    memory_events = read_ledger(run_dir / "memory" / "ledger.jsonl")
     assert "eval_summarized" in [event["title"] for event in memory_events]
     assert "holdout_summarized" in [event["title"] for event in memory_events]
+
+
+def test_file_backed_dataset_reports_validated_record_count():
+    assert controller_module._dataset_num_examples(
+        {
+            "examples": [],
+            "metadata": {"validation": {"record_count": 1}},
+        }
+    ) == 1
 
 
 def test_execute_action_starts_loop_with_harness_shortcut(tmp_path):
@@ -109,13 +121,11 @@ def test_execute_action_starts_loop_with_checkpoint_alias(tmp_path):
 
 
 def test_local_controller_runs_mock_loop(tmp_path):
-    memory = Memory(tmp_path / "memory")
     controller = LocalRSIController(
         run_root=tmp_path / "runs",
         areal=MockAReaLService(),
         envarena=MockEnvClient(),
         research_agent=MockResearchAgent(),
-        memory=memory,
     )
 
     state = controller.run_loop(
@@ -136,27 +146,219 @@ def test_local_controller_runs_mock_loop(tmp_path):
         "ckpt_000-sft-mock",
         "ckpt_000-sft-mock-sft-mock",
     ]
-    assert [result["iteration"] for result in state.metadata["iteration_results"]] == [1, 2]
-    assert (tmp_path / "runs" / state.run_id / "artifacts" / "iter_001" / "dataset.json").exists()
-    assert (tmp_path / "runs" / state.run_id / "artifacts" / "iter_002" / "dataset.json").exists()
+    assert [
+        result["iteration"] for result in state.metadata["iteration_results"]
+    ] == [1, 2]
+    run_dir = tmp_path / "runs" / state.run_id
+    assert (run_dir / "artifacts" / "iter_001" / "dataset.json").exists()
+    assert (run_dir / "artifacts" / "iter_002" / "dataset.json").exists()
 
-    audit_events = read_ledger(tmp_path / "runs" / state.run_id / "audit.jsonl")
+    audit_events = read_ledger(run_dir / "audit.jsonl")
     succeeded = [event for event in audit_events if event["status"] == "succeeded"]
-    workflow_steps = [event for event in succeeded if event["event_type"] == "workflow_step"]
-    loop_decisions = [event for event in succeeded if event["event_type"] == "loop_decision"]
-    user_goals = [event for event in succeeded if event["event_type"] == "user_goal_received"]
+    workflow_steps = [
+        event for event in succeeded if event["event_type"] == "workflow_step"
+    ]
+    loop_decisions = [
+        event for event in succeeded if event["event_type"] == "loop_decision"
+    ]
+    user_goals = [
+        event for event in succeeded if event["event_type"] == "user_goal_received"
+    ]
     assert len(workflow_steps) == 12
     assert {event["iteration"] for event in workflow_steps} == {1, 2}
     assert len(loop_decisions) == 2
     assert len(user_goals) == 1
 
-    memory_events = read_ledger(tmp_path / "memory" / "ledger.jsonl")
-    assert "loop_completed" in [event["title"] for event in memory_events]
+    memory_events = read_ledger(run_dir / "memory" / "ledger.jsonl")
+    assert "run_completed" in [event["title"] for event in memory_events]
 
     status = controller.get_status(state.run_id)
     assert status.run_id == state.run_id
     assert status.status == "completed"
     assert status.ckpt == state.ckpt
+
+
+def test_memory_and_research_context_are_isolated_per_run(tmp_path):
+    class CapturingResearcher(MockResearchAgent):
+        def __init__(self):
+            self.contexts = []
+
+        def generate_dataset(self, trajs, memory_context, current_ckpt, **kwargs):
+            self.contexts.append(memory_context)
+            return super().generate_dataset(
+                trajs, memory_context, current_ckpt, **kwargs
+            )
+
+    researcher = CapturingResearcher()
+    controller = LocalRSIController(
+        run_root=tmp_path / "runs",
+        areal=MockAReaLService(),
+        envarena=MockEnvClient(),
+        research_agent=researcher,
+        memory=Memory(tmp_path / "global-memory-must-not-be-used"),
+    )
+
+    first = controller.run_loop(
+        initial_ckpt="ckpt_first",
+        benchmark="swe_verified",
+        harness_config={"harness": "mock"},
+        max_iterations=2,
+    )
+    second = controller.run_loop(
+        initial_ckpt="ckpt_second",
+        benchmark="swe_verified",
+        harness_config={"harness": "mock"},
+        max_iterations=1,
+    )
+
+    first_iter_one, first_iter_two, second_iter_one = researcher.contexts
+    assert "iteration_finished" not in [
+        event["title"] for event in first_iter_one["events"]
+    ]
+    assert "iteration_finished" in [
+        event["title"] for event in first_iter_two["events"]
+    ]
+    assert {
+        event["metadata"]["run_id"] for event in second_iter_one["events"]
+    } == {second.run_id}
+    assert first.run_id != second.run_id
+    assert (tmp_path / "runs" / first.run_id / "memory" / "ledger.jsonl").exists()
+    assert (tmp_path / "runs" / second.run_id / "memory" / "ledger.jsonl").exists()
+    assert not (tmp_path / "global-memory-must-not-be-used" / "ledger.jsonl").exists()
+
+
+def test_mock_eval_model_reference_matches_researcher_input(tmp_path):
+    class CapturingResearcher(MockResearchAgent):
+        def generate_dataset(self, trajs, memory_context, current_ckpt, **kwargs):
+            self.trajs = trajs
+            self.model_ref = kwargs["model_ref"]
+            self.current_ckpt = current_ckpt
+            return super().generate_dataset(
+                trajs, memory_context, current_ckpt, **kwargs
+            )
+
+    researcher = CapturingResearcher()
+    controller = LocalRSIController(
+        run_root=tmp_path / "runs",
+        areal=MockAReaLService(),
+        envarena=MockEnvClient(),
+        research_agent=researcher,
+        memory=Memory(tmp_path / "memory"),
+    )
+
+    controller.run_iteration(
+        ckpt="/models/checkpoint-7",
+        benchmark="swe_verified",
+        harness_config={"harness": "mock"},
+    )
+
+    assert researcher.current_ckpt == "/models/checkpoint-7"
+    assert researcher.model_ref["model_path"] == "/models/checkpoint-7"
+    assert {traj["model_ref"] for traj in researcher.trajs} == {
+        "/models/checkpoint-7"
+    }
+
+
+def test_controller_polls_eval_without_changing_envclient_interface(tmp_path):
+    class AsyncMockEnvClient(MockEnvClient):
+        def __init__(self):
+            super().__init__()
+            self.progress_calls = {}
+
+        def get_eval_progress(self, job):
+            job_id = job["eval_job_id"]
+            calls = self.progress_calls.get(job_id, 0) + 1
+            self.progress_calls[job_id] = calls
+            return {"status": "RUNNING" if calls == 1 else "DONE"}
+
+    envarena = AsyncMockEnvClient()
+    controller = LocalRSIController(
+        run_root=tmp_path / "runs",
+        areal=MockAReaLService(),
+        envarena=envarena,
+        research_agent=MockResearchAgent(),
+        memory=Memory(tmp_path / "memory"),
+    )
+
+    state = controller.run_iteration(
+        ckpt="ckpt_000",
+        benchmark="swe_verified",
+        harness_config={
+            "harness": "mock",
+            "job_config": {"poll_interval_seconds": 0},
+        },
+    )
+
+    assert state.status == "waiting_for_acceptance"
+    assert sorted(envarena.progress_calls.values()) == [2, 2]
+
+
+def test_target_score_stops_successfully_and_max_iterations_exhausts(tmp_path):
+    controller = LocalRSIController(
+        run_root=tmp_path / "runs",
+        areal=MockAReaLService(),
+        envarena=MockEnvClient(),
+        research_agent=MockResearchAgent(),
+        memory=Memory(tmp_path / "memory"),
+    )
+
+    reached = controller.run_loop(
+        initial_ckpt="ckpt_target",
+        benchmark="swe_verified",
+        harness_config={"harness": "mock"},
+        max_iterations=3,
+        stop_criteria={"target_mean_reward": 0.5},
+    )
+    exhausted = controller.run_loop(
+        initial_ckpt="ckpt_exhaust",
+        benchmark="swe_verified",
+        harness_config={"harness": "mock"},
+        max_iterations=2,
+        stop_criteria={"target_mean_reward": 0.9},
+    )
+
+    assert reached.iteration == 1
+    assert reached.metadata["goal_reached"] is True
+    assert reached.metadata["stop_reason"] == "target_mean_reward_reached"
+    assert exhausted.iteration == 2
+    assert exhausted.metadata["goal_reached"] is False
+    assert exhausted.metadata["stop_reason"] == "max_iterations_exhausted"
+
+
+def test_controller_waits_for_slurm_and_collects_checkpoint(tmp_path, monkeypatch):
+    class SlurmAReaL:
+        def start_experiment(self, config):
+            self.config = config
+            return {
+                "job_id": "42",
+                "status": "submitted",
+                "train_run_id": "exp:trial",
+            }
+
+        def get_experiment_artifacts(self, config):
+            assert config is self.config
+            return {"latest_checkpoint": "/checkpoints/epoch1globalstep1"}
+
+    monkeypatch.setattr(
+        controller_module, "_slurm_job_state", lambda job_id: "COMPLETED"
+    )
+    controller = LocalRSIController(
+        run_root=tmp_path / "runs",
+        areal=SlurmAReaL(),
+        envarena=MockEnvClient(),
+        research_agent=MockResearchAgent(),
+        memory=Memory(tmp_path / "memory"),
+    )
+
+    state = controller.run_iteration(
+        ckpt="ckpt_000",
+        benchmark="swe_verified",
+        harness_config={"harness": "mock"},
+        train_config={"poll_interval_seconds": 0},
+    )
+
+    assert state.train_run["metadata"]["status"] == "completed"
+    assert state.ckpt == "/checkpoints/epoch1globalstep1"
 
 
 def test_execute_action_starts_loop_from_config(tmp_path):

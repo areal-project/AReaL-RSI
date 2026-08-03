@@ -19,6 +19,9 @@ dependencies = [
 agent = [
     "openai>=2.0.0",
 ]
+researcher = [
+    "claude-agent-sdk>=0.1.48",
+]
 dev = [
     "pytest>=8",
 ]

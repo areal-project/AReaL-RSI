@@ -1,4 +1,4 @@
-"""Workflow definitions for the first AReaL-RSI iteration loop."""
+"""Workflow steps executed by one AReaL-RSI iteration."""
 
 from __future__ import annotations
 

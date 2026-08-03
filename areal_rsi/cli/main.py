@@ -14,6 +14,8 @@ from areal_rsi.memory import Memory
 from areal_rsi.schemas.actions import Action, AgentResponse
 from areal_rsi.services import (
     AReaLService,
+    ClaudeResearchAgent,
+    ClaudeResearchConfig,
     EnvArenaClient,
     MockAReaLService,
     MockEnvClient,
@@ -29,7 +31,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     run = subparsers.add_parser("run", help="Run an RSI loop from a config file.")
     run.add_argument("--config", required=True, help="Path to RSI config YAML/JSON.")
-    run.add_argument("--run-root", default="runs")
+    run.add_argument("--run-root", help="Override run.run_root from the RSI config.")
 
     run_mock = subparsers.add_parser("run-mock", help="Run one local mock RSI iteration.")
     run_mock.add_argument("--ckpt", default="ckpt_000")
@@ -46,15 +48,15 @@ def build_parser() -> argparse.ArgumentParser:
     run_loop_mock.add_argument("--max-iterations", type=int, default=3)
     run_loop_mock.add_argument("--run-root", default="runs")
 
-    status = subparsers.add_parser("status", help="Print run state as JSON.")
-    status.add_argument("run_id")
+    status = subparsers.add_parser("status", help="Print Run state as JSON.")
+    status.add_argument("run_id", help="User-started Run id.")
     status.add_argument("--run-root", default="runs")
 
     chat = subparsers.add_parser("chat", help="Ask RSIAgent for an action.")
     chat.add_argument("message", nargs="*", help="Message to send. If omitted, an interactive REPL starts.")
     chat.add_argument("--backend", choices=["fake", "openai"], default="fake")
     chat.add_argument("--model", help="OpenAI model for --backend openai. Defaults to OPENAI_MODEL or gpt-5-mini.")
-    chat.add_argument("--run-id")
+    chat.add_argument("--run-id", help="Current user-started Run id.")
     chat.add_argument("--run-root", default="runs")
     chat.add_argument("--execute", action="store_true", help="Execute returned actions with the local controller.")
     chat.add_argument("--yes", action="store_true", help="Execute actions that require confirmation.")
@@ -100,13 +102,11 @@ def main(argv: list[str] | None = None) -> int:
 
 def _run_mock(args: argparse.Namespace):
     run_root = Path(args.run_root)
-    memory = Memory(run_root / "memory")
     controller = LocalRSIController(
         run_root=run_root,
         areal=MockAReaLService(),
         envarena=MockEnvClient(),
         research_agent=MockResearchAgent(),
-        memory=memory,
     )
     return controller.run_iteration(
         ckpt=args.ckpt,
@@ -117,10 +117,11 @@ def _run_mock(args: argparse.Namespace):
 
 
 def _run_config(args: argparse.Namespace):
-    run_root = Path(args.run_root)
-    memory = Memory(run_root / "memory")
     config = RSIRunConfig.load(args.config)
-    controller = _controller_from_rsi_config(config, run_root, memory)
+    run_root = Path(
+        args.run_root or config.data.get("run", {}).get("run_root", "runs")
+    )
+    controller = _controller_from_rsi_config(config, run_root, None)
     return controller.run_config(
         config,
         config_metadata={
@@ -133,13 +134,11 @@ def _run_config(args: argparse.Namespace):
 
 def _run_loop_mock(args: argparse.Namespace):
     run_root = Path(args.run_root)
-    memory = Memory(run_root / "memory")
     controller = LocalRSIController(
         run_root=run_root,
         areal=MockAReaLService(),
         envarena=MockEnvClient(),
         research_agent=MockResearchAgent(),
-        memory=memory,
     )
     return controller.run_loop(
         initial_ckpt=args.ckpt,
@@ -153,7 +152,9 @@ def _run_loop_mock(args: argparse.Namespace):
 def _chat(args: argparse.Namespace) -> dict | None:
     message = " ".join(args.message).strip()
     run_root = Path(args.run_root)
-    memory = Memory(run_root / "memory")
+    # This context belongs only to the user-facing chat agent. Researcher
+    # Memory is created independently inside each Run.
+    memory = Memory(run_root / ".agent_context")
     base_config = RSIRunConfig.load(args.config) if args.config else None
     controller = (
         _controller_from_rsi_config(base_config, run_root, memory)
@@ -297,7 +298,7 @@ def _mock_controller(run_root: Path, memory: Memory) -> LocalRSIController:
 def _controller_from_rsi_config(
     config: RSIRunConfig,
     run_root: Path,
-    memory: Memory,
+    memory: Memory | None,
 ) -> LocalRSIController:
     """Compose configured services at the CLI boundary before running a loop."""
 
@@ -359,6 +360,10 @@ def _research_agent_from_spec(spec: dict[str, object]):
         return MockResearchAgent()
     if backend == "openai":
         return OpenAIResearchAgent()
+    if backend in {"claude", "claude_agent_sdk"}:
+        return ClaudeResearchAgent(
+            ClaudeResearchConfig.from_mapping(dict(spec))
+        )
     raise ValueError(f"Unsupported research service backend: {backend!r}.")
 
 
@@ -420,6 +425,7 @@ def _workflow_spec(harness: str, base_config: RSIRunConfig | None) -> dict:
 def _openai_rsi_system_prompt() -> str:
     return (
         "You are RSIAgent, the user-facing coordinator for AReaL-RSI. "
+        "One user-started workflow is a Run; each loop round inside it is an iteration. "
         "Choose exactly one action tool for user goals and queries: "
         "start_loop, inspect_run, resume_run, or stop_run. "
         "Answer brief progress or completion questions directly from context "

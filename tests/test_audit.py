@@ -45,9 +45,9 @@ def test_audit_logger_records_point_event(tmp_path):
 
     audit.record_event(
         run_id="run_1",
-        event_type="loop_decision",
+        event_type="run_decision",
         iteration=1,
-        step="loop_decision",
+        step="run_decision",
         input={"candidate_ckpt": "ckpt_001"},
         output={"decision": {"reason": "continue"}},
     )
@@ -55,6 +55,6 @@ def test_audit_logger_records_point_event(tmp_path):
     events = read_ledger(tmp_path / "audit.jsonl")
 
     assert len(events) == 1
-    assert events[0]["event_type"] == "loop_decision"
+    assert events[0]["event_type"] == "run_decision"
     assert events[0]["status"] == "succeeded"
     assert events[0]["output"]["decision"]["reason"] == "continue"

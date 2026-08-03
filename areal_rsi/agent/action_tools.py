@@ -43,11 +43,19 @@ def rsi_action_tools() -> list[dict[str, Any]]:
                     },
                     "initial_ckpt": {"type": "string", "description": "Initial checkpoint to improve."},
                     "benchmark": {"type": "string", "description": "EnvArena benchmark ref or name."},
+                    "holdout_benchmark": {
+                        "type": "string",
+                        "description": "Benchmark used for the post-training success evaluation.",
+                    },
                     "method": {"type": "string", "enum": ["sft", "opd"], "description": "Training method."},
                     "max_iterations": {
                         "type": "integer",
                         "minimum": 1,
                         "description": "Maximum number of RSI loop iterations.",
+                    },
+                    "target_mean_reward": {
+                        "type": "number",
+                        "description": "Stop successfully when holdout mean reward reaches this value.",
                     },
                     "harness_config": {
                         "type": "object",
@@ -63,19 +71,19 @@ def rsi_action_tools() -> list[dict[str, Any]]:
         {
             "type": "function",
             "name": "inspect_run",
-            "description": "Inspect detailed state and metadata for an RSI run.",
+            "description": "Inspect one user-started RSI Run.",
             "parameters": run_id_schema,
         },
         {
             "type": "function",
             "name": "resume_run",
-            "description": "Resume a stopped RSI run.",
+            "description": "Read resumable state for a stopped RSI Run.",
             "parameters": run_id_schema,
         },
         {
             "type": "function",
             "name": "stop_run",
-            "description": "Stop an RSI run.",
+            "description": "Stop a user-started RSI Run.",
             "parameters": {
                 "type": "object",
                 "properties": {

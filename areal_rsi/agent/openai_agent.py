@@ -223,9 +223,9 @@ def _rsi_chat_prompt(
         "emit only config overrides inferred from the user message in args.overrides. "
         "Use dot paths such as run.initial_ckpt, env.benchmark, run.max_iterations, "
         "run.method, and env.harness_config.harness. Do not repeat unchanged config fields.\n"
+        "One user-started workflow is a Run; each loop round inside it is an iteration. "
         "For brief progress or completion questions, answer from run_state and memory_context without a tool call. "
-        "Use inspect_run only for detailed run inspection or explicit state dumps. "
-        "Use resume_run to continue a stopped run, and stop_run to stop a run.\n"
+        "Use inspect_run only for detailed Run inspection or explicit state dumps.\n"
         "Humans describe goals and constraints; workflow steps such as eval, train, and holdout_eval "
         "are internal and must not be represented as user actions.\n\n"
         f"User message:\n{message}\n\n"
@@ -260,7 +260,7 @@ def _rsi_explain_prompt(
     memory_context: MemoryContext,
 ) -> str:
     return (
-        "Answer the user's question about this AReaL-RSI run. Be concise and cite run state or memory evidence.\n\n"
+        "Answer the user's question about this AReaL-RSI Run. Be concise and cite state or memory evidence.\n\n"
         f"question:\n{question}\n\n"
         f"run_id:\n{run_id}\n\n"
         f"run_state:\n{json.dumps(run_state, ensure_ascii=False, default=repr)}\n\n"

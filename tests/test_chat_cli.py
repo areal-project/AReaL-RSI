@@ -4,7 +4,12 @@ from areal_rsi.agent import FakeRSIAgent
 from areal_rsi.cli.main import _controller_from_rsi_config, main
 from areal_rsi.config import RSIRunConfig
 from areal_rsi.memory import Memory
-from areal_rsi.services import AReaLService, EnvArenaClient, MockResearchAgent
+from areal_rsi.services import (
+    AReaLService,
+    ClaudeResearchAgent,
+    EnvArenaClient,
+    MockResearchAgent,
+)
 
 
 def test_fake_agent_generates_start_loop_action():
@@ -22,6 +27,19 @@ def test_fake_agent_generates_start_loop_action():
     assert response.actions[0].args["initial_ckpt"] == "ckpt_123"
     assert response.actions[0].args["benchmark"] == "swe_verified"
     assert response.actions[0].args["max_iterations"] == 2
+
+
+def test_fake_agent_captures_holdout_benchmark_and_target():
+    response = FakeRSIAgent().chat(
+        "run --ckpt ckpt_123 --benchmark train-set --holdout-benchmark eval-set "
+        "--target 0.8 for 2 iterations",
+        controller=object(),
+        memory=object(),
+        workflow_spec={"harness": "mock"},
+    )
+
+    assert response.actions[0].args["holdout_benchmark"] == "eval-set"
+    assert response.actions[0].args["target_mean_reward"] == 0.8
 
 
 def test_rsi_config_initializes_configured_services_from_relative_paths(tmp_path, monkeypatch):
@@ -72,6 +90,29 @@ services:
     assert isinstance(controller.areal, AReaLService)
     assert isinstance(controller.envarena, EnvArenaClient)
     assert isinstance(controller.research_agent, MockResearchAgent)
+
+
+def test_rsi_config_initializes_claude_researcher_with_admin_home(tmp_path):
+    config = RSIRunConfig.from_dict(
+        {
+            "run": {"initial_ckpt": "ckpt_000"},
+            "env": {"benchmark": "swe_verified"},
+            "services": {
+                "research": {
+                    "backend": "claude_agent_sdk",
+                    "home": "/home/admin",
+                    "reference_sft_path": "/data/reference.jsonl",
+                }
+            },
+        }
+    )
+
+    controller = _controller_from_rsi_config(
+        config, tmp_path / "runs", Memory(tmp_path / "memory")
+    )
+
+    assert isinstance(controller.research_agent, ClaudeResearchAgent)
+    assert controller.research_agent.config.home == "/home/admin"
 
 
 def test_chat_cli_does_not_execute_confirmed_action_by_default(tmp_path, capsys):

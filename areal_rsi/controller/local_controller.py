@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import time
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,11 +19,12 @@ from areal_rsi.schemas.actions import Action
 from areal_rsi.schemas.core import EvalRequest, TrainMethod
 from areal_rsi.services.areal import AReaLService
 from areal_rsi.services.env_client import EnvClient
-from areal_rsi.services.research import ResearchAgent
+from areal_rsi.services.research.agent import ResearchAgent
+from areal_rsi.services.research.trajectory_workspace import TrajectoryWorkspace
 
 
 class LocalRSIController:
-    """File-backed controller for local runs and mock integration tests."""
+    """File-backed controller with Run-scoped iterations and Memory."""
 
     def __init__(
         self,
@@ -81,12 +84,18 @@ class LocalRSIController:
         areal = areal or self._require(self.areal, "AReaLService")
         envarena = envarena or self._require(self.envarena, "EnvClient")
         research_agent = research_agent or self._require(self.research_agent, "ResearchAgent")
-        memory = memory or self._require(self.memory, "Memory")
         benchmark = _resolve_benchmark_arg(benchmark, task_set)
 
         run_id = _run_id or self._new_run_id()
-        run_dir = self.run_root / run_id
-        artifacts = ArtifactStore(run_dir / "artifacts" / _artifact_prefix if _artifact_prefix else run_dir / "artifacts")
+        run_dir = self._run_dir(run_id)
+        run_memory_root = run_dir / "memory"
+        if memory is None or memory.root.resolve() != run_memory_root.resolve():
+            # A caller cannot accidentally attach another Run's ledger.
+            memory = Memory(run_memory_root)
+        artifact_root = run_dir / "artifacts"
+        if _artifact_prefix:
+            artifact_root = artifact_root / _artifact_prefix
+        artifacts = ArtifactStore(artifact_root)
         audit = AuditLogger(run_dir / "audit.jsonl")
         state = RunState(
             run_id=run_id,
@@ -95,6 +104,7 @@ class LocalRSIController:
             status="running",
             metadata={
                 **(_loop_metadata or {}),
+                "iteration": _iteration,
                 "benchmark": _benchmark_summary(benchmark),
                 "method": method,
                 "harness_config": harness_config,
@@ -102,7 +112,12 @@ class LocalRSIController:
             },
         )
         self._save_state(state)
-        self._record(memory, "iteration_started", f"ckpt={ckpt}, benchmark={_benchmark_summary(benchmark)}, method={method}", state)
+        self._record(
+            memory,
+            "iteration_started",
+            f"ckpt={ckpt}, benchmark={_benchmark_summary(benchmark)}, method={method}",
+            state,
+        )
 
         try:
             model_ref = _model_ref_from_path(ckpt)
@@ -142,6 +157,7 @@ class LocalRSIController:
                 step="collect_trajs",
                 input={"eval_job": _job_summary(eval_job), "include_messages": True},
             ) as action:
+                eval_evidence = _wait_for_eval(envarena, eval_job)
                 trajs = envarena.get_trajs(eval_job, include_messages=True)
                 eval_score = _score_summary(trajs)
                 state.mark_step(
@@ -150,9 +166,15 @@ class LocalRSIController:
                 )
                 self._save_state(state)
                 trajs_path = artifacts.write_json("trajs.json", trajs)
+                evidence_path = artifacts.write_json(
+                    "eval_evidence.json", eval_evidence
+                )
                 action.set_output(
                     {"num_trajs": len(trajs), "score": eval_score},
-                    artifacts={"trajs": _artifact_ref(run_dir, trajs_path)},
+                    artifacts={
+                        "eval_evidence": _artifact_ref(run_dir, evidence_path),
+                        "trajs": _artifact_ref(run_dir, trajs_path),
+                    },
                 )
             self._record(
                 memory,
@@ -160,6 +182,30 @@ class LocalRSIController:
                 f"ckpt={ckpt}, benchmark={_benchmark_summary(benchmark)}, score={eval_score.get('mean_reward')}, num_trajs={len(trajs)}",
                 state,
                 extra_metadata={"score": eval_score, "benchmark": _benchmark_summary(benchmark)},
+            )
+
+            # Memory is physically scoped to this Run. Prior iterations in the
+            # same Run are the intended context for a fresh Researcher session.
+            memory_context = memory.get_context()
+            research_workspace = TrajectoryWorkspace.create(
+                artifacts.root / "research"
+            )
+            base_train_config = dict(train_config or {"epochs": 1})
+            trajectory_manifest = research_workspace.materialize(
+                trajs=trajs,
+                memory_context=memory_context,
+                run_context={
+                    "run_id": run_id,
+                    "iteration": state.iteration,
+                    "current_ckpt": ckpt,
+                    "benchmark": _benchmark_summary(benchmark),
+                    "holdout_benchmark": _benchmark_summary(
+                        _holdout_benchmark(benchmark, eval_gate)
+                    ),
+                    "method": method,
+                    "harness_config": harness_config,
+                },
+                base_train_config=base_train_config,
             )
 
             with audit.action(
@@ -174,34 +220,85 @@ class LocalRSIController:
                     "traj_filter": traj_filter or {},
                 },
             ) as action:
-                dataset = research_agent.generate_dataset(
-                    trajs=trajs,
-                    memory_context=memory.get_context(ckpt=ckpt),
-                    current_ckpt=ckpt,
-                    envarena=envarena,
-                    model_ref=model_ref,
-                    harness_config=harness_config,
-                    traj_filter=traj_filter,
+                if hasattr(research_agent, "prepare_iteration"):
+                    research_result = research_agent.prepare_iteration(
+                        trajectory_manifest=trajectory_manifest,
+                        memory_context=memory_context,
+                        current_ckpt=ckpt,
+                        base_train_config=base_train_config,
+                        run_context={
+                            "run_id": run_id,
+                            "iteration": state.iteration,
+                            "benchmark": _benchmark_summary(benchmark),
+                        },
+                        config={"traj_filter": traj_filter or {}},
+                    )
+                    dataset = dict(research_result["dataset"])
+                    selected_train_config = dict(
+                        research_result.get("train_config") or base_train_config
+                    )
+                else:
+                    dataset = research_agent.generate_dataset(
+                        trajs=trajs,
+                        memory_context=memory_context,
+                        current_ckpt=ckpt,
+                        envarena=envarena,
+                        model_ref=model_ref,
+                        harness_config=harness_config,
+                        traj_filter=traj_filter,
+                    )
+                    research_result = {
+                        "schema_version": "research-result.legacy",
+                        "dataset": dataset,
+                        "train_config": base_train_config,
+                    }
+                    selected_train_config = base_train_config
+                state.mark_step(
+                    "generate_dataset",
+                    metadata={
+                        **state.metadata,
+                        "research_result": research_result,
+                        "research_workspace": str(research_workspace.root),
+                        "research_session_id": research_result.get("session_id"),
+                    },
                 )
-                state.mark_step("generate_dataset")
                 self._save_state(state)
                 dataset_path = artifacts.write_json("dataset.json", dataset)
+                research_result_path = artifacts.write_json(
+                    "research_result.json", research_result
+                )
+                num_examples = _dataset_num_examples(dataset)
                 action.set_output(
                     {
                         "dataset_id": dataset.get("dataset_id"),
-                        "num_examples": len(dataset.get("examples", [])),
+                        "num_examples": num_examples,
                     },
-                    artifacts={"dataset": _artifact_ref(run_dir, dataset_path)},
+                    artifacts={
+                        "dataset": _artifact_ref(run_dir, dataset_path),
+                        "research_result": _artifact_ref(
+                            run_dir, research_result_path
+                        ),
+                    },
                 )
             self._record(
                 memory,
                 "dataset_created",
-                str({"dataset_id": dataset.get("dataset_id"), "num_examples": len(dataset.get("examples", []))}),
+                str(
+                    {
+                        "dataset_id": dataset.get("dataset_id"),
+                        "num_examples": num_examples,
+                    }
+                ),
                 state,
                 extra_metadata={"dataset_id": dataset.get("dataset_id")},
             )
+            self._record_research_updates(
+                memory,
+                research_result.get("memory_updates"),
+                state,
+                phase="dataset",
+            )
 
-            train_config = train_config or {"epochs": 1}
             with audit.action(
                 run_id=run_id,
                 iteration=state.iteration,
@@ -210,15 +307,16 @@ class LocalRSIController:
                     "base_ckpt": ckpt,
                     "dataset_id": dataset.get("dataset_id"),
                     "method": method,
-                    "config": train_config,
+                    "config": selected_train_config,
                     "model_ref": _model_ref_summary(model_ref),
                 },
             ) as action:
-                train_run = areal.train(
+                train_run = _train_and_wait(
+                    areal,
                     base_ckpt=ckpt,
                     dataset=dataset,
                     method=method,
-                    config=train_config,
+                    config=selected_train_config,
                     envarena=envarena,
                     model_ref=model_ref,
                     harness_config=harness_config,
@@ -257,6 +355,7 @@ class LocalRSIController:
                         metadata={"run_id": run_id, "source": "holdout_eval"},
                     )
                 )
+                holdout_evidence = _wait_for_eval(envarena, holdout_job)
                 holdout_trajs = envarena.get_trajs(holdout_job, include_messages=False)
                 holdout_score = _score_summary(holdout_trajs)
                 state.mark_step(
@@ -271,6 +370,9 @@ class LocalRSIController:
                 self._save_state(state)
                 holdout_job_path = artifacts.write_json("holdout_job.json", holdout_job)
                 holdout_trajs_path = artifacts.write_json("holdout_trajs.json", holdout_trajs)
+                holdout_evidence_path = artifacts.write_json(
+                    "holdout_evidence.json", holdout_evidence
+                )
                 action.set_output(
                     {
                         "holdout_job": _job_summary(holdout_job),
@@ -280,6 +382,9 @@ class LocalRSIController:
                     artifacts={
                         "holdout_job": _artifact_ref(run_dir, holdout_job_path),
                         "holdout_trajs": _artifact_ref(run_dir, holdout_trajs_path),
+                        "holdout_evidence": _artifact_ref(
+                            run_dir, holdout_evidence_path
+                        ),
                     },
                 )
             self._record(
@@ -341,18 +446,33 @@ class LocalRSIController:
         memory: Memory | None = None,
         _run_id: str | None = None,
     ) -> RunState:
-        """Run multiple RSI iterations under one run id."""
+        """Run one user-started Run containing multiple RSI iterations."""
 
         if max_iterations < 1:
             raise ValueError("max_iterations must be >= 1.")
         benchmark = _resolve_benchmark_arg(benchmark, task_set)
 
-        memory = memory or self._require(self.memory, "Memory")
+        research_agent = research_agent or self._require(
+            self.research_agent, "ResearchAgent"
+        )
         run_id = _run_id or self._new_run_id()
-        run_dir = self.run_root / run_id
+        run_dir = self._run_dir(run_id)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        # A Run owns one ledger shared by all of its iterations. Controller- or
+        # process-global Memory cannot leak information from another Run.
+        memory = Memory(run_dir / "memory")
         audit = AuditLogger(run_dir / "audit.jsonl")
         ckpt = initial_ckpt
         accepted_ckpts = [initial_ckpt]
+        train_runs: list[dict[str, Any]] = [
+            {
+                "train_run_id": "initial-checkpoint",
+                "method": method,
+                "base_ckpt": initial_ckpt,
+                "ckpt": initial_ckpt,
+                "metrics": {},
+            }
+        ]
         iteration_results: list[dict[str, Any]] = []
         previous_holdout_score: dict[str, Any] | None = None
         state: RunState | None = None
@@ -381,110 +501,184 @@ class LocalRSIController:
             },
         )
 
-        for iteration in range(1, max_iterations + 1):
-            loop_metadata = {
-                "loop": True,
-                "initial_ckpt": initial_ckpt,
-                "max_iterations": max_iterations,
-                "accepted_ckpts": accepted_ckpts,
-                "iteration_results": iteration_results,
-                "stop_criteria": stop_criteria or {},
-            }
-            state = self.run_iteration(
-                ckpt=ckpt,
-                benchmark=benchmark,
-                harness_config=harness_config,
-                method=method,
-                train_config=train_config,
-                traj_filter=traj_filter,
-                eval_gate=eval_gate,
-                areal=areal,
-                envarena=envarena,
-                research_agent=research_agent,
-                memory=memory,
-                _run_id=run_id,
-                _iteration=iteration,
-                _artifact_prefix=f"iter_{iteration:03d}",
-                _loop_metadata=loop_metadata,
-            )
+        try:
+            for iteration in range(1, max_iterations + 1):
+                state = self.run_iteration(
+                    ckpt=ckpt,
+                    benchmark=benchmark,
+                    harness_config=harness_config,
+                    method=method,
+                    train_config=train_config,
+                    traj_filter=traj_filter,
+                    eval_gate=eval_gate,
+                    areal=areal,
+                    envarena=envarena,
+                    research_agent=research_agent,
+                    memory=memory,
+                    _run_id=run_id,
+                    _iteration=iteration,
+                    _artifact_prefix=f"iter_{iteration:03d}",
+                    _loop_metadata={
+                        "loop": True,
+                        "initial_ckpt": initial_ckpt,
+                        "max_iterations": max_iterations,
+                        "accepted_ckpts": list(accepted_ckpts),
+                        "iteration_results": list(iteration_results),
+                        "stop_criteria": stop_criteria or {},
+                    },
+                )
 
-            candidate_ckpt = str(state.metadata["candidate_ckpt"])
-            holdout_score = state.metadata.get("last_holdout_score", {})
-            decision = _decide_next_iteration(
-                holdout_score=holdout_score,
-                previous_holdout_score=previous_holdout_score,
-                stop_criteria=stop_criteria or {},
-                is_last_iteration=iteration == max_iterations,
-            )
-            audit.record_event(
-                run_id=run_id,
-                iteration=iteration,
-                event_type="loop_decision",
-                step="loop_decision",
-                input={
-                    "previous_ckpt": ckpt,
+                candidate_ckpt = str(state.metadata["candidate_ckpt"])
+                if state.train_run is not None:
+                    train_runs.append(state.train_run)
+                holdout_score = state.metadata.get("last_holdout_score", {})
+                decision = _decide_next_iteration(
+                    holdout_score=holdout_score,
+                    previous_holdout_score=previous_holdout_score,
+                    stop_criteria=stop_criteria or {},
+                    is_last_iteration=iteration == max_iterations,
+                )
+                audit.record_event(
+                    run_id=run_id,
+                    iteration=iteration,
+                    event_type="loop_decision",
+                    step="loop_decision",
+                    input={
+                        "previous_ckpt": ckpt,
+                        "candidate_ckpt": candidate_ckpt,
+                        "previous_holdout_score": previous_holdout_score,
+                        "candidate_holdout_score": holdout_score,
+                        "stop_criteria": stop_criteria or {},
+                        "is_last_iteration": iteration == max_iterations,
+                    },
+                    output={"decision": decision},
+                )
+                checkpoint_selection: dict[str, Any] | None = None
+                next_iteration_ckpt = candidate_ckpt
+                if not decision["stop"]:
+                    allowed_checkpoints = [str(run["ckpt"]) for run in train_runs]
+                    research_result = state.metadata.get("research_result", {})
+                    if hasattr(research_agent, "select_checkpoint"):
+                        checkpoint_selection = research_agent.select_checkpoint(
+                            research_result=research_result,
+                            allowed_checkpoints=allowed_checkpoints,
+                            evaluation={
+                                "holdout_score": holdout_score,
+                                "previous_holdout_score": previous_holdout_score,
+                            },
+                            memory_context=memory.get_context(),
+                            run_context={
+                                "run_id": run_id,
+                                "iteration": iteration,
+                            },
+                        )
+                        next_iteration_ckpt = str(
+                            checkpoint_selection["next_checkpoint"]
+                        )
+                    else:
+                        next_iteration_ckpt = str(
+                            research_agent.choose_ckpt(
+                                train_runs,
+                                memory.get_context(),
+                            )
+                        )
+                        checkpoint_selection = {
+                            "schema_version": "checkpoint-decision.legacy",
+                            "next_checkpoint": next_iteration_ckpt,
+                            "reason": "ResearchAgent.choose_ckpt",
+                        }
+                    if next_iteration_ckpt not in allowed_checkpoints:
+                        raise ValueError(
+                            "ResearchAgent selected a checkpoint outside the allowed "
+                            f"set: {next_iteration_ckpt!r}."
+                        )
+                    decision["next_checkpoint"] = next_iteration_ckpt
+                    self._record_research_updates(
+                        memory,
+                        checkpoint_selection.get("memory_updates"),
+                        state,
+                        phase="checkpoint_selection",
+                    )
+
+                iteration_result = {
+                    "iteration": iteration,
+                    "base_ckpt": ckpt,
                     "candidate_ckpt": candidate_ckpt,
-                    "previous_holdout_score": previous_holdout_score,
-                    "candidate_holdout_score": holdout_score,
-                    "stop_criteria": stop_criteria or {},
-                    "is_last_iteration": iteration == max_iterations,
-                },
-                output={"decision": decision},
-            )
-            iteration_result = {
-                "iteration": iteration,
-                "base_ckpt": ckpt,
-                "candidate_ckpt": candidate_ckpt,
-                "eval_score": state.metadata.get("last_eval_score"),
-                "holdout_score": holdout_score,
-                "decision": decision,
-            }
-            iteration_results.append(iteration_result)
-            self._record(
-                memory,
-                "iteration_finished",
-                str(iteration_result),
-                state,
-                extra_metadata={"decision": decision, "candidate_ckpt": candidate_ckpt},
-            )
-
-            if decision["accept"]:
-                ckpt = candidate_ckpt
-                accepted_ckpts.append(candidate_ckpt)
+                    "eval_score": state.metadata.get("last_eval_score"),
+                    "holdout_score": holdout_score,
+                    "decision": decision,
+                    "checkpoint_selection": checkpoint_selection,
+                }
+                iteration_results.append(iteration_result)
+                ckpt = (
+                    candidate_ckpt
+                    if decision["stop"]
+                    else next_iteration_ckpt
+                )
+                accepted_ckpts.append(ckpt)
                 previous_holdout_score = holdout_score
-
-            if decision["stop"]:
-                break
-
-        if state is None:
-            raise RuntimeError("run_loop did not execute any iterations.")
-
-        state.status = "completed"
-        state.current_step = "loop_completed"
-        state.metadata = {
-            **state.metadata,
-            "loop": True,
-            "initial_ckpt": initial_ckpt,
-            "final_ckpt": ckpt,
-            "accepted_ckpts": accepted_ckpts,
-            "iteration_results": iteration_results,
-            "stop_reason": iteration_results[-1]["decision"]["reason"],
-        }
-        self._save_state(state)
-        self._record(
-            memory,
-            "loop_completed",
-            str(
-                {
+                state.status = "completed"
+                state.current_step = (
+                    "loop_completed" if decision["stop"] else "iteration_completed"
+                )
+                state.ckpt = ckpt
+                state.metadata = {
+                    **state.metadata,
+                    "loop": True,
                     "initial_ckpt": initial_ckpt,
                     "final_ckpt": ckpt,
-                    "iterations": len(iteration_results),
-                    "stop_reason": state.metadata["stop_reason"],
+                    "accepted_ckpts": list(accepted_ckpts),
+                    "iteration_results": list(iteration_results),
+                    "iteration_result": iteration_result,
+                    "decision": decision,
+                    "stop_reason": decision["reason"] if decision["stop"] else None,
+                    "goal_reached": bool(decision.get("goal_reached", False)),
                 }
-            ),
-            state,
-        )
-        return state
+                self._save_state(state)
+                self._record(
+                    memory,
+                    "iteration_finished",
+                    str(iteration_result),
+                    state,
+                    extra_metadata={
+                        "decision": decision,
+                        "candidate_ckpt": candidate_ckpt,
+                    },
+                )
+
+                if decision["stop"]:
+                    break
+
+            if state is None:
+                raise RuntimeError("run_loop did not execute any iterations.")
+
+            self._record(
+                memory,
+                "run_completed",
+                str(
+                    {
+                        "run_id": run_id,
+                        "initial_ckpt": initial_ckpt,
+                        "final_ckpt": ckpt,
+                        "iterations": len(iteration_results),
+                        "stop_reason": state.metadata["stop_reason"],
+                    }
+                ),
+                state,
+            )
+            return state
+        except Exception as exc:
+            if state is not None and state.status != "failed":
+                state.mark_failed(
+                    {
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                        "traceback": traceback.format_exc(),
+                    }
+                )
+                self._save_state(state)
+                self._record(memory, "run_failed", str(state.error), state)
+            raise
 
     def run_config(
         self,
@@ -492,10 +686,10 @@ class LocalRSIController:
         *,
         config_metadata: dict[str, Any] | None = None,
     ) -> RunState:
-        """Run an RSI loop from a normalized run config."""
+        """Create one Run and execute its iterations from normalized config."""
 
         run_id = self._new_run_id()
-        run_dir = self.run_root / run_id
+        run_dir = self._run_dir(run_id)
         run_dir.mkdir(parents=True, exist_ok=True)
         config_path = run_dir / "resolved_rsi_config.json"
         config_path.write_text(json.dumps(config.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
@@ -539,7 +733,7 @@ class LocalRSIController:
         )
 
     def get_status(self, run_id: str) -> RunState:
-        return self._load_state(run_id)
+        return RunState.load(self._state_path(run_id))
 
     def resume(self, run_id: str) -> RunState:
         return self.get_status(run_id)
@@ -548,14 +742,12 @@ class LocalRSIController:
         state = self.get_status(run_id)
         state.mark_stopped(reason)
         self._save_state(state)
-        if self.memory is not None:
-            self._record(self.memory, "run_stopped", reason or "", state)
         return state
 
     def inspect_run(self, run_id: str) -> dict[str, Any]:
         state = self.get_status(run_id)
         return {
-            "run_id": run_id,
+            "run_id": state.run_id,
             "status": state.status,
             "iteration": state.iteration,
             "current_step": state.current_step,
@@ -564,17 +756,20 @@ class LocalRSIController:
         }
 
     def _load_state(self, run_id: str) -> RunState:
-        return RunState.load(self._state_path(run_id))
+        return self.get_status(run_id)
 
     def _save_state(self, state: RunState) -> None:
         state.save(self._state_path(state.run_id))
 
+    def _run_dir(self, run_id: str) -> Path:
+        return self.run_root / run_id
+
     def _state_path(self, run_id: str) -> Path:
-        return self.run_root / run_id / "state.json"
+        return self._run_dir(run_id) / "state.json"
 
     def _new_run_id(self) -> str:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
-        return f"rsi_run_{stamp}"
+        return f"run_{stamp}"
 
     @staticmethod
     def _record(
@@ -597,6 +792,34 @@ class LocalRSIController:
                 **(extra_metadata or {}),
             },
         )
+
+    @staticmethod
+    def _record_research_updates(
+        memory: Memory,
+        updates: Any,
+        state: RunState,
+        *,
+        phase: str,
+    ) -> None:
+        if not isinstance(updates, list):
+            return
+        for index, update in enumerate(updates):
+            if not isinstance(update, dict):
+                continue
+            title = str(update.get("title") or f"research_update_{index}")
+            content = str(update.get("content") or "")
+            metadata = update.get("metadata")
+            memory.record(
+                title,
+                content,
+                metadata={
+                    "run_id": state.run_id,
+                    "iteration": state.iteration,
+                    "ckpt": state.ckpt,
+                    "phase": phase,
+                    **(metadata if isinstance(metadata, dict) else {}),
+                },
+            )
 
     @staticmethod
     def _require(value: Any, name: str) -> Any:
@@ -624,6 +847,14 @@ def _normalize_start_loop_args(args: dict[str, Any]) -> dict[str, Any]:
             normalized["benchmark"] = normalized.pop(alias)
     if "max_iterations" not in normalized and "iterations" in normalized:
         normalized["max_iterations"] = normalized.pop("iterations")
+    if "holdout_benchmark" in normalized:
+        normalized.setdefault("eval_gate", {})["holdout_benchmark"] = normalized.pop(
+            "holdout_benchmark"
+        )
+    if "target_mean_reward" in normalized:
+        normalized.setdefault("stop_criteria", {})["target_mean_reward"] = normalized.pop(
+            "target_mean_reward"
+        )
     normalized.pop("goal", None)
     allowed = {
         "initial_ckpt",
@@ -666,6 +897,12 @@ def _start_loop_overrides(args: dict[str, Any]) -> dict[str, Any]:
         overrides["train.config"] = args["train_config"]
     if "stop_criteria" in args:
         overrides["stop_criteria"] = args["stop_criteria"]
+    if "target_mean_reward" in args:
+        overrides["stop_criteria.target_mean_reward"] = args[
+            "target_mean_reward"
+        ]
+    if "holdout_benchmark" in args:
+        overrides["env.holdout_benchmark"] = args["holdout_benchmark"]
     if "traj_filter" in args:
         overrides["research.traj_filter"] = args["traj_filter"]
     if isinstance(args.get("eval_gate"), dict):
@@ -766,6 +1003,171 @@ def _eval_job_config(harness_config: dict[str, Any]) -> dict[str, Any]:
     return job_config
 
 
+def _wait_for_eval(
+    envarena: EnvClient,
+    job: dict[str, Any],
+) -> dict[str, Any]:
+    """Wait for an EnvClient job without extending the service interface."""
+
+    job_config = job.get("job_config", {})
+    timeout_seconds = float(job_config.get("timeout_seconds", 7200))
+    poll_interval_seconds = float(job_config.get("poll_interval_seconds", 5))
+    started = time.monotonic()
+    while True:
+        progress = envarena.get_eval_progress(job)
+        status = _eval_status(progress, job)
+        if status in {"DONE", "COMPLETED", "SUCCEEDED", "SUCCESS"}:
+            return {
+                "progress": progress,
+                "result": envarena.get_eval_result(job),
+            }
+        if status in {
+            "FAILED",
+            "TIMEOUT",
+            "CANCELLED",
+            "STOPPED",
+            "ERROR",
+        }:
+            raise RuntimeError(
+                f"EnvArena evaluation {job.get('eval_job_id') or job.get('job_id')} "
+                f"ended with status {status}."
+            )
+        if time.monotonic() - started >= timeout_seconds:
+            raise TimeoutError(
+                f"EnvArena evaluation {job.get('eval_job_id') or job.get('job_id')} "
+                f"did not finish within {timeout_seconds:g} seconds."
+            )
+        time.sleep(max(0.0, poll_interval_seconds))
+
+
+def _eval_status(progress: dict[str, Any], job: dict[str, Any]) -> str:
+    nested_job = progress.get("job")
+    if isinstance(nested_job, dict) and nested_job.get("status") is not None:
+        value = nested_job["status"]
+    else:
+        value = progress.get("status", job.get("status", "PENDING"))
+    return str(value).upper()
+
+
+def _train_and_wait(
+    areal: Any,
+    *,
+    base_ckpt: str,
+    dataset: dict[str, Any],
+    method: TrainMethod,
+    config: dict[str, Any],
+    envarena: EnvClient,
+    model_ref: dict[str, Any],
+    harness_config: dict[str, Any],
+) -> dict[str, Any]:
+    """Run local/mock training or wait for an asynchronous Slurm submission."""
+
+    if not hasattr(areal, "start_experiment"):
+        return areal.train(
+            base_ckpt=base_ckpt,
+            dataset=dataset,
+            method=method,
+            config=config,
+            envarena=envarena,
+            model_ref=model_ref,
+            harness_config=harness_config,
+        )
+
+    if method != "sft":
+        raise ValueError(
+            f"Configured AReaL asynchronous training only supports sft, got {method!r}."
+        )
+
+    submission = areal.start_experiment(config)
+    if submission.get("ckpt"):
+        return submission
+    job_id = str(submission.get("job_id") or "").strip()
+    if not job_id:
+        raise RuntimeError(
+            "AReaL asynchronous training submission returned neither ckpt nor job_id."
+        )
+    _wait_for_slurm_job(
+        job_id,
+        timeout_seconds=float(config.get("job_timeout_seconds", 14400)),
+        poll_interval_seconds=float(config.get("poll_interval_seconds", 30)),
+    )
+    artifacts = areal.get_experiment_artifacts(config)
+    checkpoint = artifacts.get("latest_checkpoint")
+    if not checkpoint:
+        raise RuntimeError(
+            f"Slurm job {job_id} completed but AReaL reported no checkpoint."
+        )
+    return {
+        "train_run_id": submission.get("train_run_id", f"slurm:{job_id}"),
+        "method": method,
+        "base_ckpt": base_ckpt,
+        "ckpt": str(checkpoint),
+        "metrics": {},
+        "metadata": {
+            **submission,
+            "status": "completed",
+            "artifacts": artifacts,
+        },
+    }
+
+
+def _wait_for_slurm_job(
+    job_id: str,
+    *,
+    timeout_seconds: float,
+    poll_interval_seconds: float,
+) -> None:
+    started = time.monotonic()
+    while True:
+        status = _slurm_job_state(job_id)
+        if status == "COMPLETED":
+            return
+        if status in {
+            "BOOT_FAIL",
+            "CANCELLED",
+            "DEADLINE",
+            "FAILED",
+            "NODE_FAIL",
+            "OUT_OF_MEMORY",
+            "PREEMPTED",
+            "TIMEOUT",
+        }:
+            raise RuntimeError(f"Slurm job {job_id} ended with status {status}.")
+        if time.monotonic() - started >= timeout_seconds:
+            raise TimeoutError(
+                f"Slurm job {job_id} did not finish within {timeout_seconds:g} seconds."
+            )
+        time.sleep(max(0.0, poll_interval_seconds))
+
+
+def _slurm_job_state(job_id: str) -> str:
+    sacct = subprocess.run(
+        ["sacct", "-j", job_id, "--format=State", "--noheader", "--parsable2"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if sacct.returncode == 0:
+        states = [
+            line.split("|", 1)[0].strip().split("+", 1)[0].upper()
+            for line in sacct.stdout.splitlines()
+            if line.strip()
+        ]
+        if states:
+            return states[0]
+    squeue = subprocess.run(
+        ["squeue", "-h", "-j", job_id, "-o", "%T"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if squeue.returncode == 0 and squeue.stdout.strip():
+        return squeue.stdout.strip().splitlines()[0].upper().replace(" ", "_")
+    return "UNKNOWN"
+
+
 def _model_ref_summary(model_ref: dict[str, Any]) -> dict[str, Any]:
     return {
         "env_model_id": model_ref.get("env_model_id"),
@@ -810,6 +1212,18 @@ def _score_summary(trajs: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _dataset_num_examples(dataset: dict[str, Any]) -> int:
+    """Report materialized JSONL size without loading records into Dataset.examples."""
+
+    metadata = dataset.get("metadata")
+    validation = metadata.get("validation") if isinstance(metadata, dict) else None
+    record_count = validation.get("record_count") if isinstance(validation, dict) else None
+    if isinstance(record_count, int) and record_count >= 0:
+        return record_count
+    examples = dataset.get("examples", [])
+    return len(examples) if isinstance(examples, list) else 0
+
+
 def _decide_next_iteration(
     *,
     holdout_score: dict[str, Any],
@@ -821,29 +1235,31 @@ def _decide_next_iteration(
     if mean_reward is None:
         return {"accept": False, "stop": True, "reason": "missing_holdout_score"}
 
-    min_score = stop_criteria.get("min_holdout_mean_reward")
-    if min_score is not None and float(mean_reward) < float(min_score):
+    target = stop_criteria.get(
+        "target_mean_reward",
+        stop_criteria.get("target"),
+    )
+    if target is not None and float(mean_reward) >= float(target):
         return {
-            "accept": False,
+            "accept": True,
             "stop": True,
-            "reason": "below_min_holdout_mean_reward",
-            "threshold": float(min_score),
+            "reason": "target_mean_reward_reached",
+            "goal_reached": True,
+            "score": float(mean_reward),
+            "target": float(target),
         }
 
-    min_delta = stop_criteria.get("min_delta")
-    previous_mean = None if previous_holdout_score is None else previous_holdout_score.get("mean_reward")
-    if min_delta is not None and previous_mean is not None:
-        delta = float(mean_reward) - float(previous_mean)
-        if delta < float(min_delta):
-            return {
-                "accept": True,
-                "stop": True,
-                "reason": "below_min_delta",
-                "delta": delta,
-                "threshold": float(min_delta),
-            }
-
     if is_last_iteration:
-        return {"accept": True, "stop": True, "reason": "max_iterations_reached"}
+        return {
+            "accept": True,
+            "stop": True,
+            "reason": "max_iterations_exhausted",
+            "goal_reached": False,
+        }
 
-    return {"accept": True, "stop": False, "reason": "continue"}
+    return {
+        "accept": True,
+        "stop": False,
+        "reason": "continue",
+        "goal_reached": False,
+    }

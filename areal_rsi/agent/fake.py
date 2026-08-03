@@ -33,10 +33,11 @@ class FakeRSIAgent:
                 return AgentResponse(
                     reply=(
                         f"Run {run_id} 当前状态是 {_state_value(state, 'status')}，"
-                        f"iteration={_state_value(state, 'iteration')}，ckpt={_state_value(state, 'ckpt')}。"
+                        f"iteration={_state_value(state, 'iteration')}，"
+                        f"ckpt={_state_value(state, 'ckpt')}。"
                     )
                 )
-            return AgentResponse(reply=f"Run {run_id} 的状态暂时无法读取。")
+            return AgentResponse(reply=f"{run_id} 的状态暂时无法读取。")
 
         if "base_config" in workflow_spec:
             overrides = _config_overrides_from_message(message, normalized)
@@ -59,6 +60,8 @@ class FakeRSIAgent:
             or _extract_token(message, prefix="swe_")
             or "swe_verified"
         )
+        holdout_benchmark = _extract_value(message, "--holdout-benchmark")
+        target_mean_reward = _extract_float_value(message, "--target")
         method = "opd" if "opd" in normalized else "sft"
         max_iterations = _extract_int_value(message, "--max-iterations") or _extract_round_count(message) or 3
         return AgentResponse(
@@ -70,8 +73,18 @@ class FakeRSIAgent:
                         "goal": f"Improve {ckpt} on {benchmark}.",
                         "initial_ckpt": ckpt,
                         "benchmark": benchmark,
+                        **(
+                            {"holdout_benchmark": holdout_benchmark}
+                            if holdout_benchmark
+                            else {}
+                        ),
                         "method": method,
                         "max_iterations": max_iterations,
+                        **(
+                            {"target_mean_reward": target_mean_reward}
+                            if target_mean_reward is not None
+                            else {}
+                        ),
                         "harness_config": {"harness": workflow_spec.get("harness", "mock_harness")},
                     },
                     requires_confirmation=True,
@@ -118,6 +131,16 @@ def _extract_int_value(message: str, flag: str) -> int | None:
         return None
 
 
+def _extract_float_value(message: str, flag: str) -> float | None:
+    value = _extract_value(message, flag)
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
 def _extract_round_count(message: str) -> int | None:
     match = re.search(r"\b(\d+)\s*(?:rounds?|iters?|iterations?|轮|次)\b", message, flags=re.IGNORECASE)
     return int(match.group(1)) if match else None
@@ -136,17 +159,23 @@ def _config_overrides_from_message(message: str, normalized: str) -> dict[str, A
         or _extract_value(message, "--task-set")
         or _extract_token(message, prefix="swe_")
     )
+    holdout_benchmark = _extract_value(message, "--holdout-benchmark")
+    target_mean_reward = _extract_float_value(message, "--target")
     max_iterations = _extract_int_value(message, "--max-iterations") or _extract_round_count(message)
     if ckpt:
         overrides["run.initial_ckpt"] = ckpt
     if benchmark:
         overrides["env.benchmark"] = benchmark
+    if holdout_benchmark:
+        overrides["env.holdout_benchmark"] = holdout_benchmark
     if "opd" in normalized:
         overrides["run.method"] = "opd"
     elif "sft" in normalized:
         overrides["run.method"] = "sft"
     if max_iterations is not None:
         overrides["run.max_iterations"] = max_iterations
+    if target_mean_reward is not None:
+        overrides["stop_criteria.target_mean_reward"] = target_mean_reward
     return overrides
 
 

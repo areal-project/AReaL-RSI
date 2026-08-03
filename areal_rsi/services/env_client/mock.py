@@ -8,12 +8,19 @@ from typing import Any
 
 from areal_rsi.schemas.core import EvalJob, EvalRequest, Traj
 
+_DEFAULT_REWARDS: tuple[float, ...] = (1.0, 0.0, 0.5)
+
 
 class MockEnvClient:
     """Deterministic EnvClient implementation used by local tests and demos."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, task_set: list[dict[str, Any]] | None = None) -> None:
         self._job_counts: defaultdict[str, int] = defaultdict(int)
+        # When a task set is supplied, emitted trajectory task_ids ARE its entry
+        # ids (e.g. real gsm8k instance_ids), so a Researcher experience keyed by
+        # task_id lines up with the OPD train data keyed by instance_id. Without
+        # it, three synthetic benchmark tasks are emitted as before.
+        self._task_set = [dict(entry) for entry in task_set] if task_set else None
 
     def submit_eval(self, request: EvalRequest) -> EvalJob:
         model_name = _asset_label(request.model, "mock_ckpt")
@@ -55,10 +62,10 @@ class MockEnvClient:
         model_ref = job.get("model_ref", {}).get("model_ref", "mock_ckpt")
         skill = job.get("assets", {}).get("skill")
         experiences = _task_experience_map(skill)
-        rewards = [1.0, 1.0, 1.0] if source == "experience_distillation" else [1.0, 0.0, 0.5]
+        distilled = source == "experience_distillation"
+        specs = self._task_specs(benchmark, distilled)
         trajs: list[Traj] = []
-        for index, reward in enumerate(rewards):
-            task_id = f"{benchmark}_task_{index}"
+        for index, (task_id, reward, user_content) in enumerate(specs):
             experience = experiences.get(task_id)
             traj: Traj = {
                 "traj_id": f"{job['eval_job_id']}_traj_{index}",
@@ -77,9 +84,9 @@ class MockEnvClient:
             }
             if include_messages:
                 original_messages = [
-                    {"role": "system", "content": "You are a mock SWE agent."},
-                    {"role": "user", "content": f"Solve {traj['task_id']}."},
-                    {"role": "assistant", "content": "Mock patch and explanation."},
+                    {"role": "system", "content": "You are a mock agent."},
+                    {"role": "user", "content": user_content},
+                    {"role": "assistant", "content": "Mock solution and explanation."},
                 ]
                 traj["metadata"]["original_messages"] = original_messages
                 traj["messages"] = [dict(message) for message in original_messages]
@@ -87,6 +94,25 @@ class MockEnvClient:
                     traj["messages"][1]["content"] += f"\n\n{experience}"
             trajs.append(traj)
         return trajs
+
+    def _task_specs(self, benchmark: str, distilled: bool) -> list[tuple[str, float, str]]:
+        """Return (task_id, reward, user_content) per emitted trajectory."""
+
+        if self._task_set is not None:
+            specs: list[tuple[str, float, str]] = []
+            for index, entry in enumerate(self._task_set):
+                task_id = str(entry["task_id"])
+                reward = 1.0 if distilled else float(
+                    entry.get("reward", _DEFAULT_REWARDS[index % len(_DEFAULT_REWARDS)])
+                )
+                user_content = str(entry.get("user_content") or f"Solve {task_id}.")
+                specs.append((task_id, reward, user_content))
+            return specs
+        rewards = [1.0, 1.0, 1.0] if distilled else list(_DEFAULT_REWARDS)
+        return [
+            (f"{benchmark}_task_{index}", reward, f"Solve {benchmark}_task_{index}.")
+            for index, reward in enumerate(rewards)
+        ]
 
     def _new_job(
         self,

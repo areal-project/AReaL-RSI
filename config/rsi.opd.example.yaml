@@ -1,14 +1,15 @@
 # End-to-end Experience OPD Run launched from RSI (single-node, local).
 #
-# `run --config config/rsi.opd.example.yaml` drives the full loop: EnvArena is
-# mocked (as elsewhere), the Researcher/skill steps run on the mock client, and
-# the train step launches the real AReaL gsm8k Experience OPD recipe locally,
-# returning a distilled checkpoint.
+# `run --config config/rsi.opd.example.yaml` drives the full loop with a single
+# experience source: the Researcher extracts per-task experiences, RSI uses them
+# to condition skill_eval, and the SAME experiences become AReaL's OPD
+# experience_path (teacher-hook input) for reverse-KL distillation.
 #
-# For this milestone the OPD experience map + train data are the prepared gsm8k
-# files (see examples/mopd/prepare_gsm8k_experience.py in the AReaL repo);
-# sourcing experience_path from the Researcher's per-task experiences is the
-# next phase and requires the benchmark's task ids to match the train data.
+# For ids to line up, the mock benchmark task set and the OPD train data are the
+# same gsm8k JSONL (task_id == instance_id). The mock emits `task_set_limit`
+# tasks; the OPD recipe filters train/valid rows to the experience-covered ids.
+# The experience content here is the mock Researcher's; a real ResearchAgent
+# would produce gsm8k-relevant experiences through the same wiring.
 run:
   initial_ckpt: /storage/openpsi/models/Qwen__Qwen3-4B
   method: opd
@@ -26,15 +27,22 @@ services:
     config_path: areal.opd.example.yaml
   envarena:
     backend: mock
+    # Mock trajectory task_ids come from these gsm8k instances, so Researcher
+    # experiences line up with the OPD train data below. Keep the count aligned
+    # with the recipe's train_dataset.batch_size (32).
+    task_set_path: /storage/openpsi/rsi-experiments/gsm8k_experience/train.jsonl
+    task_set_limit: 32
   research:
     backend: mock
 
 train:
   config:
-    # OPD per-iteration inputs consumed by AReaLOPDWrapper. Absolute paths.
-    experience_path: /storage/openpsi/rsi-experiments/gsm8k_experience/experience.json
+    # OPD train/valid data (instance_ids match the mock task set above).
+    # experience_path is NOT set here: the controller materializes it from the
+    # Researcher's experiences at train time. valid == train so the experience
+    # store (which only covers train ids) also covers the valid split.
     train_data_path: /storage/openpsi/rsi-experiments/gsm8k_experience/train.jsonl
-    valid_data_path: /storage/openpsi/rsi-experiments/gsm8k_experience/test.jsonl
+    valid_data_path: /storage/openpsi/rsi-experiments/gsm8k_experience/train.jsonl
     trial_name: rsi-demo
 
 stop_criteria:

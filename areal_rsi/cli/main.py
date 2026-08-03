@@ -319,7 +319,7 @@ def _controller_from_rsi_config(
     envarena = (
         EnvArenaClient.from_yaml(envarena_config_path)
         if envarena_config_path is not None
-        else MockEnvClient()
+        else MockEnvClient(task_set=_load_mock_task_set(envarena_spec, config))
     )
     research_agent = _research_agent_from_spec(research_spec)
     return LocalRSIController(
@@ -329,6 +329,52 @@ def _controller_from_rsi_config(
         research_agent=research_agent,
         memory=memory,
     )
+
+
+def _load_mock_task_set(
+    envarena_spec: dict[str, object],
+    config: RSIRunConfig,
+) -> list[dict[str, object]] | None:
+    """Load a task set so mock trajectory task_ids match OPD train instance_ids.
+
+    Reads a JSONL whose rows carry ``instance_id`` (or ``task_id``) and chat
+    ``messages``; each becomes one emitted mock task. Optional
+    ``services.envarena.task_set_limit`` caps how many tasks are used.
+    """
+
+    path_value = envarena_spec.get("task_set_path")
+    if not path_value:
+        return None
+    if not isinstance(path_value, str):
+        raise ValueError("services.envarena.task_set_path must be a string path.")
+    path = Path(path_value).expanduser()
+    if not path.is_absolute() and config.source_path is not None:
+        path = config.source_path.parent / path
+    limit_value = envarena_spec.get("task_set_limit")
+    limit = int(limit_value) if limit_value else None
+    entries: list[dict[str, object]] = []
+    with path.open(encoding="utf-8") as task_file:
+        for index, line in enumerate(task_file):
+            if limit is not None and index >= limit:
+                break
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            task_id = row.get("instance_id") or row.get("task_id")
+            if not task_id:
+                continue
+            messages = row.get("messages") or []
+            user_content = next(
+                (
+                    message.get("content")
+                    for message in messages
+                    if isinstance(message, dict) and message.get("role") == "user"
+                ),
+                None,
+            )
+            entries.append({"task_id": str(task_id), "user_content": user_content})
+    return entries or None
 
 
 def _service_spec(services: dict[str, object], name: str) -> dict[str, object]:

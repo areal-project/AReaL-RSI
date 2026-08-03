@@ -23,6 +23,7 @@ from areal_rsi.services.research.agent import ResearchAgent
 from areal_rsi.services.research.experience_skill import (
     build_experience_skill,
     experience_records_from_result,
+    task_experience_map,
 )
 from areal_rsi.services.research.trajectory_workspace import TrajectoryWorkspace
 
@@ -597,6 +598,16 @@ class LocalRSIController:
                     "model_ref": _model_ref_summary(model_ref),
                 },
             ) as action:
+                if method == "opd":
+                    # The same Researcher experiences that conditioned skill_eval
+                    # become AReaL's OPD experience_path (teacher-hook input), so
+                    # eval and training distil from one experience source. Task
+                    # ids must equal the OPD train data's instance_ids.
+                    selected_train_config = _with_opd_experience_path(
+                        selected_train_config,
+                        skill,
+                        research_workspace.root / "output" / "experience_opd.json",
+                    )
                 train_run = _train_and_wait(
                     areal,
                     base_ckpt=ckpt,
@@ -1277,6 +1288,25 @@ def _eval_status(progress: dict[str, Any], job: dict[str, Any]) -> str:
     else:
         value = progress.get("status", job.get("status", "PENDING"))
     return str(value).upper()
+
+
+def _with_opd_experience_path(
+    train_config: dict[str, Any],
+    skill: dict[str, Any],
+    experience_path: Path,
+) -> dict[str, Any]:
+    """Materialize the Researcher's task experiences as the OPD experience_path."""
+
+    experience_map = task_experience_map(skill)
+    if not experience_map:
+        raise ValueError(
+            "OPD training requires Researcher experiences, but the skill carried none."
+        )
+    experience_path.parent.mkdir(parents=True, exist_ok=True)
+    experience_path.write_text(
+        json.dumps(experience_map, ensure_ascii=False, indent=0), encoding="utf-8"
+    )
+    return {**train_config, "experience_path": str(experience_path)}
 
 
 def _train_and_wait(

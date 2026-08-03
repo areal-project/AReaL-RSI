@@ -1,3 +1,5 @@
+import json
+
 from areal_rsi.config import RSIRunConfig
 import areal_rsi.controller.local_controller as controller_module
 from areal_rsi.controller import LocalRSIController
@@ -40,16 +42,32 @@ def test_local_controller_runs_mock_iteration(tmp_path):
     audit_events = read_ledger(audit_path)
     succeeded = [event for event in audit_events if event["status"] == "succeeded"]
     assert [event["step"] for event in succeeded] == [
+        "holdout_eval",
         "eval",
         "collect_trajs",
+        "generate_experiences",
+        "skill_eval",
         "generate_dataset",
         "train",
-        "holdout_eval",
         "record_decision_pending",
     ]
     assert {event["event_type"] for event in succeeded} == {"workflow_step"}
-    assert succeeded[1]["output"]["score"]["mean_reward"] == 0.5
-    assert succeeded[3]["output"]["ckpt"] == "ckpt_000-sft-mock"
+    assert succeeded[0]["output"]["score"]["mean_reward"] == 0.5
+    assert succeeded[2]["output"]["score"]["mean_reward"] == 0.5
+    assert succeeded[4]["output"]["score"]["mean_reward"] == 1.0
+    assert succeeded[6]["output"]["ckpt"] == "ckpt_000-sft-mock"
+
+    distilled = json.loads(
+        (run_dir / "artifacts" / "distilled_trajs.json").read_text(encoding="utf-8")
+    )
+    dataset = json.loads(
+        (run_dir / "artifacts" / "dataset.json").read_text(encoding="utf-8")
+    )
+    assert "Preserve the successful solution pattern" in distilled[0]["messages"][1]["content"]
+    assert dataset["examples"][0]["messages"][1]["content"] == (
+        "Solve swe_verified_task_0."
+    )
+    assert all("experience" not in example for example in dataset["examples"])
 
     memory_events = read_ledger(run_dir / "memory" / "ledger.jsonl")
     assert "eval_summarized" in [event["title"] for event in memory_events]
@@ -63,6 +81,17 @@ def test_file_backed_dataset_reports_validated_record_count():
             "metadata": {"validation": {"record_count": 1}},
         }
     ) == 1
+
+
+def test_artifact_ref_normalizes_symlinked_run_root(tmp_path):
+    actual = tmp_path / "actual"
+    artifact = actual / "artifacts" / "skill.json"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("{}", encoding="utf-8")
+    linked = tmp_path / "linked"
+    linked.symlink_to(actual, target_is_directory=True)
+
+    assert controller_module._artifact_ref(linked, artifact) == "artifacts/skill.json"
 
 
 def test_execute_action_starts_loop_with_harness_shortcut(tmp_path):
@@ -164,7 +193,7 @@ def test_local_controller_runs_mock_loop(tmp_path):
     user_goals = [
         event for event in succeeded if event["event_type"] == "user_goal_received"
     ]
-    assert len(workflow_steps) == 12
+    assert len(workflow_steps) == 16
     assert {event["iteration"] for event in workflow_steps} == {1, 2}
     assert len(loop_decisions) == 2
     assert len(user_goals) == 1
@@ -184,7 +213,8 @@ def test_memory_and_research_context_are_isolated_per_run(tmp_path):
             self.contexts = []
 
         def generate_dataset(self, trajs, memory_context, current_ckpt, **kwargs):
-            self.contexts.append(memory_context)
+            if kwargs.get("config", {}).get("stage") == "experience_generation":
+                self.contexts.append(memory_context)
             return super().generate_dataset(
                 trajs, memory_context, current_ckpt, **kwargs
             )
@@ -290,7 +320,7 @@ def test_controller_polls_eval_without_changing_envclient_interface(tmp_path):
     )
 
     assert state.status == "waiting_for_acceptance"
-    assert sorted(envarena.progress_calls.values()) == [2, 2]
+    assert sorted(envarena.progress_calls.values()) == [2, 2, 2]
 
 
 def test_target_score_stops_successfully_and_max_iterations_exhausts(tmp_path):
@@ -318,8 +348,12 @@ def test_target_score_stops_successfully_and_max_iterations_exhausts(tmp_path):
     )
 
     assert reached.iteration == 1
+    assert reached.ckpt == "ckpt_target"
+    assert reached.train_run is None
     assert reached.metadata["goal_reached"] is True
     assert reached.metadata["stop_reason"] == "target_mean_reward_reached"
+    reached_run = tmp_path / "runs" / reached.run_id
+    assert not (reached_run / "artifacts" / "iter_001" / "dataset.json").exists()
     assert exhausted.iteration == 2
     assert exhausted.metadata["goal_reached"] is False
     assert exhausted.metadata["stop_reason"] == "max_iterations_exhausted"

@@ -6,12 +6,12 @@ AReaL-RSI 是一个基于 AReaL 和 EnvArena 的自动研究与训练闭环。�
 核心闭环：
 
 ```text
-EnvArena Traj
-  -> ResearchAgent synthesizes Experience
-  -> Dataset construction
-  -> AReaL SFT / OPD training
-  -> EnvArena evaluation
-  -> Memory records evidence and decisions
+holdout eval current ckpt
+  -> training-benchmark traj
+  -> ResearchAgent synthesizes task Experience
+  -> EnvArena evaluates model + Experience Skill
+  -> original prompt + skill-assisted completion
+  -> AReaL SFT without Experience in the prompt
   -> next ckpt
 ```
 
@@ -223,9 +223,9 @@ Memory 是 AReaL-RSI 迭代过程中的全局事件和产物记录系统。
 User: 用 ckpt_000 在 swe_verified 上跑一轮，先用 sft。
 
 RSIAgent:
-  我会启动一轮 RSI：注册 AReaL endpoint -> EnvArena eval
-  -> 拉取 traj -> ResearchAgent 生成 dataset -> AReaL SFT
-  -> holdout eval。是否开始？
+  我会启动一轮 RSI：先在 holdout 上评测当前 checkpoint；未达到目标时，
+  再从训练集轨迹生成 Experience Skill，蒸馏带提示轨迹并执行无提示 SFT。
+  是否开始？
 ```
 
 Agent 生成结构化 action：
@@ -252,23 +252,17 @@ Agent 生成结构化 action：
 ### 5.2 Controller 执行闭环
 整体训练过程按外层 RSI iteration 推进：
 
-1. Controller 从当前 `ckpt_k` 开始，启动或选择 AReaL 托管的 inference service。
-2. Controller 将 inference endpoint 注册到 EnvArena，得到 `env_model_id`。
-3. Controller 调 EnvArena 对 `env_model_id` 发起 task set 评测。
-4. EnvArena 使用指定 Task、Harness 和 Env 执行任务。Harness 需要模型输出时，调用已注册的 AReaL inference endpoint。
-5. EnvArena 产生统一格式的 `Traj`，并保存在 EnvArena 内部。
-6. Controller 通过 EnvArena 的 `get_trajs(eval_job_id)` 拉取轨迹摘要，必要时通过 `get_traj(traj_id)` 拉详细轨迹。
-7. Controller 从 Memory 拉取当前 ckpt 的历史上下文，把 `trajs + memory_context + current_ckpt` 传给 ResearchAgent。
-8. ResearchAgent 过滤轨迹、选择 Task、总结 Experience。ResearchAgent 可以再次调用 EnvArena 做小规模验证，例如比较 `model` 和 `model + experience` 在评测集上的表现。
-9. ResearchAgent 输出 Dataset。第一版 DatasetExample 结构是 `Task + Experience + source_traj_ids + metadata`。
-10. Controller 根据 action 或 Agent 策略选择训练 method。第一版可固定 `sft`；后续可以选择 `opd`。
-11. Trainer 执行训练：
-    + SFT：直接消费 ResearchAgent dataset。
-    + OPD：基于 ResearchAgent dataset 或 selected tasks，调用 EnvArena 采集 on-policy teacher/student 轨迹，再做 distill。EnvArena 仍然调用 AReaL 托管的 endpoint。
-12. Trainer 产出 `ckpt_{k+1}` 和训练指标，写入 Memory。
-13. Controller 调 EnvArena 对新 ckpt 做 holdout eval，并把结果写入 Memory。
-14. Controller 根据 stop criteria、holdout 结果和 Memory 做 loop decision。
-15. 如果 decision 是 continue，则自动进入下一轮；如果 stop，则写入最终状态。
+1. Controller 在 holdout benchmark 上评测当前 `ckpt_k`。
+2. 如果 holdout 分数已经达到用户目标，当前 iteration 不执行 research 和训练，Run 直接成功结束。
+3. 未达到目标时，Controller 在训练 benchmark 上进行一次不带 Skill 的评测并拉取完整轨迹。
+4. Controller 按 Task 聚合轨迹；ResearchAgent 为每个 Task 生成一条可直接追加到 user prompt 的 Experience。
+5. Controller 将这些 Experience 组装成 task-scoped Arena Skill，再次在同一训练 benchmark 上评测当前模型。
+6. EnvArena 根据 task_id 把对应 Experience 追加到 user prompt，产生 skill-assisted trajectories。
+7. ResearchAgent 只从这些蒸馏轨迹中选择训练目标：原始轨迹提供 system/user prompt，skill-assisted trajectory 提供 assistant/tool completion。
+8. 最终 SFT JSONL 中不得包含 Experience，训练时的 prompt 与原训练任务一致，从而把 Experience 蒸馏进模型参数。
+9. ResearchAgent 同时基于模板生成完整 AReaL 训练 YAML，Trainer 产出 `ckpt_{k+1}`。
+10. iteration 结束时不再进行 holdout eval；如果还有下一轮，ResearchAgent 选择其起始 checkpoint，并在下一轮开始时评测。
+11. 最大轮数耗尽则结束 Run；当前最后一个 checkpoint 尚未额外做尾部评测。
 
 ## 6. Python 接口
 接口只保留模块之间的边界，第一版实现时所有对象都可以先用 `dict[str, Any]` 承载，不先抽复杂 dataclass。

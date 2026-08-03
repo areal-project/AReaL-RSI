@@ -5,13 +5,13 @@ AReaL-RSI is an automated research and training loop for recursive model improve
 It turns environment feedback into reusable training signal:
 
 ```text
-EnvArena Traj
-  -> ResearchAgent synthesizes Experience
-  -> Dataset construction
-  -> AReaL SFT / OPD training
-  -> EnvArena evaluation
-  -> Memory records evidence and decisions
-  -> next ckpt
+holdout eval current ckpt -> stop immediately if target is reached
+  -> training-benchmark eval without skill
+  -> ResearchAgent writes one Experience per task
+  -> EnvArena appends Experiences as a task-scoped Skill and evaluates again
+  -> ResearchAgent pairs original prompts with skill-assisted completions
+  -> SFT without Experience in the prompt
+  -> next ckpt (evaluated at the start of the next iteration)
 ```
 
 The system keeps two roles separate:
@@ -26,8 +26,8 @@ session per iteration, reads one task trajectory file at a time, and writes the
 iteration SFT JSONL and complete AReaL training YAML. Mock services remain
 available for deterministic controller tests and demos.
 
-One user command starts a **Run**. Each eval → research → train → holdout eval
-round inside that Run is one **iteration**. The config key
+One user command starts a **Run**. Each pre-training holdout → experience
+distillation → train round inside that Run is one **iteration**. The config key
 `run.max_iterations` limits the number of iterations in that Run.
 
 ## Documents
@@ -41,12 +41,12 @@ round inside that Run is one **iteration**. The config key
 
 Build a minimal but recoverable loop:
 
-1. Submit an EnvArena evaluation for the current model path and collect trajectories.
-2. Generate a dataset from trajectories.
-3. Run AReaL SFT training.
-4. Run holdout evaluation for the new checkpoint.
-5. Record each iteration in Run-scoped Memory.
-6. Let RSIAgent explain the Run.
+1. Evaluate the current checkpoint on the holdout benchmark and stop before training when the target is reached.
+2. Evaluate the training benchmark without a skill and generate one Experience per task.
+3. Submit Experiences as an Arena Skill and collect skill-assisted training trajectories.
+4. Build SFT data from original prompts plus skill-assisted completions, with Experience removed from prompts.
+5. Run AReaL SFT training and evaluate its checkpoint at the next iteration's start.
+6. Record each iteration in Run-scoped Memory and let RSIAgent explain the Run.
 
 ## Local Mock Loop
 
@@ -63,7 +63,7 @@ python -m areal_rsi.cli.main run-loop-mock --ckpt ckpt_000 --task-set swe_verifi
 Run from an RSI config file:
 
 ```bash
-python -m areal_rsi.cli.main run --config config/rsi.example.yaml
+python -m areal_rsi.cli.main run --config config/rsi.yaml
 ```
 
 Chat can generate a structured action without executing it:
@@ -75,7 +75,7 @@ python -m areal_rsi.cli.main chat --backend fake "run ckpt_000 on swe_verified"
 If no message is provided, `chat` starts an interactive REPL:
 
 ```bash
-python -m areal_rsi.cli.main chat --backend openai --config config/rsi.example.yaml --execute --yes
+python -m areal_rsi.cli.main chat --backend openai --config config/rsi.yaml --execute --yes
 ```
 
 Use `--stdin` when you want a single non-interactive message from stdin.
@@ -90,7 +90,7 @@ Chat can also load a base config and let the user message override only the
 fields it mentions:
 
 ```bash
-python -m areal_rsi.cli.main chat --backend openai --config config/rsi.example.yaml --execute --yes \
+python -m areal_rsi.cli.main chat --backend openai --config config/rsi.yaml --execute --yes \
   "use ckpt_123 and run swe_verified for 2 iterations with sft"
 ```
 
@@ -140,27 +140,42 @@ Claude ResearchAgent support is optional:
 pip install -e '.[researcher]'
 ```
 
-`config/rsi.example.yaml` currently combines real AReaL Slurm training and the
+`config/rsi.yaml` currently combines real AReaL Slurm training and the
 Claude ResearchAgent with `MockEnvClient`. Checkpoint-backed model startup in
 EnvArena is intentionally mocked until its control-plane API is available. The
 mock trajectories retain the same checkpoint path passed to the ResearchAgent.
+
+## Agent Skill Launch
+
+The repository includes one shared `start-rsi-experiment` Skill for Codex and
+Claude Code. Invoke it as `$start-rsi-experiment` in Codex or
+`/start-rsi-experiment` in Claude Code. The agent collects only the experiment
+inputs that vary (experiment name, checkpoint, train and holdout benchmarks,
+harness, iteration limit, and target reward), shows the complete resolved
+summary, and waits for explicit confirmation before starting anything.
+
+After confirmation, the Skill creates an isolated launch config under the
+ignored `.rsi/launches/` directory and starts the Controller. Fixed deployment
+settings stay in `config/rsi.yaml`, `config/areal.yaml`, and
+`config/envarena.yaml`; the Skill does not ask for runs/experiments roots,
+Arena URL, image, or Slurm settings unless the user asks to change them.
+
+The launcher reads `ENVARENA_API_TOKEN` from the repository-local `.env` file.
+The file is intentionally ignored by Git and the token is never copied into a
+resolved config, receipt, log message, commit, or command line.
 
 ## EnvArena Control Plane Client
 
 The real EnvArena adapter is generated from
 `docs/envarena-openapi.yaml`, then wrapped by `EnvArenaClient` so the
-controller does not depend on generated implementation details. Copy and
-adjust the YAML example, then provide the bearer token through its configured
-environment variable:
+controller does not depend on generated implementation details. Stable client
+settings live in `config/envarena.yaml`; credentials stay in the ignored
+repository-local `.env` file and are loaded automatically by the experiment
+Skill launcher.
 
 The platform-neutral contract and local mock live in
 `areal_rsi.services.env_client`; EnvArena's implementation and generated SDK
 live in `areal_rsi.services.env_client.envarena`.
-
-```bash
-cp config/envarena.example.yaml config/envarena.yaml
-export ENVARENA_API_TOKEN='...'
-```
 
 ```python
 from areal_rsi.services import EnvArenaClient
@@ -234,7 +249,8 @@ For the tested containerized Slurm/SPMD route, configure the optional
 submission when `scheduler_type` is `slurm`. Submission is asynchronous and
 therefore returns a job record, not a completed `TrainRun` checkpoint.
 The RSI controller polls the Slurm job and resolves the latest declared AReaL
-checkpoint before continuing to holdout evaluation.
+checkpoint before completing the iteration. Its holdout evaluation happens at
+the beginning of the next iteration.
 
 ```python
 from areal_rsi.services import AReaLService

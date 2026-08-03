@@ -1,0 +1,15 @@
+# Deployment settings for the current single-node Slurm allocation.
+# The RSI wrapper waits synchronously while AReaL's own local scheduler starts
+# its one-GPU worker inside the already allocated CUDA_VISIBLE_DEVICES set.
+areal:
+  sft:
+    commands:
+      - /opt/.venv/bin/python
+      - /storage/openpsi/users/xuruida.xrd/AReaL/examples/swe/train_sft.py
+    scheduler_type: local
+    environment_variables:
+      # AReaL's local scheduler launches torchrun for its worker process.
+      PATH: /opt/.venv/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      # Keep the launcher script and imported AReaL package on the same
+      # source revision; this tree includes the SWE JSONL dataset adapter.
+      PYTHONPATH: /storage/openpsi/users/xuruida.xrd/AReaL:/AReaL

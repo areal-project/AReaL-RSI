@@ -53,12 +53,16 @@ class MockEnvClient:
         benchmark = job.get("benchmark", job.get("task_set", "mock_benchmark"))
         source = job.get("metadata", {}).get("source", "eval")
         model_ref = job.get("model_ref", {}).get("model_ref", "mock_ckpt")
-        rewards = [1.0, 0.0, 0.5]
+        skill = job.get("assets", {}).get("skill")
+        experiences = _task_experience_map(skill)
+        rewards = [1.0, 1.0, 1.0] if source == "experience_distillation" else [1.0, 0.0, 0.5]
         trajs: list[Traj] = []
         for index, reward in enumerate(rewards):
+            task_id = f"{benchmark}_task_{index}"
+            experience = experiences.get(task_id)
             traj: Traj = {
                 "traj_id": f"{job['eval_job_id']}_traj_{index}",
-                "task_id": f"{benchmark}_task_{index}",
+                "task_id": task_id,
                 "model_ref": model_ref,
                 "harness_id": job.get("harness_config", {}).get("harness", "mock_harness"),
                 "reward": reward,
@@ -67,14 +71,20 @@ class MockEnvClient:
                     "source": source,
                     "eval_job_id": job["eval_job_id"],
                     "benchmark": benchmark,
+                    "skill_applied": bool(experience),
+                    **({"experience": experience} if experience else {}),
                 },
             }
             if include_messages:
-                traj["messages"] = [
+                original_messages = [
                     {"role": "system", "content": "You are a mock SWE agent."},
                     {"role": "user", "content": f"Solve {traj['task_id']}."},
                     {"role": "assistant", "content": "Mock patch and explanation."},
                 ]
+                traj["metadata"]["original_messages"] = original_messages
+                traj["messages"] = [dict(message) for message in original_messages]
+                if experience:
+                    traj["messages"][1]["content"] += f"\n\n{experience}"
             trajs.append(traj)
         return trajs
 
@@ -125,3 +135,22 @@ def _ref_label(config: Mapping[str, Any] | str, default: str) -> str:
 
 def _asset_dict(config: Mapping[str, Any] | str) -> dict[str, Any]:
     return {"ref": config} if isinstance(config, str) else dict(config)
+
+
+def _task_experience_map(skill: object) -> dict[str, str]:
+    if not isinstance(skill, Mapping):
+        return {}
+    spec = skill.get("spec")
+    if not isinstance(spec, Mapping):
+        return {}
+    records = spec.get("task_experiences", [])
+    if not isinstance(records, list):
+        return {}
+    return {
+        str(record["task_id"]): str(record["experience"])
+        for record in records
+        if isinstance(record, Mapping)
+        and record.get("task_id") is not None
+        and isinstance(record.get("experience"), str)
+        and record["experience"].strip()
+    }

@@ -22,7 +22,7 @@ class ResearchAgent(Protocol):
         traj_filter: dict[str, Any] | None = None,
         config: dict[str, Any] | None = None,
     ) -> Dataset:
-        """Generate a dataset with experience fields from trajectories."""
+        """Generate task experiences or a distilled dataset, as selected by config."""
 
     def choose_ckpt(self, train_runs: list[TrainRun], memory_context: MemoryContext) -> str:
         """Choose the checkpoint for the next iteration in the current Run."""

@@ -33,6 +33,7 @@ class RSIController(Protocol):
         train_config: dict[str, Any] | None = None,
         traj_filter: dict[str, Any] | None = None,
         eval_gate: dict[str, Any] | None = None,
+        stop_criteria: dict[str, Any] | None = None,
     ) -> RunState:
         """Run one deterministic RSI iteration."""
 

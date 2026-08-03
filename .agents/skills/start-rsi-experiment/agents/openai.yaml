@@ -1,0 +1,4 @@
+interface:
+  display_name: "Start RSI Experiment"
+  short_description: "Collect, confirm, and launch one RSI experiment"
+  default_prompt: "Use $start-rsi-experiment to configure and launch an AReaL-RSI experiment."

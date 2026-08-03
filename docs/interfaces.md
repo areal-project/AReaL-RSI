@@ -50,8 +50,8 @@ ActionType = Literal[
 ]
 ```
 
-Workflow steps such as `eval`, `generate_dataset`, `train`, and
-`holdout_eval` are internal controller steps and appear in audit logs, not
+Workflow steps such as `holdout_eval`, `generate_experiences`, `skill_eval`,
+`generate_dataset`, and `train` are internal controller steps and appear in audit logs, not
 in RSIAgent user actions.
 
 The preferred `start_loop` path loads a base RSI config first. RSIAgent then
@@ -304,7 +304,7 @@ Audit event shape:
 
 Non-step events use the same envelope with distinct `event_type`, for
 example `user_goal_received` before the loop starts and `loop_decision`
-after each holdout evaluation.
+after each completed iteration or an early target stop.
 
 `Memory` records higher-level summaries, research observations, decisions,
 and human feedback. It is the context source for `RSIAgent` and

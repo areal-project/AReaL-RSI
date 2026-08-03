@@ -33,6 +33,7 @@ from .sft_format import (
     describe_sft_reference,
     validate_sft_jsonl,
 )
+from .trajectory_workspace import TrajectoryWorkspace
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,10 +159,108 @@ class ClaudeResearchAgent:
         self.config.validate()
         self._query_runner = query_runner or _run_claude_turn
 
-    def prepare_iteration(
+    def prepare_experiences(
         self,
         *,
         trajectory_manifest: dict[str, Any],
+        memory_context: MemoryContext,
+        current_ckpt: str,
+        base_train_config: dict[str, Any],
+        run_context: dict[str, Any],
+        config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        del memory_context
+        effective = _merge_config(self.config, config)
+        workspace = Path(str(trajectory_manifest["workspace"])).resolve()
+        output = trajectory_manifest["output"]
+        reference_path = effective.reference_sft_path
+        if not reference_path:
+            raise ValueError(
+                "Claude Researcher requires research.reference_sft_path for SFT validation."
+            )
+        session_id: str | None = None
+        bootstrap = self._query_with_retries(
+            iteration_bootstrap_prompt(
+                manifest=trajectory_manifest,
+                reference_sft_path=reference_path,
+            ),
+            workspace=workspace,
+            config=effective,
+            session_id=session_id,
+        )
+        session_id = bootstrap.session_id
+
+        completed_paths: list[str] = []
+        skipped_tasks: list[dict[str, Any]] = []
+        experience_records: list[dict[str, Any]] = []
+        for task in trajectory_manifest.get("tasks", []):
+            experience_path = str(
+                Path(output["experiences_dir"]) / f"{Path(str(task['path'])).stem}.json"
+            )
+            try:
+                turn = self._query_with_retries(
+                    task_analysis_prompt(
+                        task=task,
+                        experience_path=experience_path,
+                    ),
+                    workspace=workspace,
+                    config=effective,
+                    session_id=session_id,
+                )
+                session_id = turn.session_id
+                experience = _read_json(Path(experience_path), "task experience")
+                _validate_task_experience(experience, expected_task_id=str(task["task_id"]))
+                if experience.get("status") == "skipped":
+                    skipped_tasks.append(
+                        {
+                            "task_id": task["task_id"],
+                            "reason": experience.get("analysis", "researcher_skipped"),
+                            "path": experience_path,
+                        }
+                    )
+                else:
+                    completed_paths.append(experience_path)
+                    experience_records.append(experience)
+            except Exception as exc:
+                skipped = {
+                    "schema_version": "task-experience.v1",
+                    "task_id": task["task_id"],
+                    "status": "skipped",
+                    "source_traj_ids": list(task.get("trajectory_ids", [])),
+                    "experience": "",
+                    "analysis": f"Task analysis failed after retries: {exc}",
+                    "training_recommendation": {
+                        "include": False,
+                        "use_failed_trajectories": False,
+                        "strategy": "skip_after_retries",
+                    },
+                    "metadata": {"error_type": type(exc).__name__},
+                }
+                _write_json(Path(experience_path), skipped)
+                skipped_tasks.append(
+                    {
+                        "task_id": task["task_id"],
+                        "reason": str(exc),
+                        "path": experience_path,
+                    }
+                )
+
+        return {
+            "schema_version": "research-experiences.v1",
+            "workspace": str(workspace),
+            "session_id": session_id,
+            "experience_records": experience_records,
+            "completed_experience_paths": completed_paths,
+            "skipped_tasks": skipped_tasks,
+            "memory_updates": [],
+        }
+
+    def finalize_iteration(
+        self,
+        *,
+        trajectory_manifest: dict[str, Any],
+        distillation_manifest: dict[str, Any],
+        experience_result: dict[str, Any],
         memory_context: MemoryContext,
         current_ckpt: str,
         base_train_config: dict[str, Any],
@@ -190,75 +289,16 @@ class ClaudeResearchAgent:
                 "Claude Researcher requires research.reference_sft_path for SFT validation."
             )
         reference_contract = describe_sft_reference(reference_path)
-
-        session_id: str | None = None
-        bootstrap = self._query_with_retries(
-            iteration_bootstrap_prompt(
-                manifest=trajectory_manifest,
-                reference_sft_path=reference_path,
-            ),
-            workspace=workspace,
-            config=effective,
-            session_id=session_id,
-        )
-        session_id = bootstrap.session_id
-
-        completed_paths: list[str] = []
-        skipped_tasks: list[dict[str, Any]] = []
-        for task in trajectory_manifest.get("tasks", []):
-            experience_path = str(
-                Path(output["experiences_dir"]) / f"{Path(str(task['path'])).stem}.json"
-            )
-            try:
-                turn = self._query_with_retries(
-                    task_analysis_prompt(
-                        task=task,
-                        experience_path=experience_path,
-                    ),
-                    workspace=workspace,
-                    config=effective,
-                    session_id=session_id,
-                )
-                session_id = turn.session_id
-                experience = _read_json(Path(experience_path), "task experience")
-                _validate_task_experience(experience, expected_task_id=str(task["task_id"]))
-                if experience.get("status") == "skipped":
-                    skipped_tasks.append(
-                        {
-                            "task_id": task["task_id"],
-                            "reason": experience.get("analysis", "researcher_skipped"),
-                            "path": experience_path,
-                        }
-                    )
-                else:
-                    completed_paths.append(experience_path)
-            except Exception as exc:
-                skipped = {
-                    "schema_version": "task-experience.v1",
-                    "task_id": task["task_id"],
-                    "status": "skipped",
-                    "source_traj_ids": list(task.get("trajectory_ids", [])),
-                    "experience": "",
-                    "analysis": f"Task analysis failed after retries: {exc}",
-                    "training_recommendation": {
-                        "include": False,
-                        "use_failed_trajectories": False,
-                        "strategy": "skip_after_retries",
-                    },
-                    "metadata": {"error_type": type(exc).__name__},
-                }
-                _write_json(Path(experience_path), skipped)
-                skipped_tasks.append(
-                    {
-                        "task_id": task["task_id"],
-                        "reason": str(exc),
-                        "path": experience_path,
-                    }
-                )
+        session_id = str(experience_result.get("session_id") or "") or None
+        completed_paths = [
+            str(path) for path in experience_result.get("completed_experience_paths", [])
+        ]
+        skipped_tasks = list(experience_result.get("skipped_tasks", []))
 
         synthesis = self._query_with_retries(
             dataset_construction_prompt(
                 manifest=trajectory_manifest,
+                distillation_manifest=distillation_manifest,
                 completed_experience_paths=completed_paths,
                 skipped_tasks=skipped_tasks,
                 reference_sft_path=reference_path,
@@ -280,6 +320,11 @@ class ClaudeResearchAgent:
                     dataset_path,
                     reference_path=reference_path,
                 )
+                _validate_no_experience_in_prompts(
+                    dataset_path,
+                    experience_result.get("experience_records", []),
+                )
+                validation["experience_removed_from_prompts"] = True
                 break
             except SFTFormatError as exc:
                 validation_errors.append(str(exc))
@@ -337,7 +382,61 @@ class ClaudeResearchAgent:
             "skipped_tasks": skipped_tasks,
             "validation": validation,
             "validation_errors_repaired": validation_errors,
+            "experience_result": experience_result,
+            "distillation_manifest": distillation_manifest,
         }
+
+    def prepare_iteration(
+        self,
+        *,
+        trajectory_manifest: dict[str, Any],
+        memory_context: MemoryContext,
+        current_ckpt: str,
+        base_train_config: dict[str, Any],
+        run_context: dict[str, Any],
+        config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Backward-compatible single-call path for non-controller callers."""
+
+        experience_result = self.prepare_experiences(
+            trajectory_manifest=trajectory_manifest,
+            memory_context=memory_context,
+            current_ckpt=current_ckpt,
+            base_train_config=base_train_config,
+            run_context=run_context,
+            config=config,
+        )
+        workspace = TrajectoryWorkspace(Path(str(trajectory_manifest["workspace"])))
+        skill_path = workspace.materialize_skill(
+            {
+                "type": "new",
+                "spec": {
+                    "schema_version": "rsi-experience-skill.v1",
+                    "task_experiences": experience_result["experience_records"],
+                },
+            }
+        )
+        trajs: list[Traj] = []
+        for task in trajectory_manifest.get("tasks", []):
+            payload = _read_json(Path(str(task["path"])), "task input")
+            task_trajs = payload.get("trajectories", [])
+            if isinstance(task_trajs, list):
+                trajs.extend(item for item in task_trajs if isinstance(item, dict))
+        distillation_manifest = workspace.materialize_distilled(
+            trajs=trajs,
+            skill_path=skill_path,
+            eval_context={"compatibility_mode": True},
+        )
+        return self.finalize_iteration(
+            trajectory_manifest=trajectory_manifest,
+            distillation_manifest=distillation_manifest,
+            experience_result=experience_result,
+            memory_context=memory_context,
+            current_ckpt=current_ckpt,
+            base_train_config=base_train_config,
+            run_context=run_context,
+            config=config,
+        )
 
     def select_checkpoint(
         self,
@@ -608,6 +707,46 @@ def _validate_task_experience(
         )
     if payload.get("status") not in {"completed", "skipped"}:
         raise ValueError("Task experience status must be 'completed' or 'skipped'.")
+    if payload.get("status") == "completed" and (
+        not isinstance(payload.get("experience"), str)
+        or not payload["experience"].strip()
+    ):
+        raise ValueError("Completed task experience must contain non-empty experience text.")
+
+
+def _validate_no_experience_in_prompts(
+    dataset_path: Path,
+    experience_records: Any,
+) -> None:
+    fragments = {
+        str(record["experience"]).strip()
+        for record in experience_records
+        if isinstance(record, dict)
+        and isinstance(record.get("experience"), str)
+        and record["experience"].strip()
+    }
+    if not fragments:
+        return
+    with dataset_path.open(encoding="utf-8") as stream:
+        for line_number, line in enumerate(stream, start=1):
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            messages = record.get("messages", []) if isinstance(record, dict) else []
+            for message_index, message in enumerate(messages):
+                if not isinstance(message, dict) or message.get("role") not in {
+                    "system",
+                    "user",
+                }:
+                    continue
+                content = message.get("content")
+                if not isinstance(content, str):
+                    continue
+                if any(fragment in content for fragment in fragments):
+                    raise SFTFormatError(
+                        f"Candidate line {line_number} messages[{message_index}] "
+                        "still contains a task experience; restore the original prompt."
+                    )
 
 
 def _write_json(path: Path, payload: Any) -> None:

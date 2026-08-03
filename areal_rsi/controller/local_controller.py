@@ -20,6 +20,10 @@ from areal_rsi.schemas.core import EvalRequest, TrainMethod
 from areal_rsi.services.areal import AReaLService
 from areal_rsi.services.env_client import EnvClient
 from areal_rsi.services.research.agent import ResearchAgent
+from areal_rsi.services.research.experience_skill import (
+    build_experience_skill,
+    experience_records_from_result,
+)
 from areal_rsi.services.research.trajectory_workspace import TrajectoryWorkspace
 
 
@@ -72,6 +76,7 @@ class LocalRSIController:
         train_config: dict[str, Any] | None = None,
         traj_filter: dict[str, Any] | None = None,
         eval_gate: dict[str, Any] | None = None,
+        stop_criteria: dict[str, Any] | None = None,
         areal: AReaLService | None = None,
         envarena: EnvClient | None = None,
         research_agent: ResearchAgent | None = None,
@@ -109,6 +114,7 @@ class LocalRSIController:
                 "method": method,
                 "harness_config": harness_config,
                 "base_ckpt": ckpt,
+                "stop_criteria": stop_criteria or {},
             },
         )
         self._save_state(state)
@@ -122,6 +128,106 @@ class LocalRSIController:
         try:
             model_ref = _model_ref_from_path(ckpt)
 
+            holdout_benchmark = _holdout_benchmark(benchmark, eval_gate)
+            with audit.action(
+                run_id=run_id,
+                iteration=state.iteration,
+                step="holdout_eval",
+                input={
+                    "model_ref": _model_ref_summary(model_ref),
+                    "benchmark": _benchmark_summary(holdout_benchmark),
+                    "harness_config": harness_config,
+                    "source": "pre_iteration_holdout",
+                },
+            ) as action:
+                holdout_job = envarena.submit_eval(
+                    EvalRequest(
+                        model=_model_asset_config(ckpt),
+                        benchmark=_benchmark_ref_config(holdout_benchmark),
+                        harness=_harness_ref_config(harness_config),
+                        skill=_optional_asset_config(harness_config, "skill"),
+                        job_config=_eval_job_config(harness_config),
+                        metadata={
+                            "run_id": run_id,
+                            "source": "pre_iteration_holdout",
+                        },
+                    )
+                )
+                holdout_evidence = _wait_for_eval(envarena, holdout_job)
+                holdout_trajs = envarena.get_trajs(
+                    holdout_job, include_messages=False
+                )
+                holdout_score = _score_summary(holdout_trajs)
+                state.mark_step(
+                    "holdout_eval",
+                    holdout_job=holdout_job,
+                    metadata={
+                        **state.metadata,
+                        "last_holdout_score": holdout_score,
+                        "holdout_ckpt": ckpt,
+                    },
+                )
+                self._save_state(state)
+                holdout_job_path = artifacts.write_json(
+                    "pre_holdout_job.json", holdout_job
+                )
+                holdout_trajs_path = artifacts.write_json(
+                    "pre_holdout_trajs.json", holdout_trajs
+                )
+                holdout_evidence_path = artifacts.write_json(
+                    "pre_holdout_evidence.json", holdout_evidence
+                )
+                action.set_output(
+                    {
+                        "holdout_job": _job_summary(holdout_job),
+                        "num_trajs": len(holdout_trajs),
+                        "score": holdout_score,
+                    },
+                    artifacts={
+                        "holdout_job": _artifact_ref(run_dir, holdout_job_path),
+                        "holdout_trajs": _artifact_ref(run_dir, holdout_trajs_path),
+                        "holdout_evidence": _artifact_ref(
+                            run_dir, holdout_evidence_path
+                        ),
+                    },
+                )
+            self._record(
+                memory,
+                "holdout_summarized",
+                (
+                    f"ckpt={ckpt}, benchmark={_benchmark_summary(holdout_benchmark)}, "
+                    f"score={holdout_score.get('mean_reward')}, "
+                    f"num_trajs={len(holdout_trajs)}"
+                ),
+                state,
+                extra_metadata={
+                    "score": holdout_score,
+                    "benchmark": _benchmark_summary(holdout_benchmark),
+                    "phase": "pre_iteration",
+                },
+            )
+            target_decision = _target_stop_decision(
+                holdout_score,
+                stop_criteria or {},
+            )
+            if target_decision is not None:
+                state.status = "completed"
+                state.current_step = "target_reached"
+                state.metadata = {
+                    **state.metadata,
+                    "target_reached_before_training": True,
+                    "candidate_ckpt": ckpt,
+                    "decision": target_decision,
+                }
+                self._save_state(state)
+                self._record(
+                    memory,
+                    "target_reached_before_training",
+                    str(target_decision),
+                    state,
+                )
+                return state
+
             with audit.action(
                 run_id=run_id,
                 iteration=state.iteration,
@@ -130,7 +236,7 @@ class LocalRSIController:
                     "model_ref": _model_ref_summary(model_ref),
                     "benchmark": _benchmark_summary(benchmark),
                     "harness_config": harness_config,
-                    "source": "eval",
+                    "source": "train_eval",
                 },
             ) as action:
                 eval_job = envarena.submit_eval(
@@ -140,7 +246,7 @@ class LocalRSIController:
                         harness=_harness_ref_config(harness_config),
                         skill=_optional_asset_config(harness_config, "skill"),
                         job_config=_eval_job_config(harness_config),
-                        metadata={"run_id": run_id, "source": "eval"},
+                        metadata={"run_id": run_id, "source": "train_eval"},
                     )
                 )
                 state.mark_step("submit_eval", eval_job=eval_job)
@@ -208,37 +314,34 @@ class LocalRSIController:
                 base_train_config=base_train_config,
             )
 
+            research_config = {"traj_filter": traj_filter or {}}
+            researcher_run_context = {
+                "run_id": run_id,
+                "iteration": state.iteration,
+                "benchmark": _benchmark_summary(benchmark),
+            }
             with audit.action(
                 run_id=run_id,
                 iteration=state.iteration,
-                step="generate_dataset",
+                step="generate_experiences",
                 input={
                     "current_ckpt": ckpt,
                     "num_trajs": len(trajs),
                     "model_ref": _model_ref_summary(model_ref),
-                    "harness_config": harness_config,
                     "traj_filter": traj_filter or {},
                 },
             ) as action:
-                if hasattr(research_agent, "prepare_iteration"):
-                    research_result = research_agent.prepare_iteration(
+                if hasattr(research_agent, "prepare_experiences"):
+                    experience_result = research_agent.prepare_experiences(
                         trajectory_manifest=trajectory_manifest,
                         memory_context=memory_context,
                         current_ckpt=ckpt,
                         base_train_config=base_train_config,
-                        run_context={
-                            "run_id": run_id,
-                            "iteration": state.iteration,
-                            "benchmark": _benchmark_summary(benchmark),
-                        },
-                        config={"traj_filter": traj_filter or {}},
-                    )
-                    dataset = dict(research_result["dataset"])
-                    selected_train_config = dict(
-                        research_result.get("train_config") or base_train_config
+                        run_context=researcher_run_context,
+                        config=research_config,
                     )
                 else:
-                    dataset = research_agent.generate_dataset(
+                    experience_dataset = research_agent.generate_dataset(
                         trajs=trajs,
                         memory_context=memory_context,
                         current_ckpt=ckpt,
@@ -246,11 +349,195 @@ class LocalRSIController:
                         model_ref=model_ref,
                         harness_config=harness_config,
                         traj_filter=traj_filter,
+                        config={**research_config, "stage": "experience_generation"},
+                    )
+                    experience_result = {
+                        "schema_version": "research-experiences.legacy",
+                        "dataset": experience_dataset,
+                        "memory_updates": [],
+                    }
+                experience_records = experience_records_from_result(experience_result)
+                skill = build_experience_skill(
+                    experience_records,
+                    run_id=run_id,
+                    iteration=state.iteration,
+                )
+                skill_path = research_workspace.materialize_skill(skill)
+                experience_result = {
+                    **experience_result,
+                    "experience_records": experience_records,
+                    "skill": skill,
+                    "skill_path": skill_path,
+                }
+                state.mark_step(
+                    "generate_experiences",
+                    metadata={
+                        **state.metadata,
+                        "experience_result": experience_result,
+                        "research_workspace": str(research_workspace.root),
+                        "research_session_id": experience_result.get("session_id"),
+                    },
+                )
+                self._save_state(state)
+                experience_result_path = artifacts.write_json(
+                    "experience_result.json", experience_result
+                )
+                action.set_output(
+                    {
+                        "num_experiences": len(experience_records),
+                        "skill_key": skill["key"],
+                    },
+                    artifacts={
+                        "experience_result": _artifact_ref(
+                            run_dir, experience_result_path
+                        ),
+                        "skill": _artifact_ref(run_dir, Path(skill_path)),
+                    },
+                )
+            self._record(
+                memory,
+                "experience_skill_created",
+                str(
+                    {
+                        "num_experiences": len(experience_records),
+                        "skill_key": skill["key"],
+                    }
+                ),
+                state,
+                extra_metadata={"skill_key": skill["key"]},
+            )
+
+            with audit.action(
+                run_id=run_id,
+                iteration=state.iteration,
+                step="skill_eval",
+                input={
+                    "current_ckpt": ckpt,
+                    "benchmark": _benchmark_summary(benchmark),
+                    "skill_key": skill["key"],
+                    "source": "experience_distillation",
+                },
+            ) as action:
+                skill_eval_job = envarena.submit_eval(
+                    EvalRequest(
+                        model=_model_asset_config(ckpt),
+                        benchmark=_benchmark_ref_config(benchmark),
+                        harness=_harness_ref_config(harness_config),
+                        skill=skill,
+                        job_config=_eval_job_config(harness_config),
+                        metadata={
+                            "run_id": run_id,
+                            "source": "experience_distillation",
+                        },
+                    )
+                )
+                skill_eval_evidence = _wait_for_eval(envarena, skill_eval_job)
+                distilled_trajs = envarena.get_trajs(
+                    skill_eval_job, include_messages=True
+                )
+                skill_eval_score = _score_summary(distilled_trajs)
+                distillation_manifest = research_workspace.materialize_distilled(
+                    trajs=distilled_trajs,
+                    skill_path=skill_path,
+                    eval_context={
+                        "job": _job_summary(skill_eval_job),
+                        "score": skill_eval_score,
+                    },
+                )
+                state.mark_step(
+                    "skill_eval",
+                    metadata={
+                        **state.metadata,
+                        "skill_eval_job": skill_eval_job,
+                        "skill_eval_score": skill_eval_score,
+                        "num_distilled_trajs": len(distilled_trajs),
+                    },
+                )
+                self._save_state(state)
+                skill_job_path = artifacts.write_json(
+                    "skill_eval_job.json", skill_eval_job
+                )
+                distilled_trajs_path = artifacts.write_json(
+                    "distilled_trajs.json", distilled_trajs
+                )
+                skill_evidence_path = artifacts.write_json(
+                    "skill_eval_evidence.json", skill_eval_evidence
+                )
+                action.set_output(
+                    {
+                        "num_trajs": len(distilled_trajs),
+                        "score": skill_eval_score,
+                    },
+                    artifacts={
+                        "skill_eval_job": _artifact_ref(run_dir, skill_job_path),
+                        "distilled_trajs": _artifact_ref(
+                            run_dir, distilled_trajs_path
+                        ),
+                        "skill_eval_evidence": _artifact_ref(
+                            run_dir, skill_evidence_path
+                        ),
+                    },
+                )
+            self._record(
+                memory,
+                "skill_eval_summarized",
+                str(
+                    {
+                        "skill_key": skill["key"],
+                        "score": skill_eval_score,
+                        "num_trajs": len(distilled_trajs),
+                    }
+                ),
+                state,
+                extra_metadata={"score": skill_eval_score},
+            )
+
+            with audit.action(
+                run_id=run_id,
+                iteration=state.iteration,
+                step="generate_dataset",
+                input={
+                    "current_ckpt": ckpt,
+                    "num_distilled_trajs": len(distilled_trajs),
+                    "skill_key": skill["key"],
+                },
+            ) as action:
+                if hasattr(research_agent, "finalize_iteration"):
+                    research_result = research_agent.finalize_iteration(
+                        trajectory_manifest=trajectory_manifest,
+                        distillation_manifest=distillation_manifest,
+                        experience_result=experience_result,
+                        memory_context=memory.get_context(),
+                        current_ckpt=ckpt,
+                        base_train_config=base_train_config,
+                        run_context=researcher_run_context,
+                        config=research_config,
+                    )
+                    dataset = dict(research_result["dataset"])
+                    selected_train_config = dict(
+                        research_result.get("train_config") or base_train_config
+                    )
+                else:
+                    dataset = research_agent.generate_dataset(
+                        trajs=distilled_trajs,
+                        memory_context=memory.get_context(),
+                        current_ckpt=ckpt,
+                        envarena=envarena,
+                        model_ref=model_ref,
+                        harness_config=harness_config,
+                        traj_filter=traj_filter,
+                        config={
+                            **research_config,
+                            "stage": "distilled_dataset",
+                            "skill_key": skill["key"],
+                        },
                     )
                     research_result = {
                         "schema_version": "research-result.legacy",
                         "dataset": dataset,
                         "train_config": base_train_config,
+                        "experience_result": experience_result,
+                        "distillation_manifest": distillation_manifest,
                     }
                     selected_train_config = base_train_config
                 state.mark_step(
@@ -258,7 +545,6 @@ class LocalRSIController:
                     metadata={
                         **state.metadata,
                         "research_result": research_result,
-                        "research_workspace": str(research_workspace.root),
                         "research_session_id": research_result.get("session_id"),
                     },
                 )
@@ -322,7 +608,12 @@ class LocalRSIController:
                     harness_config=harness_config,
                 )
                 next_ckpt = str(train_run["ckpt"])
-                state.mark_step("train", train_run=train_run, ckpt=next_ckpt)
+                state.mark_step(
+                    "train",
+                    train_run=train_run,
+                    ckpt=next_ckpt,
+                    metadata={**state.metadata, "candidate_ckpt": next_ckpt},
+                )
                 self._save_state(state)
                 train_run_path = artifacts.write_json("train_run.json", train_run)
                 action.set_output(
@@ -331,88 +622,21 @@ class LocalRSIController:
                 )
             self._record(memory, "train_finished", str(_train_summary(train_run)), state)
 
-            model_ref = _model_ref_from_path(next_ckpt)
-
-            holdout_benchmark = _holdout_benchmark(benchmark, eval_gate)
-            with audit.action(
-                run_id=run_id,
-                iteration=state.iteration,
-                step="holdout_eval",
-                input={
-                    "model_ref": _model_ref_summary(model_ref),
-                    "benchmark": _benchmark_summary(holdout_benchmark),
-                    "harness_config": harness_config,
-                    "source": "holdout_eval",
-                },
-            ) as action:
-                holdout_job = envarena.submit_eval(
-                    EvalRequest(
-                        model=_model_asset_config(next_ckpt),
-                        benchmark=_benchmark_ref_config(holdout_benchmark),
-                        harness=_harness_ref_config(harness_config),
-                        skill=_optional_asset_config(harness_config, "skill"),
-                        job_config=_eval_job_config(harness_config),
-                        metadata={"run_id": run_id, "source": "holdout_eval"},
-                    )
-                )
-                holdout_evidence = _wait_for_eval(envarena, holdout_job)
-                holdout_trajs = envarena.get_trajs(holdout_job, include_messages=False)
-                holdout_score = _score_summary(holdout_trajs)
-                state.mark_step(
-                    "holdout_eval",
-                    holdout_job=holdout_job,
-                    metadata={
-                        **state.metadata,
-                        "last_holdout_score": holdout_score,
-                        "candidate_ckpt": next_ckpt,
-                    },
-                )
-                self._save_state(state)
-                holdout_job_path = artifacts.write_json("holdout_job.json", holdout_job)
-                holdout_trajs_path = artifacts.write_json("holdout_trajs.json", holdout_trajs)
-                holdout_evidence_path = artifacts.write_json(
-                    "holdout_evidence.json", holdout_evidence
-                )
-                action.set_output(
-                    {
-                        "holdout_job": _job_summary(holdout_job),
-                        "num_trajs": len(holdout_trajs),
-                        "score": holdout_score,
-                    },
-                    artifacts={
-                        "holdout_job": _artifact_ref(run_dir, holdout_job_path),
-                        "holdout_trajs": _artifact_ref(run_dir, holdout_trajs_path),
-                        "holdout_evidence": _artifact_ref(
-                            run_dir, holdout_evidence_path
-                        ),
-                    },
-                )
-            self._record(
-                memory,
-                "holdout_summarized",
-                (
-                    f"ckpt={next_ckpt}, benchmark={_benchmark_summary(holdout_benchmark)}, "
-                    f"score={holdout_score.get('mean_reward')}, num_trajs={len(holdout_trajs)}"
-                ),
-                state,
-                extra_metadata={"score": holdout_score, "benchmark": _benchmark_summary(holdout_benchmark)},
-            )
-
             with audit.action(
                 run_id=run_id,
                 iteration=state.iteration,
                 step="record_decision_pending",
-                input={"ckpt": next_ckpt, "holdout_score": holdout_score},
+                input={"candidate_ckpt": next_ckpt},
             ) as action:
                 state.mark_step("record_decision_pending", status="waiting_for_acceptance")
                 self._save_state(state)
                 action.set_output({"status": state.status, "ckpt": next_ckpt})
             self._record(
                 memory,
-                "ckpt_evaluated",
-                str({"ckpt": next_ckpt, "num_holdout_trajs": len(holdout_trajs), "score": holdout_score}),
+                "checkpoint_produced",
+                str({"ckpt": next_ckpt, "train_run": _train_summary(train_run)}),
                 state,
-                extra_metadata={"score": holdout_score},
+                extra_metadata={"candidate_ckpt": next_ckpt},
             )
             return state
         except Exception as exc:
@@ -511,6 +735,7 @@ class LocalRSIController:
                     train_config=train_config,
                     traj_filter=traj_filter,
                     eval_gate=eval_gate,
+                    stop_criteria=stop_criteria,
                     areal=areal,
                     envarena=envarena,
                     research_agent=research_agent,
@@ -528,16 +753,18 @@ class LocalRSIController:
                     },
                 )
 
-                candidate_ckpt = str(state.metadata["candidate_ckpt"])
-                if state.train_run is not None:
-                    train_runs.append(state.train_run)
                 holdout_score = state.metadata.get("last_holdout_score", {})
-                decision = _decide_next_iteration(
-                    holdout_score=holdout_score,
-                    previous_holdout_score=previous_holdout_score,
-                    stop_criteria=stop_criteria or {},
-                    is_last_iteration=iteration == max_iterations,
-                )
+                trained = state.train_run is not None
+                if state.metadata.get("target_reached_before_training"):
+                    candidate_ckpt = ckpt
+                    decision = dict(state.metadata["decision"])
+                else:
+                    candidate_ckpt = str(state.metadata["candidate_ckpt"])
+                    if state.train_run is not None:
+                        train_runs.append(state.train_run)
+                    decision = _post_training_decision(
+                        is_last_iteration=iteration == max_iterations
+                    )
                 audit.record_event(
                     run_id=run_id,
                     iteration=iteration,
@@ -547,7 +774,8 @@ class LocalRSIController:
                         "previous_ckpt": ckpt,
                         "candidate_ckpt": candidate_ckpt,
                         "previous_holdout_score": previous_holdout_score,
-                        "candidate_holdout_score": holdout_score,
+                        "pre_iteration_holdout_score": holdout_score,
+                        "trained": trained,
                         "stop_criteria": stop_criteria or {},
                         "is_last_iteration": iteration == max_iterations,
                     },
@@ -563,8 +791,12 @@ class LocalRSIController:
                             research_result=research_result,
                             allowed_checkpoints=allowed_checkpoints,
                             evaluation={
-                                "holdout_score": holdout_score,
+                                "pre_iteration_holdout_score": holdout_score,
                                 "previous_holdout_score": previous_holdout_score,
+                                "skill_eval_score": state.metadata.get(
+                                    "skill_eval_score"
+                                ),
+                                "train_run": state.train_run,
                             },
                             memory_context=memory.get_context(),
                             run_context={
@@ -606,16 +838,14 @@ class LocalRSIController:
                     "candidate_ckpt": candidate_ckpt,
                     "eval_score": state.metadata.get("last_eval_score"),
                     "holdout_score": holdout_score,
+                    "trained": trained,
                     "decision": decision,
                     "checkpoint_selection": checkpoint_selection,
                 }
                 iteration_results.append(iteration_result)
-                ckpt = (
-                    candidate_ckpt
-                    if decision["stop"]
-                    else next_iteration_ckpt
-                )
-                accepted_ckpts.append(ckpt)
+                ckpt = candidate_ckpt if decision["stop"] else next_iteration_ckpt
+                if trained:
+                    accepted_ckpts.append(ckpt)
                 previous_holdout_score = holdout_score
                 state.status = "completed"
                 state.current_step = (
@@ -914,7 +1144,7 @@ def _start_loop_overrides(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def _artifact_ref(run_dir: Path, path: Path) -> str:
-    return str(path.relative_to(run_dir))
+    return str(path.resolve().relative_to(run_dir.resolve()))
 
 
 def _model_ref_from_path(model_path: str) -> dict[str, Any]:
@@ -1224,16 +1454,13 @@ def _dataset_num_examples(dataset: dict[str, Any]) -> int:
     return len(examples) if isinstance(examples, list) else 0
 
 
-def _decide_next_iteration(
-    *,
+def _target_stop_decision(
     holdout_score: dict[str, Any],
-    previous_holdout_score: dict[str, Any] | None,
     stop_criteria: dict[str, Any],
-    is_last_iteration: bool,
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
     mean_reward = holdout_score.get("mean_reward")
     if mean_reward is None:
-        return {"accept": False, "stop": True, "reason": "missing_holdout_score"}
+        return None
 
     target = stop_criteria.get(
         "target_mean_reward",
@@ -1245,10 +1472,14 @@ def _decide_next_iteration(
             "stop": True,
             "reason": "target_mean_reward_reached",
             "goal_reached": True,
+            "before_training": True,
             "score": float(mean_reward),
             "target": float(target),
         }
+    return None
 
+
+def _post_training_decision(*, is_last_iteration: bool) -> dict[str, Any]:
     if is_last_iteration:
         return {
             "accept": True,

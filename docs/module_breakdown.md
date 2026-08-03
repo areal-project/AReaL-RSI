@@ -114,15 +114,14 @@ class RSIController:
 
 Run steps:
 
-1. `ensure_rollout_endpoint`
-2. `register_model`
-3. `submit_eval`
-4. `collect_trajs`
-5. `generate_dataset`
-6. `train`
-7. `update_endpoint`
-8. `holdout_eval`
-9. `record_decision_pending`
+1. `holdout_eval`
+2. `submit_eval`
+3. `collect_trajs`
+4. `generate_experiences`
+5. `skill_eval`
+6. `generate_dataset`
+7. `train`
+8. `record_decision_pending`
 
 ## 4. Run State
 
@@ -247,9 +246,9 @@ MVP:
 
 Purpose:
 
-- Convert EnvArena trajectories into training datasets.
-- Generate experience fields.
-- Optionally validate experience through EnvArena.
+- Generate one prompt-ready Experience per task from unassisted trajectories.
+- Convert skill-assisted EnvArena trajectories into training datasets.
+- Restore original prompts so Experience is absent from SFT inputs.
 - Record research attempts to Memory.
 - Run as a worker agent, not as the user-facing conversation agent.
 
@@ -279,19 +278,22 @@ MVP:
 
 - Concrete scaffold is based on OpenAI SDK via `OpenAIResearchAgent`.
 - Keep `MockResearchAgent` for deterministic local controller tests.
-- Store `experience` as a dataset example field.
-- Preserve `source_traj_ids`.
-- Log filtering decisions.
+- Store task Experiences as skill artifacts, separately from the final dataset.
+- Preserve source trajectory IDs for both analysis and distillation.
+- Log skill evaluation and filtering decisions.
 
 Dataset example:
 
 ```json
 {
-  "task": {},
-  "experience": "Use failing tests as localization evidence before patching.",
-  "source_traj_ids": ["traj_001", "traj_002"],
+  "task": {"task_id": "task_001"},
+  "messages": [
+    {"role": "user", "content": "the original task prompt"},
+    {"role": "assistant", "content": "the skill-assisted completion"}
+  ],
+  "source_traj_ids": ["distilled_traj_001"],
   "metadata": {
-    "generation_method": "rule_based_mvp"
+    "experience_removed_from_prompt": true
   }
 }
 ```

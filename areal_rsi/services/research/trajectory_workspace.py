@@ -23,6 +23,9 @@ class TrajectoryWorkspace:
     def create(cls, root: str | Path) -> "TrajectoryWorkspace":
         workspace = cls(Path(root).resolve())
         (workspace.root / "input" / "tasks").mkdir(parents=True, exist_ok=True)
+        (workspace.root / "input" / "distilled_tasks").mkdir(
+            parents=True, exist_ok=True
+        )
         (workspace.root / "output" / "experiences").mkdir(parents=True, exist_ok=True)
         return workspace
 
@@ -90,6 +93,10 @@ class TrajectoryWorkspace:
             "base_train_config_path": str(train_config_path),
             "output": {
                 "experiences_dir": str(self.root / "output" / "experiences"),
+                "skill_path": str(self.root / "output" / "skill.json"),
+                "distillation_manifest_path": str(
+                    self.root / "input" / "distillation_manifest.json"
+                ),
                 # AReaL currently selects its SWE JSONL loader from a `swe`
                 # token in the path, so keep that token in the generated name.
                 "dataset_path": str(self.root / "output" / "swe_dataset.jsonl"),
@@ -103,6 +110,69 @@ class TrajectoryWorkspace:
             },
         }
         manifest_path = self.root / "input" / "trajectory_manifest.json"
+        _write_json(manifest_path, manifest)
+        manifest["manifest_path"] = str(manifest_path)
+        return manifest
+
+    def materialize_skill(self, skill: dict[str, Any]) -> str:
+        """Persist the task-experience skill submitted for distillation."""
+
+        skill_path = self.root / "output" / "skill.json"
+        _write_json(skill_path, skill)
+        return str(skill_path)
+
+    def materialize_distilled(
+        self,
+        *,
+        trajs: list[Traj],
+        skill_path: str,
+        eval_context: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Write skill-assisted trajectories separately from analysis inputs."""
+
+        grouped: defaultdict[str, list[Traj]] = defaultdict(list)
+        for index, traj in enumerate(trajs):
+            task_id = str(traj.get("task_id") or f"unknown_task_{index:06d}")
+            grouped[task_id].append(traj)
+
+        tasks: list[dict[str, Any]] = []
+        for index, task_id in enumerate(sorted(grouped)):
+            task_trajs = grouped[task_id]
+            filename = f"{index:06d}_{_safe_name(task_id)}.json"
+            task_path = self.root / "input" / "distilled_tasks" / filename
+            _write_json(
+                task_path,
+                {
+                    "schema_version": "research-distilled-task-input.v1",
+                    "task_id": task_id,
+                    "trajectories": task_trajs,
+                },
+            )
+            tasks.append(
+                {
+                    "task_id": task_id,
+                    "path": str(task_path),
+                    "num_trajectories": len(task_trajs),
+                    "trajectory_ids": [
+                        str(traj.get("traj_id", "")) for traj in task_trajs
+                    ],
+                    "rewards": [
+                        _as_float(traj.get("reward")) for traj in task_trajs
+                    ],
+                    "statuses": [traj.get("status") for traj in task_trajs],
+                }
+            )
+
+        manifest = {
+            "schema_version": "distillation-manifest.v1",
+            "workspace": str(self.root),
+            "task_count": len(tasks),
+            "trajectory_count": len(trajs),
+            "tasks": tasks,
+            "skill_path": skill_path,
+            "eval_context": eval_context,
+        }
+        manifest_path = self.root / "input" / "distillation_manifest.json"
         _write_json(manifest_path, manifest)
         manifest["manifest_path"] = str(manifest_path)
         return manifest

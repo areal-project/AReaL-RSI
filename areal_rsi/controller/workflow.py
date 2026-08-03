@@ -5,20 +5,24 @@ from __future__ import annotations
 from typing import Literal, TypeAlias
 
 StepName: TypeAlias = Literal[
+    "holdout_eval",
     "submit_eval",
     "collect_trajs",
+    "generate_experiences",
+    "skill_eval",
     "generate_dataset",
     "train",
-    "holdout_eval",
     "record_decision_pending",
 ]
 
 RSI_ITERATION_STEPS: tuple[StepName, ...] = (
+    "holdout_eval",
     "submit_eval",
     "collect_trajs",
+    "generate_experiences",
+    "skill_eval",
     "generate_dataset",
     "train",
-    "holdout_eval",
     "record_decision_pending",
 )
 

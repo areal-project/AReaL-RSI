@@ -5,13 +5,13 @@ AReaL-RSI is an automated research and training loop for recursive model improve
 It turns environment feedback into reusable training signal:
 
 ```text
-EnvArena Traj
-  -> ResearchAgent synthesizes Experience
-  -> Dataset construction
-  -> AReaL SFT / OPD training
-  -> EnvArena evaluation
-  -> Memory records evidence and decisions
-  -> next ckpt
+holdout eval current ckpt -> stop immediately if target is reached
+  -> training-benchmark eval without skill
+  -> ResearchAgent writes one Experience per task
+  -> EnvArena appends Experiences as a task-scoped Skill and evaluates again
+  -> ResearchAgent pairs original prompts with skill-assisted completions
+  -> SFT without Experience in the prompt
+  -> next ckpt (evaluated at the start of the next iteration)
 ```
 
 The system keeps two roles separate:
@@ -26,8 +26,8 @@ session per iteration, reads one task trajectory file at a time, and writes the
 iteration SFT JSONL and complete AReaL training YAML. Mock services remain
 available for deterministic controller tests and demos.
 
-One user command starts a **Run**. Each eval → research → train → holdout eval
-round inside that Run is one **iteration**. The config key
+One user command starts a **Run**. Each pre-training holdout → experience
+distillation → train round inside that Run is one **iteration**. The config key
 `run.max_iterations` limits the number of iterations in that Run.
 
 ## Documents
@@ -41,12 +41,12 @@ round inside that Run is one **iteration**. The config key
 
 Build a minimal but recoverable loop:
 
-1. Submit an EnvArena evaluation for the current model path and collect trajectories.
-2. Generate a dataset from trajectories.
-3. Run AReaL SFT training.
-4. Run holdout evaluation for the new checkpoint.
-5. Record each iteration in Run-scoped Memory.
-6. Let RSIAgent explain the Run.
+1. Evaluate the current checkpoint on the holdout benchmark and stop before training when the target is reached.
+2. Evaluate the training benchmark without a skill and generate one Experience per task.
+3. Submit Experiences as an Arena Skill and collect skill-assisted training trajectories.
+4. Build SFT data from original prompts plus skill-assisted completions, with Experience removed from prompts.
+5. Run AReaL SFT training and evaluate its checkpoint at the next iteration's start.
+6. Record each iteration in Run-scoped Memory and let RSIAgent explain the Run.
 
 ## Local Mock Loop
 
@@ -234,7 +234,8 @@ For the tested containerized Slurm/SPMD route, configure the optional
 submission when `scheduler_type` is `slurm`. Submission is asynchronous and
 therefore returns a job record, not a completed `TrainRun` checkpoint.
 The RSI controller polls the Slurm job and resolves the latest declared AReaL
-checkpoint before continuing to holdout evaluation.
+checkpoint before completing the iteration. Its holdout evaluation happens at
+the beginning of the next iteration.
 
 ```python
 from areal_rsi.services import AReaLService

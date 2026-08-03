@@ -8,8 +8,10 @@ import yaml
 from areal_rsi.services.research import (
     ClaudeResearchAgent,
     ClaudeResearchConfig,
+    MockResearchAgent,
     SFTFormatError,
     TrajectoryWorkspace,
+    build_experience_skill,
     validate_sft_jsonl,
 )
 from areal_rsi.services.research.claude_agent import ClaudeTurnResult
@@ -40,6 +42,46 @@ def test_trajectory_workspace_writes_one_file_per_task(tmp_path):
     assert len(first_task["trajectories"]) == 2
     compact_manifest = Path(manifest["manifest_path"]).read_text()
     assert '"messages"' not in compact_manifest
+
+
+def test_mock_research_and_skill_emit_one_experience_per_task():
+    agent = MockResearchAgent()
+    draft = agent.generate_dataset(
+        trajs=[
+            {"traj_id": "a1", "task_id": "task-a", "reward": 0.0},
+            {"traj_id": "a2", "task_id": "task-a", "reward": 1.0},
+        ],
+        memory_context={"events": []},
+        current_ckpt="base",
+    )
+    assert len(draft["examples"]) == 1
+    assert draft["examples"][0]["source_traj_ids"] == ["a1", "a2"]
+
+    skill = build_experience_skill(
+        [
+            {
+                "task_id": "task-a",
+                "status": "completed",
+                "experience": "old",
+                "source_traj_ids": ["a1"],
+            },
+            {
+                "task_id": "task-a",
+                "status": "completed",
+                "experience": "new",
+                "source_traj_ids": ["a2"],
+            },
+        ],
+        run_id="run-1",
+        iteration=1,
+    )
+    assert skill["spec"]["task_experiences"] == [
+        {
+            "task_id": "task-a",
+            "experience": "new",
+            "source_traj_ids": ["a2"],
+        }
+    ]
 
 
 def test_sft_validator_checks_reference_shape_and_tool_pairing(tmp_path):
@@ -105,10 +147,12 @@ def test_claude_researcher_reuses_one_session_within_iteration(tmp_path):
         base_train_config=base_train_config,
     )
     received_session_ids: list[str | None] = []
+    received_prompts: list[str] = []
 
     def fake_query(prompt, cwd, config, session_id):
         del config
         received_session_ids.append(session_id)
+        received_prompts.append(prompt)
         if "Analyze exactly one task." in prompt:
             task_id = re.search(r"Task ID: (.+)", prompt).group(1)
             output_path = Path(
@@ -155,7 +199,7 @@ def test_claude_researcher_reuses_one_session_within_iteration(tmp_path):
                 ),
                 encoding="utf-8",
             )
-        elif "Training and evaluation are complete." in prompt:
+        elif "Training is complete." in prompt:
             (cwd / "output" / "checkpoint_decision.json").write_text(
                 json.dumps(
                     {
@@ -177,8 +221,49 @@ def test_claude_researcher_reuses_one_session_within_iteration(tmp_path):
         ),
         query_runner=fake_query,
     )
-    result = agent.prepare_iteration(
+    experience_result = agent.prepare_experiences(
         trajectory_manifest=manifest,
+        memory_context={"events": []},
+        current_ckpt="base",
+        base_train_config=base_train_config,
+        run_context={"run_id": "run-1", "iteration": 1},
+    )
+    skill_path = workspace.materialize_skill(
+        {
+            "type": "new",
+            "spec": {
+                "task_experiences": experience_result["experience_records"]
+            },
+        }
+    )
+    distillation_manifest = workspace.materialize_distilled(
+        trajs=[
+            {
+                "traj_id": "distilled-1",
+                "task_id": "gsm8k-1",
+                "reward": 1.0,
+                "messages": [
+                    {"role": "user", "content": "1+1?\n\ncheck arithmetic"},
+                    {"role": "assistant", "content": "2"},
+                ],
+            },
+            {
+                "traj_id": "distilled-2",
+                "task_id": "gsm8k-2",
+                "reward": 1.0,
+                "messages": [
+                    {"role": "user", "content": "2+2?\n\ncheck arithmetic"},
+                    {"role": "assistant", "content": "4"},
+                ],
+            },
+        ],
+        skill_path=skill_path,
+        eval_context={"score": {"mean_reward": 1.0}},
+    )
+    result = agent.finalize_iteration(
+        trajectory_manifest=manifest,
+        distillation_manifest=distillation_manifest,
+        experience_result=experience_result,
         memory_context={"events": []},
         current_ckpt="base",
         base_train_config=base_train_config,
@@ -201,6 +286,11 @@ def test_claude_researcher_reuses_one_session_within_iteration(tmp_path):
         "scheduler_type": "slurm",
     }
     assert result["validation"]["record_count"] == 1
+    assert result["validation"]["experience_removed_from_prompts"] is True
+    assert any(
+        distillation_manifest["manifest_path"] in prompt
+        for prompt in received_prompts
+    )
     assert decision["next_checkpoint"] == "candidate"
     assert decision["session_id"] == "iteration-session"
 

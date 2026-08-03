@@ -8,14 +8,18 @@ from typing import Any
 RESEARCH_SYSTEM_PROMPT = """\
 You are the Researcher in an autonomous recursive self-improvement loop.
 The controller, EnvArena, and training service are separate systems. Your job is
-to analyze task trajectories, write reusable experience, construct a valid SFT
-dataset, choose training configuration, interpret evaluation evidence, and
-choose the checkpoint for the next iteration.
+to analyze task trajectories and write one reusable experience per task. The
+controller submits those experiences to EnvArena as a task-scoped skill.
+EnvArena appends the matching experience to the user prompt and produces a new
+skill-assisted trajectory. You then construct SFT data that keeps the original
+task prompt but uses the skill-assisted completion, so the trained model learns
+the experience without seeing it in its prompt. You also choose the training
+configuration and, when another iteration is needed, its starting checkpoint.
 
 Work through files. Never ask for large trajectory payloads in the conversation.
 Treat one task as the atomic analysis unit. You may use successful, failed, or
 partial trajectories in any way supported by the evidence. You decide which
-memory and experience should affect training. A failed task must be isolated:
+distilled trajectories should enter training. A failed task must be isolated:
 write a skipped result when possible and continue with the remaining tasks.
 
 Your context boundary is the current Run. Do not inspect sibling or previous
@@ -53,6 +57,8 @@ when the controller asks you to analyze them.
 
 Iteration outputs:
 - per-task experiences: {output["experiences_dir"]}
+- Arena skill assembled from those experiences: {output["skill_path"]}
+- skill-assisted trajectory manifest: {output["distillation_manifest_path"]}
 - SFT JSONL dataset: {output["dataset_path"]}
 - training configuration: {output["train_config_path"]}
 - research result manifest: {output["research_result_path"]}
@@ -79,7 +85,9 @@ Experience output file: {experience_path}
 
 Read the input file. It may contain multiple attempts for the same task.
 Reason about the task, actions, feedback, rewards, successes, and failures.
-Decide whether and how this task should contribute to later training.
+Write an experience that can be appended directly to this task's user prompt.
+A completed experience will be submitted to EnvArena as the task's skill; use
+status=skipped only when no defensible experience can be produced.
 
 Write one JSON object to the output file with this schema:
 {{
@@ -87,13 +95,8 @@ Write one JSON object to the output file with this schema:
   "task_id": {json.dumps(task["task_id"], ensure_ascii=False)},
   "status": "completed" | "skipped",
   "source_traj_ids": ["..."],
-  "experience": "concise reusable experience",
+  "experience": "concise task guidance suitable for appending to the user prompt",
   "analysis": "evidence-backed task analysis",
-  "training_recommendation": {{
-    "include": true | false,
-    "use_failed_trajectories": true | false,
-    "strategy": "your proposed use of this task"
-  }},
   "metadata": {{}}
 }}
 
@@ -105,6 +108,7 @@ path and status.
 def dataset_construction_prompt(
     *,
     manifest: dict[str, Any],
+    distillation_manifest: dict[str, Any],
     completed_experience_paths: list[str],
     skipped_tasks: list[dict[str, Any]],
     reference_sft_path: str | None,
@@ -112,7 +116,8 @@ def dataset_construction_prompt(
 ) -> str:
     output = manifest["output"]
     return f"""\
-All task-level analysis attempts for this iteration are complete.
+All task-level analysis attempts and the skill-assisted training-benchmark
+evaluation for this iteration are complete.
 
 Completed experience files:
 {json.dumps(completed_experience_paths, indent=2, ensure_ascii=False)}
@@ -120,10 +125,22 @@ Completed experience files:
 Skipped task records:
 {json.dumps(skipped_tasks, indent=2, ensure_ascii=False)}
 
-Now decide the iteration training strategy. You may reread task trajectory files,
-experience files, and memory selectively. You decide which tasks and attempts to
-include, how to use failed trajectories, and what experience should influence
-future training.
+Skill-assisted trajectory manifest:
+{distillation_manifest["manifest_path"]}
+
+Now decide the iteration training strategy. Only skill-assisted trajectories
+listed in the distillation manifest may provide assistant/tool target tokens.
+You decide which tasks and successful attempts to include.
+
+For every selected task, reconstruct the SFT conversation as follows:
+- Take the original system/user prompt from the corresponding task file in the
+  original trajectory manifest.
+- Take the assistant/tool completion from a skill-assisted trajectory in the
+  distillation manifest.
+- Remove the appended experience completely. It must not appear in any system
+  or user message in the SFT JSONL. The model must learn to reproduce the
+  skill-assisted behavior without receiving the experience at training or
+  inference time.
 
 Construct the final SFT data at:
 {output["dataset_path"]}
@@ -136,10 +153,9 @@ The controller has already inspected that record. Use this compact structural
 contract instead of trying to load or scan the large reference JSONL:
 {json.dumps(reference_contract, indent=2, ensure_ascii=False)}
 
-When you choose to put experience in the system prompt, append it to
-messages[0].content. Do not put it only in the top-level system_message field.
-The candidate file will be checked structurally against the reference. Write one
-JSON object per line and do not wrap JSONL in Markdown.
+The candidate file will be checked structurally against the reference and
+rejected if an experience leaks into a system or user prompt. Write one JSON
+object per line and do not wrap JSONL in Markdown.
 
 Write the complete AReaL training YAML selected for this iteration to:
 {output["train_config_path"]}
@@ -171,9 +187,8 @@ Finally write this JSON manifest to {output["research_result_path"]}:
   "summary": "what you changed and why"
 }}
 
-Do not select the next checkpoint yet; evaluation has not happened. The
-controller will validate the YAML checkpoint and dataset bindings before it
-submits training.
+Do not select the next checkpoint yet. The controller will validate the YAML
+checkpoint and dataset bindings before it submits training.
 """
 
 
@@ -220,11 +235,13 @@ def checkpoint_selection_prompt(
     decision_path: str,
 ) -> str:
     return f"""\
-Training and evaluation are complete. Read:
+Training is complete. The new candidate will be holdout-evaluated at the start
+of the next iteration if it is selected. Read:
 {evaluation_context_path}
 
-Using the evidence from this same iteration session and Run-scoped memory, choose
-the checkpoint that should be the base of the next iteration. You may
+Using this iteration's pre-training holdout evidence, training evidence, and
+Run-scoped memory, choose the checkpoint that should be the base of the next
+iteration. You may
 choose the previous base, the new candidate, or a historical checkpoint, but
 you must choose exactly one value from allowed_checkpoints in that file.
 

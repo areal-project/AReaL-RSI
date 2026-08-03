@@ -1,0 +1,38 @@
+run:
+  initial_ckpt: /storage/openpsi/models/Qwen__Qwen3-4B
+  method: sft
+  max_iterations: 2
+  run_root: /storage/openpsi/rsi-runs/local-sft-demo
+
+env:
+  # EnvArena remains mocked; model-backed evaluation is not implemented yet.
+  benchmark: swe-bench-verified@mock
+  holdout_benchmark: swe-bench-verified@mock
+  harness_config:
+    harness: claude-code-swe-baseline@mock
+
+services:
+  areal:
+    config_path: areal.local.example.yaml
+  envarena:
+    backend: mock
+  research:
+    backend: claude_agent_sdk
+    model: claude-opus-4-8
+    # The Claude Code OAuth session available in this allocation is rooted here.
+    home: /root
+    max_retries: 10
+    retry_backoff_seconds: 2
+    retry_max_backoff_seconds: 30
+    max_turns: 80
+    setting_sources: [user, project, local]
+    allowed_tools: [Read, Write, Edit, Glob, Grep]
+    reference_sft_path: /storage/openpsi/users/shenxujie.sxj/datasets/swe_data/sft_data/ring/split/stage3_swe_engineering/claude-opus-4.6.jsonl
+
+train:
+  config:
+    train_config_path: areal/qwen3_4b_swe_sft_local_smoke.yaml
+    scheduler_type: local
+
+stop_criteria:
+  target_mean_reward: 1.0

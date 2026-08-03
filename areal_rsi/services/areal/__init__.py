@@ -1,6 +1,12 @@
 """AReaL service contract and implementations."""
 
 from .mock import MockAReaLService
+from .opd_wrapper import (
+    AReaLOPDConfig,
+    AReaLOPDConfigurationError,
+    AReaLOPDTrainingError,
+    AReaLOPDWrapper,
+)
 from .service import AReaLService, AReaLServiceConfigurationError
 from .sft_wrapper import (
     AReaLSFTConfig,
@@ -20,5 +26,9 @@ __all__ = [
     "AReaLSFTTrainingError",
     "AReaLSlurmConfig",
     "AReaLSFTWrapper",
+    "AReaLOPDConfig",
+    "AReaLOPDConfigurationError",
+    "AReaLOPDTrainingError",
+    "AReaLOPDWrapper",
     "MockAReaLService",
 ]

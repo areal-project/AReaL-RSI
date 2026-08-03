@@ -7,7 +7,12 @@ from typing import Any
 
 import pytest
 
-from areal_rsi.services.areal import AReaLSFTConfig, AReaLService, AReaLServiceConfigurationError
+from areal_rsi.services.areal import (
+    AReaLOPDConfig,
+    AReaLSFTConfig,
+    AReaLService,
+    AReaLServiceConfigurationError,
+)
 
 
 def test_areal_service_routes_train_config_to_the_single_sft_launch_api(tmp_path: Path):
@@ -61,10 +66,61 @@ cluster:
     assert seen[0][1]["env"]["WANDB_MODE"] == "offline"
 
 
+def test_areal_service_opd_dispatches_locally_and_resolves_checkpoint(tmp_path: Path):
+    fileroot = tmp_path / "root"
+    checkpoint = (
+        fileroot
+        / "checkpoints"
+        / getpass.getuser()
+        / "exp-opd"
+        / "trial-x"
+        / "default"
+        / "epoch0epochstep1globalstep1"
+    )
+    recorded: dict[str, Any] = {}
+
+    def fake_runner(command, **kwargs):
+        recorded["command"] = list(command)
+        recorded["cwd"] = kwargs.get("cwd")
+        checkpoint.mkdir(parents=True, exist_ok=True)
+
+        class _Result:
+            returncode = 0
+
+        return _Result()
+
+    service = AReaLService(
+        opd_config=AReaLOPDConfig(
+            working_directory=tmp_path,
+            command=("python", "-m", "recipe"),
+            config_path="recipe.yaml",
+            fileroot=fileroot,
+            experiment_name="exp-opd",
+        ),
+        runner=fake_runner,
+    )
+    run = service.train(
+        "/models/base",
+        {"experience_path": "/exp.json", "train_data_path": "/train.jsonl"},
+        "opd",
+        {"trial_name": "trial-x"},
+    )
+
+    assert run["method"] == "opd"
+    assert run["base_ckpt"] == "/models/base"
+    assert run["ckpt"] == str(checkpoint)
+    assert recorded["cwd"] == str(tmp_path)
+    assert "--config" in recorded["command"]
+    assert "actor.path=/models/base" in recorded["command"]
+    assert "experience_path=/exp.json" in recorded["command"]
+    assert "train_dataset.path=/train.jsonl" in recorded["command"]
+    assert "trial_name=trial-x" in recorded["command"]
+
+
 def test_areal_service_rejects_unsupported_async_or_incomplete_train_config():
     service = AReaLService(sft_config=AReaLSFTConfig())
 
-    with pytest.raises(AReaLServiceConfigurationError, match="only configured training method"):
+    with pytest.raises(AReaLServiceConfigurationError, match="OPD is not configured"):
         service.train("/models/base", {}, "opd", {"train_config_path": "/tmp/opd.yaml"})
     with pytest.raises(AReaLServiceConfigurationError, match="train_config_path"):
         service.train("/models/base", {}, "sft", {"epochs": 1})

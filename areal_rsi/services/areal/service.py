@@ -1,12 +1,16 @@
-"""AReaL service entry point with SFT training support."""
+"""AReaL service entry point with SFT and Experience OPD training support."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from areal_rsi.schemas.core import Dataset, ModelRef, TrainMethod, TrainRun
 
+from .opd_wrapper import AReaLOPDConfig, AReaLOPDWrapper
 from .sft_wrapper import AReaLSFTConfig, AReaLSFTWrapper, ProcessRunner
 
 
@@ -15,23 +19,39 @@ class AReaLServiceConfigurationError(RuntimeError):
 
 
 class AReaLService:
-    """Hosts the configured AReaL SFT training capability."""
+    """Hosts the configured AReaL SFT and/or Experience OPD training capabilities."""
 
     def __init__(
         self,
         sft_config: AReaLSFTConfig | None = None,
         *,
+        opd_config: AReaLOPDConfig | None = None,
         runner: ProcessRunner | None = None,
     ) -> None:
         self._sft_wrapper = (
             AReaLSFTWrapper(sft_config, runner=runner) if sft_config is not None else None
         )
+        self._opd_wrapper = (
+            AReaLOPDWrapper(opd_config, runner=runner) if opd_config is not None else None
+        )
 
     @classmethod
     def from_yaml(cls, path: str | Path, *, runner: ProcessRunner | None = None) -> "AReaLService":
-        """Construct the service from a YAML containing ``areal.sft``."""
+        """Construct the service from a YAML with an ``areal.sft`` and/or ``areal.opd`` section."""
 
-        return cls(sft_config=AReaLSFTConfig.from_yaml(path), runner=runner)
+        payload = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+        areal = payload.get("areal") if isinstance(payload, Mapping) else None
+        has_sft = isinstance(areal, Mapping) and "sft" in areal
+        has_opd = isinstance(areal, Mapping) and "opd" in areal
+        if not has_sft and not has_opd:
+            raise AReaLServiceConfigurationError(
+                "AReaL service config must contain an 'areal.sft' or 'areal.opd' section."
+            )
+        return cls(
+            sft_config=AReaLSFTConfig.from_yaml(path) if has_sft else None,
+            opd_config=AReaLOPDConfig.from_yaml(path) if has_opd else None,
+            runner=runner,
+        )
 
     def train(
         self,
@@ -44,19 +64,22 @@ class AReaLService:
         model_ref: ModelRef | None = None,
         harness_config: dict[str, Any] | None = None,
     ) -> TrainRun:
-        """Run a synchronous local SFT experiment selected by ``train_config``.
+        """Run a synchronous local training experiment for ``method``.
 
-        The controller-facing arguments are retained for compatibility; the
-        complete launcher request is in ``train_config``. Slurm runs are
-        asynchronous and cannot provide the checkpoint required by the RSI
-        loop, so callers must use ``start_experiment`` for them.
+        ``opd`` launches AReaL Experience OPD locally through ``AReaLOPDWrapper``,
+        blocking until a checkpoint exists. ``sft`` runs a local SFT experiment
+        selected by ``config``; Slurm SFT runs are asynchronous and must instead
+        use ``start_experiment``.
         """
 
-        del base_ckpt, dataset, envarena, model_ref, harness_config
+        if method == "opd":
+            return self._opd_training_wrapper().train(base_ckpt, dataset, config)
+        del envarena, model_ref, harness_config
         if method != "sft":
             raise AReaLServiceConfigurationError(
-                f"SFT is the only configured training method; received {method!r}."
+                f"Unsupported training method {method!r}; expected 'sft' or 'opd'."
             )
+        del base_ckpt, dataset
         _, _, _, scheduler_type = self._launch_options(config)
         if scheduler_type == "slurm" or (
             scheduler_type is None and self._training_wrapper().config.scheduler_type == "slurm"
@@ -92,6 +115,14 @@ class AReaLService:
                 "SFT is not configured. Initialize AReaLService with AReaLSFTConfig."
             )
         return self._sft_wrapper
+
+    def _opd_training_wrapper(self) -> AReaLOPDWrapper:
+        if self._opd_wrapper is None:
+            raise AReaLServiceConfigurationError(
+                "OPD is not configured. Initialize AReaLService with AReaLOPDConfig "
+                "(an 'areal.opd' section)."
+            )
+        return self._opd_wrapper
 
     @staticmethod
     def _launch_options(

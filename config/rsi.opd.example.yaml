@@ -1,0 +1,41 @@
+# End-to-end Experience OPD Run launched from RSI (single-node, local).
+#
+# `run --config config/rsi.opd.example.yaml` drives the full loop: EnvArena is
+# mocked (as elsewhere), the Researcher/skill steps run on the mock client, and
+# the train step launches the real AReaL gsm8k Experience OPD recipe locally,
+# returning a distilled checkpoint.
+#
+# For this milestone the OPD experience map + train data are the prepared gsm8k
+# files (see examples/mopd/prepare_gsm8k_experience.py in the AReaL repo);
+# sourcing experience_path from the Researcher's per-task experiences is the
+# next phase and requires the benchmark's task ids to match the train data.
+run:
+  initial_ckpt: /storage/openpsi/models/Qwen__Qwen3-4B
+  method: opd
+  max_iterations: 1
+  run_root: /storage/openpsi/rsi-runs/opd-gsm8k-demo
+
+env:
+  benchmark: gsm8k@mock
+  holdout_benchmark: gsm8k@mock
+  harness_config:
+    harness: gsm8k-mock@mock
+
+services:
+  areal:
+    config_path: areal.opd.example.yaml
+  envarena:
+    backend: mock
+  research:
+    backend: mock
+
+train:
+  config:
+    # OPD per-iteration inputs consumed by AReaLOPDWrapper. Absolute paths.
+    experience_path: /storage/openpsi/rsi-experiments/gsm8k_experience/experience.json
+    train_data_path: /storage/openpsi/rsi-experiments/gsm8k_experience/train.jsonl
+    valid_data_path: /storage/openpsi/rsi-experiments/gsm8k_experience/test.jsonl
+    trial_name: rsi-demo
+
+stop_criteria:
+  target_mean_reward: 1.0

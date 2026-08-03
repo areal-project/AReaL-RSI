@@ -1,0 +1,25 @@
+# Deployment settings for AReaL Experience OPD (single-node, local scheduler).
+#
+# Unlike areal.*.yaml (SFT), OPD drives AReaL's own scheduler from one
+# entrypoint invoked as `<command> --config <yaml> key=value ...`. The gsm8k
+# Experience OPD recipe runs locally and blocks, so the RSI loop gets a
+# completed checkpoint without polling Slurm. The RSI wrapper appends the
+# per-iteration overrides (actor.path, experience_path, train/valid data,
+# experiment_name, trial_name, cluster.fileroot).
+areal:
+  opd:
+    scheduler_type: local
+    working_directory: /storage/openpsi/users/fenghui/AReaL
+    command:
+      - /opt/.venv/bin/python
+      - -m
+      - examples.mopd.gsm8k_experience_opd
+    config_path: examples/mopd/gsm8k_experience_opd_local.yaml
+    # fileroot + experiment_name must match the recipe YAML so the wrapper can
+    # resolve <fileroot>/checkpoints/<user>/<experiment_name>/<trial>/default.
+    fileroot: /storage/openpsi/rsi-experiments/gsm8k-exp-opd
+    experiment_name: gsm8k-experience-opd
+    trial_name: rsi
+    environment_variables:
+      PATH: /opt/.venv/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      PYTHONPATH: /storage/openpsi/users/fenghui/AReaL

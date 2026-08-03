@@ -1303,6 +1303,20 @@ def _train_and_wait(
             harness_config=harness_config,
         )
 
+    if method == "opd":
+        # Experience OPD drives AReaL's own scheduler from a single entrypoint
+        # that runs locally and blocks, so it returns a completed checkpoint the
+        # same way a local SFT run does -- no Slurm submission to poll.
+        return areal.train(
+            base_ckpt=base_ckpt,
+            dataset=dataset,
+            method=method,
+            config=config,
+            envarena=envarena,
+            model_ref=model_ref,
+            harness_config=harness_config,
+        )
+
     if method != "sft":
         raise ValueError(
             f"Configured AReaL asynchronous training only supports sft, got {method!r}."

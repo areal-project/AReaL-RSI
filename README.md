@@ -63,7 +63,7 @@ python -m areal_rsi.cli.main run-loop-mock --ckpt ckpt_000 --task-set swe_verifi
 Run from an RSI config file:
 
 ```bash
-python -m areal_rsi.cli.main run --config config/rsi.example.yaml
+python -m areal_rsi.cli.main run --config config/rsi.yaml
 ```
 
 Chat can generate a structured action without executing it:
@@ -75,7 +75,7 @@ python -m areal_rsi.cli.main chat --backend fake "run ckpt_000 on swe_verified"
 If no message is provided, `chat` starts an interactive REPL:
 
 ```bash
-python -m areal_rsi.cli.main chat --backend openai --config config/rsi.example.yaml --execute --yes
+python -m areal_rsi.cli.main chat --backend openai --config config/rsi.yaml --execute --yes
 ```
 
 Use `--stdin` when you want a single non-interactive message from stdin.
@@ -90,7 +90,7 @@ Chat can also load a base config and let the user message override only the
 fields it mentions:
 
 ```bash
-python -m areal_rsi.cli.main chat --backend openai --config config/rsi.example.yaml --execute --yes \
+python -m areal_rsi.cli.main chat --backend openai --config config/rsi.yaml --execute --yes \
   "use ckpt_123 and run swe_verified for 2 iterations with sft"
 ```
 
@@ -140,27 +140,42 @@ Claude ResearchAgent support is optional:
 pip install -e '.[researcher]'
 ```
 
-`config/rsi.example.yaml` currently combines real AReaL Slurm training and the
+`config/rsi.yaml` currently combines real AReaL Slurm training and the
 Claude ResearchAgent with `MockEnvClient`. Checkpoint-backed model startup in
 EnvArena is intentionally mocked until its control-plane API is available. The
 mock trajectories retain the same checkpoint path passed to the ResearchAgent.
+
+## Agent Skill Launch
+
+The repository includes one shared `start-rsi-experiment` Skill for Codex and
+Claude Code. Invoke it as `$start-rsi-experiment` in Codex or
+`/start-rsi-experiment` in Claude Code. The agent collects only the experiment
+inputs that vary (experiment name, checkpoint, train and holdout benchmarks,
+harness, iteration limit, and target reward), shows the complete resolved
+summary, and waits for explicit confirmation before starting anything.
+
+After confirmation, the Skill creates an isolated launch config under the
+ignored `.rsi/launches/` directory and starts the Controller. Fixed deployment
+settings stay in `config/rsi.yaml`, `config/areal.yaml`, and
+`config/envarena.yaml`; the Skill does not ask for runs/experiments roots,
+Arena URL, image, or Slurm settings unless the user asks to change them.
+
+The launcher reads `ENVARENA_API_TOKEN` from the repository-local `.env` file.
+The file is intentionally ignored by Git and the token is never copied into a
+resolved config, receipt, log message, commit, or command line.
 
 ## EnvArena Control Plane Client
 
 The real EnvArena adapter is generated from
 `docs/envarena-openapi.yaml`, then wrapped by `EnvArenaClient` so the
-controller does not depend on generated implementation details. Copy and
-adjust the YAML example, then provide the bearer token through its configured
-environment variable:
+controller does not depend on generated implementation details. Stable client
+settings live in `config/envarena.yaml`; credentials stay in the ignored
+repository-local `.env` file and are loaded automatically by the experiment
+Skill launcher.
 
 The platform-neutral contract and local mock live in
 `areal_rsi.services.env_client`; EnvArena's implementation and generated SDK
 live in `areal_rsi.services.env_client.envarena`.
-
-```bash
-cp config/envarena.example.yaml config/envarena.yaml
-export ENVARENA_API_TOKEN='...'
-```
 
 ```python
 from areal_rsi.services import EnvArenaClient

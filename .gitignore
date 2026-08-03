@@ -11,10 +11,8 @@ build/
 dist/
 *.egg-info/
 runs/
+.rsi/
 .DS_Store
-
-# Local service credentials and runtime configuration
-config/envarena.yaml
 
 # Local agent planning notes
 task_plan.md

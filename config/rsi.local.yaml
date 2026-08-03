@@ -1,14 +1,11 @@
 run:
-  # These are smoke defaults. The Controller input remains authoritative and
-  # may override checkpoint, benchmarks, method, limits, and target.
   initial_ckpt: /storage/openpsi/models/Qwen__Qwen3-4B
   method: sft
-  max_iterations: 1
-  run_root: /storage/openpsi/rsi-runs
+  max_iterations: 2
+  run_root: /storage/openpsi/rsi-runs/local-sft-demo
 
 env:
-  # Checkpoint-backed EnvArena model startup is not implemented yet. The smoke
-  # config therefore uses MockEnvClient and these refs are audit labels only.
+  # EnvArena remains mocked; model-backed evaluation is not implemented yet.
   benchmark: swe-bench-verified@mock
   holdout_benchmark: swe-bench-verified@mock
   harness_config:
@@ -16,13 +13,14 @@ env:
 
 services:
   areal:
-    config_path: areal.example.yaml
+    config_path: areal.local.yaml
   envarena:
     backend: mock
   research:
     backend: claude_agent_sdk
     model: claude-opus-4-8
-    home: /home/admin
+    # The Claude Code OAuth session available in this allocation is rooted here.
+    home: /root
     max_retries: 10
     retry_backoff_seconds: 2
     retry_max_backoff_seconds: 30
@@ -33,10 +31,8 @@ services:
 
 train:
   config:
-    train_config_path: areal/qwen3_4b_swe_sft_smoke.yaml
-    scheduler_type: slurm
-    job_timeout_seconds: 14400
-    poll_interval_seconds: 30
+    train_config_path: areal/qwen3_4b_swe_sft_local_smoke.yaml
+    scheduler_type: local
 
 stop_criteria:
   target_mean_reward: 1.0

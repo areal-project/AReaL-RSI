@@ -1,21 +1,20 @@
-# End-to-end Experience OPD Run launched from RSI (nested-Slurm, multi-node).
+# End-to-end Experience OPD Run launched from RSI (2-node nested-Slurm).
 #
-# `run --config config/rsi.opd.yaml` (or the start-rsi-experiment skill with
-# --method opd) drives the full loop: the Researcher extracts per-task
-# experiences, RSI conditions skill_eval on them, and the SAME experiences
-# become AReaL OPD's experience_path. The train step submits AReaL's Experience
-# OPD Slurm driver (see config/areal.opd.yaml).
+# The train step submits AReaL's 2-node Experience OPD Slurm driver
+# (sbatch_experience_opd_qwen3_30b_2node.sh -> swe_experience_opd_2node...yaml,
+# 2x8=16 GPU). EnvArena stays mocked; the Researcher/skill steps run on the mock
+# client. A fixed experience_path is provided below, so the controller uses it
+# directly as the OPD experience_path (it does not override an explicitly
+# configured experience_path with the Researcher's).
 #
-# For ids to line up, the mock benchmark task set and the OPD train data are the
-# same SWE JSONL (task_id == instance_id). REPLACE the placeholder data/model
-# paths below with your SWE assets; OPD needs a real 4x8 allocation + sandbox
-# (AENV_SYSTEM_URL) + credentials in the environment (not runnable on a single
-# reservation node).
+# Needs a real 2-node GPU allocation + the deployment roots/secrets in the
+# environment (AWEX_ROOT/SGLANG_PYTHON_ROOT/FLASH_LINEAR_ATTENTION_ROOT/
+# AENV_SYSTEM_URL/WANDB_*/PYPI_INDEX_URL); not runnable on a single node.
 run:
-  initial_ckpt: /storage/openpsi/models/Qwen__Qwen3-Coder-30B   # student = SWE coder checkpoint
+  initial_ckpt: /storage/openpsi/models/Qwen__Qwen3-Coder-30B-A3B-Instruct
   method: opd
   max_iterations: 1
-  run_root: /storage/openpsi/rsi-runs/swe-opd-demo
+  run_root: /storage/openpsi/rsi-runs/swe-opd-2node
 
 env:
   benchmark: swe-bench-verified@mock
@@ -28,21 +27,18 @@ services:
     config_path: areal.opd.yaml
   envarena:
     backend: mock
-    # SWE task JSONL (rows carry instance_id); mock trajectory task_ids come
-    # from here so Researcher experiences line up with the OPD train data.
-    task_set_path: /storage/openpsi/users/fenghui/datasets/swe/opd_train.jsonl
+    task_set_path: /storage/openpsi/users/public/data/swe_areal_pengzai_overfit.jsonl
     task_set_limit: 64
   research:
     backend: mock
 
 train:
   config:
-    # OPD train/valid data (instance_ids match the mock task set above).
-    # experience_path is materialized by the controller from the Researcher's
-    # experiences at train time (not set here).
-    train_data_path: /storage/openpsi/users/fenghui/datasets/swe/opd_train.jsonl
-    valid_data_path: /storage/openpsi/users/fenghui/datasets/swe/opd_train.jsonl
-    trial_name: swe-opd
+    # Fixed experience map (used directly as the OPD experience_path).
+    experience_path: /storage/openpsi/users/wanghuaijie.whj/zeta/multitask_data/exp7_agent_qwen3_coder_user_claude.json
+    train_data_path: /storage/openpsi/users/public/data/swe_areal_pengzai_overfit.jsonl
+    valid_data_path: /storage/openpsi/users/public/data/swe_areal_pengzai_overfit.jsonl
+    trial_name: swe-opd-2node
 
 stop_criteria:
   target_mean_reward: 1.0

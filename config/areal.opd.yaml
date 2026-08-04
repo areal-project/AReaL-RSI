@@ -15,14 +15,13 @@ areal:
   opd:
     scheduler_type: slurm
     working_directory: /storage/openpsi/users/fenghui/AReaL
-    driver_script: examples/mopd/sbatch_experience_opd_qwen3_30b.sh
+    driver_script: examples/mopd/sbatch_experience_opd_qwen3_30b_2node.sh
     # fileroot + experiment_name must match the recipe so the wrapper resolves
     # <fileroot>/checkpoints/<user>/<experiment_name>/<trial>/default.
     fileroot: /storage/openpsi/rsi-experiments/swe-exp-opd
     experiment_name: swe-experience-opd
-    # The 026 recipe is fixed at 4x8; a different topology needs a recipe/driver
-    # with a matching allocation_mode.
-    n_nodes: 4
+    # 2-node variant (swe_experience_opd_2node_qwen3_30b.yaml, 2x8=16 GPU).
+    n_nodes: 2
     n_gpus_per_node: 8
     environment_variables:
       AREAL_IMAGE: /storage/openpsi/images/areal-dev-20260508.sif

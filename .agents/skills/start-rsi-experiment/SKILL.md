@@ -30,8 +30,7 @@ description: 交互式配置并启动 AReaL-RSI 实验。用户要求新建、�
 - `harness`：EnvArena harness 引用。
 - `max_iterations`：大于等于 1 的最大迭代数。
 - `target_mean_reward`：达到后停止的 holdout 平均 reward。
-
-当前基线只支持 SFT 端到端启动，不要把 `method` 作为常规问题。用户主动要求其他方法时，先说明当前启动模板仅支持 SFT，不要静默降级或伪造支持。
+- `method`：训练方法，`sft` 或 `opd`，默认 `sft`。`sft` 走 Slurm SFT，以 `config/rsi.yaml` 为基线；`opd` 走单机 Experience-OPD（reverse-KL 蒸馏，Researcher 的经验同时用于 skill 评测与 OPD 的 experience_path），以 `config/rsi.opd.yaml` 为基线。用户未指定时默认 `sft`，不要静默切换或伪造支持。
 
 ## 3. 启动前校验
 
@@ -42,7 +41,7 @@ description: 交互式配置并启动 AReaL-RSI 实验。用户要求新建、�
 
 ## 4. 汇总并等待确认
 
-用一个紧凑表格展示：实验名、checkpoint、训练 benchmark、holdout benchmark、harness、SFT、最大迭代数、目标 reward、Slurm、Arena backend，以及固定的 runs/experiments 目录。
+用一个紧凑表格展示：实验名、checkpoint、训练 benchmark、holdout benchmark、harness、训练方法（SFT/OPD）、最大迭代数、目标 reward、调度方式（OPD 为单机本地，SFT 为 Slurm）、Arena backend，以及固定的 runs/experiments 目录。
 
 另外注明：
 
@@ -63,6 +62,7 @@ description: 交互式配置并启动 AReaL-RSI 实验。用户要求新建、�
 ```bash
 sudo /home/admin/.venvs/areal-rsi/bin/python <skill-dir>/scripts/launch.py \
   --repo-root <repo-root> \
+  --method <sft|opd> \
   --experiment-name <experiment-name> \
   --initial-ckpt <checkpoint> \
   --benchmark <training-benchmark> \
@@ -73,7 +73,7 @@ sudo /home/admin/.venvs/areal-rsi/bin/python <skill-dir>/scripts/launch.py \
   --launch
 ```
 
-逐个参数传递，不拼接未经引用的 shell 字符串。不要把 token 作为参数或环境变量前缀写进命令。辅助脚本会加载仓库 `.env`、生成独立配置、后台启动 Controller，并输出 JSON receipt。
+`--method opd` 时脚本自动以 `config/rsi.opd.yaml` 为基线（可用 `--base-config` 覆盖）。逐个参数传递，不拼接未经引用的 shell 字符串。不要把 token 作为参数或环境变量前缀写进命令。辅助脚本会加载仓库 `.env`、生成独立配置、后台启动 Controller，并输出 JSON receipt。
 
 ## 6. 回报结果
 

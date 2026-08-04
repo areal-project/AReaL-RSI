@@ -1334,9 +1334,10 @@ def _train_and_wait(
         )
 
     if method == "opd":
-        # Experience OPD drives AReaL's own scheduler from a single entrypoint
-        # that runs locally and blocks, so it returns a completed checkpoint the
-        # same way a local SFT run does -- no Slurm submission to poll.
+        # Experience OPD is launched through AReaLOPDWrapper, which submits the
+        # recipe to Slurm (or runs it locally), waits for completion, and
+        # resolves the saved checkpoint -- so from here it blocks and returns a
+        # completed TrainRun, no controller-side Slurm polling needed.
         return areal.train(
             base_ckpt=base_ckpt,
             dataset=dataset,

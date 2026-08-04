@@ -25,7 +25,17 @@ def build_parser() -> argparse.ArgumentParser:
         description="Prepare an isolated AReaL-RSI config and launch it only with --launch."
     )
     parser.add_argument("--repo-root", type=Path, help="AReaL-RSI repository root.")
-    parser.add_argument("--base-config", default="config/rsi.yaml")
+    parser.add_argument(
+        "--method",
+        default="sft",
+        choices=["sft", "opd"],
+        help="Training method. Selects the default base config when --base-config is unset.",
+    )
+    parser.add_argument(
+        "--base-config",
+        default=None,
+        help="RSI base config. Defaults to config/rsi.yaml (sft) or config/rsi.opd.yaml (opd).",
+    )
     parser.add_argument("--experiment-name", required=True)
     parser.add_argument("--initial-ckpt", required=True)
     parser.add_argument("--benchmark", required=True)
@@ -49,7 +59,10 @@ def main(argv: list[str] | None = None) -> int:
     _validate_args(args, repo_root)
     loaded_env = _load_dotenv(repo_root / ".env")
 
-    base_path = _resolve(repo_root, Path(args.base_config))
+    base_config = args.base_config or (
+        "config/rsi.opd.yaml" if args.method == "opd" else "config/rsi.yaml"
+    )
+    base_path = _resolve(repo_root, Path(base_config))
     base = _load_yaml_mapping(base_path)
     output_dir = _launch_dir(repo_root, args)
     output_dir.mkdir(parents=True, exist_ok=False)
@@ -59,6 +72,7 @@ def main(argv: list[str] | None = None) -> int:
     resolved = _resolve_rsi_config(
         base,
         base_path=base_path,
+        method=args.method,
         resolved_areal_path=resolved_areal_path,
         experiment_name=args.experiment_name,
         initial_ckpt=args.initial_ckpt,
@@ -73,10 +87,17 @@ def main(argv: list[str] | None = None) -> int:
     receipt: dict[str, Any] = {
         "schema_version": "rsi-launch-receipt.v1",
         "launched": False,
+        "method": args.method,
         "experiment_name": args.experiment_name,
         "base_config_path": str(base_path),
         "resolved_rsi_config_path": str(resolved_rsi_path),
-        "resolved_areal_config_path": str(resolved_areal_path),
+        # SFT materializes a per-run AReaL training YAML; OPD references the
+        # areal.opd service config as-is (its recipe drives AReaL's scheduler).
+        "resolved_areal_config_path": (
+            str(resolved_areal_path)
+            if args.method == "sft"
+            else str(resolved.get("services", {}).get("areal", {}).get("config_path", ""))
+        ),
         "env_file": str(repo_root / ".env"),
         "envarena_api_token_configured": bool(
             os.environ.get("ENVARENA_API_TOKEN") or "ENVARENA_API_TOKEN" in loaded_env
@@ -116,6 +137,7 @@ def _resolve_rsi_config(
     config: dict[str, Any],
     *,
     base_path: Path,
+    method: str,
     resolved_areal_path: Path,
     experiment_name: str,
     initial_ckpt: str,
@@ -137,7 +159,7 @@ def _resolve_rsi_config(
     run.update(
         {
             "initial_ckpt": initial_ckpt,
-            "method": "sft",
+            "method": method,
             "max_iterations": max_iterations,
         }
     )
@@ -156,6 +178,14 @@ def _resolve_rsi_config(
             service["config_path"] = str(
                 _resolve(base_path.parent, Path(str(service["config_path"])))
             )
+
+    if method == "opd":
+        # OPD drives AReaL's scheduler through the areal.opd service recipe plus
+        # a task_set; there is no per-run SFT training YAML to materialize. The
+        # controller sources experience_path from the Researcher at train time.
+        # Isolate this run by trial name so checkpoints do not collide.
+        train_config["trial_name"] = experiment_name
+        return config
 
     template_value = train_config.get("train_config_path") or train_config.get(
         "experiment_config"

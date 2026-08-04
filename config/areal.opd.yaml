@@ -1,14 +1,24 @@
-# Deployment settings for AReaL Experience OPD (single-node, local scheduler).
+# Deployment settings for AReaL Experience OPD (Slurm).
 #
-# Unlike areal.*.yaml (SFT), OPD drives AReaL's own scheduler from one
-# entrypoint invoked as `<command> --config <yaml> key=value ...`. The gsm8k
-# Experience OPD recipe runs locally and blocks, so the RSI loop gets a
-# completed checkpoint without polling Slurm. The RSI wrapper appends the
-# per-iteration overrides (actor.path, experience_path, train/valid data,
-# experiment_name, trial_name, cluster.fileroot).
+# Unlike areal.*.yaml (SFT, torchrun), OPD drives AReaL's own scheduler from one
+# entrypoint invoked as `<command> --config <yaml> key=value ...`. The RSI
+# wrapper renders an sbatch that runs this entrypoint inside the container on an
+# allocation (the recipe's own scheduler manages the GPUs within it), submits it
+# with `sbatch --parsable`, and blocks until the job leaves the queue and a
+# checkpoint exists (completion detected via squeue, so no sacct dependency).
+# The wrapper appends per-iteration overrides (actor.path, experience_path,
+# train/valid data, experiment_name, trial_name, cluster.fileroot).
 areal:
   opd:
-    scheduler_type: local
+    scheduler_type: slurm
+    image: /storage/openpsi/images/areal-dev-20260508.sif
+    reservation: rsi
+    n_nodes: 1
+    n_gpus_per_node: 8
+    cpus_per_task: 64
+    memory: 400G
+    time_limit: "24:00:00"
+    bind_paths: [/storage]
     working_directory: /storage/openpsi/users/fenghui/AReaL
     command:
       - /opt/.venv/bin/python
@@ -21,5 +31,6 @@ areal:
     experiment_name: gsm8k-experience-opd
     trial_name: rsi
     environment_variables:
-      PATH: /opt/.venv/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
       PYTHONPATH: /storage/openpsi/users/fenghui/AReaL
+    poll_interval_seconds: 30
+    job_timeout_seconds: 86400

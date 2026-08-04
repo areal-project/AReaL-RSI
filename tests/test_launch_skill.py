@@ -127,3 +127,95 @@ stop_criteria:
     assert "private-token" not in (output_dir / "launch.json").read_text(
         encoding="utf-8"
     )
+
+
+def test_launch_skill_opd_uses_opd_base_without_sft_template(tmp_path):
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='test'\n", encoding="utf-8")
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "service-opd.yaml").write_text(
+        "areal:\n  opd:\n    scheduler_type: local\n", encoding="utf-8"
+    )
+    (config_dir / "rsi.opd.yaml").write_text(
+        """
+run:
+  initial_ckpt: /old/checkpoint
+  method: opd
+  max_iterations: 1
+  run_root: /fixed/opd-runs
+env:
+  benchmark: old-train
+  holdout_benchmark: old-holdout
+  harness_config:
+    harness: old-harness
+services:
+  areal:
+    config_path: service-opd.yaml
+  envarena:
+    backend: mock
+    task_set_path: /data/train.jsonl
+    task_set_limit: 32
+research:
+  backend: mock
+train:
+  config:
+    train_data_path: /data/train.jsonl
+    valid_data_path: /data/train.jsonl
+stop_criteria:
+  target_mean_reward: 1.0
+""".lstrip(),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "prepared-opd"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(LAUNCH_SCRIPT),
+            "--repo-root",
+            str(tmp_path),
+            "--method",
+            "opd",
+            "--experiment-name",
+            "opd-test",
+            "--initial-ckpt",
+            "/models/new",
+            "--benchmark",
+            "gsm8k@mock",
+            "--holdout-benchmark",
+            "gsm8k@mock",
+            "--harness",
+            "gsm8k-mock@mock",
+            "--max-iterations",
+            "2",
+            "--target-mean-reward",
+            "1.0",
+            "--output-dir",
+            str(output_dir),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    receipt = json.loads(result.stdout)
+    assert receipt["method"] == "opd"
+    assert receipt["base_config_path"] == str((config_dir / "rsi.opd.yaml").resolve())
+    resolved = yaml.safe_load((output_dir / "rsi.yaml").read_text(encoding="utf-8"))
+    assert resolved["run"] == {
+        "initial_ckpt": "/models/new",
+        "method": "opd",
+        "max_iterations": 2,
+        "run_root": "/fixed/opd-runs",
+    }
+    assert resolved["env"]["benchmark"] == "gsm8k@mock"
+    assert resolved["services"]["areal"]["config_path"] == str(
+        (config_dir / "service-opd.yaml").resolve()
+    )
+    # Researcher experiences drive experience_path at train time; the base carries
+    # only train/valid data, and the run is isolated by trial name.
+    assert "experience_path" not in resolved["train"]["config"]
+    assert resolved["train"]["config"]["trial_name"] == "opd-test"
+    # OPD does not materialize a per-run SFT training YAML.
+    assert not (output_dir / "areal-training.yaml").exists()
+

@@ -24,7 +24,7 @@ env:
 
 services:
   areal:
-    config_path: areal.opd.example.yaml
+    config_path: areal.opd.yaml
   envarena:
     backend: mock
     # Mock trajectory task_ids come from these gsm8k instances, so Researcher

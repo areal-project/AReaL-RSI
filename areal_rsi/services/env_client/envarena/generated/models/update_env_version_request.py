@@ -19,15 +19,20 @@ T = TypeVar("T", bound="UpdateEnvVersionRequest")
 class UpdateEnvVersionRequest:
     """
     Attributes:
+        storage_ref (str | Unset): Registry material storage binding. `default` is the immutable OSS_* environment
+            configuration.
         spec (EnvSpec | Unset): Env can be files-backed or image-backed. The agent workspace is
             ARENA_WORKSPACE=/envarena/workspace; OSS-backed platform mounts are namespaced under /envarena/ (query, files,
             out, result, oracle).
     """
 
+    storage_ref: str | Unset = UNSET
     spec: EnvSpec | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        storage_ref = self.storage_ref
+
         spec: dict[str, Any] | Unset = UNSET
         if not isinstance(self.spec, Unset):
             spec = self.spec.to_dict()
@@ -35,6 +40,8 @@ class UpdateEnvVersionRequest:
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
+        if storage_ref is not UNSET:
+            field_dict["storage_ref"] = storage_ref
         if spec is not UNSET:
             field_dict["spec"] = spec
 
@@ -45,6 +52,8 @@ class UpdateEnvVersionRequest:
         from ..models.env_spec import EnvSpec
 
         d = dict(src_dict)
+        storage_ref = d.pop("storage_ref", UNSET)
+
         _spec = d.pop("spec", UNSET)
         spec: EnvSpec | Unset
         if isinstance(_spec, Unset):
@@ -53,6 +62,7 @@ class UpdateEnvVersionRequest:
             spec = EnvSpec.from_dict(_spec)
 
         update_env_version_request = cls(
+            storage_ref=storage_ref,
             spec=spec,
         )
 

@@ -25,6 +25,21 @@ def _client(handler, *, job_config: dict | None = None) -> EnvArenaClient:
     )
 
 
+def _model_service_instance(instance_id: str, *, status: str = "PENDING") -> dict[str, object]:
+    return {
+        "instance_id": instance_id,
+        "service_id": "svc-1",
+        "model_path": "/models/model-a",
+        "resource_spec": {"gpu_num": 1},
+        "sglang": {},
+        "node_num": 1,
+        "status": status,
+        "created_at": "2026-08-03T00:00:00Z",
+        "updated_at": "2026-08-03T00:00:00Z",
+        "submit_attempts": 1,
+    }
+
+
 def test_config_loads_environment_values_and_normalizes_generated_sdk_base_url(tmp_path):
     config_path = tmp_path / "envarena.yaml"
     config_path.write_text(
@@ -214,14 +229,67 @@ def test_llm_model_list_can_exclude_dynamic_stream_routes():
                     {
                         "model_name": "areal-rsi-ckpt_001",
                         "enabled": True,
+                        "endpoints": [
+                            {
+                                "endpoint_id": "ep-1",
+                                "upstream_model": "areal-rsi-ckpt_001",
+                                "base_url": "https://llm.example.test",
+                                "inbound_protos": ["chat"],
+                                "weight": 1,
+                                "enabled": True,
+                                "upstream_extra_params": {},
+                            }
+                        ],
                     }
                 ]
             },
         )
 
     assert _client(handler).list_models() == [
-        {"model_name": "areal-rsi-ckpt_001", "enabled": True}
+        {
+            "model_name": "areal-rsi-ckpt_001",
+            "enabled": True,
+            "endpoints": [
+                {
+                    "endpoint_id": "ep-1",
+                    "upstream_model": "areal-rsi-ckpt_001",
+                    "base_url": "https://llm.example.test",
+                    "inbound_protos": ["chat"],
+                    "weight": 1,
+                    "enabled": True,
+                    "upstream_extra_params": {},
+                }
+            ],
+        }
     ]
+
+
+def test_online_harnesses_use_generated_get_api():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/envarena/openapi/v1/online/harnesses"
+        return httpx.Response(200, json={"harness": ["claude-code@1.0.0"]})
+
+    assert _client(handler).list_online_harnesses() == ["claude-code@1.0.0"]
+
+
+def test_registry_entity_page_fetches_one_page_without_auto_paging():
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        assert request.method == "GET"
+        assert request.url.path == "/envarena/openapi/v1/envs"
+        assert request.url.params == httpx.QueryParams({"limit": "1", "offset": "0"})
+        return httpx.Response(200, json={"items": [{"key": "env-a"}], "total": 2, "limit": 1, "offset": 0})
+
+    assert _client(handler).list_registry_entity_page("env", limit=1) == {
+        "items": [{"key": "env-a"}],
+        "total": 2,
+        "limit": 1,
+        "offset": 0,
+    }
+    assert len(seen) == 1
 
 
 def test_registry_and_task_pages_are_fully_collected_and_task_attempt_is_requested():
@@ -461,3 +529,583 @@ def test_non_json_and_transport_failures_are_normalized():
     transport_client = _client(broken_transport)
     with pytest.raises(EnvArenaError, match="transport error"):
         transport_client.list_benchmarks()
+
+
+def test_registry_crud_helpers_use_consistent_asset_paths_and_payloads():
+    seen: list[tuple[str, str, dict]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content or b"{}")
+        seen.append((request.method, request.url.path, payload))
+        path = request.url.path
+        if request.method == "GET" and path == "/envarena/openapi/v1/envs":
+            assert request.url.params["limit"] == "1"
+            assert request.url.params["offset"] == "0"
+            return httpx.Response(200, json={"items": [{"key": "env-a"}], "total": 1})
+        if request.method == "POST" and path == "/envarena/openapi/v1/envs":
+            assert payload == {"key": "env-a", "name": "Env A", "tags": ["rsi"], "metadata": {"owner": "7"}}
+            return httpx.Response(201, json={"key": "env-a"})
+        if request.method == "GET" and path == "/envarena/openapi/v1/envs/env-a":
+            return httpx.Response(200, json={"key": "env-a", "name": "Env A"})
+        if request.method == "PATCH" and path == "/envarena/openapi/v1/envs/env-a":
+            assert payload == {"description": "updated"}
+            return httpx.Response(200, json={"key": "env-a", "description": "updated"})
+        if request.method == "POST" and path == "/envarena/openapi/v1/envs/env-a/versions":
+            assert payload == {"version": "1.0.0", "spec": {"query": {"uri": "oss://q"}}, "supersedes": "0.9.0"}
+            return httpx.Response(201, json={"key": "env-a", "version": "1.0.0"})
+        if request.method == "POST" and path == "/envarena/openapi/v1/envs/env-a/versions/1.0.0/publish":
+            return httpx.Response(200, json={"key": "env-a", "version": "1.0.0", "status": "PUBLISHED"})
+        if request.method == "DELETE" and path == "/envarena/openapi/v1/envs/env-a/versions/1.0.0":
+            return httpx.Response(204)
+        if request.method == "DELETE" and path == "/envarena/openapi/v1/envs/env-a":
+            return httpx.Response(204)
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    client = _client(handler)
+
+    assert client.list_registry_entities("env", limit=1) == [{"key": "env-a"}]
+    assert client.create_env(key="env-a", name="Env A", tags=["rsi"], metadata={"owner": 7})["key"] == "env-a"
+    assert client.get_env("env-a")["name"] == "Env A"
+    assert client.update_env("env-a", description="updated")["description"] == "updated"
+    assert client.create_env_version("env-a", version="1.0.0", spec={"query": {"uri": "oss://q"}}, supersedes="0.9.0")[
+        "version"
+    ] == "1.0.0"
+    assert client.publish_env_version("env-a", "1.0.0")["status"] == "PUBLISHED"
+    assert client.delete_registry_version("env", "env-a", "1.0.0") == {}
+    assert client.delete_env("env-a") == {}
+    assert [method for method, _, _ in seen] == ["GET", "POST", "GET", "PATCH", "POST", "POST", "DELETE", "DELETE"]
+
+
+def test_model_service_can_be_created_from_checkpoint_when_enabled():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/envarena/openapi/v1/model-services"
+        payload = json.loads(request.content)
+        assert payload == {
+            "served_model_name": "ckpt-alias",
+            "model_path": "/models/ckpt",
+            "replicas": 2,
+            "readiness_policy": "all",
+            "resource_spec": {"gpu_num": 1},
+            "sglang": {"tp": 1},
+            "metadata": {"run_id": "run-1", "source": "areal-rsi"},
+        }
+        return httpx.Response(
+            201,
+            json={
+                "service_id": "svc-1",
+                "served_model_name": "ckpt-alias",
+                "status": "PENDING",
+                "replicas": 2,
+                "desired_replicas": 2,
+                "readiness_policy": "all",
+                "ready_replicas": 0,
+                "instances": [],
+                "created_at": "2026-08-03T00:00:00Z",
+                "updated_at": "2026-08-03T00:00:00Z",
+            },
+        )
+
+    client = EnvArenaClient(
+        EnvArenaConfig(
+            control_base_url="https://arena.example.test/envarena/openapi/v1",
+            api_token="test-token",
+            model_service_config={
+                "enabled": True,
+                "replicas": 2,
+                "readiness_policy": "all",
+                "resource_spec": {"gpu_num": 1},
+                "sglang": {"tp": 1},
+            },
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+
+    model = client.ensure_model_service_for_ckpt(
+        {"model_path": "/models/ckpt", "served_model_name": "ckpt-alias"},
+        metadata={"run_id": "run-1"},
+    )
+
+    assert model["model_name"] == "ckpt-alias"
+    assert model["asset"]["model_service"]["service_id"] == "svc-1"
+
+
+def test_create_model_service_merges_base_model_catalog_config_with_overrides():
+    seen: list[tuple[str, str, dict]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content or b"{}")
+        seen.append((request.method, request.url.path, payload))
+        if request.method == "GET" and request.url.path == "/envarena/openapi/v1/model-services/catalog/models/base-model":
+            return httpx.Response(
+                200,
+                json={
+                    "model_id": "base-model",
+                    "model_name": "base-served",
+                    "model_path": "/models/base",
+                    "gateway": {},
+                    "image": "base-image",
+                    "resource_spec": {"cpu": 96, "gpu_num": 8},
+                    "sglang": {"dtype": "bfloat16", "tp": 4},
+                    "metadata": {"base": "yes"},
+                    "exists": True,
+                    "readable": True,
+                    "weights_exist": True,
+                    "weights_readable": True,
+                    "availability_status": "AVAILABLE",
+                    "created_at": "2026-08-03T00:00:00Z",
+                    "updated_at": "2026-08-03T00:00:00Z",
+                },
+            )
+        if request.method == "POST" and request.url.path == "/envarena/openapi/v1/model-services":
+            assert payload == {
+                "served_model_name": "override-served",
+                "model_path": "/models/base",
+                "image": "base-image",
+                "replicas": 3,
+                "resource_spec": {"cpu": 96, "gpu_num": 4},
+                "sglang": {"dtype": "bfloat16", "tp": 2},
+                "metadata": {"base": "yes", "request": "yes"},
+            }
+            return httpx.Response(
+                201,
+                json={
+                    "service_id": "svc-base",
+                    "served_model_name": "override-served",
+                    "status": "PENDING",
+                    "replicas": 3,
+                    "desired_replicas": 3,
+                    "readiness_policy": "any",
+                    "ready_replicas": 0,
+                    "instances": [],
+                    "created_at": "2026-08-03T00:00:00Z",
+                    "updated_at": "2026-08-03T00:00:00Z",
+                },
+            )
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    service = _client(handler).create_model_service(
+        base_model_id="base-model",
+        served_model_name="override-served",
+        replicas=3,
+        resource_spec={"gpu_num": 4},
+        sglang={"tp": 2},
+        metadata={"request": "yes"},
+    )
+
+    assert service["service_id"] == "svc-base"
+    assert [method for method, _, _ in seen] == ["GET", "POST"]
+
+
+def test_create_model_service_warns_when_base_model_catalog_config_cannot_be_loaded():
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content or b"{}")
+        if request.method == "GET" and request.url.path == "/envarena/openapi/v1/model-services/catalog/models/missing":
+            return httpx.Response(404, json={"error": "not found"})
+        if request.method == "POST" and request.url.path == "/envarena/openapi/v1/model-services":
+            assert payload == {
+                "served_model_name": "explicit",
+                "model_path": "/models/explicit",
+            }
+            return httpx.Response(
+                201,
+                json={
+                    "service_id": "svc-explicit",
+                    "served_model_name": "explicit",
+                    "status": "PENDING",
+                    "replicas": 1,
+                    "desired_replicas": 1,
+                    "readiness_policy": "any",
+                    "ready_replicas": 0,
+                    "instances": [],
+                    "created_at": "2026-08-03T00:00:00Z",
+                    "updated_at": "2026-08-03T00:00:00Z",
+                },
+            )
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    with pytest.warns(RuntimeWarning, match="base model 'missing' could not be loaded"):
+        service = _client(handler).create_model_service(
+            base_model_id="missing",
+            served_model_name="explicit",
+            model_path="/models/explicit",
+        )
+
+    assert service["service_id"] == "svc-explicit"
+
+
+def test_model_service_instance_stop_can_wait_for_parent_service_status_update():
+    get_attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal get_attempts
+        if request.method == "POST" and request.url.path == "/envarena/openapi/v1/model-services/svc-1/instances/inst-1/stop":
+            return httpx.Response(
+                200,
+                json={
+                    "service_id": "svc-1",
+                    "served_model_name": "model-a",
+                    "status": "PENDING",
+                    "replicas": 1,
+                    "desired_replicas": 1,
+                    "readiness_policy": "any",
+                    "ready_replicas": 0,
+                    "instances": [_model_service_instance("inst-1", status="PENDING")],
+                    "created_at": "2026-08-03T00:00:00Z",
+                    "updated_at": "2026-08-03T00:00:00Z",
+                },
+            )
+        assert request.method == "GET"
+        assert request.url.path == "/envarena/openapi/v1/model-services/svc-1"
+        get_attempts += 1
+        instance_status = "STOPPED" if get_attempts >= 2 else "PENDING"
+        return httpx.Response(
+            200,
+            json={
+                "service_id": "svc-1",
+                "served_model_name": "model-a",
+                "status": instance_status,
+                "replicas": 1,
+                "desired_replicas": 1,
+                "readiness_policy": "any",
+                "ready_replicas": 0,
+                "instances": [_model_service_instance("inst-1", status=instance_status)],
+                "created_at": "2026-08-03T00:00:00Z",
+                "updated_at": "2026-08-03T00:00:00Z",
+            },
+        )
+
+    instance = _client(handler).stop_model_service_instance_and_wait(
+        "svc-1",
+        "inst-1",
+        timeout_seconds=1,
+        poll_seconds=0.001,
+    )
+
+    assert instance["instance_id"] == "inst-1"
+    assert instance["status"] == "STOPPED"
+    assert get_attempts == 2
+
+
+def test_ensure_model_registry_for_ckpt_creates_service_waits_ready_and_publishes_model_ref():
+    seen: list[tuple[str, str, dict]] = []
+    get_attempts = 0
+
+    def service_payload(status: str) -> dict[str, object]:
+        return {
+            "service_id": "svc-1",
+            "served_model_name": "ckpt-alias",
+            "status": status,
+            "replicas": 1,
+            "desired_replicas": 1,
+            "readiness_policy": "any",
+            "ready_replicas": 1 if status == "READY" else 0,
+            "instances": [_model_service_instance("inst-1", status="READY" if status == "READY" else "PENDING")],
+            "created_at": "2026-08-03T00:00:00Z",
+            "updated_at": "2026-08-03T00:00:00Z",
+        }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal get_attempts
+        payload = json.loads(request.content or b"{}")
+        seen.append((request.method, request.url.path, payload))
+        path = request.url.path
+        if request.method == "POST" and path == "/envarena/openapi/v1/model-services":
+            assert payload == {
+                "served_model_name": "ckpt-alias",
+                "model_path": "/models/ckpt",
+                "metadata": {"run_id": "run-1", "source": "areal-rsi"},
+            }
+            return httpx.Response(201, json=service_payload("PENDING"))
+        if request.method == "GET" and path == "/envarena/openapi/v1/model-services/svc-1":
+            get_attempts += 1
+            return httpx.Response(200, json=service_payload("READY" if get_attempts >= 2 else "PENDING"))
+        if request.method == "POST" and path == "/envarena/openapi/v1/models":
+            assert payload == {
+                "key": "model-key",
+                "name": "Model Key",
+                "description": "registered from ckpt",
+                "tags": ["rsi"],
+                "metadata": {
+                    "run_id": "run-1",
+                    "owner": "7",
+                    "source": "areal-rsi",
+                    "runtime_model_name": "ckpt-alias",
+                    "model_service_id": "svc-1",
+                    "model_path": "/models/ckpt",
+                },
+            }
+            return httpx.Response(201, json={"key": "model-key"})
+        if request.method == "POST" and path == "/envarena/openapi/v1/models/model-key/versions":
+            assert payload == {
+                "version": "2.0.0",
+                "spec": {
+                    "model_name": "ckpt-alias",
+                    "parameters": {"temperature": 0.2},
+                    "env": {"A": "1"},
+                },
+            }
+            return httpx.Response(201, json={"key": "model-key", "version": "2.0.0"})
+        if request.method == "POST" and path == "/envarena/openapi/v1/models/model-key/versions/2.0.0/publish":
+            return httpx.Response(200, json={"key": "model-key", "version": "2.0.0", "status": "PUBLISHED"})
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    result = _client(handler).ensure_model_registry_for_ckpt(
+        {"model_path": "/models/ckpt", "served_model_name": "ckpt-alias"},
+        key="model-key",
+        version="2.0.0",
+        name="Model Key",
+        description="registered from ckpt",
+        tags=["rsi"],
+        metadata={"run_id": "run-1"},
+        ready_timeout_seconds=1,
+        ready_poll_seconds=0.001,
+        parameters={"temperature": 0.2},
+        env={"A": "1"},
+        job_config={"model_registry": {"metadata": {"owner": 7}}},
+    )
+
+    assert result["model_name"] == "ckpt-alias"
+    assert result["registry_ref"] == {"key": "model-key", "version": "2.0.0"}
+    assert result["asset"]["model_service"]["status"] == "READY"
+    assert get_attempts == 2
+    assert [method for method, _, _ in seen] == ["POST", "GET", "GET", "POST", "POST", "POST"]
+
+
+def test_ensure_model_registry_for_ckpt_forces_model_service_creation():
+    seen: list[tuple[str, str, dict]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content or b"{}")
+        seen.append((request.method, request.url.path, payload))
+        if request.method == "POST" and request.url.path == "/envarena/openapi/v1/model-services":
+            assert payload == {
+                "served_model_name": "ckpt-alias",
+                "model_path": "/models/ckpt",
+                "metadata": {"source": "areal-rsi"},
+            }
+            return httpx.Response(
+                201,
+                json={
+                    "service_id": "svc-1",
+                    "served_model_name": "ckpt-alias",
+                    "status": "PENDING",
+                    "replicas": 1,
+                    "desired_replicas": 1,
+                    "readiness_policy": "any",
+                    "ready_replicas": 0,
+                    "instances": [_model_service_instance("inst-1", status="PENDING")],
+                    "created_at": "2026-08-03T00:00:00Z",
+                    "updated_at": "2026-08-03T00:00:00Z",
+                },
+            )
+        if request.method == "POST" and request.url.path == "/envarena/openapi/v1/models/model-key/versions":
+            assert payload == {"version": "1.0.0", "spec": {"model_name": "ckpt-alias"}}
+            return httpx.Response(201, json={"key": "model-key", "version": "1.0.0"})
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    result = _client(handler).ensure_model_registry_for_ckpt(
+        {"model_path": "/models/ckpt", "served_model_name": "ckpt-alias"},
+        key="model-key",
+        wait_ready=False,
+        create_entity=False,
+        publish=False,
+        job_config={"model_service": {"enabled": False}},
+    )
+
+    assert result["registry_ref"] == {"key": "model-key", "version": "1.0.0"}
+    assert result["asset"]["model_service"]["service_id"] == "svc-1"
+    assert [method for method, _, _ in seen] == ["POST", "POST"]
+
+
+def test_submit_eval_by_existed_stream_builds_temporary_benchmark_and_submits_one_job():
+    benchmark_key = ""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal benchmark_key
+        path = request.url.path
+        payload = json.loads(request.content or b"{}")
+        if request.method == "GET" and path == "/envarena/openapi/v1/streams/train-stream":
+            return httpx.Response(
+                200,
+                json={
+                    "stream": {
+                        "stream_id": "train-stream",
+                        "name": "Train Stream",
+                        "task": "swe",
+                        "selector": {"include_tags": ["train"]},
+                        "default_harness_ref": {"key": "base-harness", "version": "1.0.0"},
+                        "default_reward_ref": {"key": "base-reward", "version": "1.0.0"},
+                        "status": "ACTIVE",
+                    }
+                },
+            )
+        if request.method == "POST" and path == "/envarena/openapi/v1/streams/train-stream/dataset":
+            assert request.url.params["limit"] == "1000"
+            return httpx.Response(
+                200,
+                json={
+                    "data_ids": ["env:env-a@1.0.0"],
+                    "items": [{"data_id": "env:env-a@1.0.0", "env_ref": {"key": "env-a", "version": "1.0.0"}}],
+                    "count": 1,
+                    "total": 1,
+                    "offset": 0,
+                    "limit": 1000,
+                },
+            )
+        if request.method == "POST" and path == "/envarena/openapi/v1/benchmarks":
+            benchmark_key = payload["key"]
+            assert benchmark_key.startswith("areal-rsi-train-stream-benchmark-")
+            return httpx.Response(201, json={})
+        if request.method == "POST" and path == f"/envarena/openapi/v1/benchmarks/{benchmark_key}/versions":
+            assert payload["version"] == "1.0.0"
+            assert payload["spec"]["reward_ref"] == {"key": "base-reward", "version": "1.0.0"}
+            assert payload["spec"]["env_refs"] == [
+                {
+                    "env_ref": {"key": "env-a", "version": "1.0.0"},
+                    "params": {
+                        "data_id": "env:env-a@1.0.0",
+                        "source_stream_id": "train-stream",
+                        "harness_ref": {"key": "base-harness", "version": "1.0.0"},
+                    },
+                }
+            ]
+            return httpx.Response(201, json={})
+        if request.method == "POST" and path == f"/envarena/openapi/v1/benchmarks/{benchmark_key}/versions/1.0.0/publish":
+            return httpx.Response(200, json={})
+        if request.method == "POST" and path == "/envarena/openapi/v1/jobs":
+            assert payload["benchmark_ref"] == {"key": benchmark_key, "version": "1.0.0"}
+            assert payload["harness_ref"] == {"key": "base-harness", "version": "1.0.0"}
+            assert payload["model"] == {"model_name": "areal-rsi-models-ckpt"}
+            assert payload["metadata"]["source_stream_id"] == "train-stream"
+            return httpx.Response(202, json={"job_id": "job-stream", "task_ids": ["task-1"]})
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    job = _client(handler).submit_eval_by_existed_stream("/models/ckpt", "train-stream")
+
+    assert job["eval_job_id"] == "job-stream"
+    assert job["stream_id"] == "train-stream"
+    assert job["selected_data_ids"] == ["env:env-a@1.0.0"]
+    assert job["assets"]["benchmark"] == {"key": benchmark_key, "version": "1.0.0"}
+
+
+def test_submit_eval_by_fork_stream_creates_skill_harness_fork_stream_and_job():
+    keys: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        payload = json.loads(request.content or b"{}")
+        if request.method == "GET" and path == "/envarena/openapi/v1/streams/source-stream":
+            return httpx.Response(
+                200,
+                json={
+                    "stream": {
+                        "stream_id": "source-stream",
+                        "name": "Source",
+                        "task": "swe",
+                        "selector": {"include_tags": ["train"]},
+                        "default_harness_ref": {"key": "base-harness", "version": "1.0.0"},
+                        "default_reward_ref": {"key": "base-reward", "version": "1.0.0"},
+                        "status": "ACTIVE",
+                    }
+                },
+            )
+        if request.method == "POST" and path == "/envarena/openapi/v1/streams/source-stream/dataset":
+            return httpx.Response(
+                200,
+                json={
+                    "data_ids": ["env:env-a@1.0.0", "env:env-b@1.0.0"],
+                    "items": [
+                        {"data_id": "env:env-a@1.0.0", "env_ref": {"key": "env-a", "version": "1.0.0"}},
+                        {"data_id": "env:env-b@1.0.0", "env_ref": {"key": "env-b", "version": "1.0.0"}},
+                    ],
+                    "count": 2,
+                    "total": 2,
+                    "offset": 0,
+                    "limit": 1000,
+                },
+            )
+        if request.method == "POST" and path == "/envarena/openapi/v1/skills":
+            assert payload["key"] == "skill-new"
+            return httpx.Response(201, json={})
+        if request.method == "POST" and path == "/envarena/openapi/v1/skills/skill-new/versions":
+            assert payload["spec"] == {"bundle": {"uri": "oss://skill"}, "manifest": {"name": "skill-new", "description": "d"}}
+            return httpx.Response(201, json={})
+        if request.method == "POST" and path == "/envarena/openapi/v1/skills/skill-new/versions/1.0.0/publish":
+            return httpx.Response(200, json={})
+        if request.method == "GET" and path == "/envarena/openapi/v1/harnesses/base-harness/versions/1.0.0":
+            return httpx.Response(
+                200,
+                json={
+                    "key": "base-harness",
+                    "version": "1.0.0",
+                    "spec": {
+                        "runtime": {"type": "claude_code", "uri": "oss://runtime"},
+                        "ttl_seconds": 600,
+                    },
+                },
+            )
+        if request.method == "POST" and path == "/envarena/openapi/v1/harnesses":
+            keys["harness"] = payload["key"]
+            assert keys["harness"].startswith("areal-rsi-base-harness-fork-harness-")
+            return httpx.Response(201, json={})
+        if request.method == "POST" and path == f"/envarena/openapi/v1/harnesses/{keys['harness']}/versions":
+            assert payload["spec"]["skill_refs"] == [
+                {"key": "skill-new", "version": "1.0.0"},
+                {"key": "skill-existing", "version": "2.0.0"},
+            ]
+            return httpx.Response(201, json={})
+        if request.method == "POST" and path == f"/envarena/openapi/v1/harnesses/{keys['harness']}/versions/1.0.0/publish":
+            return httpx.Response(200, json={})
+        if request.method == "POST" and path == "/envarena/openapi/v1/benchmarks":
+            keys["benchmark"] = payload["key"]
+            return httpx.Response(201, json={})
+        if request.method == "POST" and path == f"/envarena/openapi/v1/benchmarks/{keys['benchmark']}/versions":
+            env_refs = payload["spec"]["env_refs"]
+            assert len(env_refs) == 1
+            assert env_refs[0]["env_ref"] == {"key": "env-a", "version": "1.0.0"}
+            assert env_refs[0]["params"]["relationships"] == [
+                {"data_id": "env:env-a@1.0.0", "experience_id": "exp-1"}
+            ]
+            assert env_refs[0]["params"]["skill_refs"] == [
+                {"key": "skill-new", "version": "1.0.0"},
+                {"key": "skill-existing", "version": "2.0.0"},
+            ]
+            keys["fork_stream"] = env_refs[0]["params"]["fork_stream_id"]
+            return httpx.Response(201, json={})
+        if request.method == "POST" and path == f"/envarena/openapi/v1/benchmarks/{keys['benchmark']}/versions/1.0.0/publish":
+            return httpx.Response(200, json={})
+        if request.method == "POST" and path == "/envarena/openapi/v1/streams":
+            assert payload["stream_id"] == keys["fork_stream"]
+            assert payload["default_harness_ref"] == {"key": keys["harness"], "version": "1.0.0"}
+            assert payload["metadata"]["benchmark_ref"] == f"{keys['benchmark']}@1.0.0"
+            assert json.loads(payload["metadata"]["relationships"]) == [
+                {"data_id": "env:env-a@1.0.0", "experience_id": "exp-1"}
+            ]
+            return httpx.Response(201, json={"stream_id": keys["fork_stream"], "status": "ACTIVE"})
+        if request.method == "POST" and path == "/envarena/openapi/v1/jobs":
+            assert payload["benchmark_ref"] == {"key": keys["benchmark"], "version": "1.0.0"}
+            assert payload["harness_ref"] == {"key": keys["harness"], "version": "1.0.0"}
+            assert payload["metadata"]["fork_stream_id"] == keys["fork_stream"]
+            return httpx.Response(202, json={"job_id": "job-fork", "task_ids": ["task-1"]})
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    job = _client(handler).submit_eval_by_fork_stream(
+        "ckpt-1",
+        "source-stream",
+        ["env:env-a@1.0.0"],
+        [
+            {
+                "type": "new",
+                "key": "skill-new",
+                "version": "1.0.0",
+                "spec": {"bundle": {"uri": "oss://skill"}, "manifest": {"name": "skill-new", "description": "d"}},
+            },
+            "skill-existing@2.0.0",
+        ],
+        [{"data_id": "env:env-a@1.0.0", "experience_id": "exp-1"}],
+    )
+
+    assert job["eval_job_id"] == "job-fork"
+    assert job["fork_stream_id"] == keys["fork_stream"]
+    assert job["selected_data_ids"] == ["env:env-a@1.0.0"]

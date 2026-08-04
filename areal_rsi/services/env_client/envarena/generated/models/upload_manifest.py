@@ -25,12 +25,15 @@ class UploadManifest:
         files (list[UploadManifestFilesItem]):
         base (str | Unset): Scratch base from the presign response. Required for /uploads/complete, ignored by
             /uploads/presign. Example: uploads/260716/0123456789abcdef.
+        storage_ref (str | Unset): Registry material storage binding. `default` is the immutable OSS_* environment
+            configuration.
     """
 
     kind: UploadManifestKind
     name: str
     files: list[UploadManifestFilesItem]
     base: str | Unset = UNSET
+    storage_ref: str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -45,6 +48,8 @@ class UploadManifest:
 
         base = self.base
 
+        storage_ref = self.storage_ref
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -56,6 +61,8 @@ class UploadManifest:
         )
         if base is not UNSET:
             field_dict["base"] = base
+        if storage_ref is not UNSET:
+            field_dict["storage_ref"] = storage_ref
 
         return field_dict
 
@@ -77,11 +84,14 @@ class UploadManifest:
 
         base = d.pop("base", UNSET)
 
+        storage_ref = d.pop("storage_ref", UNSET)
+
         upload_manifest = cls(
             kind=kind,
             name=name,
             files=files,
             base=base,
+            storage_ref=storage_ref,
         )
 
         upload_manifest.additional_properties = d

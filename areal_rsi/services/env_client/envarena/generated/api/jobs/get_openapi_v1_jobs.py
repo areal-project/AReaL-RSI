@@ -16,6 +16,7 @@ def _get_kwargs(
     benchmark_key: str | Unset = UNSET,
     harness_key: str | Unset = UNSET,
     model_name: str | Unset = UNSET,
+    created_by: str | Unset = UNSET,
     tag: str | Unset = UNSET,
 ) -> dict[str, Any]:
 
@@ -32,6 +33,8 @@ def _get_kwargs(
     params["harness_key"] = harness_key
 
     params["model_name"] = model_name
+
+    params["created_by"] = created_by
 
     params["tag"] = tag
 
@@ -77,6 +80,7 @@ def sync_detailed(
     benchmark_key: str | Unset = UNSET,
     harness_key: str | Unset = UNSET,
     model_name: str | Unset = UNSET,
+    created_by: str | Unset = UNSET,
     tag: str | Unset = UNSET,
 ) -> Response[Error | GetOpenapiV1JobsResponse200]:
     """List BenchmarkJobs
@@ -86,6 +90,7 @@ def sync_detailed(
         benchmark_key (str | Unset):
         harness_key (str | Unset):
         model_name (str | Unset):
+        created_by (str | Unset):
         tag (str | Unset):
 
     Raises:
@@ -101,6 +106,7 @@ def sync_detailed(
         benchmark_key=benchmark_key,
         harness_key=harness_key,
         model_name=model_name,
+        created_by=created_by,
         tag=tag,
     )
 
@@ -118,6 +124,7 @@ def sync(
     benchmark_key: str | Unset = UNSET,
     harness_key: str | Unset = UNSET,
     model_name: str | Unset = UNSET,
+    created_by: str | Unset = UNSET,
     tag: str | Unset = UNSET,
 ) -> Error | GetOpenapiV1JobsResponse200 | None:
     """List BenchmarkJobs
@@ -127,6 +134,7 @@ def sync(
         benchmark_key (str | Unset):
         harness_key (str | Unset):
         model_name (str | Unset):
+        created_by (str | Unset):
         tag (str | Unset):
 
     Raises:
@@ -143,6 +151,7 @@ def sync(
         benchmark_key=benchmark_key,
         harness_key=harness_key,
         model_name=model_name,
+        created_by=created_by,
         tag=tag,
     ).parsed
 
@@ -154,6 +163,7 @@ async def asyncio_detailed(
     benchmark_key: str | Unset = UNSET,
     harness_key: str | Unset = UNSET,
     model_name: str | Unset = UNSET,
+    created_by: str | Unset = UNSET,
     tag: str | Unset = UNSET,
 ) -> Response[Error | GetOpenapiV1JobsResponse200]:
     """List BenchmarkJobs
@@ -163,6 +173,7 @@ async def asyncio_detailed(
         benchmark_key (str | Unset):
         harness_key (str | Unset):
         model_name (str | Unset):
+        created_by (str | Unset):
         tag (str | Unset):
 
     Raises:
@@ -178,6 +189,7 @@ async def asyncio_detailed(
         benchmark_key=benchmark_key,
         harness_key=harness_key,
         model_name=model_name,
+        created_by=created_by,
         tag=tag,
     )
 
@@ -193,6 +205,7 @@ async def asyncio(
     benchmark_key: str | Unset = UNSET,
     harness_key: str | Unset = UNSET,
     model_name: str | Unset = UNSET,
+    created_by: str | Unset = UNSET,
     tag: str | Unset = UNSET,
 ) -> Error | GetOpenapiV1JobsResponse200 | None:
     """List BenchmarkJobs
@@ -202,6 +215,7 @@ async def asyncio(
         benchmark_key (str | Unset):
         harness_key (str | Unset):
         model_name (str | Unset):
+        created_by (str | Unset):
         tag (str | Unset):
 
     Raises:
@@ -219,6 +233,7 @@ async def asyncio(
             benchmark_key=benchmark_key,
             harness_key=harness_key,
             model_name=model_name,
+            created_by=created_by,
             tag=tag,
         )
     ).parsed

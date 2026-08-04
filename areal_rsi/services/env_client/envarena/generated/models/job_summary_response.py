@@ -28,6 +28,7 @@ class JobSummaryResponse:
         env_count (int):
         result (JobResult | Unset):
         reward_ref (VersionRef | Unset):
+        model_ref (VersionRef | Unset):
         sample_summary (list[JobSampleSummary] | Unset):
     """
 
@@ -36,6 +37,7 @@ class JobSummaryResponse:
     env_count: int
     result: JobResult | Unset = UNSET
     reward_ref: VersionRef | Unset = UNSET
+    model_ref: VersionRef | Unset = UNSET
     sample_summary: list[JobSampleSummary] | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -53,6 +55,10 @@ class JobSummaryResponse:
         reward_ref: dict[str, Any] | Unset = UNSET
         if not isinstance(self.reward_ref, Unset):
             reward_ref = self.reward_ref.to_dict()
+
+        model_ref: dict[str, Any] | Unset = UNSET
+        if not isinstance(self.model_ref, Unset):
+            model_ref = self.model_ref.to_dict()
 
         sample_summary: list[dict[str, Any]] | Unset = UNSET
         if not isinstance(self.sample_summary, Unset):
@@ -74,6 +80,8 @@ class JobSummaryResponse:
             field_dict["result"] = result
         if reward_ref is not UNSET:
             field_dict["reward_ref"] = reward_ref
+        if model_ref is not UNSET:
+            field_dict["model_ref"] = model_ref
         if sample_summary is not UNSET:
             field_dict["sample_summary"] = sample_summary
 
@@ -108,6 +116,13 @@ class JobSummaryResponse:
         else:
             reward_ref = VersionRef.from_dict(_reward_ref)
 
+        _model_ref = d.pop("model_ref", UNSET)
+        model_ref: VersionRef | Unset
+        if isinstance(_model_ref, Unset):
+            model_ref = UNSET
+        else:
+            model_ref = VersionRef.from_dict(_model_ref)
+
         _sample_summary = d.pop("sample_summary", UNSET)
         sample_summary: list[JobSampleSummary] | Unset = UNSET
         if _sample_summary is not UNSET:
@@ -125,6 +140,7 @@ class JobSummaryResponse:
             env_count=env_count,
             result=result,
             reward_ref=reward_ref,
+            model_ref=model_ref,
             sample_summary=sample_summary,
         )
 

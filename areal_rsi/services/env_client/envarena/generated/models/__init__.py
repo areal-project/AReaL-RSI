@@ -34,6 +34,8 @@ from .create_job_request import CreateJobRequest
 from .create_job_request_metadata import CreateJobRequestMetadata
 from .create_llm_model_request import CreateLLMModelRequest
 from .create_llm_model_request_metadata import CreateLLMModelRequestMetadata
+from .create_model_service_request import CreateModelServiceRequest
+from .create_model_service_request_metadata import CreateModelServiceRequestMetadata
 from .create_model_version_request import CreateModelVersionRequest
 from .create_rescore_job_request import CreateRescoreJobRequest
 from .create_rescore_job_request_metadata import CreateRescoreJobRequestMetadata
@@ -47,6 +49,14 @@ from .create_stream_request import CreateStreamRequest
 from .create_stream_request_metadata import CreateStreamRequestMetadata
 from .create_tool_version_request import CreateToolVersionRequest
 from .data_source import DataSource
+from .delete_openapi_v1_model_services_catalog_images_image_response_200 import (
+    DeleteOpenapiV1ModelServicesCatalogImagesImageResponse200,
+)
+from .delete_openapi_v1_model_services_catalog_models_model_id_response_200 import (
+    DeleteOpenapiV1ModelServicesCatalogModelsModelIdResponse200,
+)
+from .dependency_check import DependencyCheck
+from .dependency_check_status import DependencyCheckStatus
 from .entity_status import EntityStatus
 from .env_runtime_spec import EnvRuntimeSpec
 from .env_runtime_spec_kind import EnvRuntimeSpecKind
@@ -104,6 +114,7 @@ from .get_openapi_v1_models_model_key_versions_response_200 import (
 from .get_openapi_v1_online_harnesses_response_200 import (
     GetOpenapiV1OnlineHarnessesResponse200,
 )
+from .get_openapi_v1_oss_storages_response_200 import GetOpenapiV1OssStoragesResponse200
 from .get_openapi_v1_rewards_reward_key_versions_response_200 import (
     GetOpenapiV1RewardsRewardKeyVersionsResponse200,
 )
@@ -114,6 +125,9 @@ from .get_openapi_v1_streams_response_200 import GetOpenapiV1StreamsResponse200
 from .get_openapi_v1_streams_status import GetOpenapiV1StreamsStatus
 from .get_openapi_v1_streams_stream_id_events_response_200 import (
     GetOpenapiV1StreamsStreamIdEventsResponse200,
+)
+from .get_openapi_v1_streams_stream_id_experiments_response_200 import (
+    GetOpenapiV1StreamsStreamIdExperimentsResponse200,
 )
 from .get_openapi_v1_streams_stream_id_response_200 import (
     GetOpenapiV1StreamsStreamIdResponse200,
@@ -137,6 +151,16 @@ from .harness_runtime_spec_type import HarnessRuntimeSpecType
 from .harness_spec import HarnessSpec
 from .harness_spec_metadata import HarnessSpecMetadata
 from .harness_version import HarnessVersion
+from .health_report import HealthReport
+from .health_report_checks import HealthReportChecks
+from .health_report_status import HealthReportStatus
+from .import_model_service_migration_body import ImportModelServiceMigrationBody
+from .import_model_service_migration_response_200 import (
+    ImportModelServiceMigrationResponse200,
+)
+from .import_model_service_migration_response_200_services_skipped_item import (
+    ImportModelServiceMigrationResponse200ServicesSkippedItem,
+)
 from .import_skill_url_request import ImportSkillURLRequest
 from .import_skill_url_request_metadata import ImportSkillURLRequestMetadata
 from .io_contract import IOContract
@@ -158,9 +182,6 @@ from .job_status import JobStatus
 from .job_summary_response import JobSummaryResponse
 from .job_task_counts import JobTaskCounts
 from .job_task_list_response import JobTaskListResponse
-from .launch_one_task_request import LaunchOneTaskRequest
-from .launch_one_task_request_envs import LaunchOneTaskRequestEnvs
-from .launch_one_task_request_metadata import LaunchOneTaskRequestMetadata
 from .launch_one_task_response import LaunchOneTaskResponse
 from .leaderboard_row import LeaderboardRow
 from .llm_endpoint_health import LLMEndpointHealth
@@ -183,11 +204,138 @@ from .llm_model_endpoint_upstream_extra_params import (
 )
 from .llm_model_list_response import LLMModelListResponse
 from .llm_model_metadata import LLMModelMetadata
+from .model_service import ModelService
+from .model_service_ais_cluster_config import ModelServiceAISClusterConfig
+from .model_service_ais_clusters_response import ModelServiceAISClustersResponse
+from .model_service_ais_job import ModelServiceAISJob
+from .model_service_ais_job_raw import ModelServiceAISJobRaw
+from .model_service_ais_node import ModelServiceAISNode
+from .model_service_ais_node_raw import ModelServiceAISNodeRaw
+from .model_service_ais_resources import ModelServiceAISResources
+from .model_service_ais_resources_jobs_item import ModelServiceAISResourcesJobsItem
+from .model_service_ais_resources_status_counts import (
+    ModelServiceAISResourcesStatusCounts,
+)
+from .model_service_ais_runtime_config import ModelServiceAISRuntimeConfig
+from .model_service_catalog_config import ModelServiceCatalogConfig
+from .model_service_catalog_config_config import ModelServiceCatalogConfigConfig
+from .model_service_catalog_config_object import ModelServiceCatalogConfigObject
+from .model_service_catalog_image import ModelServiceCatalogImage
+from .model_service_catalog_image_request import ModelServiceCatalogImageRequest
+from .model_service_catalog_model import ModelServiceCatalogModel
+from .model_service_catalog_model_availability_status import (
+    ModelServiceCatalogModelAvailabilityStatus,
+)
+from .model_service_catalog_model_metadata import ModelServiceCatalogModelMetadata
+from .model_service_catalog_model_request import ModelServiceCatalogModelRequest
+from .model_service_catalog_model_request_metadata import (
+    ModelServiceCatalogModelRequestMetadata,
+)
+from .model_service_catalog_parameters import ModelServiceCatalogParameters
+from .model_service_catalog_parameters_object import ModelServiceCatalogParametersObject
+from .model_service_catalog_parameters_response import (
+    ModelServiceCatalogParametersResponse,
+)
+from .model_service_catalog_parameters_response_object import (
+    ModelServiceCatalogParametersResponseObject,
+)
+from .model_service_catalog_response import ModelServiceCatalogResponse
+from .model_service_catalog_response_image_usages import (
+    ModelServiceCatalogResponseImageUsages,
+)
+from .model_service_cleanup_stopped_report import ModelServiceCleanupStoppedReport
+from .model_service_cleanup_stopped_report_failures_item import (
+    ModelServiceCleanupStoppedReportFailuresItem,
+)
+from .model_service_command_preview import ModelServiceCommandPreview
+from .model_service_data_store_config import ModelServiceDataStoreConfig
+from .model_service_endpoint import ModelServiceEndpoint
+from .model_service_gateway_config import ModelServiceGatewayConfig
+from .model_service_gateway_config_inbound_protos_item import (
+    ModelServiceGatewayConfigInboundProtosItem,
+)
+from .model_service_gateway_config_upstream_extra_params import (
+    ModelServiceGatewayConfigUpstreamExtraParams,
+)
+from .model_service_instance import ModelServiceInstance
+from .model_service_instance_check import ModelServiceInstanceCheck
+from .model_service_instance_check_health import ModelServiceInstanceCheckHealth
+from .model_service_instance_check_item import ModelServiceInstanceCheckItem
+from .model_service_instance_check_item_details import (
+    ModelServiceInstanceCheckItemDetails,
+)
+from .model_service_instance_check_item_status import (
+    ModelServiceInstanceCheckItemStatus,
+)
+from .model_service_instance_check_object import ModelServiceInstanceCheckObject
+from .model_service_instance_check_overall_status import (
+    ModelServiceInstanceCheckOverallStatus,
+)
+from .model_service_instance_check_router_deployment import (
+    ModelServiceInstanceCheckRouterDeployment,
+)
+from .model_service_instance_detail import ModelServiceInstanceDetail
+from .model_service_instance_detail_ais_type_1 import ModelServiceInstanceDetailAisType1
+from .model_service_instance_log_file import ModelServiceInstanceLogFile
+from .model_service_instance_logs import ModelServiceInstanceLogs
+from .model_service_instance_probe_request import ModelServiceInstanceProbeRequest
+from .model_service_instance_probe_request_payload import (
+    ModelServiceInstanceProbeRequestPayload,
+)
+from .model_service_instance_probe_request_protocol import (
+    ModelServiceInstanceProbeRequestProtocol,
+)
+from .model_service_instance_probe_response import ModelServiceInstanceProbeResponse
+from .model_service_instance_probe_response_headers import (
+    ModelServiceInstanceProbeResponseHeaders,
+)
+from .model_service_instance_probe_response_protocol import (
+    ModelServiceInstanceProbeResponseProtocol,
+)
+from .model_service_instance_resource_request import ModelServiceInstanceResourceRequest
+from .model_service_instance_started_request import ModelServiceInstanceStartedRequest
+from .model_service_instance_status import ModelServiceInstanceStatus
+from .model_service_list_response import ModelServiceListResponse
+from .model_service_metadata import ModelServiceMetadata
+from .model_service_register_instance_request import ModelServiceRegisterInstanceRequest
+from .model_service_resource_spec import ModelServiceResourceSpec
+from .model_service_settings import ModelServiceSettings
+from .model_service_sglang_spec import ModelServiceSglangSpec
+from .model_service_sglang_spec_env import ModelServiceSglangSpecEnv
+from .model_service_status import ModelServiceStatus
 from .model_spec import ModelSpec
 from .model_spec_env import ModelSpecEnv
 from .model_spec_parameters import ModelSpecParameters
 from .model_version import ModelVersion
 from .object_ref import ObjectRef
+from .oss_storage import OSSStorage
+from .oss_storage_request import OSSStorageRequest
+from .play_forge_finish_response import PlayForgeFinishResponse
+from .play_forge_game_agent_selector import PlayForgeGameAgentSelector
+from .play_forge_game_agent_skill_selector import PlayForgeGameAgentSkillSelector
+from .play_forge_game_agent_skill_selector_source import (
+    PlayForgeGameAgentSkillSelectorSource,
+)
+from .play_forge_game_agent_system_prompt_selector import (
+    PlayForgeGameAgentSystemPromptSelector,
+)
+from .play_forge_game_agent_system_prompt_selector_source import (
+    PlayForgeGameAgentSystemPromptSelectorSource,
+)
+from .play_forge_harness import PlayForgeHarness
+from .play_forge_harness_envs import PlayForgeHarnessEnvs
+from .play_forge_harness_snapshot import PlayForgeHarnessSnapshot
+from .play_forge_harness_snapshot_envs import PlayForgeHarnessSnapshotEnvs
+from .play_forge_launch import PlayForgeLaunch
+from .play_forge_launch_metadata import PlayForgeLaunchMetadata
+from .play_forge_launch_response import PlayForgeLaunchResponse
+from .play_forge_launch_runtime_profile import PlayForgeLaunchRuntimeProfile
+from .play_forge_mount import PlayForgeMount
+from .play_forge_runtime_mount import PlayForgeRuntimeMount
+from .play_forge_runtime_snapshot import PlayForgeRuntimeSnapshot
+from .post_openapi_v1_oss_storages_storage_id_test_response_200 import (
+    PostOpenapiV1OssStoragesStorageIdTestResponse200,
+)
 from .post_openapi_v1_skills_import_body import PostOpenapiV1SkillsImportBody
 from .post_openapi_v1_streams_stream_id_dataset_body import (
     PostOpenapiV1StreamsStreamIdDatasetBody,
@@ -203,6 +351,7 @@ from .post_openapi_v1_uploads_body_unpack import PostOpenapiV1UploadsBodyUnpack
 from .recovery_result import RecoveryResult
 from .recovery_result_skipped_sandboxes import RecoveryResultSkippedSandboxes
 from .registry_page_meta import RegistryPageMeta
+from .registry_version_list_response import RegistryVersionListResponse
 from .resource_spec import ResourceSpec
 from .result_status import ResultStatus
 from .retry_job_request import RetryJobRequest
@@ -229,6 +378,7 @@ from .runtime_image import RuntimeImage
 from .runtime_image_kind import RuntimeImageKind
 from .runtime_profile import RuntimeProfile
 from .runtime_profile_network import RuntimeProfileNetwork
+from .sandbox_mount import SandboxMount
 from .score_schema import ScoreSchema
 from .score_schema_normalization import ScoreSchemaNormalization
 from .score_schema_sub_scores_item import ScoreSchemaSubScoresItem
@@ -247,6 +397,7 @@ from .stream_data_ref import StreamDataRef
 from .stream_event import StreamEvent
 from .stream_event_after import StreamEventAfter
 from .stream_event_before import StreamEventBefore
+from .stream_experiment import StreamExperiment
 from .stream_metadata import StreamMetadata
 from .stream_reward_point import StreamRewardPoint
 from .stream_selector import StreamSelector
@@ -254,6 +405,12 @@ from .stream_stats import StreamStats
 from .stream_status import StreamStatus
 from .stream_task_row import StreamTaskRow
 from .stream_task_row_reward_type_0 import StreamTaskRowRewardType0
+from .system_overview import SystemOverview
+from .system_overview_headline import SystemOverviewHeadline
+from .system_overview_series import SystemOverviewSeries
+from .system_overview_series_point import SystemOverviewSeriesPoint
+from .system_overview_state_row import SystemOverviewStateRow
+from .system_overview_terminal_tasks_1h_type_0 import SystemOverviewTerminalTasks1HType0
 from .system_prompt_spec import SystemPromptSpec
 from .system_prompt_spec_kind import SystemPromptSpecKind
 from .task import Task
@@ -285,6 +442,7 @@ from .update_job_config_request import UpdateJobConfigRequest
 from .update_job_config_response import UpdateJobConfigResponse
 from .update_llm_model_request import UpdateLLMModelRequest
 from .update_llm_model_request_metadata import UpdateLLMModelRequestMetadata
+from .update_model_service_settings_request import UpdateModelServiceSettingsRequest
 from .update_model_version_request import UpdateModelVersionRequest
 from .update_reward_version_request import UpdateRewardVersionRequest
 from .update_skill_version_request import UpdateSkillVersionRequest
@@ -340,6 +498,8 @@ __all__ = (
     "CreateJobRequestMetadata",
     "CreateLLMModelRequest",
     "CreateLLMModelRequestMetadata",
+    "CreateModelServiceRequest",
+    "CreateModelServiceRequestMetadata",
     "CreateModelVersionRequest",
     "CreateRescoreJobRequest",
     "CreateRescoreJobRequestMetadata",
@@ -351,6 +511,10 @@ __all__ = (
     "CreateStreamRequestMetadata",
     "CreateToolVersionRequest",
     "DataSource",
+    "DeleteOpenapiV1ModelServicesCatalogImagesImageResponse200",
+    "DeleteOpenapiV1ModelServicesCatalogModelsModelIdResponse200",
+    "DependencyCheck",
+    "DependencyCheckStatus",
     "EntityStatus",
     "EnvRuntimeSpec",
     "EnvRuntimeSpecKind",
@@ -380,11 +544,13 @@ __all__ = (
     "GetOpenapiV1LeaderboardResponse200",
     "GetOpenapiV1ModelsModelKeyVersionsResponse200",
     "GetOpenapiV1OnlineHarnessesResponse200",
+    "GetOpenapiV1OssStoragesResponse200",
     "GetOpenapiV1RewardsRewardKeyVersionsResponse200",
     "GetOpenapiV1SkillsKeyVersionsResponse200",
     "GetOpenapiV1StreamsResponse200",
     "GetOpenapiV1StreamsStatus",
     "GetOpenapiV1StreamsStreamIdEventsResponse200",
+    "GetOpenapiV1StreamsStreamIdExperimentsResponse200",
     "GetOpenapiV1StreamsStreamIdResponse200",
     "GetOpenapiV1StreamsStreamIdTasksResponse200",
     "GetOpenapiV1TasksTaskIdArtifactsResponse200",
@@ -399,8 +565,14 @@ __all__ = (
     "HarnessSpec",
     "HarnessSpecMetadata",
     "HarnessVersion",
+    "HealthReport",
+    "HealthReportChecks",
+    "HealthReportStatus",
     "IOContract",
     "IOContractMetadata",
+    "ImportModelServiceMigrationBody",
+    "ImportModelServiceMigrationResponse200",
+    "ImportModelServiceMigrationResponse200ServicesSkippedItem",
     "ImportSkillURLRequest",
     "ImportSkillURLRequestMetadata",
     "JobAcceptedResponse",
@@ -434,16 +606,98 @@ __all__ = (
     "LLMModelEndpointUpstreamExtraParams",
     "LLMModelListResponse",
     "LLMModelMetadata",
-    "LaunchOneTaskRequest",
-    "LaunchOneTaskRequestEnvs",
-    "LaunchOneTaskRequestMetadata",
     "LaunchOneTaskResponse",
     "LeaderboardRow",
+    "ModelService",
+    "ModelServiceAISClusterConfig",
+    "ModelServiceAISClustersResponse",
+    "ModelServiceAISJob",
+    "ModelServiceAISJobRaw",
+    "ModelServiceAISNode",
+    "ModelServiceAISNodeRaw",
+    "ModelServiceAISResources",
+    "ModelServiceAISResourcesJobsItem",
+    "ModelServiceAISResourcesStatusCounts",
+    "ModelServiceAISRuntimeConfig",
+    "ModelServiceCatalogConfig",
+    "ModelServiceCatalogConfigConfig",
+    "ModelServiceCatalogConfigObject",
+    "ModelServiceCatalogImage",
+    "ModelServiceCatalogImageRequest",
+    "ModelServiceCatalogModel",
+    "ModelServiceCatalogModelAvailabilityStatus",
+    "ModelServiceCatalogModelMetadata",
+    "ModelServiceCatalogModelRequest",
+    "ModelServiceCatalogModelRequestMetadata",
+    "ModelServiceCatalogParameters",
+    "ModelServiceCatalogParametersObject",
+    "ModelServiceCatalogParametersResponse",
+    "ModelServiceCatalogParametersResponseObject",
+    "ModelServiceCatalogResponse",
+    "ModelServiceCatalogResponseImageUsages",
+    "ModelServiceCleanupStoppedReport",
+    "ModelServiceCleanupStoppedReportFailuresItem",
+    "ModelServiceCommandPreview",
+    "ModelServiceDataStoreConfig",
+    "ModelServiceEndpoint",
+    "ModelServiceGatewayConfig",
+    "ModelServiceGatewayConfigInboundProtosItem",
+    "ModelServiceGatewayConfigUpstreamExtraParams",
+    "ModelServiceInstance",
+    "ModelServiceInstanceCheck",
+    "ModelServiceInstanceCheckHealth",
+    "ModelServiceInstanceCheckItem",
+    "ModelServiceInstanceCheckItemDetails",
+    "ModelServiceInstanceCheckItemStatus",
+    "ModelServiceInstanceCheckObject",
+    "ModelServiceInstanceCheckOverallStatus",
+    "ModelServiceInstanceCheckRouterDeployment",
+    "ModelServiceInstanceDetail",
+    "ModelServiceInstanceDetailAisType1",
+    "ModelServiceInstanceLogFile",
+    "ModelServiceInstanceLogs",
+    "ModelServiceInstanceProbeRequest",
+    "ModelServiceInstanceProbeRequestPayload",
+    "ModelServiceInstanceProbeRequestProtocol",
+    "ModelServiceInstanceProbeResponse",
+    "ModelServiceInstanceProbeResponseHeaders",
+    "ModelServiceInstanceProbeResponseProtocol",
+    "ModelServiceInstanceResourceRequest",
+    "ModelServiceInstanceStartedRequest",
+    "ModelServiceInstanceStatus",
+    "ModelServiceListResponse",
+    "ModelServiceMetadata",
+    "ModelServiceRegisterInstanceRequest",
+    "ModelServiceResourceSpec",
+    "ModelServiceSettings",
+    "ModelServiceSglangSpec",
+    "ModelServiceSglangSpecEnv",
+    "ModelServiceStatus",
     "ModelSpec",
     "ModelSpecEnv",
     "ModelSpecParameters",
     "ModelVersion",
+    "OSSStorage",
+    "OSSStorageRequest",
     "ObjectRef",
+    "PlayForgeFinishResponse",
+    "PlayForgeGameAgentSelector",
+    "PlayForgeGameAgentSkillSelector",
+    "PlayForgeGameAgentSkillSelectorSource",
+    "PlayForgeGameAgentSystemPromptSelector",
+    "PlayForgeGameAgentSystemPromptSelectorSource",
+    "PlayForgeHarness",
+    "PlayForgeHarnessEnvs",
+    "PlayForgeHarnessSnapshot",
+    "PlayForgeHarnessSnapshotEnvs",
+    "PlayForgeLaunch",
+    "PlayForgeLaunchMetadata",
+    "PlayForgeLaunchResponse",
+    "PlayForgeLaunchRuntimeProfile",
+    "PlayForgeMount",
+    "PlayForgeRuntimeMount",
+    "PlayForgeRuntimeSnapshot",
+    "PostOpenapiV1OssStoragesStorageIdTestResponse200",
     "PostOpenapiV1SkillsImportBody",
     "PostOpenapiV1StreamsStreamIdDatasetBody",
     "PostOpenapiV1StreamsStreamIdDatasetResponse200",
@@ -453,6 +707,7 @@ __all__ = (
     "RecoveryResult",
     "RecoveryResultSkippedSandboxes",
     "RegistryPageMeta",
+    "RegistryVersionListResponse",
     "ResourceSpec",
     "ResultStatus",
     "RetryJobRequest",
@@ -479,6 +734,7 @@ __all__ = (
     "RuntimeImageKind",
     "RuntimeProfile",
     "RuntimeProfileNetwork",
+    "SandboxMount",
     "ScoreSchema",
     "ScoreSchemaNormalization",
     "ScoreSchemaSubScoresItem",
@@ -497,6 +753,7 @@ __all__ = (
     "StreamEvent",
     "StreamEventAfter",
     "StreamEventBefore",
+    "StreamExperiment",
     "StreamMetadata",
     "StreamRewardPoint",
     "StreamSelector",
@@ -504,6 +761,12 @@ __all__ = (
     "StreamStatus",
     "StreamTaskRow",
     "StreamTaskRowRewardType0",
+    "SystemOverview",
+    "SystemOverviewHeadline",
+    "SystemOverviewSeries",
+    "SystemOverviewSeriesPoint",
+    "SystemOverviewStateRow",
+    "SystemOverviewTerminalTasks1HType0",
     "SystemPromptSpec",
     "SystemPromptSpecKind",
     "Task",
@@ -535,6 +798,7 @@ __all__ = (
     "UpdateJobConfigResponse",
     "UpdateLLMModelRequest",
     "UpdateLLMModelRequestMetadata",
+    "UpdateModelServiceSettingsRequest",
     "UpdateModelVersionRequest",
     "UpdateRewardVersionRequest",
     "UpdateSkillVersionRequest",

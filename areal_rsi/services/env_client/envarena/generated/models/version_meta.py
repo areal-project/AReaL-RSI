@@ -22,6 +22,8 @@ class VersionMeta:
         version (str):
         status (EntityStatus):
         created_at (datetime.datetime):
+        storage_ref (str | Unset): Registry material storage binding. `default` is the immutable OSS_* environment
+            configuration.
         content_hash (str | Unset):
         supersedes (str | Unset):
         created_by (str | Unset):
@@ -33,6 +35,7 @@ class VersionMeta:
     version: str
     status: EntityStatus
     created_at: datetime.datetime
+    storage_ref: str | Unset = UNSET
     content_hash: str | Unset = UNSET
     supersedes: str | Unset = UNSET
     created_by: str | Unset = UNSET
@@ -48,6 +51,8 @@ class VersionMeta:
         status = self.status.value
 
         created_at = self.created_at.isoformat()
+
+        storage_ref = self.storage_ref
 
         content_hash = self.content_hash
 
@@ -71,6 +76,8 @@ class VersionMeta:
                 "created_at": created_at,
             }
         )
+        if storage_ref is not UNSET:
+            field_dict["storage_ref"] = storage_ref
         if content_hash is not UNSET:
             field_dict["content_hash"] = content_hash
         if supersedes is not UNSET:
@@ -95,6 +102,8 @@ class VersionMeta:
 
         created_at = isoparse(d.pop("created_at"))
 
+        storage_ref = d.pop("storage_ref", UNSET)
+
         content_hash = d.pop("content_hash", UNSET)
 
         supersedes = d.pop("supersedes", UNSET)
@@ -115,6 +124,7 @@ class VersionMeta:
             version=version,
             status=status,
             created_at=created_at,
+            storage_ref=storage_ref,
             content_hash=content_hash,
             supersedes=supersedes,
             created_by=created_by,

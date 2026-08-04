@@ -23,6 +23,8 @@ class PostOpenapiV1SkillsImportBody:
         name (str | Unset):
         description (str | Unset):
         tags (str | Unset): Comma-separated tags.
+        storage_ref (str | Unset): Registry material storage binding. `default` is the immutable OSS_* environment
+            configuration.
         publish (bool | Unset):
     """
 
@@ -32,6 +34,7 @@ class PostOpenapiV1SkillsImportBody:
     name: str | Unset = UNSET
     description: str | Unset = UNSET
     tags: str | Unset = UNSET
+    storage_ref: str | Unset = UNSET
     publish: bool | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -47,6 +50,8 @@ class PostOpenapiV1SkillsImportBody:
         description = self.description
 
         tags = self.tags
+
+        storage_ref = self.storage_ref
 
         publish = self.publish
 
@@ -67,6 +72,8 @@ class PostOpenapiV1SkillsImportBody:
             field_dict["description"] = description
         if tags is not UNSET:
             field_dict["tags"] = tags
+        if storage_ref is not UNSET:
+            field_dict["storage_ref"] = storage_ref
         if publish is not UNSET:
             field_dict["publish"] = publish
 
@@ -94,6 +101,11 @@ class PostOpenapiV1SkillsImportBody:
         if not isinstance(self.tags, Unset):
             files.append(("tags", (None, str(self.tags).encode(), "text/plain")))
 
+        if not isinstance(self.storage_ref, Unset):
+            files.append(
+                ("storage_ref", (None, str(self.storage_ref).encode(), "text/plain"))
+            )
+
         if not isinstance(self.publish, Unset):
             files.append(("publish", (None, str(self.publish).encode(), "text/plain")))
 
@@ -117,6 +129,8 @@ class PostOpenapiV1SkillsImportBody:
 
         tags = d.pop("tags", UNSET)
 
+        storage_ref = d.pop("storage_ref", UNSET)
+
         publish = d.pop("publish", UNSET)
 
         post_openapi_v1_skills_import_body = cls(
@@ -126,6 +140,7 @@ class PostOpenapiV1SkillsImportBody:
             name=name,
             description=description,
             tags=tags,
+            storage_ref=storage_ref,
             publish=publish,
         )
 

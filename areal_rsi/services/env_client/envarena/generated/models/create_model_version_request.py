@@ -23,11 +23,14 @@ class CreateModelVersionRequest:
         spec (ModelSpec): Compact model runtime config. EnvArena recognizes model_name, parameters, and env; unknown
             fields are preserved but are not used for routing.
         supersedes (str | Unset):
+        storage_ref (str | Unset): Registry material storage binding. `default` is the immutable OSS_* environment
+            configuration.
     """
 
     version: str
     spec: ModelSpec
     supersedes: str | Unset = UNSET
+    storage_ref: str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -36,6 +39,8 @@ class CreateModelVersionRequest:
         spec = self.spec.to_dict()
 
         supersedes = self.supersedes
+
+        storage_ref = self.storage_ref
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
@@ -47,6 +52,8 @@ class CreateModelVersionRequest:
         )
         if supersedes is not UNSET:
             field_dict["supersedes"] = supersedes
+        if storage_ref is not UNSET:
+            field_dict["storage_ref"] = storage_ref
 
         return field_dict
 
@@ -61,10 +68,13 @@ class CreateModelVersionRequest:
 
         supersedes = d.pop("supersedes", UNSET)
 
+        storage_ref = d.pop("storage_ref", UNSET)
+
         create_model_version_request = cls(
             version=version,
             spec=spec,
             supersedes=supersedes,
+            storage_ref=storage_ref,
         )
 
         create_model_version_request.additional_properties = d

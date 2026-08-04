@@ -21,12 +21,16 @@ class GetOpenapiV1StreamsStreamIdTasksResponse200:
         total (int):
         offset (int):
         limit (int):
+        experiment (str): The experiment scope the server resolved for this page. Empty means the unlabeled tasks.
+        all_experiments (bool):
     """
 
     items: list[StreamTaskRow]
     total: int
     offset: int
     limit: int
+    experiment: str
+    all_experiments: bool
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -41,6 +45,10 @@ class GetOpenapiV1StreamsStreamIdTasksResponse200:
 
         limit = self.limit
 
+        experiment = self.experiment
+
+        all_experiments = self.all_experiments
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -49,6 +57,8 @@ class GetOpenapiV1StreamsStreamIdTasksResponse200:
                 "total": total,
                 "offset": offset,
                 "limit": limit,
+                "experiment": experiment,
+                "all_experiments": all_experiments,
             }
         )
 
@@ -72,11 +82,17 @@ class GetOpenapiV1StreamsStreamIdTasksResponse200:
 
         limit = d.pop("limit")
 
+        experiment = d.pop("experiment")
+
+        all_experiments = d.pop("all_experiments")
+
         get_openapi_v1_streams_stream_id_tasks_response_200 = cls(
             items=items,
             total=total,
             offset=offset,
             limit=limit,
+            experiment=experiment,
+            all_experiments=all_experiments,
         )
 
         get_openapi_v1_streams_stream_id_tasks_response_200.additional_properties = d

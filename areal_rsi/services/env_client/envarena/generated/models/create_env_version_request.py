@@ -24,11 +24,14 @@ class CreateEnvVersionRequest:
             ARENA_WORKSPACE=/envarena/workspace; OSS-backed platform mounts are namespaced under /envarena/ (query, files,
             out, result, oracle).
         supersedes (str | Unset):
+        storage_ref (str | Unset): Registry material storage binding. `default` is the immutable OSS_* environment
+            configuration.
     """
 
     version: str
     spec: EnvSpec
     supersedes: str | Unset = UNSET
+    storage_ref: str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -37,6 +40,8 @@ class CreateEnvVersionRequest:
         spec = self.spec.to_dict()
 
         supersedes = self.supersedes
+
+        storage_ref = self.storage_ref
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
@@ -48,6 +53,8 @@ class CreateEnvVersionRequest:
         )
         if supersedes is not UNSET:
             field_dict["supersedes"] = supersedes
+        if storage_ref is not UNSET:
+            field_dict["storage_ref"] = storage_ref
 
         return field_dict
 
@@ -62,10 +69,13 @@ class CreateEnvVersionRequest:
 
         supersedes = d.pop("supersedes", UNSET)
 
+        storage_ref = d.pop("storage_ref", UNSET)
+
         create_env_version_request = cls(
             version=version,
             spec=spec,
             supersedes=supersedes,
+            storage_ref=storage_ref,
         )
 
         create_env_version_request.additional_properties = d

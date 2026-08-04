@@ -32,6 +32,8 @@ class EnvSpec:
             oracle (ObjectRef | Unset):
             oracle_schema (str | Unset):  Example: feiji.oracle.v1.
             query_path (str | Unset): Defaults to /workspace/Target.md. Default: '/workspace/Target.md'.
+            workdir (str | Unset): Absolute agent working directory for image Envs. Defaults to the image configured working
+                directory. Example: /testbed.
             tags (list[str] | Unset):
             resource_hints (ResourceSpec | Unset):
             metadata (EnvSpecMetadata | Unset):
@@ -46,6 +48,7 @@ class EnvSpec:
     oracle: ObjectRef | Unset = UNSET
     oracle_schema: str | Unset = UNSET
     query_path: str | Unset = "/workspace/Target.md"
+    workdir: str | Unset = UNSET
     tags: list[str] | Unset = UNSET
     resource_hints: ResourceSpec | Unset = UNSET
     metadata: EnvSpecMetadata | Unset = UNSET
@@ -70,6 +73,8 @@ class EnvSpec:
         oracle_schema = self.oracle_schema
 
         query_path = self.query_path
+
+        workdir = self.workdir
 
         tags: list[str] | Unset = UNSET
         if not isinstance(self.tags, Unset):
@@ -104,6 +109,8 @@ class EnvSpec:
             field_dict["oracle_schema"] = oracle_schema
         if query_path is not UNSET:
             field_dict["query_path"] = query_path
+        if workdir is not UNSET:
+            field_dict["workdir"] = workdir
         if tags is not UNSET:
             field_dict["tags"] = tags
         if resource_hints is not UNSET:
@@ -148,6 +155,8 @@ class EnvSpec:
 
         query_path = d.pop("query_path", UNSET)
 
+        workdir = d.pop("workdir", UNSET)
+
         tags = cast(list[str], d.pop("tags", UNSET))
 
         _resource_hints = d.pop("resource_hints", UNSET)
@@ -179,6 +188,7 @@ class EnvSpec:
             oracle=oracle,
             oracle_schema=oracle_schema,
             query_path=query_path,
+            workdir=workdir,
             tags=tags,
             resource_hints=resource_hints,
             metadata=metadata,

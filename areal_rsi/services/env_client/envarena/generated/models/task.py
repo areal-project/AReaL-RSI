@@ -14,6 +14,8 @@ from ..types import UNSET, Unset
 if TYPE_CHECKING:
     from ..models.error import Error
     from ..models.model_spec import ModelSpec
+    from ..models.play_forge_harness_snapshot import PlayForgeHarnessSnapshot
+    from ..models.sandbox_mount import SandboxMount
     from ..models.task_timings import TaskTimings
     from ..models.version_ref import VersionRef
 
@@ -49,6 +51,9 @@ class Task:
         workspace_uri (str | Unset):
         agent_sandbox_id (str | Unset):
         eval_sandbox_id (str | Unset):
+        sandbox_mounts (list[SandboxMount] | Unset): The effective ARCA mount plan recorded for a PlayForge sandbox
+            task.
+        playforge_harness (PlayForgeHarnessSnapshot | Unset):
         timings (TaskTimings | Unset):
         failure (Error | Unset):
         created_at (datetime.datetime | Unset):
@@ -77,6 +82,8 @@ class Task:
     workspace_uri: str | Unset = UNSET
     agent_sandbox_id: str | Unset = UNSET
     eval_sandbox_id: str | Unset = UNSET
+    sandbox_mounts: list[SandboxMount] | Unset = UNSET
+    playforge_harness: PlayForgeHarnessSnapshot | Unset = UNSET
     timings: TaskTimings | Unset = UNSET
     failure: Error | Unset = UNSET
     created_at: datetime.datetime | Unset = UNSET
@@ -133,6 +140,17 @@ class Task:
         agent_sandbox_id = self.agent_sandbox_id
 
         eval_sandbox_id = self.eval_sandbox_id
+
+        sandbox_mounts: list[dict[str, Any]] | Unset = UNSET
+        if not isinstance(self.sandbox_mounts, Unset):
+            sandbox_mounts = []
+            for sandbox_mounts_item_data in self.sandbox_mounts:
+                sandbox_mounts_item = sandbox_mounts_item_data.to_dict()
+                sandbox_mounts.append(sandbox_mounts_item)
+
+        playforge_harness: dict[str, Any] | Unset = UNSET
+        if not isinstance(self.playforge_harness, Unset):
+            playforge_harness = self.playforge_harness.to_dict()
 
         timings: dict[str, Any] | Unset = UNSET
         if not isinstance(self.timings, Unset):
@@ -191,6 +209,10 @@ class Task:
             field_dict["agent_sandbox_id"] = agent_sandbox_id
         if eval_sandbox_id is not UNSET:
             field_dict["eval_sandbox_id"] = eval_sandbox_id
+        if sandbox_mounts is not UNSET:
+            field_dict["sandbox_mounts"] = sandbox_mounts
+        if playforge_harness is not UNSET:
+            field_dict["playforge_harness"] = playforge_harness
         if timings is not UNSET:
             field_dict["timings"] = timings
         if failure is not UNSET:
@@ -206,6 +228,8 @@ class Task:
     def from_dict(cls, src_dict: Mapping[str, Any]) -> Self:
         from ..models.error import Error
         from ..models.model_spec import ModelSpec
+        from ..models.play_forge_harness_snapshot import PlayForgeHarnessSnapshot
+        from ..models.sandbox_mount import SandboxMount
         from ..models.task_timings import TaskTimings
         from ..models.version_ref import VersionRef
 
@@ -266,6 +290,22 @@ class Task:
 
         eval_sandbox_id = d.pop("eval_sandbox_id", UNSET)
 
+        _sandbox_mounts = d.pop("sandbox_mounts", UNSET)
+        sandbox_mounts: list[SandboxMount] | Unset = UNSET
+        if _sandbox_mounts is not UNSET:
+            sandbox_mounts = []
+            for sandbox_mounts_item_data in _sandbox_mounts:
+                sandbox_mounts_item = SandboxMount.from_dict(sandbox_mounts_item_data)
+
+                sandbox_mounts.append(sandbox_mounts_item)
+
+        _playforge_harness = d.pop("playforge_harness", UNSET)
+        playforge_harness: PlayForgeHarnessSnapshot | Unset
+        if isinstance(_playforge_harness, Unset):
+            playforge_harness = UNSET
+        else:
+            playforge_harness = PlayForgeHarnessSnapshot.from_dict(_playforge_harness)
+
         _timings = d.pop("timings", UNSET)
         timings: TaskTimings | Unset
         if isinstance(_timings, Unset):
@@ -317,6 +357,8 @@ class Task:
             workspace_uri=workspace_uri,
             agent_sandbox_id=agent_sandbox_id,
             eval_sandbox_id=eval_sandbox_id,
+            sandbox_mounts=sandbox_mounts,
+            playforge_harness=playforge_harness,
             timings=timings,
             failure=failure,
             created_at=created_at,

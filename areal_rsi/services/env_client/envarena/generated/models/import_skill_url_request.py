@@ -26,6 +26,8 @@ class ImportSkillURLRequest:
         description (str | Unset):
         tags (list[str] | Unset):
         metadata (ImportSkillURLRequestMetadata | Unset):
+        storage_ref (str | Unset): Registry material storage binding. `default` is the immutable OSS_* environment
+            configuration.
         publish (bool | Unset):
     """
 
@@ -36,6 +38,7 @@ class ImportSkillURLRequest:
     description: str | Unset = UNSET
     tags: list[str] | Unset = UNSET
     metadata: ImportSkillURLRequestMetadata | Unset = UNSET
+    storage_ref: str | Unset = UNSET
     publish: bool | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -58,6 +61,8 @@ class ImportSkillURLRequest:
         if not isinstance(self.metadata, Unset):
             metadata = self.metadata.to_dict()
 
+        storage_ref = self.storage_ref
+
         publish = self.publish
 
         field_dict: dict[str, Any] = {}
@@ -79,6 +84,8 @@ class ImportSkillURLRequest:
             field_dict["tags"] = tags
         if metadata is not UNSET:
             field_dict["metadata"] = metadata
+        if storage_ref is not UNSET:
+            field_dict["storage_ref"] = storage_ref
         if publish is not UNSET:
             field_dict["publish"] = publish
 
@@ -110,6 +117,8 @@ class ImportSkillURLRequest:
         else:
             metadata = ImportSkillURLRequestMetadata.from_dict(_metadata)
 
+        storage_ref = d.pop("storage_ref", UNSET)
+
         publish = d.pop("publish", UNSET)
 
         import_skill_url_request = cls(
@@ -120,6 +129,7 @@ class ImportSkillURLRequest:
             description=description,
             tags=tags,
             metadata=metadata,
+            storage_ref=storage_ref,
             publish=publish,
         )
 

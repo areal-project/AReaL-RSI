@@ -20,10 +20,13 @@ class PostOpenapiV1UploadsBody:
     Attributes:
         file (File): File content (max 256 MB).
         unpack (PostOpenapiV1UploadsBodyUnpack | Unset): Unpack the uploaded zip into a directory URI.
+        storage_ref (str | Unset): Registry material storage binding. `default` is the immutable OSS_* environment
+            configuration.
     """
 
     file: File
     unpack: PostOpenapiV1UploadsBodyUnpack | Unset = UNSET
+    storage_ref: str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -32,6 +35,8 @@ class PostOpenapiV1UploadsBody:
         unpack: str | Unset = UNSET
         if not isinstance(self.unpack, Unset):
             unpack = self.unpack.value
+
+        storage_ref = self.storage_ref
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
@@ -42,6 +47,8 @@ class PostOpenapiV1UploadsBody:
         )
         if unpack is not UNSET:
             field_dict["unpack"] = unpack
+        if storage_ref is not UNSET:
+            field_dict["storage_ref"] = storage_ref
 
         return field_dict
 
@@ -53,6 +60,11 @@ class PostOpenapiV1UploadsBody:
         if not isinstance(self.unpack, Unset):
             files.append(
                 ("unpack", (None, str(self.unpack.value).encode(), "text/plain"))
+            )
+
+        if not isinstance(self.storage_ref, Unset):
+            files.append(
+                ("storage_ref", (None, str(self.storage_ref).encode(), "text/plain"))
             )
 
         for prop_name, prop in self.additional_properties.items():
@@ -72,9 +84,12 @@ class PostOpenapiV1UploadsBody:
         else:
             unpack = PostOpenapiV1UploadsBodyUnpack(_unpack)
 
+        storage_ref = d.pop("storage_ref", UNSET)
+
         post_openapi_v1_uploads_body = cls(
             file=file,
             unpack=unpack,
+            storage_ref=storage_ref,
         )
 
         post_openapi_v1_uploads_body.additional_properties = d

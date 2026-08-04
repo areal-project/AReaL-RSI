@@ -7,7 +7,7 @@ EnvArena without forcing early, brittle dataclass schemas.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, Mapping, TypeAlias
+from typing import Any, Literal, Mapping, Sequence, TypeAlias
 
 TrainMethod: TypeAlias = Literal["sft", "opd"]
 TrajSource: TypeAlias = Literal["eval", "research_validation", "opd"]
@@ -17,6 +17,7 @@ ModelRef: TypeAlias = dict[str, Any]
 EvalJob: TypeAlias = dict[str, Any]
 EvalAssetConfig: TypeAlias = Mapping[str, Any]
 EvalRegistryRef: TypeAlias = str | Mapping[str, Any]
+EnvArenaCkpt: TypeAlias = str | Mapping[str, Any]
 Traj: TypeAlias = dict[str, Any]
 Dataset: TypeAlias = dict[str, Any]
 TrainRun: TypeAlias = dict[str, Any]
@@ -50,5 +51,29 @@ class EvalRequest:
     benchmark: EvalRegistryRef
     harness: EvalRegistryRef
     skill: EvalAssetConfig | None = None
+    job_config: Mapping[str, Any] = field(default_factory=dict)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class EnvArenaEvalRequest:
+    """EnvArena stream-oriented evaluation request.
+
+    ``ckpt`` is either a checkpoint/model path or a mapping with model-service
+    options such as ``model_path`` and ``served_model_name``.
+
+    ``skills`` accepts published refs or new/ref asset configs. ``relationships``
+    is intentionally mapping-shaped because EnvArena does not currently define
+    a server-side relationship entity; callers can pass fields such as
+    ``experience_id`` and ``data_id`` and the EnvArena adapter persists them in
+    generated benchmark/stream metadata.
+    """
+
+    ckpt: EnvArenaCkpt
+    stream_id: str
+    data_ids: Sequence[str] = field(default_factory=tuple)
+    skills: Sequence[EvalRegistryRef | EvalAssetConfig] = field(default_factory=tuple)
+    relationships: Sequence[Mapping[str, Any]] = field(default_factory=tuple)
+    reward: EvalRegistryRef | EvalAssetConfig | None = None
     job_config: Mapping[str, Any] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)

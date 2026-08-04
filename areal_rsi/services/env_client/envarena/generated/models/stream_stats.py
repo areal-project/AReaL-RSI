@@ -26,6 +26,8 @@ class StreamStats:
         failed_count (int):
         reward_points (list[StreamRewardPoint]): The 1,000 most recently computed successful reward points, ordered by
             computed_at.
+        experiment (str): The experiment scope these counts belong to. Empty means the unlabeled tasks.
+        all_experiments (bool):
         avg_reward (float | None | Unset):
     """
 
@@ -35,6 +37,8 @@ class StreamStats:
     done_count: int
     failed_count: int
     reward_points: list[StreamRewardPoint]
+    experiment: str
+    all_experiments: bool
     avg_reward: float | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -54,6 +58,10 @@ class StreamStats:
             reward_points_item = reward_points_item_data.to_dict()
             reward_points.append(reward_points_item)
 
+        experiment = self.experiment
+
+        all_experiments = self.all_experiments
+
         avg_reward: float | None | Unset
         if isinstance(self.avg_reward, Unset):
             avg_reward = UNSET
@@ -70,6 +78,8 @@ class StreamStats:
                 "done_count": done_count,
                 "failed_count": failed_count,
                 "reward_points": reward_points,
+                "experiment": experiment,
+                "all_experiments": all_experiments,
             }
         )
         if avg_reward is not UNSET:
@@ -99,6 +109,10 @@ class StreamStats:
 
             reward_points.append(reward_points_item)
 
+        experiment = d.pop("experiment")
+
+        all_experiments = d.pop("all_experiments")
+
         def _parse_avg_reward(data: object) -> float | None | Unset:
             if data is None:
                 return data
@@ -115,6 +129,8 @@ class StreamStats:
             done_count=done_count,
             failed_count=failed_count,
             reward_points=reward_points,
+            experiment=experiment,
+            all_experiments=all_experiments,
             avg_reward=avg_reward,
         )
 

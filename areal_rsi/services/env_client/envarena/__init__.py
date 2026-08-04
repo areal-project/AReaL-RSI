@@ -8,11 +8,13 @@ from .client import (
     EnvArenaHTTPError,
     EnvArenaVersionRef,
 )
+from areal_rsi.schemas import EnvArenaEvalRequest
 
 __all__ = [
     "EnvArenaClient",
     "EnvArenaConfig",
     "EnvArenaConfigurationError",
+    "EnvArenaEvalRequest",
     "EnvArenaError",
     "EnvArenaHTTPError",
     "EnvArenaVersionRef",

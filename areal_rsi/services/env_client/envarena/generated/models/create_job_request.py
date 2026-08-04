@@ -25,8 +25,8 @@ class CreateJobRequest:
         benchmark_ref (VersionRef):
         harness_ref (VersionRef):
         job_id (str | Unset): Optional readable Job short name, for example programbench. The server appends
-            -YYMMDDHHMM; if omitted, it uses job-YYMMDDHHMM. A short numeric suffix resolves same-minute collisions.
-            Example: programbench.
+            -YYMMDDHHMM; if omitted, it uses job-YYMMDDHHMM. A random lowercase-alphanumeric suffix resolves same-minute
+            collisions. Returns 409 if the resulting job_id is already taken. Example: programbench.
         model_ref (VersionRef | Unset):
         model (ModelSpec | Unset): Compact model runtime config. EnvArena recognizes model_name, parameters, and env;
             unknown fields are preserved but are not used for routing.

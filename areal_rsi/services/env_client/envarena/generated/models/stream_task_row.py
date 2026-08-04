@@ -26,6 +26,7 @@ class StreamTaskRow:
         reward (None | StreamTaskRowRewardType0 | Unset):
         data_id (str | Unset):
         partition (str | Unset):
+        experiment (str | Unset): Experiment dimension of the task; absent for tasks launched without one.
     """
 
     task: Task
@@ -33,6 +34,7 @@ class StreamTaskRow:
     reward: None | StreamTaskRowRewardType0 | Unset = UNSET
     data_id: str | Unset = UNSET
     partition: str | Unset = UNSET
+    experiment: str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -56,6 +58,8 @@ class StreamTaskRow:
 
         partition = self.partition
 
+        experiment = self.experiment
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -71,6 +75,8 @@ class StreamTaskRow:
             field_dict["data_id"] = data_id
         if partition is not UNSET:
             field_dict["partition"] = partition
+        if experiment is not UNSET:
+            field_dict["experiment"] = experiment
 
         return field_dict
 
@@ -111,12 +117,15 @@ class StreamTaskRow:
 
         partition = d.pop("partition", UNSET)
 
+        experiment = d.pop("experiment", UNSET)
+
         stream_task_row = cls(
             task=task,
             job=job,
             reward=reward,
             data_id=data_id,
             partition=partition,
+            experiment=experiment,
         )
 
         stream_task_row.additional_properties = d

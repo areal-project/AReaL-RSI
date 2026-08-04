@@ -19,14 +19,19 @@ T = TypeVar("T", bound="UpdateHarnessVersionRequest")
 class UpdateHarnessVersionRequest:
     """
     Attributes:
+        storage_ref (str | Unset): Registry material storage binding. `default` is the immutable OSS_* environment
+            configuration.
         spec (HarnessSpec | Unset): Harness is system_prompt + tool_refs + skill_refs plus a versioned agent runtime
             binary. The platform still chooses the execution substrate from the bound Env runtime.
     """
 
+    storage_ref: str | Unset = UNSET
     spec: HarnessSpec | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        storage_ref = self.storage_ref
+
         spec: dict[str, Any] | Unset = UNSET
         if not isinstance(self.spec, Unset):
             spec = self.spec.to_dict()
@@ -34,6 +39,8 @@ class UpdateHarnessVersionRequest:
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
+        if storage_ref is not UNSET:
+            field_dict["storage_ref"] = storage_ref
         if spec is not UNSET:
             field_dict["spec"] = spec
 
@@ -44,6 +51,8 @@ class UpdateHarnessVersionRequest:
         from ..models.harness_spec import HarnessSpec
 
         d = dict(src_dict)
+        storage_ref = d.pop("storage_ref", UNSET)
+
         _spec = d.pop("spec", UNSET)
         spec: HarnessSpec | Unset
         if isinstance(_spec, Unset):
@@ -52,6 +61,7 @@ class UpdateHarnessVersionRequest:
             spec = HarnessSpec.from_dict(_spec)
 
         update_harness_version_request = cls(
+            storage_ref=storage_ref,
             spec=spec,
         )
 

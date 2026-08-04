@@ -16,6 +16,8 @@ def _get_kwargs(
     stream_id: str,
     *,
     status: str | Unset = UNSET,
+    experiment: str | Unset = UNSET,
+    all_experiments: bool | Unset = False,
     limit: int | Unset = 100,
     offset: int | Unset = 0,
 ) -> dict[str, Any]:
@@ -23,6 +25,10 @@ def _get_kwargs(
     params: dict[str, Any] = {}
 
     params["status"] = status
+
+    params["experiment"] = experiment
+
+    params["all_experiments"] = all_experiments
 
     params["limit"] = limit
 
@@ -72,17 +78,21 @@ def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
     status: str | Unset = UNSET,
+    experiment: str | Unset = UNSET,
+    all_experiments: bool | Unset = False,
     limit: int | Unset = 100,
     offset: int | Unset = 0,
 ) -> Response[Error | GetOpenapiV1StreamsStreamIdTasksResponse200]:
     """List online tasks in a Stream
 
      Returns a database-paged task list; use limit and offset rather than loading every task in the
-    Stream.
+    Stream. Results are scoped to one experiment dimension unless all_experiments is set.
 
     Args:
         stream_id (str):
         status (str | Unset):
+        experiment (str | Unset):
+        all_experiments (bool | Unset):  Default: False.
         limit (int | Unset):  Default: 100.
         offset (int | Unset):  Default: 0.
 
@@ -97,6 +107,8 @@ def sync_detailed(
     kwargs = _get_kwargs(
         stream_id=stream_id,
         status=status,
+        experiment=experiment,
+        all_experiments=all_experiments,
         limit=limit,
         offset=offset,
     )
@@ -113,17 +125,21 @@ def sync(
     *,
     client: AuthenticatedClient | Client,
     status: str | Unset = UNSET,
+    experiment: str | Unset = UNSET,
+    all_experiments: bool | Unset = False,
     limit: int | Unset = 100,
     offset: int | Unset = 0,
 ) -> Error | GetOpenapiV1StreamsStreamIdTasksResponse200 | None:
     """List online tasks in a Stream
 
      Returns a database-paged task list; use limit and offset rather than loading every task in the
-    Stream.
+    Stream. Results are scoped to one experiment dimension unless all_experiments is set.
 
     Args:
         stream_id (str):
         status (str | Unset):
+        experiment (str | Unset):
+        all_experiments (bool | Unset):  Default: False.
         limit (int | Unset):  Default: 100.
         offset (int | Unset):  Default: 0.
 
@@ -139,6 +155,8 @@ def sync(
         stream_id=stream_id,
         client=client,
         status=status,
+        experiment=experiment,
+        all_experiments=all_experiments,
         limit=limit,
         offset=offset,
     ).parsed
@@ -149,17 +167,21 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
     status: str | Unset = UNSET,
+    experiment: str | Unset = UNSET,
+    all_experiments: bool | Unset = False,
     limit: int | Unset = 100,
     offset: int | Unset = 0,
 ) -> Response[Error | GetOpenapiV1StreamsStreamIdTasksResponse200]:
     """List online tasks in a Stream
 
      Returns a database-paged task list; use limit and offset rather than loading every task in the
-    Stream.
+    Stream. Results are scoped to one experiment dimension unless all_experiments is set.
 
     Args:
         stream_id (str):
         status (str | Unset):
+        experiment (str | Unset):
+        all_experiments (bool | Unset):  Default: False.
         limit (int | Unset):  Default: 100.
         offset (int | Unset):  Default: 0.
 
@@ -174,6 +196,8 @@ async def asyncio_detailed(
     kwargs = _get_kwargs(
         stream_id=stream_id,
         status=status,
+        experiment=experiment,
+        all_experiments=all_experiments,
         limit=limit,
         offset=offset,
     )
@@ -188,17 +212,21 @@ async def asyncio(
     *,
     client: AuthenticatedClient | Client,
     status: str | Unset = UNSET,
+    experiment: str | Unset = UNSET,
+    all_experiments: bool | Unset = False,
     limit: int | Unset = 100,
     offset: int | Unset = 0,
 ) -> Error | GetOpenapiV1StreamsStreamIdTasksResponse200 | None:
     """List online tasks in a Stream
 
      Returns a database-paged task list; use limit and offset rather than loading every task in the
-    Stream.
+    Stream. Results are scoped to one experiment dimension unless all_experiments is set.
 
     Args:
         stream_id (str):
         status (str | Unset):
+        experiment (str | Unset):
+        all_experiments (bool | Unset):  Default: False.
         limit (int | Unset):  Default: 100.
         offset (int | Unset):  Default: 0.
 
@@ -215,6 +243,8 @@ async def asyncio(
             stream_id=stream_id,
             client=client,
             status=status,
+            experiment=experiment,
+            all_experiments=all_experiments,
             limit=limit,
             offset=offset,
         )

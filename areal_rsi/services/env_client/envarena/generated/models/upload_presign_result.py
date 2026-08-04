@@ -27,6 +27,8 @@ class UploadPresignResult:
         files (list[UploadPresignResultFilesItem]):
         name (str | Unset):
         kind (UploadPresignResultKind | Unset):
+        storage_ref (str | Unset): Registry material storage binding. `default` is the immutable OSS_* environment
+            configuration.
         expires_at (datetime.datetime | Unset):
     """
 
@@ -35,6 +37,7 @@ class UploadPresignResult:
     files: list[UploadPresignResultFilesItem]
     name: str | Unset = UNSET
     kind: UploadPresignResultKind | Unset = UNSET
+    storage_ref: str | Unset = UNSET
     expires_at: datetime.datetime | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -54,6 +57,8 @@ class UploadPresignResult:
         if not isinstance(self.kind, Unset):
             kind = self.kind.value
 
+        storage_ref = self.storage_ref
+
         expires_at: str | Unset = UNSET
         if not isinstance(self.expires_at, Unset):
             expires_at = self.expires_at.isoformat()
@@ -71,6 +76,8 @@ class UploadPresignResult:
             field_dict["name"] = name
         if kind is not UNSET:
             field_dict["kind"] = kind
+        if storage_ref is not UNSET:
+            field_dict["storage_ref"] = storage_ref
         if expires_at is not UNSET:
             field_dict["expires_at"] = expires_at
 
@@ -103,6 +110,8 @@ class UploadPresignResult:
         else:
             kind = UploadPresignResultKind(_kind)
 
+        storage_ref = d.pop("storage_ref", UNSET)
+
         _expires_at = d.pop("expires_at", UNSET)
         expires_at: datetime.datetime | Unset
         if isinstance(_expires_at, Unset):
@@ -116,6 +125,7 @@ class UploadPresignResult:
             files=files,
             name=name,
             kind=kind,
+            storage_ref=storage_ref,
             expires_at=expires_at,
         )
 

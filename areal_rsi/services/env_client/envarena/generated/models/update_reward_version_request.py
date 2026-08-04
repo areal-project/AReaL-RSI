@@ -19,13 +19,18 @@ T = TypeVar("T", bound="UpdateRewardVersionRequest")
 class UpdateRewardVersionRequest:
     """
     Attributes:
+        storage_ref (str | Unset): Registry material storage binding. `default` is the immutable OSS_* environment
+            configuration.
         spec (RewardSpec | Unset):
     """
 
+    storage_ref: str | Unset = UNSET
     spec: RewardSpec | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        storage_ref = self.storage_ref
+
         spec: dict[str, Any] | Unset = UNSET
         if not isinstance(self.spec, Unset):
             spec = self.spec.to_dict()
@@ -33,6 +38,8 @@ class UpdateRewardVersionRequest:
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
+        if storage_ref is not UNSET:
+            field_dict["storage_ref"] = storage_ref
         if spec is not UNSET:
             field_dict["spec"] = spec
 
@@ -43,6 +50,8 @@ class UpdateRewardVersionRequest:
         from ..models.reward_spec import RewardSpec
 
         d = dict(src_dict)
+        storage_ref = d.pop("storage_ref", UNSET)
+
         _spec = d.pop("spec", UNSET)
         spec: RewardSpec | Unset
         if isinstance(_spec, Unset):
@@ -51,6 +60,7 @@ class UpdateRewardVersionRequest:
             spec = RewardSpec.from_dict(_spec)
 
         update_reward_version_request = cls(
+            storage_ref=storage_ref,
             spec=spec,
         )
 

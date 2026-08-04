@@ -13,6 +13,8 @@ def _get_kwargs(
     *,
     status: EntityStatus | Unset = UNSET,
     tag: list[str] | Unset = UNSET,
+    keys: list[str] | Unset = UNSET,
+    created_by: str | Unset = UNSET,
     dataset_task: str | Unset = UNSET,
     partition: str | Unset = UNSET,
     limit: int | Unset = 20,
@@ -32,6 +34,14 @@ def _get_kwargs(
         json_tag = tag
 
     params["tag"] = json_tag
+
+    json_keys: list[str] | Unset = UNSET
+    if not isinstance(keys, Unset):
+        json_keys = keys
+
+    params["keys"] = json_keys
+
+    params["created_by"] = created_by
 
     params["dataset_task"] = dataset_task
 
@@ -76,6 +86,8 @@ def sync_detailed(
     client: AuthenticatedClient | Client,
     status: EntityStatus | Unset = UNSET,
     tag: list[str] | Unset = UNSET,
+    keys: list[str] | Unset = UNSET,
+    created_by: str | Unset = UNSET,
     dataset_task: str | Unset = UNSET,
     partition: str | Unset = UNSET,
     limit: int | Unset = 20,
@@ -86,6 +98,8 @@ def sync_detailed(
     Args:
         status (EntityStatus | Unset):
         tag (list[str] | Unset):
+        keys (list[str] | Unset):
+        created_by (str | Unset):
         dataset_task (str | Unset):
         partition (str | Unset):
         limit (int | Unset):  Default: 20.
@@ -102,6 +116,8 @@ def sync_detailed(
     kwargs = _get_kwargs(
         status=status,
         tag=tag,
+        keys=keys,
+        created_by=created_by,
         dataset_task=dataset_task,
         partition=partition,
         limit=limit,
@@ -120,6 +136,8 @@ def sync(
     client: AuthenticatedClient | Client,
     status: EntityStatus | Unset = UNSET,
     tag: list[str] | Unset = UNSET,
+    keys: list[str] | Unset = UNSET,
+    created_by: str | Unset = UNSET,
     dataset_task: str | Unset = UNSET,
     partition: str | Unset = UNSET,
     limit: int | Unset = 20,
@@ -130,6 +148,8 @@ def sync(
     Args:
         status (EntityStatus | Unset):
         tag (list[str] | Unset):
+        keys (list[str] | Unset):
+        created_by (str | Unset):
         dataset_task (str | Unset):
         partition (str | Unset):
         limit (int | Unset):  Default: 20.
@@ -147,6 +167,8 @@ def sync(
         client=client,
         status=status,
         tag=tag,
+        keys=keys,
+        created_by=created_by,
         dataset_task=dataset_task,
         partition=partition,
         limit=limit,
@@ -159,6 +181,8 @@ async def asyncio_detailed(
     client: AuthenticatedClient | Client,
     status: EntityStatus | Unset = UNSET,
     tag: list[str] | Unset = UNSET,
+    keys: list[str] | Unset = UNSET,
+    created_by: str | Unset = UNSET,
     dataset_task: str | Unset = UNSET,
     partition: str | Unset = UNSET,
     limit: int | Unset = 20,
@@ -169,6 +193,8 @@ async def asyncio_detailed(
     Args:
         status (EntityStatus | Unset):
         tag (list[str] | Unset):
+        keys (list[str] | Unset):
+        created_by (str | Unset):
         dataset_task (str | Unset):
         partition (str | Unset):
         limit (int | Unset):  Default: 20.
@@ -185,6 +211,8 @@ async def asyncio_detailed(
     kwargs = _get_kwargs(
         status=status,
         tag=tag,
+        keys=keys,
+        created_by=created_by,
         dataset_task=dataset_task,
         partition=partition,
         limit=limit,
@@ -201,6 +229,8 @@ async def asyncio(
     client: AuthenticatedClient | Client,
     status: EntityStatus | Unset = UNSET,
     tag: list[str] | Unset = UNSET,
+    keys: list[str] | Unset = UNSET,
+    created_by: str | Unset = UNSET,
     dataset_task: str | Unset = UNSET,
     partition: str | Unset = UNSET,
     limit: int | Unset = 20,
@@ -211,6 +241,8 @@ async def asyncio(
     Args:
         status (EntityStatus | Unset):
         tag (list[str] | Unset):
+        keys (list[str] | Unset):
+        created_by (str | Unset):
         dataset_task (str | Unset):
         partition (str | Unset):
         limit (int | Unset):  Default: 20.
@@ -229,6 +261,8 @@ async def asyncio(
             client=client,
             status=status,
             tag=tag,
+            keys=keys,
+            created_by=created_by,
             dataset_task=dataset_task,
             partition=partition,
             limit=limit,

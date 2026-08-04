@@ -3,10 +3,10 @@ info:
   title: EnvArena Control Plane API
   version: 0.1.1
   description: >
-    Draft automation-facing API for versioned Env, Harness, Tool, Skill, Reward, Benchmark, Model, BenchmarkJob, Task, and result management.
-
+    Draft automation-facing API for versioned Env, Harness, Tool, Skill, Reward, Benchmark, Model,
+    BenchmarkJob, Task, and result management.
 servers:
-  - url: '{__DOMAIN__}'
+  - url: http://localhost:8080
 security:
   - BearerAuth: []
 tags:
@@ -21,12 +21,14 @@ tags:
   - name: benchmarks
   - name: models
   - name: llm
+  - name: model-services
   - name: jobs
   - name: streams
   - name: online
   - name: leaderboard
   - name: tasks
   - name: arena
+
 paths:
   /openapi/v1/openapi.yaml:
     get:
@@ -40,6 +42,7 @@ paths:
             application/yaml:
               schema:
                 type: string
+
   /openapi/v1/docs:
     get:
       tags: [system]
@@ -52,13 +55,46 @@ paths:
             text/html:
               schema:
                 type: string
+
+  /openapi/v1/system/overview:
+    get:
+      tags: [system]
+      summary: Get system health and trend overview
+      parameters:
+        - name: window
+          in: query
+          required: false
+          description: Trend lookback window in seconds. Values above 7 days are clamped.
+          schema:
+            type: integer
+            minimum: 1
+            default: 3600
+        - name: bucket
+          in: query
+          required: false
+          description: Trend bucket size in seconds.
+          schema:
+            type: integer
+            minimum: 1
+            default: 60
+      responses:
+        "200":
+          description: System overview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemOverview"
+        default:
+          $ref: "#/components/responses/Error"
+
   /openapi/v1/cli:
     get:
       tags: [cli]
       summary: Get the latest arena CLI release (version + download links)
       description: >
-        Public. Returns the latest published arena CLI release with per-platform download URLs that stream back through this API (gateway-reachable), so install.sh and `arena update` work before a token is configured.
-
+        Public. Returns the latest published arena CLI release with per-platform
+        download URLs that stream back through this API (gateway-reachable), so
+        install.sh and `arena update` work before a token is configured.
       security: []
       responses:
         "200":
@@ -77,8 +113,9 @@ paths:
       tags: [cli]
       summary: Publish a new arena CLI release (root only)
       description: >
-        Root only. Records the latest CLI release manifest. Upload each platform binary via POST /openapi/v1/uploads first, then reference the returned uploads/ URIs (or absolute http(s) URLs) in downloads[].
-
+        Root only. Records the latest CLI release manifest. Upload each
+        platform binary via POST /openapi/v1/uploads first, then reference the
+        returned uploads/ URIs (or absolute http(s) URLs) in downloads[].
       requestBody:
         required: true
         content:
@@ -104,13 +141,16 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+
   /openapi/v1/cli/install.sh:
     get:
       tags: [cli]
       summary: One-line install script for the arena CLI
       description: >
-        Public. Returns a POSIX shell script with this API's base URL injected. Usage: `curl -fsSL <base>/openapi/v1/cli/install.sh | sh`. It detects the OS/arch, downloads the matching binary, and installs it to /usr/local/bin (falling back to ~/.local/bin).
-
+        Public. Returns a POSIX shell script with this API's base URL injected.
+        Usage: `curl -fsSL <base>/openapi/v1/cli/install.sh | sh`. It detects the
+        OS/arch, downloads the matching binary, and installs it to
+        /usr/local/bin (falling back to ~/.local/bin).
       security: []
       responses:
         "200":
@@ -119,13 +159,15 @@ paths:
             text/x-shellscript:
               schema:
                 type: string
+
   /openapi/v1/cli/download/{platform}:
     get:
       tags: [cli]
       summary: Download the arena CLI binary for a platform
       description: >
-        Public. Streams the platform binary from OSS (or 302-redirects when the release references an absolute URL). platform is a GOOS-GOARCH token, e.g. darwin-arm64 or linux-amd64.
-
+        Public. Streams the platform binary from OSS (or 302-redirects when the
+        release references an absolute URL). platform is a GOOS-GOARCH token,
+        e.g. darwin-arm64 or linux-amd64.
       security: []
       parameters:
         - name: platform
@@ -150,13 +192,16 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+
   /openapi/v1/uploads:
     post:
       tags: [system]
       summary: Stage a file (or unpacked zip directory) and get its uploads/ URI
       description: >
-        Multipart upload into the OSS scratch area. Reference the returned prefix-relative URI from any spec field; publish-time materialization copies the bytes into the immutable registry prefix. Send `unpack=zip` to unpack a zip archive into a directory URI (trailing slash).
-
+        Multipart upload into the OSS scratch area. Reference the returned
+        prefix-relative URI from any spec field; publish-time materialization
+        copies the bytes into the immutable registry prefix. Send `unpack=zip`
+        to unpack a zip archive into a directory URI (trailing slash).
       requestBody:
         required: true
         content:
@@ -173,6 +218,8 @@ paths:
                   type: string
                   enum: [zip]
                   description: Unpack the uploaded zip into a directory URI.
+                storage_ref:
+                  $ref: "#/components/schemas/StorageRef"
       responses:
         "201":
           description: Staged upload
@@ -182,13 +229,123 @@ paths:
                 $ref: "#/components/schemas/UploadResult"
         default:
           $ref: "#/components/responses/Error"
+
+  /openapi/v1/oss-storages:
+    get:
+      tags: [system]
+      summary: List configured OSS backends
+      description: Returns the immutable environment-backed default plus database-managed additional backends. Credentials are always masked.
+      responses:
+        "200":
+          description: OSS storage list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/OSSStorage"
+                  total:
+                    type: integer
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      tags: [system]
+      summary: Create an additional OSS backend (root only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OSSStorageRequest"
+      responses:
+        "201":
+          description: OSS storage created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OSSStorage"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /openapi/v1/oss-storages/{storage_id}:
+    parameters:
+      - name: storage_id
+        in: path
+        required: true
+        schema:
+          type: string
+    patch:
+      tags: [system]
+      summary: Update an additional OSS backend (root only)
+      description: Bucket, endpoint, prefix, and mount_id become immutable after any Registry version references the backend. Credentials may still be rotated.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OSSStorageRequest"
+      responses:
+        "200":
+          description: OSS storage updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OSSStorage"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      tags: [system]
+      summary: Delete an unreferenced additional OSS backend (root only)
+      responses:
+        "204":
+          description: Deleted
+        default:
+          $ref: "#/components/responses/Error"
+
+  /openapi/v1/oss-storages/{storage_id}/test:
+    post:
+      tags: [system]
+      summary: Probe OSS read/write connectivity (root only)
+      parameters:
+        - name: storage_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Probe succeeded
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, storage_id, latency_ms]
+                properties:
+                  ok:
+                    type: boolean
+                  storage_id:
+                    type: string
+                  latency_ms:
+                    type: integer
+                    format: int64
+        default:
+          $ref: "#/components/responses/Error"
+
   /openapi/v1/uploads/presign:
     post:
       tags: [system]
       summary: Get presigned PUT URLs for a direct (client → OSS) upload
       description: >
-        Declares an upload manifest and receives one presigned PUT URL per file under a server-generated scratch base. Clients PUT bytes straight to OSS (send exactly the returned headers; Content-MD5 is part of the signature) and then call /openapi/v1/uploads/complete. Answers 501 when direct upload is disabled (OSS_PRESIGN_ENDPOINT unset); fall back to the legacy multipart POST /openapi/v1/uploads.
-
+        Declares an upload manifest and receives one presigned PUT URL per
+        file under a server-generated scratch base. Clients PUT bytes straight
+        to OSS (send exactly the returned headers; Content-MD5 is part of the
+        signature) and then call /openapi/v1/uploads/complete. Answers 501
+        when direct upload is disabled (OSS_PRESIGN_ENDPOINT unset); fall back
+        to the legacy multipart POST /openapi/v1/uploads.
       requestBody:
         required: true
         content:
@@ -204,13 +361,15 @@ paths:
                 $ref: "#/components/schemas/UploadPresignResult"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/uploads/complete:
     post:
       tags: [system]
       summary: Verify a direct upload and get its final uploads/ URI
       description: >
-        Re-declares the manifest for a presigned upload. The server lists the scratch base and requires an exact match (every manifest file present with its declared size, nothing else); mismatches answer 409.
-
+        Re-declares the manifest for a presigned upload. The server lists the
+        scratch base and requires an exact match (every manifest file present
+        with its declared size, nothing else); mismatches answer 409.
       requestBody:
         required: true
         content:
@@ -226,6 +385,7 @@ paths:
                 $ref: "#/components/schemas/UploadResult"
         default:
           $ref: "#/components/responses/Error"
+
   /api/runtime-config:
     get:
       tags: [system]
@@ -239,6 +399,7 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RuntimeConfig"
+
   /openapi/v1/recovery:
     post:
       tags: [recovery]
@@ -252,6 +413,7 @@ paths:
                 $ref: "#/components/schemas/RecoveryResult"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/envs:
     get:
       tags: [envs]
@@ -259,6 +421,8 @@ paths:
       parameters:
         - $ref: "#/components/parameters/StatusQuery"
         - $ref: "#/components/parameters/TagQuery"
+        - $ref: "#/components/parameters/RegistryKeysQuery"
+        - $ref: "#/components/parameters/CreatedByQuery"
         - $ref: "#/components/parameters/EnvDatasetTaskQuery"
         - $ref: "#/components/parameters/EnvPartitionQuery"
         - $ref: "#/components/parameters/RegistryLimitQuery"
@@ -290,6 +454,27 @@ paths:
                 $ref: "#/components/schemas/Env"
         default:
           $ref: "#/components/responses/Error"
+
+  /openapi/v1/envs/versions:
+    get:
+      tags: [envs]
+      summary: List Env versions across entity keys
+      parameters:
+        - $ref: "#/components/parameters/StatusQuery"
+        - $ref: "#/components/parameters/RegistryKeysQuery"
+        - $ref: "#/components/parameters/CreatedByQuery"
+        - $ref: "#/components/parameters/RegistryLimitQuery"
+        - $ref: "#/components/parameters/RegistryOffsetQuery"
+      responses:
+        "200":
+          description: Env version metadata list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegistryVersionListResponse"
+        default:
+          $ref: "#/components/responses/Error"
+
   /openapi/v1/envs/{key}:
     get:
       tags: [envs]
@@ -336,6 +521,7 @@ paths:
           description: Env deleted
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/envs/{key}/versions:
     get:
       tags: [envs]
@@ -377,6 +563,7 @@ paths:
                 $ref: "#/components/schemas/EnvVersion"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/envs/{key}/versions/{version}:
     get:
       tags: [envs]
@@ -426,6 +613,7 @@ paths:
           description: Env version deleted
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/envs/{key}/versions/{version}/publish:
     post:
       tags: [envs]
@@ -443,6 +631,7 @@ paths:
                 $ref: "#/components/schemas/EnvVersion"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/envs/{key}/versions/{version}/deprecate:
     post:
       tags: [envs]
@@ -459,6 +648,7 @@ paths:
                 $ref: "#/components/schemas/EnvVersion"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/envs/{key}/versions/{version}/archive:
     post:
       tags: [envs]
@@ -475,6 +665,7 @@ paths:
                 $ref: "#/components/schemas/EnvVersion"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/harnesses:
     get:
       tags: [harnesses]
@@ -482,6 +673,8 @@ paths:
       parameters:
         - $ref: "#/components/parameters/StatusQuery"
         - $ref: "#/components/parameters/TagQuery"
+        - $ref: "#/components/parameters/RegistryKeysQuery"
+        - $ref: "#/components/parameters/CreatedByQuery"
         - $ref: "#/components/parameters/RegistryLimitQuery"
         - $ref: "#/components/parameters/RegistryOffsetQuery"
       responses:
@@ -511,6 +704,27 @@ paths:
                 $ref: "#/components/schemas/Harness"
         default:
           $ref: "#/components/responses/Error"
+
+  /openapi/v1/harnesses/versions:
+    get:
+      tags: [harnesses]
+      summary: List Harness versions across entity keys
+      parameters:
+        - $ref: "#/components/parameters/StatusQuery"
+        - $ref: "#/components/parameters/RegistryKeysQuery"
+        - $ref: "#/components/parameters/CreatedByQuery"
+        - $ref: "#/components/parameters/RegistryLimitQuery"
+        - $ref: "#/components/parameters/RegistryOffsetQuery"
+      responses:
+        "200":
+          description: Harness version metadata list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegistryVersionListResponse"
+        default:
+          $ref: "#/components/responses/Error"
+
   /openapi/v1/harnesses/{key}:
     get:
       tags: [harnesses]
@@ -557,6 +771,7 @@ paths:
           description: Harness deleted
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/harnesses/{key}/versions:
     get:
       tags: [harnesses]
@@ -598,6 +813,7 @@ paths:
                 $ref: "#/components/schemas/HarnessVersion"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/harnesses/{key}/versions/{version}:
     get:
       tags: [harnesses]
@@ -647,6 +863,7 @@ paths:
           description: Harness version deleted
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/harnesses/{key}/versions/{version}/publish:
     post:
       tags: [harnesses]
@@ -664,6 +881,7 @@ paths:
                 $ref: "#/components/schemas/HarnessVersion"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/harnesses/{key}/versions/{version}/deprecate:
     post:
       tags: [harnesses]
@@ -680,6 +898,7 @@ paths:
                 $ref: "#/components/schemas/HarnessVersion"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/harnesses/{key}/versions/{version}/archive:
     post:
       tags: [harnesses]
@@ -696,6 +915,7 @@ paths:
                 $ref: "#/components/schemas/HarnessVersion"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/tools:
     get:
       tags: [tools]
@@ -703,6 +923,8 @@ paths:
       parameters:
         - $ref: "#/components/parameters/StatusQuery"
         - $ref: "#/components/parameters/TagQuery"
+        - $ref: "#/components/parameters/RegistryKeysQuery"
+        - $ref: "#/components/parameters/CreatedByQuery"
         - $ref: "#/components/parameters/RegistryLimitQuery"
         - $ref: "#/components/parameters/RegistryOffsetQuery"
       responses:
@@ -732,6 +954,27 @@ paths:
                 $ref: "#/components/schemas/Tool"
         default:
           $ref: "#/components/responses/Error"
+
+  /openapi/v1/tools/versions:
+    get:
+      tags: [tools]
+      summary: List Tool versions across entity keys
+      parameters:
+        - $ref: "#/components/parameters/StatusQuery"
+        - $ref: "#/components/parameters/RegistryKeysQuery"
+        - $ref: "#/components/parameters/CreatedByQuery"
+        - $ref: "#/components/parameters/RegistryLimitQuery"
+        - $ref: "#/components/parameters/RegistryOffsetQuery"
+      responses:
+        "200":
+          description: Tool version metadata list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegistryVersionListResponse"
+        default:
+          $ref: "#/components/responses/Error"
+
   /openapi/v1/tools/{key}:
     get:
       tags: [tools]
@@ -778,6 +1021,7 @@ paths:
           description: Tool deleted
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/tools/{key}/versions:
     get:
       tags: [tools]
@@ -819,6 +1063,7 @@ paths:
                 $ref: "#/components/schemas/ToolVersion"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/tools/{key}/versions/{version}:
     get:
       tags: [tools]
@@ -868,6 +1113,7 @@ paths:
           description: Tool version deleted
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/tools/{key}/versions/{version}/publish:
     post:
       tags: [tools]
@@ -884,6 +1130,7 @@ paths:
                 $ref: "#/components/schemas/ToolVersion"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/tools/{key}/versions/{version}/deprecate:
     post:
       tags: [tools]
@@ -900,6 +1147,7 @@ paths:
                 $ref: "#/components/schemas/ToolVersion"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/tools/{key}/versions/{version}/archive:
     post:
       tags: [tools]
@@ -916,6 +1164,7 @@ paths:
                 $ref: "#/components/schemas/ToolVersion"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/skills:
     get:
       tags: [skills]
@@ -923,6 +1172,8 @@ paths:
       parameters:
         - $ref: "#/components/parameters/StatusQuery"
         - $ref: "#/components/parameters/TagQuery"
+        - $ref: "#/components/parameters/RegistryKeysQuery"
+        - $ref: "#/components/parameters/CreatedByQuery"
         - $ref: "#/components/parameters/RegistryLimitQuery"
         - $ref: "#/components/parameters/RegistryOffsetQuery"
       responses:
@@ -952,6 +1203,7 @@ paths:
                 $ref: "#/components/schemas/Skill"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/skills/import-url:
     post:
       tags: [skills]
@@ -972,6 +1224,7 @@ paths:
                 $ref: "#/components/schemas/SkillVersion"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/skills/import:
     post:
       tags: [skills]
@@ -998,6 +1251,8 @@ paths:
                 tags:
                   type: string
                   description: Comma-separated tags.
+                storage_ref:
+                  $ref: "#/components/schemas/StorageRef"
                 publish:
                   type: boolean
       responses:
@@ -1009,6 +1264,27 @@ paths:
                 $ref: "#/components/schemas/SkillVersion"
         default:
           $ref: "#/components/responses/Error"
+
+  /openapi/v1/skills/versions:
+    get:
+      tags: [skills]
+      summary: List Skill versions across entity keys
+      parameters:
+        - $ref: "#/components/parameters/StatusQuery"
+        - $ref: "#/components/parameters/RegistryKeysQuery"
+        - $ref: "#/components/parameters/CreatedByQuery"
+        - $ref: "#/components/parameters/RegistryLimitQuery"
+        - $ref: "#/components/parameters/RegistryOffsetQuery"
+      responses:
+        "200":
+          description: Skill version metadata list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegistryVersionListResponse"
+        default:
+          $ref: "#/components/responses/Error"
+
   /openapi/v1/skills/{key}:
     get:
       tags: [skills]
@@ -1055,6 +1331,7 @@ paths:
           description: Skill deleted
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/skills/{key}/versions:
     get:
       tags: [skills]
@@ -1096,6 +1373,7 @@ paths:
                 $ref: "#/components/schemas/SkillVersion"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/skills/{key}/versions/{version}:
     get:
       tags: [skills]
@@ -1145,6 +1423,7 @@ paths:
           description: Skill version deleted
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/skills/{key}/versions/{version}/publish:
     post:
       tags: [skills]
@@ -1161,6 +1440,7 @@ paths:
                 $ref: "#/components/schemas/SkillVersion"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/skills/{key}/versions/{version}/deprecate:
     post:
       tags: [skills]
@@ -1177,6 +1457,7 @@ paths:
                 $ref: "#/components/schemas/SkillVersion"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/skills/{key}/versions/{version}/archive:
     post:
       tags: [skills]
@@ -1193,6 +1474,7 @@ paths:
                 $ref: "#/components/schemas/SkillVersion"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/rewards:
     get:
       tags: [rewards]
@@ -1200,6 +1482,8 @@ paths:
       parameters:
         - $ref: "#/components/parameters/StatusQuery"
         - $ref: "#/components/parameters/TagQuery"
+        - $ref: "#/components/parameters/RegistryKeysQuery"
+        - $ref: "#/components/parameters/CreatedByQuery"
         - $ref: "#/components/parameters/RegistryLimitQuery"
         - $ref: "#/components/parameters/RegistryOffsetQuery"
       responses:
@@ -1229,6 +1513,27 @@ paths:
                 $ref: "#/components/schemas/Reward"
         default:
           $ref: "#/components/responses/Error"
+
+  /openapi/v1/rewards/versions:
+    get:
+      tags: [rewards]
+      summary: List Reward versions across entity keys
+      parameters:
+        - $ref: "#/components/parameters/StatusQuery"
+        - $ref: "#/components/parameters/RegistryKeysQuery"
+        - $ref: "#/components/parameters/CreatedByQuery"
+        - $ref: "#/components/parameters/RegistryLimitQuery"
+        - $ref: "#/components/parameters/RegistryOffsetQuery"
+      responses:
+        "200":
+          description: Reward version metadata list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegistryVersionListResponse"
+        default:
+          $ref: "#/components/responses/Error"
+
   /openapi/v1/rewards/{reward_key}:
     get:
       tags: [rewards]
@@ -1275,6 +1580,7 @@ paths:
           description: Reward deleted
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/rewards/{reward_key}/versions:
     get:
       tags: [rewards]
@@ -1316,6 +1622,7 @@ paths:
                 $ref: "#/components/schemas/RewardVersion"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/rewards/{reward_key}/versions/{version}:
     get:
       tags: [rewards]
@@ -1365,6 +1672,7 @@ paths:
           description: Reward version deleted
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/rewards/{reward_key}/versions/{version}/publish:
     post:
       tags: [rewards]
@@ -1382,6 +1690,7 @@ paths:
                 $ref: "#/components/schemas/RewardVersion"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/rewards/{reward_key}/versions/{version}/deprecate:
     post:
       tags: [rewards]
@@ -1398,6 +1707,7 @@ paths:
                 $ref: "#/components/schemas/RewardVersion"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/rewards/{reward_key}/versions/{version}/archive:
     post:
       tags: [rewards]
@@ -1414,13 +1724,14 @@ paths:
                 $ref: "#/components/schemas/RewardVersion"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/arena/matrix:
     get:
       tags: [arena]
       summary: Get the arena model-matrix dashboard config
       description: >
-        Returns the stored arena matrix (stages → ability rows → benchmark refs and tracked issues). Falls back to a built-in default when unset.
-
+        Returns the stored arena matrix (stages → ability rows → benchmark refs
+        and tracked issues). Falls back to a built-in default when unset.
       responses:
         "200":
           description: Arena matrix config
@@ -1434,8 +1745,9 @@ paths:
       tags: [arena]
       summary: Replace the arena model-matrix dashboard config (root only)
       description: >
-        Overwrites the arena matrix. Requires the root identity. The server normalizes ids, dedupes benchmark refs / raw names / job ids, and coerces each issue status to WIP unless FIXED.
-
+        Overwrites the arena matrix. Requires the root identity. The server
+        normalizes ids, dedupes benchmark refs / raw names / job ids, and
+        coerces each issue status to WIP unless FIXED.
       requestBody:
         required: true
         content:
@@ -1457,6 +1769,7 @@ paths:
                 $ref: "#/components/schemas/Error"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/benchmarks:
     get:
       tags: [benchmarks]
@@ -1464,6 +1777,8 @@ paths:
       parameters:
         - $ref: "#/components/parameters/StatusQuery"
         - $ref: "#/components/parameters/TagQuery"
+        - $ref: "#/components/parameters/RegistryKeysQuery"
+        - $ref: "#/components/parameters/CreatedByQuery"
         - $ref: "#/components/parameters/RegistryLimitQuery"
         - $ref: "#/components/parameters/RegistryOffsetQuery"
       responses:
@@ -1493,6 +1808,27 @@ paths:
                 $ref: "#/components/schemas/Benchmark"
         default:
           $ref: "#/components/responses/Error"
+
+  /openapi/v1/benchmarks/versions:
+    get:
+      tags: [benchmarks]
+      summary: List Benchmark versions across entity keys
+      parameters:
+        - $ref: "#/components/parameters/StatusQuery"
+        - $ref: "#/components/parameters/RegistryKeysQuery"
+        - $ref: "#/components/parameters/CreatedByQuery"
+        - $ref: "#/components/parameters/RegistryLimitQuery"
+        - $ref: "#/components/parameters/RegistryOffsetQuery"
+      responses:
+        "200":
+          description: Benchmark version metadata list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegistryVersionListResponse"
+        default:
+          $ref: "#/components/responses/Error"
+
   /openapi/v1/benchmarks/{benchmark_key}:
     get:
       tags: [benchmarks]
@@ -1539,6 +1875,7 @@ paths:
           description: Benchmark deleted
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/benchmarks/{benchmark_key}/versions:
     get:
       tags: [benchmarks]
@@ -1580,6 +1917,7 @@ paths:
                 $ref: "#/components/schemas/BenchmarkVersion"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/benchmarks/{benchmark_key}/versions/{version}:
     get:
       tags: [benchmarks]
@@ -1629,6 +1967,7 @@ paths:
           description: Benchmark version deleted
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/benchmarks/{benchmark_key}/versions/{version}/publish:
     post:
       tags: [benchmarks]
@@ -1646,6 +1985,7 @@ paths:
                 $ref: "#/components/schemas/BenchmarkVersion"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/benchmarks/{benchmark_key}/versions/{version}/deprecate:
     post:
       tags: [benchmarks]
@@ -1662,6 +2002,7 @@ paths:
                 $ref: "#/components/schemas/BenchmarkVersion"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/benchmarks/{benchmark_key}/versions/{version}/archive:
     post:
       tags: [benchmarks]
@@ -1678,6 +2019,7 @@ paths:
                 $ref: "#/components/schemas/BenchmarkVersion"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/models:
     get:
       tags: [models]
@@ -1685,6 +2027,8 @@ paths:
       parameters:
         - $ref: "#/components/parameters/StatusQuery"
         - $ref: "#/components/parameters/TagQuery"
+        - $ref: "#/components/parameters/RegistryKeysQuery"
+        - $ref: "#/components/parameters/CreatedByQuery"
         - $ref: "#/components/parameters/RegistryLimitQuery"
         - $ref: "#/components/parameters/RegistryOffsetQuery"
       responses:
@@ -1714,6 +2058,27 @@ paths:
                 $ref: "#/components/schemas/Model"
         default:
           $ref: "#/components/responses/Error"
+
+  /openapi/v1/models/versions:
+    get:
+      tags: [models]
+      summary: List Model versions across entity keys
+      parameters:
+        - $ref: "#/components/parameters/StatusQuery"
+        - $ref: "#/components/parameters/RegistryKeysQuery"
+        - $ref: "#/components/parameters/CreatedByQuery"
+        - $ref: "#/components/parameters/RegistryLimitQuery"
+        - $ref: "#/components/parameters/RegistryOffsetQuery"
+      responses:
+        "200":
+          description: Model version metadata list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegistryVersionListResponse"
+        default:
+          $ref: "#/components/responses/Error"
+
   /openapi/v1/models/{model_key}:
     get:
       tags: [models]
@@ -1760,6 +2125,7 @@ paths:
           description: Model deleted
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/models/{model_key}/versions:
     get:
       tags: [models]
@@ -1801,6 +2167,7 @@ paths:
                 $ref: "#/components/schemas/ModelVersion"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/models/{model_key}/versions/{version}:
     get:
       tags: [models]
@@ -1850,6 +2217,7 @@ paths:
           description: Model version deleted
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/models/{model_key}/versions/{version}/publish:
     post:
       tags: [models]
@@ -1867,6 +2235,7 @@ paths:
                 $ref: "#/components/schemas/ModelVersion"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/models/{model_key}/versions/{version}/deprecate:
     post:
       tags: [models]
@@ -1883,6 +2252,7 @@ paths:
                 $ref: "#/components/schemas/ModelVersion"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/models/{model_key}/versions/{version}/archive:
     post:
       tags: [models]
@@ -1899,6 +2269,7 @@ paths:
                 $ref: "#/components/schemas/ModelVersion"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/leaderboard:
     get:
       tags: [leaderboard]
@@ -1952,6 +2323,7 @@ paths:
                       $ref: "#/components/schemas/LeaderboardRow"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/online/harnesses:
     get:
       tags: [online]
@@ -1972,6 +2344,7 @@ paths:
                     example: ["tau3-runner@0.1.0"]
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/llm/models:
     get:
       tags: [llm]
@@ -2013,6 +2386,7 @@ paths:
                 $ref: "#/components/schemas/LLMModel"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/llm/models/{name}:
     get:
       tags: [llm]
@@ -2060,13 +2434,16 @@ paths:
           description: LLM model route deleted
         default:
           $ref: "#/components/responses/Error"
-  /api/v1/chat/completions:
+
+  /v1/chat/completions:
     post:
       tags: [llm]
       summary: OpenAI-compatible chat completions through the embedded LLM gateway
       description: >
-        Sends an OpenAI Chat Completions request to the configured model alias. Set stream=true to receive an unbuffered Server-Sent Events response. Authenticate with Authorization: Bearer (an Arena token or enabled endpoint key), or x-api-key (an enabled endpoint key).
-
+        Sends an OpenAI Chat Completions request to the configured model alias.
+        Set stream=true to receive an unbuffered Server-Sent Events response.
+        Authenticate with Authorization: Bearer (an Arena token or enabled
+        endpoint key), or x-api-key (an enabled endpoint key).
       security:
         - BearerAuth: []
         - LLMEndpointAPIKey: []
@@ -2088,13 +2465,16 @@ paths:
                 type: string
         default:
           $ref: "#/components/responses/Error"
-  /api/v1/responses:
+
+  /v1/responses:
     post:
       tags: [llm]
       summary: OpenAI-compatible Responses through the embedded LLM gateway
       description: >
-        Sends an OpenAI Responses request to the configured model alias. Set stream=true to receive an unbuffered Server-Sent Events response. Authenticate with Authorization: Bearer (an Arena token or enabled endpoint key).
-
+        Sends an OpenAI Responses request to the configured model alias.
+        Set stream=true to receive an unbuffered Server-Sent Events response.
+        Authenticate with Authorization: Bearer (an Arena token or enabled
+        endpoint key).
       security:
         - BearerAuth: []
         - LLMEndpointAPIKey: []
@@ -2116,13 +2496,17 @@ paths:
                 type: string
         default:
           $ref: "#/components/responses/Error"
-  /api/v1/messages:
+
+  /v1/messages:
     post:
       tags: [llm]
       summary: Anthropic-compatible Messages through the embedded LLM gateway
       description: >
-        Sends an Anthropic Messages request to the configured model alias. Set stream=true to receive an unbuffered Server-Sent Events response. Authenticate with Authorization: Bearer (an Arena token or enabled endpoint key), or x-api-key (an enabled endpoint key, as used by the Anthropic SDK).
-
+        Sends an Anthropic Messages request to the configured model alias.
+        Set stream=true to receive an unbuffered Server-Sent Events response.
+        Authenticate with Authorization: Bearer (an Arena token or enabled
+        endpoint key), or x-api-key (an enabled endpoint key, as used by the
+        Anthropic SDK).
       security:
         - BearerAuth: []
         - LLMEndpointAPIKey: []
@@ -2144,6 +2528,780 @@ paths:
                 type: string
         default:
           $ref: "#/components/responses/Error"
+
+  /openapi/v1/model-services/command-preview:
+    post:
+      tags: [model-services]
+      summary: Preview the SGLang launch command for a model service
+      description: Calls the internal AIS bridge command builder without creating service rows or submitting an AIS job.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateModelServiceRequest"
+      responses:
+        "200":
+          description: SGLang command preview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelServiceCommandPreview"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /openapi/v1/model-services/ais/resources:
+    get:
+      tags: [model-services]
+      summary: Query AIS resource and job visibility through the bridge
+      responses:
+        "200":
+          description: AIS resource summary from the bridge
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelServiceAISResources"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /openapi/v1/model-services/ais/clusters:
+    get:
+      tags: [model-services]
+      summary: List configured AIS clusters
+      description: Returns DB-backed AIS cluster defaults. The cluster selector value is app_name.
+      responses:
+        "200":
+          description: AIS cluster defaults
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelServiceAISClustersResponse"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /openapi/v1/model-services/catalog:
+    get:
+      tags: [model-services]
+      summary: List migrated model service catalog entries
+      description: Returns model definitions and AIS images imported from AModelService resources.yaml into EnvArena's model_service_catalog tables.
+      responses:
+        "200":
+          description: Model service catalog snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelServiceCatalogResponse"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /openapi/v1/model-services/catalog/parameters:
+    get:
+      tags: [model-services]
+      summary: Count parameter metadata for all catalog models
+      parameters:
+        - name: persist
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Parameter metadata for catalog models
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelServiceCatalogParametersResponse"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /openapi/v1/model-services/catalog/models:
+    post:
+      tags: [model-services]
+      summary: Create a model service catalog model
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ModelServiceCatalogModelRequest"
+      responses:
+        "201":
+          description: Created catalog model
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelServiceCatalogModel"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /openapi/v1/model-services/catalog/models/{model_id}:
+    get:
+      tags: [model-services]
+      summary: Get a model service catalog model
+      parameters:
+        - name: model_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Catalog model
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelServiceCatalogModel"
+        default:
+          $ref: "#/components/responses/Error"
+    put:
+      tags: [model-services]
+      summary: Update a model service catalog model
+      parameters:
+        - name: model_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ModelServiceCatalogModelRequest"
+      responses:
+        "200":
+          description: Updated catalog model
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelServiceCatalogModel"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      tags: [model-services]
+      summary: Delete a model service catalog model
+      parameters:
+        - name: model_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+        default:
+          $ref: "#/components/responses/Error"
+
+  /openapi/v1/model-services/catalog/models/{model_id}/parameters:
+    get:
+      tags: [model-services]
+      summary: Count parameter metadata for one catalog model
+      parameters:
+        - name: model_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: persist
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Parameter metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelServiceCatalogParameters"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /openapi/v1/model-services/catalog/models/{model_id}/config:
+    get:
+      tags: [model-services]
+      summary: Read config.json for a catalog model
+      parameters:
+        - name: model_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Model config.json detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelServiceCatalogConfig"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /openapi/v1/model-services/catalog/images:
+    post:
+      tags: [model-services]
+      summary: Add an AIS image to the model service catalog
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ModelServiceCatalogImageRequest"
+      responses:
+        "201":
+          description: Created catalog image
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelServiceCatalogImage"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /openapi/v1/model-services/catalog/images/{image}:
+    put:
+      tags: [model-services]
+      summary: Rename or update an AIS image in the model service catalog
+      parameters:
+        - name: image
+          in: path
+          required: true
+          schema:
+            type: string
+          description: URL-encoded image string; slashes are accepted by the server route.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ModelServiceCatalogImageRequest"
+      responses:
+        "200":
+          description: Updated catalog image
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelServiceCatalogImage"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      tags: [model-services]
+      summary: Delete an unused AIS image from the model service catalog
+      parameters:
+        - name: image
+          in: path
+          required: true
+          schema:
+            type: string
+          description: URL-encoded image string; slashes are accepted by the server route.
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+        default:
+          $ref: "#/components/responses/Error"
+
+  /openapi/v1/model-services:
+    get:
+      tags: [model-services]
+      summary: List model services
+      responses:
+        "200":
+          description: Model service list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelServiceListResponse"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      tags: [model-services]
+      summary: Create a model service and enqueue AIS SGLang instance submissions
+      description: EnvArena writes service and instance rows to the existing Arena store, returns immediately with instances in SUBMITTING, and submits AIS jobs through the Python AIS bridge in the background.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateModelServiceRequest"
+      responses:
+        "201":
+          description: Created model service
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelService"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /openapi/v1/model-services/cleanup-stopped:
+    post:
+      tags: [model-services]
+      summary: Delete all stopped or failed model services (root only)
+      description: Deletes only services whose instances are all STOPPED or FAILED. Per-service destructive actions remain restricted to the service creator.
+      responses:
+        "200":
+          description: Cleanup report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelServiceCleanupStoppedReport"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /openapi/v1/model-services/settings:
+    get:
+      tags: [model-services]
+      summary: Get model-service runtime settings (root only)
+      description: Secret tokens are reported only as configured/hint flags; root can update them by sending new token values.
+      responses:
+        "200":
+          description: Runtime settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelServiceSettings"
+        default:
+          $ref: "#/components/responses/Error"
+    put:
+      tags: [model-services]
+      summary: Update model-service runtime settings (root only)
+      description: Updates DB-backed model-service defaults, including Go-side bridge/register tokens. MODEL_AIS_BRIDGE_ADDR remains a bridge process startup setting.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateModelServiceSettingsRequest"
+      responses:
+        "200":
+          description: Updated runtime settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelServiceSettings"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /openapi/v1/model-services/migrations:
+    post:
+      operationId: importModelServiceMigration
+      summary: Import an AModelService -> Arena model-service exchange file (root only)
+      tags: [model-services]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Exchange file with schema "arena.model-service.migration/v1"
+      responses:
+        "200":
+          description: Migration report
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  catalog_models: { type: integer }
+                  catalog_images: { type: integer }
+                  services_imported: { type: integer }
+                  instances_imported: { type: integer }
+                  ready_gateway_endpoints: { type: integer }
+                  services_skipped:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        service_id: { type: string }
+                        served_model_name: { type: string }
+                        reason: { type: string }
+        "400": { description: Invalid or unsupported exchange file }
+        "403": { description: Root privileges required }
+
+  /openapi/v1/model-services/{service_id}:
+    get:
+      tags: [model-services]
+      summary: Get a model service
+      parameters:
+        - $ref: "#/components/parameters/ModelServiceID"
+      responses:
+        "200":
+          description: Model service detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelService"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      tags: [model-services]
+      summary: Delete a model service with no active instances
+      description: Deletes the service and its remaining stopped or failed instances. Active instances must be stopped first.
+      parameters:
+        - $ref: "#/components/parameters/ModelServiceID"
+      responses:
+        "204":
+          description: Model service deleted
+        default:
+          $ref: "#/components/responses/Error"
+
+  /openapi/v1/model-services/{service_id}/stop:
+    post:
+      tags: [model-services]
+      summary: Stop all instances of a model service
+      parameters:
+        - $ref: "#/components/parameters/ModelServiceID"
+      responses:
+        "200":
+          description: Stopped model service
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelService"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /openapi/v1/model-services/{service_id}/instances/{instance_id}:
+    get:
+      tags: [model-services]
+      summary: Get a model service instance
+      parameters:
+        - $ref: "#/components/parameters/ModelServiceID"
+        - $ref: "#/components/parameters/ModelServiceInstanceID"
+        - name: include_ais
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+        - $ref: "#/components/parameters/ModelServiceIncludeDetails"
+        - $ref: "#/components/parameters/ModelServiceIncludeLogs"
+        - $ref: "#/components/parameters/ModelServiceLogOffset"
+        - $ref: "#/components/parameters/ModelServiceLogLimit"
+      responses:
+        "200":
+          description: Model service instance detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelServiceInstanceDetail"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      tags: [model-services]
+      summary: Delete one stopped or failed model service instance
+      parameters:
+        - $ref: "#/components/parameters/ModelServiceID"
+        - $ref: "#/components/parameters/ModelServiceInstanceID"
+      responses:
+        "200":
+          description: Parent model service after deleting the instance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelService"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /openapi/v1/model-services/{service_id}/instances/{instance_id}/check:
+    get:
+      tags: [model-services]
+      summary: Check one model service instance
+      description: Checks the control-plane record, direct SGLang endpoint, OpenAI-compatible routes, Arena LLM Gateway route, AIS job, and local SGLang logs.
+      parameters:
+        - $ref: "#/components/parameters/ModelServiceID"
+        - $ref: "#/components/parameters/ModelServiceInstanceID"
+        - name: health_timeout
+          in: query
+          required: false
+          schema:
+            type: number
+            format: double
+            minimum: 0
+            default: 2
+      responses:
+        "200":
+          description: Instance check result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelServiceInstanceCheck"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /openapi/v1/model-services/{service_id}/instances/{instance_id}/stop:
+    post:
+      tags: [model-services]
+      summary: Stop one model service instance
+      parameters:
+        - $ref: "#/components/parameters/ModelServiceID"
+        - $ref: "#/components/parameters/ModelServiceInstanceID"
+      responses:
+        "200":
+          description: Parent model service after stopping the instance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelService"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /openapi/v1/model-services/{service_id}/instances/{instance_id}/probe:
+    post:
+      tags: [model-services]
+      summary: Probe one READY model service instance through the control plane
+      description: The API server forwards a non-streaming OpenAI Chat, OpenAI Responses, or Anthropic Messages request to the instance's registered SGLang endpoint.
+      parameters:
+        - $ref: "#/components/parameters/ModelServiceID"
+        - $ref: "#/components/parameters/ModelServiceInstanceID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ModelServiceInstanceProbeRequest"
+      responses:
+        "200":
+          description: Probe result wrapper
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelServiceInstanceProbeResponse"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /openapi/v1/model-services/{service_id}/instances/{instance_id}/ais:
+    get:
+      tags: [model-services]
+      summary: Query AIS job detail for one model service instance
+      parameters:
+        - $ref: "#/components/parameters/ModelServiceID"
+        - $ref: "#/components/parameters/ModelServiceInstanceID"
+        - $ref: "#/components/parameters/ModelServiceIncludeDetails"
+        - $ref: "#/components/parameters/ModelServiceIncludeLogs"
+        - $ref: "#/components/parameters/ModelServiceLogOffset"
+        - $ref: "#/components/parameters/ModelServiceLogLimit"
+      responses:
+        "200":
+          description: AIS job detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelServiceAISJob"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /openapi/v1/model-services/{service_id}/instances/{instance_id}/logs:
+    get:
+      tags: [model-services]
+      summary: Query local SGLang logs for one model service instance
+      parameters:
+        - $ref: "#/components/parameters/ModelServiceID"
+        - $ref: "#/components/parameters/ModelServiceInstanceID"
+        - name: file_name
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: tail_lines
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 200
+        - name: max_bytes
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 200000
+        - name: line_offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+        - name: line_limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 500
+        - name: include_content
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: true
+      responses:
+        "200":
+          description: Local log files and optional content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelServiceInstanceLogs"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /openapi/v1/model-service/internal/started:
+    post:
+      tags: [model-services]
+      summary: Internal callback marking an AIS instance as started
+      description: Internal endpoint called by AIS jobs. Authorization bearer value must match ARENA_MODEL_SERVICE_REGISTER_TOKEN, not a user token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ModelServiceInstanceStartedRequest"
+      responses:
+        "200":
+          description: Updated model service instance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelServiceInstance"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /openapi/v1/model-service/internal/register:
+    post:
+      tags: [model-services]
+      summary: Internal callback registering a ready SGLang endpoint
+      description: Internal endpoint called by AIS jobs after SGLang health and model probes pass. Authorization bearer value must match ARENA_MODEL_SERVICE_REGISTER_TOKEN.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ModelServiceRegisterInstanceRequest"
+      responses:
+        "200":
+          description: Parent model service after registering the ready endpoint
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelService"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /api/v1/chat/completions:
+    post:
+      tags: [llm]
+      summary: OpenAI-compatible chat completions through the embedded LLM gateway
+      description: >
+        Sends an OpenAI Chat Completions request to the configured model alias.
+        Set stream=true to receive an unbuffered Server-Sent Events response.
+        Authenticate with Authorization: Bearer (an Arena token or enabled
+        endpoint key), or x-api-key (an enabled endpoint key).
+      security:
+        - BearerAuth: []
+        - LLMEndpointAPIKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LLMGatewayRequest"
+      responses:
+        "200":
+          description: OpenAI Chat Completions response or Server-Sent Events stream
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LLMGatewayResponse"
+            text/event-stream:
+              schema:
+                type: string
+        default:
+          $ref: "#/components/responses/Error"
+
+  /api/v1/responses:
+    post:
+      tags: [llm]
+      summary: OpenAI-compatible Responses through the embedded LLM gateway
+      description: >
+        Sends an OpenAI Responses request to the configured model alias.
+        Set stream=true to receive an unbuffered Server-Sent Events response.
+        Authenticate with Authorization: Bearer (an Arena token or enabled
+        endpoint key).
+      security:
+        - BearerAuth: []
+        - LLMEndpointAPIKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LLMGatewayRequest"
+      responses:
+        "200":
+          description: OpenAI Responses response or Server-Sent Events stream
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LLMGatewayResponse"
+            text/event-stream:
+              schema:
+                type: string
+        default:
+          $ref: "#/components/responses/Error"
+
+  /api/v1/messages:
+    post:
+      tags: [llm]
+      summary: Anthropic-compatible Messages through the embedded LLM gateway
+      description: >
+        Sends an Anthropic Messages request to the configured model alias.
+        Set stream=true to receive an unbuffered Server-Sent Events response.
+        Authenticate with Authorization: Bearer (an Arena token or enabled
+        endpoint key), or x-api-key (an enabled endpoint key, as used by the
+        Anthropic SDK).
+      security:
+        - BearerAuth: []
+        - LLMEndpointAPIKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LLMGatewayRequest"
+      responses:
+        "200":
+          description: Anthropic Messages response or Server-Sent Events stream
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LLMGatewayResponse"
+            text/event-stream:
+              schema:
+                type: string
+        default:
+          $ref: "#/components/responses/Error"
+
   /openapi/v1/streams:
     get:
       tags: [streams]
@@ -2188,6 +3346,7 @@ paths:
                 $ref: "#/components/schemas/Stream"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/streams/{stream_id}:
     get:
       tags: [streams]
@@ -2240,6 +3399,7 @@ paths:
           description: Stream deleted
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/streams/{stream_id}/archive:
     post:
       tags: [streams]
@@ -2255,13 +3415,14 @@ paths:
                 $ref: "#/components/schemas/Stream"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/streams/{stream_id}/dataset:
     post:
       tags: [streams]
       summary: Select online dataset data_ids for a Stream
       description: >
-        Applies the Stream selector plus request overrides. Selector supports partition, include_tags, exclude_tags, and optional created_at bounds; no raw SQL is accepted.
-
+        Applies the Stream selector plus request overrides. Selector supports partition,
+        include_tags, exclude_tags, and optional created_at bounds; no raw SQL is accepted.
       parameters:
         - $ref: "#/components/parameters/StreamID"
         - name: limit
@@ -2317,10 +3478,12 @@ paths:
                     type: integer
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/streams/{stream_id}/launch_one_task:
     post:
       tags: [online]
-      summary: Asynchronously launch one online task
+      summary: Launch one online task or PlayForge sandbox
+      description: Standard online requests return 202 after scheduling. Requests with `playforge` synchronously create an ARCA sandbox, persist the derived Harness mount plan, and return a pre-signed port-8080 URL for the PlayForge OpenAI SSE data plane. The public wrapper does not accept caller-selected network, storage, or template fields.
       parameters:
         - $ref: "#/components/parameters/StreamID"
       requestBody:
@@ -2330,6 +3493,12 @@ paths:
             schema:
               $ref: "#/components/schemas/LaunchOneTaskRequest"
       responses:
+        "201":
+          description: PlayForge sandbox created and pre-signed for port-8080 runtime access. The runtime client must check application health before sending OpenAI SSE.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlayForgeLaunchResponse"
         "202":
           description: Online task accepted
           content:
@@ -2338,11 +3507,40 @@ paths:
                 $ref: "#/components/schemas/LaunchOneTaskResponse"
         default:
           $ref: "#/components/responses/Error"
+
+  /openapi/v1/streams/{stream_id}/tasks/{task_id}/finish:
+    post:
+      tags: [online]
+      summary: Finish a PlayForge sandbox task
+      description: Atomically claims and destroys the ARCA sandbox for a PlayForge task. A concurrent caller receives 202 while destruction is in progress; a stale claim is reclaimed by a later finish call or the EnvArena reaper. A completed task returns 200. TTL remains the cleanup fallback if the runtime client cannot call this endpoint.
+      parameters:
+        - $ref: "#/components/parameters/StreamID"
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: PlayForge sandbox task finished
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlayForgeFinishResponse"
+        "202":
+          description: Another EnvArena replica is finishing the PlayForge sandbox
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlayForgeFinishResponse"
+        default:
+          $ref: "#/components/responses/Error"
+
   /openapi/v1/streams/{stream_id}/tasks:
     get:
       tags: [streams]
       summary: List online tasks in a Stream
-      description: Returns a database-paged task list; use limit and offset rather than loading every task in the Stream.
+      description: Returns a database-paged task list; use limit and offset rather than loading every task in the Stream. Results are scoped to one experiment dimension unless all_experiments is set.
       parameters:
         - $ref: "#/components/parameters/StreamID"
         - name: status
@@ -2350,6 +3548,19 @@ paths:
           required: false
           schema:
             type: string
+        - name: experiment
+          in: query
+          required: false
+          description: Experiment dimension scope. Omit it to land on the Stream's newest experiment; pass it empty to select the tasks launched without an experiment; ignored when all_experiments is true.
+          schema:
+            type: string
+        - name: all_experiments
+          in: query
+          required: false
+          description: Aggregate every experiment instead of scoping to one.
+          schema:
+            type: boolean
+            default: false
         - name: limit
           in: query
           required: false
@@ -2369,7 +3580,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [items, total, offset, limit]
+                required: [items, total, offset, limit, experiment, all_experiments]
                 properties:
                   items:
                     type: array
@@ -2381,8 +3592,14 @@ paths:
                     type: integer
                   limit:
                     type: integer
+                  experiment:
+                    type: string
+                    description: The experiment scope the server resolved for this page. Empty means the unlabeled tasks.
+                  all_experiments:
+                    type: boolean
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/streams/{stream_id}/tasks/{task_id}:
     get:
       tags: [streams]
@@ -2403,12 +3620,27 @@ paths:
                 $ref: "#/components/schemas/StreamTaskRow"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/streams/{stream_id}/stats:
     get:
       tags: [streams]
       summary: Get realtime Stream stats and reward points
+      description: Counts and reward points are scoped to one experiment dimension unless all_experiments is set.
       parameters:
         - $ref: "#/components/parameters/StreamID"
+        - name: experiment
+          in: query
+          required: false
+          description: Experiment dimension scope. Omit it to land on the Stream's newest experiment; pass it empty to select the tasks launched without an experiment; ignored when all_experiments is true.
+          schema:
+            type: string
+        - name: all_experiments
+          in: query
+          required: false
+          description: Aggregate every experiment instead of scoping to one.
+          schema:
+            type: boolean
+            default: false
       responses:
         "200":
           description: Stream stats
@@ -2418,6 +3650,35 @@ paths:
                 $ref: "#/components/schemas/StreamStats"
         default:
           $ref: "#/components/responses/Error"
+
+  /openapi/v1/streams/{stream_id}/experiments:
+    get:
+      tags: [streams]
+      summary: List the experiment dimensions present in a Stream
+      description: Buckets the Stream's tasks by experiment, newest first. The row whose experiment is empty holds the tasks launched without one, and the first row is the dimension the task and stats endpoints default to.
+      parameters:
+        - $ref: "#/components/parameters/StreamID"
+      responses:
+        "200":
+          description: Experiment dimensions
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total, latest]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/StreamExperiment"
+                  total:
+                    type: integer
+                  latest:
+                    type: string
+                    description: Experiment of the newest task, which is the default scope of the task and stats endpoints.
+        default:
+          $ref: "#/components/responses/Error"
+
   /openapi/v1/streams/{stream_id}/events:
     get:
       tags: [streams]
@@ -2446,6 +3707,7 @@ paths:
                       $ref: "#/components/schemas/StreamEvent"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/jobs:
     get:
       tags: [jobs]
@@ -2471,6 +3733,7 @@ paths:
           required: false
           schema:
             type: string
+        - $ref: "#/components/parameters/CreatedByQuery"
         - name: tag
           in: query
           required: false
@@ -2509,6 +3772,7 @@ paths:
                 $ref: "#/components/schemas/JobAcceptedResponse"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/jobs/{job_id}:
     get:
       tags: [jobs]
@@ -2533,6 +3797,7 @@ paths:
                     $ref: "#/components/schemas/JobResult"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/jobs/{job_id}/summary:
     get:
       tags: [jobs]
@@ -2549,6 +3814,7 @@ paths:
                 $ref: "#/components/schemas/JobSummaryResponse"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/jobs/{job_id}/envs:
     get:
       tags: [jobs]
@@ -2587,6 +3853,7 @@ paths:
                 $ref: "#/components/schemas/JobEnvListResponse"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/jobs/{job_id}/tasks:
     get:
       tags: [jobs]
@@ -2630,6 +3897,7 @@ paths:
                 $ref: "#/components/schemas/JobTaskListResponse"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/jobs/{job_id}/cancel:
     post:
       tags: [jobs]
@@ -2651,6 +3919,7 @@ paths:
                 $ref: "#/components/schemas/Error"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/jobs/{job_id}/stop:
     post:
       tags: [jobs]
@@ -2680,6 +3949,7 @@ paths:
                 $ref: "#/components/schemas/Error"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/jobs/{job_id}/start:
     post:
       tags: [jobs]
@@ -2708,6 +3978,7 @@ paths:
                 $ref: "#/components/schemas/Error"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/jobs/{job_id}/config:
     patch:
       tags: [jobs]
@@ -2747,6 +4018,7 @@ paths:
                 $ref: "#/components/schemas/Error"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/jobs/{job_id}/retry:
     post:
       tags: [jobs]
@@ -2792,6 +4064,7 @@ paths:
                 $ref: "#/components/schemas/Error"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/jobs/{job_id}/rescore:
     post:
       tags: [jobs]
@@ -2835,6 +4108,7 @@ paths:
                 $ref: "#/components/schemas/Error"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/jobs/{job_id}/executions:
     get:
       tags: [jobs]
@@ -2862,6 +4136,7 @@ paths:
                 $ref: "#/components/schemas/JobExecutionListResponse"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/jobs/{job_id}/result:
     get:
       tags: [jobs]
@@ -2877,13 +4152,15 @@ paths:
                 $ref: "#/components/schemas/JobResult"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/jobs/{job_id}/trajectories:
     get:
       tags: [jobs]
       summary: List trajectory references for every task in a job
       description: >
-        Returns one entry per task with a reference to its trajectory (trajectory_uri + metadata). Pass inline=true to embed the parsed events of each task's latest attempt.
-
+        Returns one entry per task with a reference to its trajectory
+        (trajectory_uri + metadata). Pass inline=true to embed the parsed
+        events of each task's latest attempt.
       parameters:
         - $ref: "#/components/parameters/JobID"
         - name: inline
@@ -2907,26 +4184,29 @@ paths:
                     items:
                       type: object
                       properties:
-                        task_id: {type: string}
-                        env_key: {type: string}
-                        sample_index: {type: integer}
-                        status: {type: string}
-                        attempts: {type: integer}
-                        latest_attempt: {type: integer}
-                        trajectory_uri: {type: string}
-                        event_count: {type: integer}
+                        task_id: { type: string }
+                        env_key: { type: string }
+                        sample_index: { type: integer }
+                        status: { type: string }
+                        attempts: { type: integer }
+                        latest_attempt: { type: integer }
+                        trajectory_uri: { type: string }
+                        event_count: { type: integer }
                         events:
                           type: array
-                          items: {type: object}
+                          items: { type: object }
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/jobs/{job_id}/tasks/{task_id}/trajectory:
     get:
       tags: [jobs]
       summary: Get the complete trajectory of a single task attempt
       description: >
-        Returns the full, structured stream-json trajectory for one task attempt. Default format=json parses each event into a JSON object array (no truncation, no escaping); format=raw streams the verbatim NDJSON. attempt defaults to the latest (task.attempts); valid range 1..attempts.
-
+        Returns the full, structured stream-json trajectory for one task
+        attempt. Default format=json parses each event into a JSON object array
+        (no truncation, no escaping); format=raw streams the verbatim NDJSON.
+        attempt defaults to the latest (task.attempts); valid range 1..attempts.
       parameters:
         - $ref: "#/components/parameters/JobID"
         - $ref: "#/components/parameters/TaskID"
@@ -2951,24 +4231,32 @@ paths:
               schema:
                 type: object
                 properties:
-                  task_id: {type: string}
-                  attempt: {type: integer}
-                  event_count: {type: integer}
+                  task_id: { type: string }
+                  attempt: { type: integer }
+                  event_count: { type: integer }
                   events:
                     type: array
-                    items: {type: object}
+                    items: { type: object }
             application/x-ndjson:
               schema:
                 type: string
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/jobs/{job_id}/tasks/{task_id}/logs/{kind}:
     get:
       tags: [jobs]
       summary: Read one page of a task execution log
       description: >
-        Returns a bounded, UTF-8-safe byte page of the harness, runner, or reward log stored for one task attempt. Page boundaries are aligned to UTF-8 rune starts, so the returned offset may be up to three bytes after the requested offset and content never splits a multi-byte character. kind=runner falls back to the harness log and kind=reward falls back to the shared-sandbox reward log when the dedicated object is absent; source_kind reports which object was served. Follow next_offset to read consecutive pages without gaps; next_offset is omitted on the final page.
-
+        Returns a bounded, UTF-8-safe byte page of the harness, runner, or
+        reward log stored for one task attempt. Page boundaries are aligned to
+        UTF-8 rune starts, so the returned offset may be up to three bytes
+        after the requested offset and content never splits a multi-byte
+        character. kind=runner falls back to the harness log and kind=reward
+        falls back to the shared-sandbox reward log when the dedicated object
+        is absent; source_kind reports which object was served. Follow
+        next_offset to read consecutive pages without gaps; next_offset is
+        omitted on the final page.
       parameters:
         - $ref: "#/components/parameters/JobID"
         - $ref: "#/components/parameters/TaskID"
@@ -3009,10 +4297,11 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [task_id, attempt, kind, source_kind, offset, limit, total_bytes, has_more, content]
+                required:
+                  [task_id, attempt, kind, source_kind, offset, limit, total_bytes, has_more, content]
                 properties:
-                  task_id: {type: string}
-                  attempt: {type: integer}
+                  task_id: { type: string }
+                  attempt: { type: integer }
                   kind:
                     type: string
                     enum: [harness, runner, reward]
@@ -3023,14 +4312,14 @@ paths:
                     type: integer
                     format: int64
                     description: Byte offset of the first returned byte after UTF-8 alignment.
-                  limit: {type: integer, format: int64}
+                  limit: { type: integer, format: int64 }
                   next_offset:
                     type: integer
                     format: int64
                     description: Offset of the next unread byte. Omitted on the final page.
-                  total_bytes: {type: integer, format: int64}
-                  has_more: {type: boolean}
-                  content: {type: string}
+                  total_bytes: { type: integer, format: int64 }
+                  has_more: { type: boolean }
+                  content: { type: string }
               example:
                 task_id: task_9f2c
                 attempt: 2
@@ -3062,6 +4351,7 @@ paths:
                 $ref: "#/components/schemas/Error"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/tasks/{task_id}:
     get:
       tags: [tasks]
@@ -3077,6 +4367,7 @@ paths:
                 $ref: "#/components/schemas/Task"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/tasks/{task_id}/result:
     get:
       tags: [tasks]
@@ -3092,13 +4383,18 @@ paths:
                 $ref: "#/components/schemas/TaskResult"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/tasks/{task_id}/reward-review:
     get:
       tags: [tasks]
       summary: Get structured X2Env Reward review
       description: >
-        Projects the current X2Env deterministic script report into one score card per atomic check and resolves only evidence declared by that report. It is available when the Task has a registered artifacts/x2env/reward_report.json. The script report remains the authoritative source of score and pass; verifier-agent information is diagnostic only. Hidden check descriptions and evidence require root.
-
+        Projects the current X2Env deterministic script report into one score
+        card per atomic check and resolves only evidence declared by that
+        report. It is available when the Task has a registered
+        artifacts/x2env/reward_report.json. The script report remains the
+        authoritative source of score and pass; verifier-agent information is
+        diagnostic only. Hidden check descriptions and evidence require root.
       parameters:
         - $ref: "#/components/parameters/TaskID"
       responses:
@@ -3122,13 +4418,15 @@ paths:
                 $ref: "#/components/schemas/Error"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/tasks/{task_id}/reward-review/evidence/{evidence_id}:
     get:
       tags: [tasks]
       summary: Stream one declared X2Env Reward evidence file
       description: >
-        Streams only a file referenced by the current structured X2Env Reward review. evidence_id is an opaque value returned by reward-review; callers cannot use this route to request arbitrary sandbox paths.
-
+        Streams only a file referenced by the current structured X2Env Reward
+        review. evidence_id is an opaque value returned by reward-review;
+        callers cannot use this route to request arbitrary sandbox paths.
       parameters:
         - $ref: "#/components/parameters/TaskID"
         - name: evidence_id
@@ -3160,6 +4458,7 @@ paths:
                 $ref: "#/components/schemas/Error"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/tasks/{task_id}/trace:
     get:
       tags: [tasks]
@@ -3175,6 +4474,7 @@ paths:
                 $ref: "#/components/schemas/TaskTrace"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/traces/{trace_id}:
     get:
       tags: [tasks]
@@ -3190,6 +4490,7 @@ paths:
                 $ref: "#/components/schemas/TaskTrace"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/tasks/{task_id}/artifacts:
     get:
       tags: [tasks]
@@ -3210,13 +4511,14 @@ paths:
                       $ref: "#/components/schemas/ArtifactRef"
         default:
           $ref: "#/components/responses/Error"
+
   /openapi/v1/tasks/{task_id}/reeval:
     post:
       tags: [tasks]
       summary: Re-run Reward for an existing Task artifact set and refresh JobResult
       description: >
-        Optional reward_ref must point to a published Reward version and pass the same oracle-schema compatibility checks used by Benchmark publish.
-
+        Optional reward_ref must point to a published Reward version and pass
+        the same oracle-schema compatibility checks used by Benchmark publish.
       parameters:
         - $ref: "#/components/parameters/TaskID"
       requestBody:
@@ -3239,6 +4541,7 @@ paths:
                 $ref: "#/components/schemas/Task"
         default:
           $ref: "#/components/responses/Error"
+
 components:
   securitySchemes:
     BearerAuth:
@@ -3249,6 +4552,7 @@ components:
       in: header
       name: x-api-key
       description: Access key configured on an enabled endpoint of the requested LLM model alias.
+
   parameters:
     EnvKey:
       name: key
@@ -3298,6 +4602,48 @@ components:
       required: true
       schema:
         type: string
+    ModelServiceID:
+      name: service_id
+      in: path
+      required: true
+      schema:
+        type: string
+    ModelServiceInstanceID:
+      name: instance_id
+      in: path
+      required: true
+      schema:
+        type: string
+    ModelServiceIncludeDetails:
+      name: include_details
+      in: query
+      required: false
+      schema:
+        type: boolean
+        default: true
+    ModelServiceIncludeLogs:
+      name: include_logs
+      in: query
+      required: false
+      schema:
+        type: boolean
+        default: false
+    ModelServiceLogOffset:
+      name: log_offset
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    ModelServiceLogLimit:
+      name: log_limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        default: 100
     Version:
       name: version
       in: path
@@ -3346,6 +4692,24 @@ components:
         type: array
         items:
           type: string
+    RegistryKeysQuery:
+      name: keys
+      in: query
+      required: false
+      description: Repeat this parameter to select exact Registry entity keys. When combined with created_by or other filters, all filters must match.
+      style: form
+      explode: true
+      schema:
+        type: array
+        items:
+          type: string
+    CreatedByQuery:
+      name: created_by
+      in: query
+      required: false
+      description: Filter resources created by the supplied authenticated username.
+      schema:
+        type: string
     EnvDatasetTaskQuery:
       name: dataset_task
       in: query
@@ -3379,6 +4743,7 @@ components:
         type: integer
         minimum: 0
         default: 0
+
   responses:
     Error:
       description: Error response
@@ -3386,6 +4751,7 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
+
   schemas:
     Error:
       type: object
@@ -3398,6 +4764,207 @@ components:
         details:
           type: object
           additionalProperties: true
+
+    DependencyCheck:
+      type: object
+      required: [status, latency_ms]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, disabled]
+        latency_ms:
+          type: number
+          format: double
+        error:
+          type: string
+        detail:
+          type: string
+
+    HealthReport:
+      type: object
+      required: [status, checks]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        instance_id:
+          type: string
+        checks:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/DependencyCheck"
+
+    SystemOverviewHeadline:
+      type: object
+      required: [max_task_state_age_seconds, arca_quota_in_use, arca_quota_limit, active_tasks, active_jobs]
+      properties:
+        http_success_ratio:
+          type: number
+          format: double
+        platform_success_ratio:
+          type: number
+          format: double
+        max_task_state_age_seconds:
+          type: number
+          format: double
+        max_task_state_status:
+          type: string
+        arca_quota_in_use:
+          type: integer
+          format: int64
+        arca_quota_limit:
+          type: integer
+        active_tasks:
+          type: integer
+          format: int64
+        active_jobs:
+          type: integer
+          format: int64
+
+    SystemOverviewStateRow:
+      type: object
+      required: [status, count, oldest_age_seconds]
+      properties:
+        status:
+          type: string
+        count:
+          type: integer
+          format: int64
+        oldest_age_seconds:
+          type: number
+          format: double
+
+    SystemOverviewSeriesPoint:
+      type: object
+      required: [at, value]
+      properties:
+        at:
+          type: string
+          format: date-time
+        label:
+          type: string
+        value:
+          type: number
+          format: double
+
+    SystemOverviewSeries:
+      type: object
+      required: [metric, points]
+      properties:
+        metric:
+          type: string
+        points:
+          type: array
+          items:
+            $ref: "#/components/schemas/SystemOverviewSeriesPoint"
+
+    SystemOverview:
+      type: object
+      required: [generated_at, window_seconds, bucket_seconds, health, headline, tasks_in_state, jobs_in_state, terminal_tasks_1h, trends]
+      properties:
+        generated_at:
+          type: string
+          format: date-time
+        window_seconds:
+          type: integer
+        bucket_seconds:
+          type: integer
+        health:
+          $ref: "#/components/schemas/HealthReport"
+        headline:
+          $ref: "#/components/schemas/SystemOverviewHeadline"
+        tasks_in_state:
+          type: array
+          nullable: true
+          items:
+            $ref: "#/components/schemas/SystemOverviewStateRow"
+        jobs_in_state:
+          type: array
+          nullable: true
+          items:
+            $ref: "#/components/schemas/SystemOverviewStateRow"
+        terminal_tasks_1h:
+          type: object
+          nullable: true
+          additionalProperties:
+            type: integer
+            format: int64
+        trends:
+          type: array
+          nullable: true
+          items:
+            $ref: "#/components/schemas/SystemOverviewSeries"
+        warnings:
+          type: array
+          items:
+            type: string
+
+    StorageRef:
+      type: string
+      default: default
+      description: Registry material storage binding. `default` is the immutable OSS_* environment configuration.
+
+    OSSStorage:
+      type: object
+      required: [storage_id, name, bucket, endpoint, mount_id, secret_set, default, immutable, reference_count]
+      properties:
+        storage_id:
+          type: string
+        name:
+          type: string
+        bucket:
+          type: string
+        endpoint:
+          type: string
+        presign_endpoint:
+          type: string
+        prefix:
+          type: string
+        mount_id:
+          type: string
+        access_key_id_hint:
+          type: string
+        secret_set:
+          type: boolean
+        default:
+          type: boolean
+        immutable:
+          type: boolean
+        reference_count:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    OSSStorageRequest:
+      type: object
+      required: [storage_id, name, bucket, endpoint, mount_id]
+      properties:
+        storage_id:
+          type: string
+          pattern: '^[a-z][a-z0-9_-]{1,62}$'
+        name:
+          type: string
+        bucket:
+          type: string
+        endpoint:
+          type: string
+        presign_endpoint:
+          type: string
+        prefix:
+          type: string
+        mount_id:
+          type: string
+        access_key_id:
+          type: string
+          writeOnly: true
+        access_key_secret:
+          type: string
+          writeOnly: true
+
     UploadResult:
       type: object
       required: [uri]
@@ -3415,6 +4982,9 @@ components:
           type: string
         unpack:
           type: boolean
+        storage_ref:
+          $ref: "#/components/schemas/StorageRef"
+
     UploadManifest:
       type: object
       required: [kind, name, files]
@@ -3429,6 +4999,8 @@ components:
         name:
           type: string
           description: File name (kind=file) or directory name (kind=dir) under the scratch base.
+        storage_ref:
+          $ref: "#/components/schemas/StorageRef"
         files:
           type: array
           maxItems: 5000
@@ -3449,6 +5021,7 @@ components:
               sha256:
                 type: string
                 description: Optional client-declared hex digest, echoed by /uploads/complete for kind=file.
+
     UploadPresignResult:
       type: object
       required: [base, uri, files]
@@ -3464,6 +5037,8 @@ components:
         kind:
           type: string
           enum: [file, dir]
+        storage_ref:
+          $ref: "#/components/schemas/StorageRef"
         expires_at:
           type: string
           format: date-time
@@ -3483,6 +5058,7 @@ components:
                 type: object
                 additionalProperties:
                   type: string
+
     CLIDownload:
       type: object
       required: [platform, uri]
@@ -3506,6 +5082,7 @@ components:
           type: string
           description: Derived at GET time — the streaming download route for this platform. Not persisted.
           example: https://htnn-gateway.alipay.com/envarena/openapi/v1/cli/download/darwin-arm64
+
     CLIManifest:
       type: object
       required: [version, downloads]
@@ -3524,6 +5101,7 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/CLIDownload"
+
     CLIPublishRequest:
       type: object
       required: [version, downloads]
@@ -3538,6 +5116,7 @@ components:
           minItems: 1
           items:
             $ref: "#/components/schemas/CLIDownload"
+
     RuntimeConfig:
       type: object
       required: [host_addr, openapi_base_url]
@@ -3562,6 +5141,7 @@ components:
               type: array
               items:
                 $ref: "#/components/schemas/RuntimeProfile"
+
     RuntimeProfile:
       type: object
       required: [key, label, kind]
@@ -3578,12 +5158,15 @@ components:
         network:
           type: string
           enum: [enabled, disabled]
+
     EntityStatus:
       type: string
       enum: [DRAFT, PUBLISHED, DEPRECATED, ARCHIVED]
+
     JobStatus:
       type: string
       enum: [PENDING, RUNNING, AGGREGATING, STOPPING, STOPPED, DONE, FAILED, CANCELLED, TIMEOUT]
+
     TaskStatus:
       type: string
       enum:
@@ -3604,9 +5187,11 @@ components:
         - FAILED
         - TIMEOUT
         - CANCELLED
+
     ResultStatus:
       type: string
       enum: [OK, HARNESS_FAILED, EVAL_FAILED, FAILED, TIMEOUT, CANCELLED]
+
     RecoveryResult:
       type: object
       required: [recovered_jobs, reset_tasks]
@@ -3625,6 +5210,7 @@ components:
         skipped_sandboxes:
           type: object
           additionalProperties: true
+
     VersionRef:
       type: object
       required: [key, version]
@@ -3634,6 +5220,7 @@ components:
         version:
           type: string
           example: 1.0.0
+
     StreamSelector:
       type: object
       properties:
@@ -3659,6 +5246,7 @@ components:
         limit:
           type: integer
           minimum: 1
+
     Stream:
       type: object
       required: [stream_id, name, task, status]
@@ -3692,6 +5280,7 @@ components:
           format: date-time
         created_by:
           type: string
+
     CreateStreamRequest:
       type: object
       required: [name, task]
@@ -3714,6 +5303,7 @@ components:
           type: object
           additionalProperties:
             type: string
+
     UpdateStreamRequest:
       type: object
       properties:
@@ -3736,6 +5326,7 @@ components:
           type: object
           additionalProperties:
             type: string
+
     StreamDataRef:
       type: object
       required: [data_id, env_ref]
@@ -3754,6 +5345,7 @@ components:
         created_at:
           type: string
           format: date-time
+
     ArenaMatrix:
       type: object
       required: [stages]
@@ -3765,6 +5357,7 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ArenaMatrixStage"
+
     ArenaMatrixStage:
       type: object
       required: [id, name, rows]
@@ -3779,6 +5372,7 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ArenaMatrixRow"
+
     ArenaMatrixRow:
       type: object
       required: [id, ability, benchmark_refs]
@@ -3799,6 +5393,7 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ArenaMatrixIssue"
+
     ArenaMatrixIssue:
       type: object
       required: [id, title, job_ids, status]
@@ -3814,12 +5409,18 @@ components:
         status:
           type: string
           enum: [WIP, FIXED]
+
     LaunchOneTaskRequest:
       type: object
-      required: [data_id, base_url, api_key]
+      description: Supply standard online-task fields, or a `playforge` object. A PlayForge request does not register a Harness and does not require `data_id`, `base_url`, or `api_key`.
+      oneOf:
+        - required: [data_id, base_url, api_key]
+        - required: [playforge]
       properties:
         job_id:
           type: string
+          description: Optional explicit Job ID, normally short-name-YYMMDDHHMM. Omit it under concurrent launches so the server generates a collision-free online-YYMMDDHHMM-<random> ID. Returns 409 if the given job_id is already taken.
+          example: online-2606261654
         data_id:
           type: string
           example: env:tau3-retail-001@0.1.0
@@ -3848,6 +5449,13 @@ components:
           type: object
           additionalProperties:
             type: string
+        experiment:
+          type: string
+          description: "Experiment dimension for this task. Tags the job with experiment:<name> and becomes the grouping key of the Stream task and stats endpoints. 1-64 chars matching ^[A-Za-z0-9][A-Za-z0-9._-]*$; omit it to leave the task unlabeled. Falls back to metadata.experiment when unset."
+          example: exp-0803-baseline
+        playforge:
+          $ref: "#/components/schemas/PlayForgeLaunch"
+
     LaunchOneTaskResponse:
       type: object
       required: [accepted, stream_id, job_id, task_id, status]
@@ -3862,6 +5470,213 @@ components:
           type: string
         status:
           type: string
+
+    PlayForgeLaunch:
+      type: object
+      required: [runtime_profile, harness, output_oss_path]
+      description: PlayForge inline Harness and controlled output contract. EnvArena resolves OSS storage and the ARCA template from `runtime_profile`; caller-selected network, storage, and template fields are not part of this schema. `mounts` are read-only additions inside the configured PlayForge OSS scope. EnvArena creates the fixed writable mounts `/output` and `/envarena/out`.
+      properties:
+        runtime_profile:
+          type: string
+          enum: [playforge]
+          description: Must be `playforge`; EnvArena maps this profile to ARCA_PLAYFORGE_TEMPLATE_ID and ARENA_PLAYFORGE_STORAGE_REF.
+        sandbox_ttl_minutes:
+          type: integer
+          minimum: 1
+          maximum: 180
+          description: Optional runtime TTL. When absent, EnvArena uses ARENA_PLAYFORGE_SANDBOX_TTL_MINUTES (default 60).
+        harness:
+          $ref: "#/components/schemas/PlayForgeHarness"
+        mounts:
+          type: array
+          items:
+            $ref: "#/components/schemas/PlayForgeMount"
+        output_oss_path:
+          type: string
+          description: PlayForge release OSS path mounted read-write at `/output`. It must be below ARENA_PLAYFORGE_OUTPUT_PREFIX.
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+
+    PlayForgeHarness:
+      type: object
+      properties:
+        model_id:
+          type: string
+          description: Non-secret sandbox model identifier. EnvArena maps it to ARCA envs.GAMEAGENT_MODEL and rejects a conflicting harness.envs.GAMEAGENT_MODEL value.
+        system_prompt:
+          type: string
+          description: Complete OSS object path inside `<scope>/prompt-catalog/` or `<scope>/user_prompts/`. The object must be non-empty UTF-8, use `.md` or `.txt`, be at most 32 KiB, and not contain template-reserved prompt terms (`sandbox`, `mount`, `oss`, or `挂载`).
+        skills:
+          type: array
+          items:
+            type: string
+          description: Complete OSS directories inside `<scope>/skill-catalog/` or `<scope>/user_skills/`, mounted read-only at their canonical GameAgent selector roots.
+        envs:
+          type: object
+          additionalProperties:
+            type: string
+          description: User runtime environment values merged into the ARCA environment. EnvArena injects task, trace, output, trajectory, and OTel path variables after rejecting reserved platform keys. PlayForge does not receive EnvArena built-in OTLP exporter configuration because its template owns telemetry. EnvArena persists only masked user-supplied values in the PlayForge Harness snapshot.
+
+    PlayForgeMount:
+      type: object
+      required: [oss_path, mount_path]
+      properties:
+        oss_path:
+          type: string
+          description: PlayForge OSS path inside ARENA_PLAYFORGE_OSS_PREFIX for a read-only input mount.
+        mount_path:
+          type: string
+          description: Absolute sandbox path; the mount is always read-only.
+
+    SandboxMount:
+      type: object
+      required: [storage_ref, oss_path, mount_path, read_only]
+      properties:
+        storage_ref:
+          type: string
+          description: Effective EnvArena OSS storage reference selected by the PlayForge runtime profile.
+        oss_path:
+          type: string
+          description: Effective normalized OSS path sent to ARCA.
+        mount_path:
+          type: string
+          description: Effective absolute sandbox mount target.
+        read_only:
+          type: boolean
+          description: True for system prompt, skills, and controlled input mounts; false only for the fixed `/output` release and `/envarena/out` telemetry mounts.
+
+    PlayForgeHarnessSnapshot:
+      type: object
+      properties:
+        model_id:
+          type: string
+          description: Non-secret model identifier selected for the ARCA sandbox.
+        system_prompt:
+          $ref: "#/components/schemas/PlayForgeMount"
+        skills:
+          type: array
+          items:
+            $ref: "#/components/schemas/PlayForgeMount"
+        envs:
+          type: object
+          additionalProperties:
+            type: string
+          description: Redacted Harness environment values retained for task audit. Never use this field for secrets.
+        runtime:
+          $ref: "#/components/schemas/PlayForgeRuntimeSnapshot"
+
+    PlayForgeRuntimeMount:
+      type: object
+      required: [storage_ref, oss_path, mount_path]
+      properties:
+        storage_ref:
+          type: string
+        oss_path:
+          type: string
+        mount_path:
+          type: string
+
+    PlayForgeGameAgentSkillSelector:
+      type: object
+      required: [source, name]
+      properties:
+        source:
+          type: string
+          enum: [catalog, user]
+        name:
+          type: string
+
+    PlayForgeGameAgentSystemPromptSelector:
+      type: object
+      required: [source, path]
+      properties:
+        source:
+          type: string
+          enum: [catalog, user]
+        path:
+          type: string
+
+    PlayForgeGameAgentSelector:
+      type: object
+      properties:
+        model_id:
+          type: string
+        system_prompt:
+          $ref: "#/components/schemas/PlayForgeGameAgentSystemPromptSelector"
+        skills:
+          type: array
+          items:
+            $ref: "#/components/schemas/PlayForgeGameAgentSkillSelector"
+
+    PlayForgeRuntimeSnapshot:
+      type: object
+      required: [runtime_profile, template_id, ttl_minutes, release_output, telemetry_output, gameagent]
+      properties:
+        runtime_profile:
+          type: string
+        template_id:
+          type: string
+        ttl_minutes:
+          type: integer
+          minimum: 1
+          maximum: 180
+        release_output:
+          $ref: "#/components/schemas/PlayForgeRuntimeMount"
+        telemetry_output:
+          $ref: "#/components/schemas/PlayForgeRuntimeMount"
+        gameagent:
+          $ref: "#/components/schemas/PlayForgeGameAgentSelector"
+
+    PlayForgeLaunchResponse:
+      type: object
+      required: [stream_id, job_id, task_id, status, sandbox_url, ttl_minutes, runtime_profile, template_id, gameagent, harness_system_prompt_path, effective_output_oss_path, effective_output_storage_ref]
+      properties:
+        stream_id:
+          type: string
+        job_id:
+          type: string
+        task_id:
+          type: string
+        status:
+          type: string
+        sandbox_url:
+          type: string
+          format: uri
+          description: Pre-signed ARCA session URL for sandbox port 8080. Treat it as a bearer capability and do not expose it in logs, traces, or UI.
+        ttl_minutes:
+          type: integer
+          minimum: 1
+          maximum: 180
+        runtime_profile:
+          type: string
+        template_id:
+          type: string
+        gameagent:
+          $ref: "#/components/schemas/PlayForgeGameAgentSelector"
+        harness_system_prompt_path:
+          type: string
+          description: Effective in-sandbox system prompt file path. Empty when no Harness system prompt OSS file was supplied.
+        effective_output_oss_path:
+          type: string
+          description: Effective storage-normalized release directory mounted at `/output`.
+        effective_output_storage_ref:
+          type: string
+          description: Effective EnvArena OSS storage reference for effective_output_oss_path, selected by the PlayForge runtime profile.
+
+    PlayForgeFinishResponse:
+      type: object
+      required: [task_id, status, finished]
+      properties:
+        task_id:
+          type: string
+        status:
+          type: string
+        finished:
+          type: boolean
+          description: False only while another EnvArena replica is destroying the PlayForge sandbox.
+
     StreamTaskRow:
       type: object
       required: [task]
@@ -3878,6 +5693,10 @@ components:
           type: string
         partition:
           type: string
+        experiment:
+          type: string
+          description: Experiment dimension of the task; absent for tasks launched without one.
+
     StreamRewardPoint:
       type: object
       required: [task_id, reward, computed_at]
@@ -3893,9 +5712,10 @@ components:
         computed_at:
           type: string
           format: date-time
+
     StreamStats:
       type: object
-      required: [request_count, pending_count, running_count, done_count, failed_count, reward_points]
+      required: [request_count, pending_count, running_count, done_count, failed_count, reward_points, experiment, all_experiments]
       properties:
         request_count:
           type: integer
@@ -3915,6 +5735,22 @@ components:
           description: The 1,000 most recently computed successful reward points, ordered by computed_at.
           items:
             $ref: "#/components/schemas/StreamRewardPoint"
+        experiment:
+          type: string
+          description: The experiment scope these counts belong to. Empty means the unlabeled tasks.
+        all_experiments:
+          type: boolean
+
+    StreamExperiment:
+      type: object
+      required: [experiment, task_count]
+      properties:
+        experiment:
+          type: string
+          description: Experiment name; empty for the tasks launched without an experiment.
+        task_count:
+          type: integer
+
     StreamEvent:
       type: object
       required: [event_id, stream_id, type, created_at]
@@ -3939,6 +5775,7 @@ components:
         created_at:
           type: string
           format: date-time
+
     ObjectRef:
       type: object
       required: [uri]
@@ -3950,6 +5787,7 @@ components:
           type: string
         media_type:
           type: string
+
     ResourceSpec:
       type: object
       properties:
@@ -3962,6 +5800,7 @@ components:
         disk:
           type: string
           example: 25Gi
+
     DataSource:
       type: object
       description: Object-store materialization override for Env bundles with non-standard layout.
@@ -3975,6 +5814,7 @@ components:
           type: string
         oss_mount_id:
           type: string
+
     CreateEntityRequest:
       type: object
       required: [key, name]
@@ -3993,6 +5833,7 @@ components:
           type: object
           additionalProperties:
             type: string
+
     UpdateEntityRequest:
       type: object
       properties:
@@ -4008,6 +5849,7 @@ components:
           type: object
           additionalProperties:
             type: string
+
     Env:
       type: object
       required: [key, name]
@@ -4028,24 +5870,31 @@ components:
           type: object
           additionalProperties:
             type: string
+
     Harness:
       allOf:
         - $ref: "#/components/schemas/Env"
+
     Skill:
       allOf:
         - $ref: "#/components/schemas/Env"
+
     Tool:
       allOf:
         - $ref: "#/components/schemas/Env"
+
     Reward:
       allOf:
         - $ref: "#/components/schemas/Env"
+
     Benchmark:
       allOf:
         - $ref: "#/components/schemas/Env"
+
     Model:
       allOf:
         - $ref: "#/components/schemas/Env"
+
     RegistryPageMeta:
       type: object
       required: [total, offset, limit]
@@ -4063,6 +5912,19 @@ components:
           minimum: 1
           maximum: 200
           description: Applied page size. Defaults to 20.
+
+    RegistryVersionListResponse:
+      allOf:
+        - $ref: "#/components/schemas/RegistryPageMeta"
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              description: Version metadata only; fetch the existing key/version endpoint for the full spec.
+              items:
+                $ref: "#/components/schemas/VersionMeta"
+
     EnvListResponse:
       allOf:
         - $ref: "#/components/schemas/RegistryPageMeta"
@@ -4073,6 +5935,7 @@ components:
               type: array
               items:
                 $ref: "#/components/schemas/Env"
+
     HarnessListResponse:
       allOf:
         - $ref: "#/components/schemas/RegistryPageMeta"
@@ -4083,6 +5946,7 @@ components:
               type: array
               items:
                 $ref: "#/components/schemas/Harness"
+
     SkillListResponse:
       allOf:
         - $ref: "#/components/schemas/RegistryPageMeta"
@@ -4093,6 +5957,7 @@ components:
               type: array
               items:
                 $ref: "#/components/schemas/Skill"
+
     ToolListResponse:
       allOf:
         - $ref: "#/components/schemas/RegistryPageMeta"
@@ -4103,6 +5968,7 @@ components:
               type: array
               items:
                 $ref: "#/components/schemas/Tool"
+
     RewardListResponse:
       allOf:
         - $ref: "#/components/schemas/RegistryPageMeta"
@@ -4113,6 +5979,7 @@ components:
               type: array
               items:
                 $ref: "#/components/schemas/Reward"
+
     BenchmarkListResponse:
       allOf:
         - $ref: "#/components/schemas/RegistryPageMeta"
@@ -4123,6 +5990,7 @@ components:
               type: array
               items:
                 $ref: "#/components/schemas/Benchmark"
+
     ModelListResponse:
       allOf:
         - $ref: "#/components/schemas/RegistryPageMeta"
@@ -4133,6 +6001,7 @@ components:
               type: array
               items:
                 $ref: "#/components/schemas/Model"
+
     LLMModel:
       type: object
       required: [model_name, endpoints, enabled]
@@ -4165,6 +6034,7 @@ components:
         created_by:
           type: string
           readOnly: true
+
     LLMModelEndpoint:
       type: object
       required: [endpoint_id, upstream_model, base_url, inbound_protos, weight, enabled, upstream_extra_params]
@@ -4202,14 +6072,17 @@ components:
           type: object
           additionalProperties: true
           description: >
-            Extra JSON fields merged into the request sent to this endpoint's upstream. Nested objects merge recursively and this configuration takes precedence over client fields. model, stream, messages, and input are reserved and must not be set.
-
+            Extra JSON fields merged into the request sent to this endpoint's
+            upstream. Nested objects merge recursively and this configuration
+            takes precedence over client fields. model, stream, messages, and
+            input are reserved and must not be set.
         health_check:
           $ref: "#/components/schemas/LLMEndpointHealthCheck"
         health:
           allOf:
             - $ref: "#/components/schemas/LLMEndpointHealth"
           readOnly: true
+
     LLMEndpointHealthCheck:
       type: object
       required: [url, expected_status, interval_seconds]
@@ -4230,6 +6103,7 @@ components:
           maximum: 86400
           default: 30
           description: Probe interval. A failed probe removes this endpoint from weighted selection.
+
     LLMEndpointHealth:
       type: object
       required: [state]
@@ -4246,6 +6120,7 @@ components:
           format: date-time
         last_error:
           type: string
+
     LLMModelListResponse:
       type: object
       required: [items]
@@ -4254,12 +6129,14 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/LLMModel"
+
     LLMGatewayRequest:
       type: object
       required: [model]
       description: >
-        Protocol-native request body. Fields other than model and stream pass through to the OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages adapter.
-
+        Protocol-native request body. Fields other than model and stream pass
+        through to the OpenAI Chat Completions, OpenAI Responses, or Anthropic
+        Messages adapter.
       properties:
         model:
           type: string
@@ -4268,10 +6145,12 @@ components:
           type: boolean
           default: false
       additionalProperties: true
+
     LLMGatewayResponse:
       type: object
       description: Protocol-native non-streaming response from the selected upstream.
       additionalProperties: true
+
     CreateLLMModelRequest:
       type: object
       required: [model_name, endpoints]
@@ -4290,6 +6169,7 @@ components:
           type: object
           additionalProperties:
             type: string
+
     UpdateLLMModelRequest:
       type: object
       properties:
@@ -4304,6 +6184,7 @@ components:
           type: object
           additionalProperties:
             type: string
+
     LLMModelEndpointRequest:
       type: object
       required: [upstream_model, base_url, inbound_protos]
@@ -4337,10 +6218,974 @@ components:
           type: object
           additionalProperties: true
           description: >
-            Endpoint-specific JSON fields to merge into the upstream request. Omit on PATCH to preserve the existing value; pass {} to clear it.
-
+            Endpoint-specific JSON fields to merge into the upstream request.
+            Omit on PATCH to preserve the existing value; pass {} to clear it.
         health_check:
           $ref: "#/components/schemas/LLMEndpointHealthCheck"
+
+    CreateModelServiceRequest:
+      type: object
+      required: [served_model_name, model_path]
+      additionalProperties: false
+      properties:
+        served_model_name:
+          type: string
+          description: Model alias exposed through EnvArena LLM Gateway after an instance becomes READY.
+          example: qwen3-coder
+        model_path:
+          type: string
+          description: Filesystem model path visible inside the AIS job.
+          example: /storage/openpsi/models/Qwen__Qwen3-Coder
+        image:
+          type: string
+          description: Optional AIS runtime image.
+        replicas:
+          type: integer
+          minimum: 1
+          default: 1
+        resource_spec:
+          $ref: "#/components/schemas/ModelServiceResourceSpec"
+        sglang:
+          $ref: "#/components/schemas/ModelServiceSglangSpec"
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+
+    ModelServiceResourceSpec:
+      type: object
+      additionalProperties: false
+      properties:
+        gpu_num:
+          type: integer
+          minimum: 0
+          default: 8
+        gpu_type:
+          type: string
+          default: h200
+        ais_cluster:
+          type: string
+          description: AIS cluster selector. This is the configured AIS app_name.
+        node_num:
+          type: integer
+          minimum: 1
+          default: 1
+        cpu:
+          type: integer
+          minimum: 1
+          default: 96
+        memory:
+          type: integer
+          minimum: 1
+          default: 500000
+          description: AIS memory request value.
+        disk_m:
+          type: integer
+          minimum: 1
+          default: 1000000
+        host_port:
+          type: integer
+          minimum: 1
+          default: 1
+
+    ModelServiceSglangSpec:
+      type: object
+      additionalProperties: false
+      properties:
+        tp:
+          type: integer
+          minimum: 1
+        dp:
+          type: integer
+          minimum: 1
+        pp_size:
+          type: integer
+          minimum: 1
+        nccl_port:
+          type: integer
+          minimum: 1
+        tokenizer_path:
+          type: string
+        context_length:
+          type: integer
+          minimum: 1
+        tool_call_parser:
+          type: string
+        reasoning_parser:
+          type: string
+        trust_remote_code:
+          type: boolean
+        chunked_prefill_size:
+          type: integer
+          minimum: -1
+        dtype:
+          type: string
+        mem_fraction_static:
+          type: number
+          format: double
+          exclusiveMinimum: true
+          minimum: 0
+        max_running_requests:
+          type: integer
+          minimum: 1
+        mamba_full_memory_ratio:
+          type: number
+          format: double
+          exclusiveMinimum: true
+          minimum: 0
+        json_model_override_args:
+          type: string
+        model_loader_extra_config:
+          type: string
+        chat_template:
+          type: string
+        watchdog_timeout:
+          type: integer
+          minimum: 1
+        log_level:
+          type: string
+        disable_chunked_prefix_cache:
+          type: boolean
+        disable_flashinfer_autotune:
+          type: boolean
+        enable_metrics:
+          type: boolean
+        enable_cache_report:
+          type: boolean
+        log_requests:
+          type: boolean
+        log_requests_level:
+          type: integer
+          minimum: 0
+        runtime_prepare_command:
+          type: string
+        env:
+          type: object
+          description: Additional environment variables for SGLang. Variables managed by model-service are rejected, including MODEL_SERVICE_ID, MODEL_INSTANCE_ID, MODEL_PATH, SERVED_MODEL_NAME, CONTROL_BASE_URL, REGISTER_URL, STARTED_URL, REGISTER_TOKEN, SGLANG_PORT, SGLANG_PORT_INDEX, SGLANG_NNODES, SGLANG_NODE_RANK, SGLANG_DIST_INIT_ADDR, and SGLANG_LOG_DIR.
+          additionalProperties:
+            type: string
+        extra_args:
+          type: string
+
+    ModelServiceCommandPreview:
+      type: object
+      required: [object, launcher_module, argv, command]
+      properties:
+        object:
+          type: string
+          example: sglang_command_preview
+        launcher_module:
+          type: string
+          example: sglang serve
+        argv:
+          type: array
+          items:
+            type: string
+        command:
+          type: string
+
+    ModelServiceDataStoreConfig:
+      type: object
+      additionalProperties: false
+      required: [mount_point, store_name, sub_path]
+      properties:
+        mount_point:
+          type: string
+        store_name:
+          type: string
+        sub_path:
+          type: string
+
+    ModelServiceAISRuntimeConfig:
+      type: object
+      additionalProperties: false
+      properties:
+        login_name:
+          type: string
+          default: aistudio
+        app_name:
+          type: string
+          default: areals3
+        group_id:
+          type: integer
+          minimum: 0
+        priority:
+          type: string
+          default: low
+        runtime:
+          type: string
+          default: pytorch
+        retry_max_attempt:
+          type: integer
+          minimum: 1
+          default: 3
+        job_script_path:
+          type: string
+        default_image:
+          type: string
+        pypai_target_dir:
+          type: string
+          description: Optional PyPAI local target directory for generated job files. Empty keeps PyPAI default.
+        data_stores:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModelServiceDataStoreConfig"
+
+    ModelServiceAISClusterConfig:
+      type: object
+      additionalProperties: false
+      required: [app_name, gpu_type, enabled]
+      properties:
+        app_name:
+          type: string
+          description: AIS app name. Also used as the cluster selector value.
+        group_id:
+          type: integer
+          minimum: 0
+        gpu_type:
+          type: string
+          default: h200
+        enabled:
+          type: boolean
+          default: true
+
+    ModelServiceAISClustersResponse:
+      type: object
+      required: [clusters]
+      properties:
+        clusters:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModelServiceAISClusterConfig"
+
+    ModelServiceSettings:
+      type: object
+      required: [enabled, callback_base_url, register_token_configured, bridge_url, bridge_token_configured, bridge_timeout, endpoint_id_prefix, sglang_log_dir, ais, ais_clusters]
+      properties:
+        enabled:
+          type: boolean
+        callback_base_url:
+          type: string
+        register_token_configured:
+          type: boolean
+          description: Whether the model-service callback register token is configured.
+        register_token_hint:
+          type: string
+        bridge_url:
+          type: string
+          example: http://127.0.0.1:8090
+        bridge_token_configured:
+          type: boolean
+          description: Whether the Go-side bridge bearer token is configured.
+        bridge_token_hint:
+          type: string
+        bridge_timeout:
+          type: string
+          example: 5m
+        endpoint_id_prefix:
+          type: string
+          example: model-service-
+        sglang_log_dir:
+          type: string
+        ais:
+          $ref: "#/components/schemas/ModelServiceAISRuntimeConfig"
+        ais_clusters:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModelServiceAISClusterConfig"
+
+    UpdateModelServiceSettingsRequest:
+      type: object
+      additionalProperties: false
+      required: [enabled, callback_base_url, bridge_url, bridge_timeout, endpoint_id_prefix, sglang_log_dir, ais, ais_clusters]
+      properties:
+        enabled:
+          type: boolean
+        callback_base_url:
+          type: string
+        register_token:
+          type: string
+          description: New model-service callback register token. Omit to keep the current token.
+        bridge_url:
+          type: string
+          example: http://127.0.0.1:8090
+        bridge_token:
+          type: string
+          description: New Go-side bridge bearer token. Omit to keep the current token.
+        bridge_timeout:
+          type: string
+          example: 5m
+        endpoint_id_prefix:
+          type: string
+        sglang_log_dir:
+          type: string
+        ais:
+          $ref: "#/components/schemas/ModelServiceAISRuntimeConfig"
+        ais_clusters:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModelServiceAISClusterConfig"
+
+    ModelServiceCatalogResponse:
+      type: object
+      required: [models, images]
+      properties:
+        models:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModelServiceCatalogModel"
+        images:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModelServiceCatalogImage"
+        image_usages:
+          type: object
+          additionalProperties:
+            type: integer
+
+    ModelServiceCatalogModel:
+      type: object
+      required: [model_id, model_name, model_path, gateway, exists, readable, weights_exist, weights_readable, availability_status, created_at, updated_at]
+      properties:
+        model_id:
+          type: string
+        model_name:
+          type: string
+        family:
+          type: string
+        parameter_count:
+          type: integer
+          format: int64
+        parameter_size:
+          type: string
+        model_path:
+          type: string
+        image:
+          type: string
+        resource_spec:
+          $ref: "#/components/schemas/ModelServiceResourceSpec"
+        sglang:
+          $ref: "#/components/schemas/ModelServiceSglangSpec"
+        gateway:
+          $ref: "#/components/schemas/ModelServiceGatewayConfig"
+        source:
+          type: string
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+        exists:
+          type: boolean
+        readable:
+          type: boolean
+        weights_exist:
+          type: boolean
+        weights_readable:
+          type: boolean
+        availability_status:
+          type: string
+          enum: [AVAILABLE, PATH_MISSING, PATH_UNREADABLE, WEIGHTS_MISSING, WEIGHTS_UNREADABLE]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        created_by:
+          type: string
+
+    ModelServiceCatalogModelRequest:
+      type: object
+      required: [model_id, model_name, model_path]
+      additionalProperties: false
+      properties:
+        model_id:
+          type: string
+        model_name:
+          type: string
+        family:
+          type: string
+        parameter_count:
+          type: integer
+          format: int64
+        parameter_size:
+          type: string
+        model_path:
+          type: string
+        image:
+          type: string
+        resource_spec:
+          $ref: "#/components/schemas/ModelServiceResourceSpec"
+        sglang:
+          $ref: "#/components/schemas/ModelServiceSglangSpec"
+        gateway:
+          $ref: "#/components/schemas/ModelServiceGatewayConfig"
+        source:
+          type: string
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+
+    ModelServiceGatewayConfig:
+      type: object
+      additionalProperties: false
+      properties:
+        inbound_protos:
+          type: array
+          description: Default gateway protocols used when model-service registers a new endpoint for this catalog model.
+          items:
+            type: string
+            enum: [chat, messages, responses]
+          default: [chat, messages]
+        upstream_extra_params:
+          type: object
+          description: Default upstream extra params copied to model-service managed gateway endpoints.
+          additionalProperties: true
+          default: {}
+
+    ModelServiceCatalogImage:
+      type: object
+      required: [image, created_at, updated_at]
+      properties:
+        image:
+          type: string
+        source:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        created_by:
+          type: string
+
+    ModelServiceCatalogImageRequest:
+      type: object
+      required: [image]
+      additionalProperties: false
+      properties:
+        image:
+          type: string
+
+    ModelServiceCatalogParametersResponse:
+      type: object
+      required: [object, count, data]
+      properties:
+        object:
+          type: string
+          enum: [list]
+        count:
+          type: integer
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModelServiceCatalogParameters"
+
+    ModelServiceCatalogParameters:
+      type: object
+      required: [object, model_id, model_name, model_path, exists, readable]
+      properties:
+        object:
+          type: string
+          enum: [model_parameters]
+        model_id:
+          type: string
+        model_name:
+          type: string
+        family:
+          type: string
+        parameter_count:
+          type: integer
+          format: int64
+        parameter_size:
+          type: string
+        model_path:
+          type: string
+        exists:
+          type: boolean
+        readable:
+          type: boolean
+
+    ModelServiceCatalogConfig:
+      type: object
+      required: [object, model_id, model_name, model_path, config_path, exists, readable, config]
+      properties:
+        object:
+          type: string
+          enum: [model_config]
+        model_id:
+          type: string
+        model_name:
+          type: string
+        family:
+          type: string
+        parameter_count:
+          type: integer
+          format: int64
+        parameter_size:
+          type: string
+        model_path:
+          type: string
+        config_path:
+          type: string
+        exists:
+          type: boolean
+        readable:
+          type: boolean
+        config:
+          type: object
+          additionalProperties: true
+
+    ModelServiceListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModelService"
+
+    ModelServiceCleanupStoppedReport:
+      type: object
+      required: [deleted, skipped_active, failures]
+      properties:
+        deleted:
+          type: integer
+        skipped_active:
+          type: integer
+        failures:
+          type: array
+          items:
+            type: object
+            required: [service_id, served_model_name, reason]
+            properties:
+              service_id:
+                type: string
+              served_model_name:
+                type: string
+              reason:
+                type: string
+
+    ModelService:
+      type: object
+      required: [service_id, served_model_name, replicas, status, created_at, updated_at, ready_replicas, instances]
+      properties:
+        service_id:
+          type: string
+        served_model_name:
+          type: string
+        replicas:
+          type: integer
+        status:
+          type: string
+          enum: [PENDING, PARTIAL, READY, DEGRADED, STOPPED, FAILED]
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        created_by:
+          type: string
+        ready_replicas:
+          type: integer
+        instances:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModelServiceInstance"
+
+    ModelServiceInstance:
+      type: object
+      required: [instance_id, service_id, model_path, resource_spec, sglang, node_num, status, created_at, updated_at, submit_attempts]
+      properties:
+        instance_id:
+          type: string
+        service_id:
+          type: string
+        model_path:
+          type: string
+        image:
+          type: string
+        resource_spec:
+          $ref: "#/components/schemas/ModelServiceResourceSpec"
+        sglang:
+          $ref: "#/components/schemas/ModelServiceSglangSpec"
+        job_name:
+          type: string
+        ais_job_id:
+          type: string
+        node_num:
+          type: integer
+        pod_ip:
+          type: string
+        port:
+          type: integer
+        status:
+          type: string
+          enum: [SUBMITTING, PENDING, REGISTERED, READY, UNHEALTHY, STOPPED, FAILED]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        ready_at:
+          type: string
+          format: date-time
+          nullable: true
+        last_health_at:
+          type: string
+          format: date-time
+          nullable: true
+        stopped_at:
+          type: string
+          format: date-time
+          nullable: true
+        error_message:
+          type: string
+        submit_attempts:
+          type: integer
+        bridge_last_error:
+          type: string
+        runtime_seconds:
+          type: number
+          format: double
+        created_by:
+          type: string
+
+    ModelServiceEndpoint:
+      type: object
+      properties:
+        base_url:
+          type: string
+          format: uri
+        v1_url:
+          type: string
+          format: uri
+        models_url:
+          type: string
+          format: uri
+        health_url:
+          type: string
+          format: uri
+
+    ModelServiceInstanceDetail:
+      type: object
+      required: [service, instance, endpoint, resource_request]
+      properties:
+        service:
+          $ref: "#/components/schemas/ModelService"
+        instance:
+          $ref: "#/components/schemas/ModelServiceInstance"
+        endpoint:
+          $ref: "#/components/schemas/ModelServiceEndpoint"
+        resource_request:
+          $ref: "#/components/schemas/ModelServiceInstanceResourceRequest"
+        ais:
+          oneOf:
+            - $ref: "#/components/schemas/ModelServiceAISJob"
+            - type: object
+              additionalProperties: true
+
+    ModelServiceInstanceCheck:
+      type: object
+      required: [object, service_id, instance_id, checked_at, overall_status, service, instance, endpoint, checks]
+      properties:
+        object:
+          type: string
+          enum: [instance_check]
+        service_id:
+          type: string
+        instance_id:
+          type: string
+        checked_at:
+          type: string
+          format: date-time
+        overall_status:
+          type: string
+          enum: [PASS, WARN, FAIL, SKIPPED]
+        service:
+          $ref: "#/components/schemas/ModelService"
+        instance:
+          $ref: "#/components/schemas/ModelServiceInstance"
+        endpoint:
+          $ref: "#/components/schemas/ModelServiceEndpoint"
+        checks:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModelServiceInstanceCheckItem"
+        router_deployment:
+          type: object
+          additionalProperties: true
+        health:
+          type: object
+          additionalProperties: true
+        ais:
+          description: AIS job view or error object.
+        local_logs:
+          $ref: "#/components/schemas/ModelServiceInstanceLogs"
+
+    ModelServiceInstanceCheckItem:
+      type: object
+      required: [key, label, status, message]
+      properties:
+        key:
+          type: string
+        label:
+          type: string
+        status:
+          type: string
+          enum: [PASS, WARN, FAIL, SKIPPED]
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+
+    ModelServiceInstanceResourceRequest:
+      type: object
+      required: [resource_spec, nodes, total_gpus, total_cpu, total_memory, total_disk_m, host_ports]
+      properties:
+        resource_spec:
+          $ref: "#/components/schemas/ModelServiceResourceSpec"
+        nodes:
+          type: integer
+        total_gpus:
+          type: integer
+        total_cpu:
+          type: integer
+        total_memory:
+          type: integer
+        total_disk_m:
+          type: integer
+        host_ports:
+          type: integer
+
+    ModelServiceInstanceProbeRequest:
+      type: object
+      required: [protocol, payload]
+      additionalProperties: false
+      properties:
+        protocol:
+          type: string
+          enum: [chat, responses, messages]
+        payload:
+          type: object
+          additionalProperties: true
+        timeout:
+          type: integer
+          minimum: 1
+          maximum: 300
+          default: 30
+
+    ModelServiceInstanceProbeResponse:
+      type: object
+      required: [ok, status_code, protocol, url]
+      properties:
+        ok:
+          type: boolean
+        status_code:
+          type: integer
+        protocol:
+          type: string
+          enum: [chat, responses, messages]
+        url:
+          type: string
+        response:
+          description: Protocol-native upstream response, or plain text when the upstream did not return JSON.
+        error:
+          type: string
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+
+    ModelServiceInstanceLogs:
+      type: object
+      required: [service_id, instance_id, source, available, files_count, files]
+      properties:
+        service_id:
+          type: string
+        instance_id:
+          type: string
+        source:
+          type: string
+        log_dir:
+          type: string
+        available:
+          type: boolean
+        message:
+          type: string
+        files_count:
+          type: integer
+        files:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModelServiceInstanceLogFile"
+
+    ModelServiceInstanceLogFile:
+      type: object
+      required: [file_name, path, size_bytes, truncated, start_offset, bytes_read, lines_returned, has_more_lines]
+      properties:
+        file_name:
+          type: string
+        path:
+          type: string
+        size_bytes:
+          type: integer
+          format: int64
+        modified_at:
+          type: string
+          format: date-time
+        content:
+          type: string
+        truncated:
+          type: boolean
+        start_offset:
+          type: integer
+          format: int64
+        bytes_read:
+          type: integer
+        line_offset:
+          type: integer
+        line_limit:
+          type: integer
+        lines_returned:
+          type: integer
+        next_line_offset:
+          type: integer
+        has_more_lines:
+          type: boolean
+
+    ModelServiceAISJob:
+      type: object
+      required: [ais_job_id, status]
+      properties:
+        ais_job_id:
+          type: string
+        status:
+          type: string
+        message:
+          type: string
+        detail_url:
+          type: string
+          format: uri
+        training_detail_url:
+          type: string
+          format: uri
+        log_urls:
+          type: array
+          items:
+            type: string
+            format: uri
+        trace_urls:
+          type: array
+          items:
+            type: string
+            format: uri
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModelServiceAISNode"
+        log_tail:
+          type: array
+          items:
+            type: string
+        raw:
+          type: object
+          additionalProperties: true
+
+    ModelServiceAISNode:
+      type: object
+      properties:
+        index:
+          type: integer
+        role:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+        evicted:
+          type: boolean
+        pod_ip:
+          type: string
+        host_ip:
+          type: string
+        log_url:
+          type: string
+          format: uri
+        trace_url:
+          type: string
+          format: uri
+        raw:
+          type: object
+          additionalProperties: true
+
+    ModelServiceAISResources:
+      type: object
+      properties:
+        available:
+          type: boolean
+        source:
+          type: string
+        limits_available:
+          type: boolean
+        jobs_count:
+          type: integer
+        status_counts:
+          type: object
+          additionalProperties:
+            type: integer
+        jobs:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+      additionalProperties: true
+
+    ModelServiceInstanceStartedRequest:
+      type: object
+      required: [service_id, instance_id]
+      additionalProperties: false
+      properties:
+        service_id:
+          type: string
+        instance_id:
+          type: string
+        pod_ip:
+          type: string
+        message:
+          type: string
+
+    ModelServiceRegisterInstanceRequest:
+      type: object
+      required: [service_id, instance_id, pod_ip, port]
+      additionalProperties: false
+      properties:
+        service_id:
+          type: string
+        instance_id:
+          type: string
+        pod_ip:
+          type: string
+        port:
+          type: integer
+          minimum: 1
+        served_model_name:
+          type: string
+        model_path:
+          type: string
+        health_url:
+          type: string
+          format: uri
+
     EnvSpec:
       type: object
       required: [query, runtime, timeout_seconds]
@@ -4362,6 +7207,10 @@ components:
           type: string
           default: /workspace/Target.md
           description: Defaults to /workspace/Target.md.
+        workdir:
+          type: string
+          description: Absolute agent working directory for image Envs. Defaults to the image configured working directory.
+          example: /testbed
         timeout_seconds:
           type: integer
           minimum: 1
@@ -4378,6 +7227,7 @@ components:
         data_source:
           description: Optional object-store materialization override.
           $ref: "#/components/schemas/DataSource"
+
     EnvRuntimeSpec:
       type: object
       required: [kind]
@@ -4396,6 +7246,7 @@ components:
         command:
           type: string
           description: Optional keepalive command for image runtimes. Defaults to sleep infinity.
+
     RuntimeImage:
       type: object
       required: [kind, ref]
@@ -4410,6 +7261,7 @@ components:
           type: string
           description: Optional container startup command. For container_image, Arena defaults to sleep infinity so the sandbox stays alive for exec.
           example: sleep infinity
+
     IOContract:
       type: object
       properties:
@@ -4431,6 +7283,7 @@ components:
         metadata:
           type: object
           additionalProperties: true
+
     HarnessSpec:
       type: object
       required: [runtime, ttl_seconds]
@@ -4466,6 +7319,7 @@ components:
         metadata:
           type: object
           additionalProperties: true
+
     HarnessRuntimeSpec:
       type: object
       required: [type, uri]
@@ -4479,6 +7333,7 @@ components:
           description: OSS URI of the runtime executable, for example a specific claude-code binary version.
         digest:
           type: string
+
     HarnessAgentSpec:
       type: object
       properties:
@@ -4492,6 +7347,7 @@ components:
         metadata:
           type: object
           additionalProperties: true
+
     HarnessMaterialsSpec:
       type: object
       properties:
@@ -4503,6 +7359,7 @@ components:
           $ref: "#/components/schemas/ObjectRef"
         commands:
           $ref: "#/components/schemas/ObjectRef"
+
     SystemPromptSpec:
       type: object
       properties:
@@ -4516,6 +7373,7 @@ components:
           type: string
         digest:
           type: string
+
     ToolSpec:
       type: object
       required: [manifest]
@@ -4534,6 +7392,7 @@ components:
           type: object
           additionalProperties:
             type: string
+
     ToolManifest:
       type: object
       required: [name, description]
@@ -4549,6 +7408,7 @@ components:
           type: object
           additionalProperties:
             type: string
+
     SkillSpec:
       type: object
       required: [bundle, manifest]
@@ -4563,6 +7423,7 @@ components:
           type: object
           additionalProperties:
             type: string
+
     SkillSource:
       type: object
       properties:
@@ -4571,6 +7432,7 @@ components:
           enum: [url, upload, local_path, git]
         uri:
           type: string
+
     SkillManifest:
       type: object
       required: [name, description]
@@ -4585,6 +7447,7 @@ components:
           type: object
           additionalProperties:
             type: string
+
     ImportSkillURLRequest:
       type: object
       required: [url]
@@ -4608,8 +7471,11 @@ components:
           type: object
           additionalProperties:
             type: string
+        storage_ref:
+          $ref: "#/components/schemas/StorageRef"
         publish:
           type: boolean
+
     ScoreSchema:
       type: object
       required: [normalization, sub_scores]
@@ -4637,6 +7503,7 @@ components:
               weight:
                 type: number
                 default: 1
+
     EvalModelSpec:
       type: object
       properties:
@@ -4653,6 +7520,7 @@ components:
         parameters:
           type: object
           additionalProperties: true
+
     RewardSpec:
       type: object
       required: [runtime_image, entrypoint, score_schema, ttl_seconds]
@@ -4677,6 +7545,7 @@ components:
         metadata:
           type: object
           additionalProperties: true
+
     BenchmarkEnvRef:
       type: object
       required: [env_ref]
@@ -4689,6 +7558,7 @@ components:
         params:
           type: object
           additionalProperties: true
+
     AggregationSpec:
       type: object
       required: [method]
@@ -4711,11 +7581,13 @@ components:
         params:
           type: object
           additionalProperties: true
+
     BenchmarkSpec:
       type: object
       description: >
-        Benchmark binds one published Reward to one or more published Envs. When both sides declare oracle schemas, Reward accepted_oracle_schema must match each Env oracle_schema at publish/job creation time.
-
+        Benchmark binds one published Reward to one or more published Envs.
+        When both sides declare oracle schemas, Reward accepted_oracle_schema
+        must match each Env oracle_schema at publish/job creation time.
       required: [reward_ref, env_refs, aggregation]
       properties:
         reward_ref:
@@ -4734,6 +7606,7 @@ components:
         metadata:
           type: object
           additionalProperties: true
+
     VersionMeta:
       type: object
       required: [key, version, status, created_at]
@@ -4744,6 +7617,8 @@ components:
           type: string
         status:
           $ref: "#/components/schemas/EntityStatus"
+        storage_ref:
+          $ref: "#/components/schemas/StorageRef"
         content_hash:
           type: string
         supersedes:
@@ -4758,6 +7633,7 @@ components:
           format: date-time
         published_by:
           type: string
+
     EnvVersion:
       allOf:
         - $ref: "#/components/schemas/VersionMeta"
@@ -4766,6 +7642,7 @@ components:
           properties:
             spec:
               $ref: "#/components/schemas/EnvSpec"
+
     HarnessVersion:
       allOf:
         - $ref: "#/components/schemas/VersionMeta"
@@ -4774,6 +7651,7 @@ components:
           properties:
             spec:
               $ref: "#/components/schemas/HarnessSpec"
+
     ToolVersion:
       allOf:
         - $ref: "#/components/schemas/VersionMeta"
@@ -4782,6 +7660,7 @@ components:
           properties:
             spec:
               $ref: "#/components/schemas/ToolSpec"
+
     SkillVersion:
       allOf:
         - $ref: "#/components/schemas/VersionMeta"
@@ -4790,6 +7669,7 @@ components:
           properties:
             spec:
               $ref: "#/components/schemas/SkillSpec"
+
     RewardVersion:
       allOf:
         - $ref: "#/components/schemas/VersionMeta"
@@ -4798,6 +7678,7 @@ components:
           properties:
             spec:
               $ref: "#/components/schemas/RewardSpec"
+
     BenchmarkVersion:
       allOf:
         - $ref: "#/components/schemas/VersionMeta"
@@ -4806,6 +7687,7 @@ components:
           properties:
             spec:
               $ref: "#/components/schemas/BenchmarkSpec"
+
     ModelVersion:
       allOf:
         - $ref: "#/components/schemas/VersionMeta"
@@ -4814,6 +7696,7 @@ components:
           properties:
             spec:
               $ref: "#/components/schemas/ModelSpec"
+
     CreateEnvVersionRequest:
       type: object
       required: [version, spec]
@@ -4822,13 +7705,19 @@ components:
           type: string
         supersedes:
           type: string
+        storage_ref:
+          $ref: "#/components/schemas/StorageRef"
         spec:
           $ref: "#/components/schemas/EnvSpec"
+
     UpdateEnvVersionRequest:
       type: object
       properties:
+        storage_ref:
+          $ref: "#/components/schemas/StorageRef"
         spec:
           $ref: "#/components/schemas/EnvSpec"
+
     CreateHarnessVersionRequest:
       type: object
       required: [version, spec]
@@ -4837,13 +7726,19 @@ components:
           type: string
         supersedes:
           type: string
+        storage_ref:
+          $ref: "#/components/schemas/StorageRef"
         spec:
           $ref: "#/components/schemas/HarnessSpec"
+
     UpdateHarnessVersionRequest:
       type: object
       properties:
+        storage_ref:
+          $ref: "#/components/schemas/StorageRef"
         spec:
           $ref: "#/components/schemas/HarnessSpec"
+
     CreateToolVersionRequest:
       type: object
       required: [version, spec]
@@ -4852,13 +7747,19 @@ components:
           type: string
         supersedes:
           type: string
+        storage_ref:
+          $ref: "#/components/schemas/StorageRef"
         spec:
           $ref: "#/components/schemas/ToolSpec"
+
     UpdateToolVersionRequest:
       type: object
       properties:
+        storage_ref:
+          $ref: "#/components/schemas/StorageRef"
         spec:
           $ref: "#/components/schemas/ToolSpec"
+
     CreateSkillVersionRequest:
       type: object
       required: [version, spec]
@@ -4867,13 +7768,19 @@ components:
           type: string
         supersedes:
           type: string
+        storage_ref:
+          $ref: "#/components/schemas/StorageRef"
         spec:
           $ref: "#/components/schemas/SkillSpec"
+
     UpdateSkillVersionRequest:
       type: object
       properties:
+        storage_ref:
+          $ref: "#/components/schemas/StorageRef"
         spec:
           $ref: "#/components/schemas/SkillSpec"
+
     CreateRewardVersionRequest:
       type: object
       required: [version, spec]
@@ -4882,13 +7789,19 @@ components:
           type: string
         supersedes:
           type: string
+        storage_ref:
+          $ref: "#/components/schemas/StorageRef"
         spec:
           $ref: "#/components/schemas/RewardSpec"
+
     UpdateRewardVersionRequest:
       type: object
       properties:
+        storage_ref:
+          $ref: "#/components/schemas/StorageRef"
         spec:
           $ref: "#/components/schemas/RewardSpec"
+
     CreateBenchmarkVersionRequest:
       type: object
       required: [version, spec]
@@ -4897,13 +7810,19 @@ components:
           type: string
         supersedes:
           type: string
+        storage_ref:
+          $ref: "#/components/schemas/StorageRef"
         spec:
           $ref: "#/components/schemas/BenchmarkSpec"
+
     UpdateBenchmarkVersionRequest:
       type: object
       properties:
+        storage_ref:
+          $ref: "#/components/schemas/StorageRef"
         spec:
           $ref: "#/components/schemas/BenchmarkSpec"
+
     CreateModelVersionRequest:
       type: object
       required: [version, spec]
@@ -4912,13 +7831,19 @@ components:
           type: string
         supersedes:
           type: string
+        storage_ref:
+          $ref: "#/components/schemas/StorageRef"
         spec:
           $ref: "#/components/schemas/ModelSpec"
+
     UpdateModelVersionRequest:
       type: object
       properties:
+        storage_ref:
+          $ref: "#/components/schemas/StorageRef"
         spec:
           $ref: "#/components/schemas/ModelSpec"
+
     ModelSpec:
       type: object
       additionalProperties: true
@@ -4936,6 +7861,7 @@ components:
           description: Environment variables injected into Harness sandbox and Env image sandbox. Put model gateway and credentials here for now. ARENA_*, OTEL_*, TRACEPARENT/TRACESTATE, Claude Code telemetry controls, and IS_SANDBOX are reserved and cannot be overridden.
           additionalProperties:
             type: string
+
     ConcurrencyPolicy:
       type: object
       properties:
@@ -4951,13 +7877,14 @@ components:
           type: integer
           minimum: 0
           default: 30
+
     CreateJobRequest:
       type: object
       required: [benchmark_ref, harness_ref]
       properties:
         job_id:
           type: string
-          description: Optional readable Job short name, for example programbench. The server appends -YYMMDDHHMM; if omitted, it uses job-YYMMDDHHMM. A short numeric suffix resolves same-minute collisions.
+          description: Optional readable Job short name, for example programbench. The server appends -YYMMDDHHMM; if omitted, it uses job-YYMMDDHHMM. A random lowercase-alphanumeric suffix resolves same-minute collisions. Returns 409 if the resulting job_id is already taken.
           example: programbench
         benchmark_ref:
           $ref: "#/components/schemas/VersionRef"
@@ -4985,6 +7912,7 @@ components:
           type: object
           additionalProperties:
             type: string
+
     BenchmarkJob:
       type: object
       required: [job_id, harness_key, env_keys, concurrency, sample_numbers, status, created_at]
@@ -5068,6 +7996,7 @@ components:
           type: object
           additionalProperties:
             type: string
+
     JobTaskCounts:
       type: object
       required: [total, done, failed, running, pending]
@@ -5095,6 +8024,7 @@ components:
             stop/cancel, not genuine failures). Manual retry mode=failed
             skips them; failed - cancelled is the retry-failed candidate
             count.
+
     JobSummaryResponse:
       type: object
       required: [job, task_counts, env_count]
@@ -5110,10 +8040,14 @@ components:
           minimum: 0
         reward_ref:
           $ref: "#/components/schemas/VersionRef"
+        model_ref:
+          $ref: "#/components/schemas/VersionRef"
+          description: Versioned Model configuration used by this Job, when the Job was created from the Model registry.
         sample_summary:
           type: array
           items:
             $ref: "#/components/schemas/JobSampleSummary"
+
     JobSampleSummary:
       type: object
       required: [sample_index, pass_count, total, pass_rate]
@@ -5131,6 +8065,7 @@ components:
           type: number
           minimum: 0
           maximum: 1
+
     JobEnvSummary:
       type: object
       required:
@@ -5218,6 +8153,7 @@ components:
         avg_duration_ms:
           type: number
           minimum: 0
+
     JobEnvListResponse:
       type: object
       required: [items, total, offset, limit, env_count, task_count, filtered_task_count, status_counts, task_counts]
@@ -5256,6 +8192,7 @@ components:
           $ref: "#/components/schemas/JobTaskCounts"
         result:
           $ref: "#/components/schemas/JobResult"
+
     JobTaskListResponse:
       type: object
       required: [items, total, offset, limit]
@@ -5273,6 +8210,7 @@ components:
         limit:
           type: integer
           minimum: 1
+
     JobAcceptedResponse:
       type: object
       required: [job_id, task_ids]
@@ -5288,6 +8226,7 @@ components:
             type: string
         job:
           $ref: "#/components/schemas/BenchmarkJob"
+
     CreateRescoreJobRequest:
       type: object
       required: [reward_ref]
@@ -5308,6 +8247,7 @@ components:
           type: object
           additionalProperties:
             type: string
+
     CreateRescoreJobResponse:
       type: object
       required: [job_id, task_ids, source_job_id, reward_ref, reward_task_count, agent_task_count]
@@ -5332,6 +8272,7 @@ components:
           type: integer
           enum: [0]
           description: Always zero; a RESCORE Job never launches Agent/Harness sandboxes.
+
     CancelJobResponse:
       type: object
       required: [job, tasks, cancelled_tasks]
@@ -5352,6 +8293,7 @@ components:
         skipped_sandboxes:
           type: object
           additionalProperties: true
+
     StopJobResponse:
       type: object
       required: [job, tasks, stopped_tasks]
@@ -5376,6 +8318,7 @@ components:
         skipped_sandboxes:
           type: object
           additionalProperties: true
+
     StartJobResponse:
       type: object
       required: [job, reset_tasks]
@@ -5386,6 +8329,7 @@ components:
           type: integer
           minimum: 0
           description: Number of non-DONE tasks reset to PENDING for the re-run.
+
     UpdateJobConfigRequest:
       type: object
       required: [config_revision]
@@ -5407,12 +8351,14 @@ components:
           format: int64
           minimum: 0
           description: The config_revision read from the job. Mismatch returns 409.
+
     UpdateJobConfigResponse:
       type: object
       required: [job]
       properties:
         job:
           $ref: "#/components/schemas/BenchmarkJob"
+
     RetryJobRequest:
       type: object
       required: [mode]
@@ -5429,6 +8375,7 @@ components:
         idempotency_key:
           type: string
           description: Optional client key. Replaying the same key returns the recorded outcome instead of opening another generation.
+
     RetryJobResponse:
       type: object
       required: [job, generation, reset_task_ids, reused]
@@ -5446,6 +8393,7 @@ components:
         reused:
           type: boolean
           description: True when the idempotency key matched an earlier retry and nothing was re-run.
+
     JobExecution:
       type: object
       required: [job_id, generation, mode, reset_task_ids, created_at]
@@ -5489,6 +8437,7 @@ components:
         created_at:
           type: string
           format: date-time
+
     JobExecutionListResponse:
       type: object
       required: [items, total]
@@ -5500,6 +8449,7 @@ components:
         total:
           type: integer
           minimum: 0
+
     Task:
       type: object
       required:
@@ -5565,6 +8515,13 @@ components:
           type: string
         eval_sandbox_id:
           type: string
+        sandbox_mounts:
+          type: array
+          description: The effective ARCA mount plan recorded for a PlayForge sandbox task.
+          items:
+            $ref: "#/components/schemas/SandboxMount"
+        playforge_harness:
+          $ref: "#/components/schemas/PlayForgeHarnessSnapshot"
         timings:
           type: object
           additionalProperties:
@@ -5577,6 +8534,7 @@ components:
         updated_at:
           type: string
           format: date-time
+
     ArtifactRef:
       type: object
       required: [name, uri]
@@ -5603,6 +8561,7 @@ components:
           type: integer
         digest:
           type: string
+
     RewardReviewEvidenceAsset:
       type: object
       required: [name, mime_type, uri]
@@ -5614,6 +8573,7 @@ components:
         uri:
           type: string
           description: Authenticated, opaque endpoint for the declared evidence file.
+
     RewardReviewEvidence:
       type: object
       required: [id, kind, detail]
@@ -5627,6 +8587,7 @@ components:
           type: string
         artifact:
           $ref: "#/components/schemas/RewardReviewEvidenceAsset"
+
     RewardReviewCheck:
       type: object
       required: [id, label, visibility, gate, required, status, score]
@@ -5667,6 +8628,7 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/RewardReviewEvidence"
+
     RewardReviewAgent:
       type: object
       required: [status, advisory]
@@ -5679,6 +8641,7 @@ components:
         comparable_check_count:
           type: integer
           minimum: 0
+
     RewardReview:
       type: object
       required: [schema, authoritative, status, score, pass, checks]
@@ -5707,6 +8670,7 @@ components:
             $ref: "#/components/schemas/RewardReviewCheck"
         agent:
           $ref: "#/components/schemas/RewardReviewAgent"
+
     TaskResult:
       type: object
       required: [task_id, status, computed_at]
@@ -5736,6 +8700,7 @@ components:
         computed_at:
           type: string
           format: date-time
+
     JobResult:
       type: object
       required: [job_id, aggregation, task_count, computed_at]
@@ -5781,6 +8746,7 @@ components:
         computed_at:
           type: string
           format: date-time
+
     LeaderboardRow:
       type: object
       required:
@@ -5834,6 +8800,7 @@ components:
         computed_at:
           type: string
           format: date-time
+
     TaskEvent:
       type: object
       required: [id, task_id, attempt, phase, status, message, timestamp]
@@ -5856,6 +8823,7 @@ components:
         timestamp:
           type: string
           format: date-time
+
     TaskTrace:
       type: object
       required: [events]
@@ -5896,6 +8864,7 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ArtifactRef"
+
     TraceSpan:
       type: object
       required: [span_id, name]
@@ -5942,15 +8911,3 @@ components:
               attributes:
                 type: object
                 additionalProperties: true
-x-api-svc:
-  org: tmc
-  project: envarena
-  name: envarena
-  describe: EnvArena Control Plane OpenAPI
-  config:
-    serverUrl: '{__DOMAIN__}'
-    backend:
-      protocol: http
-      endpoints:
-        - envarena-api.aenv-sandbox.svc.et2.alipay.com
-      port: 8080

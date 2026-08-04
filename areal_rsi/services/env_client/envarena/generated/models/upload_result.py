@@ -21,6 +21,8 @@ class UploadResult:
         size (int | Unset):
         sha256 (str | Unset):
         unpack (bool | Unset):
+        storage_ref (str | Unset): Registry material storage binding. `default` is the immutable OSS_* environment
+            configuration.
     """
 
     uri: str
@@ -28,6 +30,7 @@ class UploadResult:
     size: int | Unset = UNSET
     sha256: str | Unset = UNSET
     unpack: bool | Unset = UNSET
+    storage_ref: str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -40,6 +43,8 @@ class UploadResult:
         sha256 = self.sha256
 
         unpack = self.unpack
+
+        storage_ref = self.storage_ref
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
@@ -56,6 +61,8 @@ class UploadResult:
             field_dict["sha256"] = sha256
         if unpack is not UNSET:
             field_dict["unpack"] = unpack
+        if storage_ref is not UNSET:
+            field_dict["storage_ref"] = storage_ref
 
         return field_dict
 
@@ -72,12 +79,15 @@ class UploadResult:
 
         unpack = d.pop("unpack", UNSET)
 
+        storage_ref = d.pop("storage_ref", UNSET)
+
         upload_result = cls(
             uri=uri,
             name=name,
             size=size,
             sha256=sha256,
             unpack=unpack,
+            storage_ref=storage_ref,
         )
 
         upload_result.additional_properties = d

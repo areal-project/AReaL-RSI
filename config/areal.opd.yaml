@@ -1,36 +1,35 @@
-# Deployment settings for AReaL Experience OPD (Slurm).
+# Deployment settings for AReaL Experience OPD (nested-Slurm driver).
 #
-# Unlike areal.*.yaml (SFT, torchrun), OPD drives AReaL's own scheduler from one
-# entrypoint invoked as `<command> --config <yaml> key=value ...`. The RSI
-# wrapper renders an sbatch that runs this entrypoint inside the container on an
-# allocation (the recipe's own scheduler manages the GPUs within it), submits it
-# with `sbatch --parsable`, and blocks until the job leaves the queue and a
-# checkpoint exists (completion detected via squeue, so no sacct dependency).
-# The wrapper appends per-iteration overrides (actor.path, experience_path,
-# train/valid data, experiment_name, trial_name, cluster.fileroot).
+# OPD is launched by reusing AReaL's checked-in CPU driver sbatch: the RSI
+# wrapper sets the driver's environment contract and submits it with
+# `sbatch --parsable`, then waits (squeue only, no sacct) until the driver job
+# leaves the queue and resolves the saved checkpoint. AReaL's own scheduler
+# allocates the colocated actor/rollout/teacher workers inside the run.
+#
+# Per-iteration inputs are supplied by the RSI loop as MODEL_PATH (current
+# checkpoint), EXPERIENCE_PATH (Researcher experience map) and TRAIN_DATA. The
+# deployment paths below are set here; SECRETS (AENV_SYSTEM_URL, WANDB_API_KEY,
+# WANDB_BASE_URL, PYPI_INDEX_URL, ...) must be present in the process
+# environment at launch time and are NOT stored here.
 areal:
   opd:
     scheduler_type: slurm
-    image: /storage/openpsi/images/areal-dev-20260508.sif
-    reservation: rsi
-    n_nodes: 1
-    n_gpus_per_node: 8
-    cpus_per_task: 64
-    memory: 400G
-    time_limit: "24:00:00"
-    bind_paths: [/storage]
     working_directory: /storage/openpsi/users/fenghui/AReaL
-    command:
-      - /opt/.venv/bin/python
-      - -m
-      - examples.mopd.gsm8k_experience_opd
-    config_path: examples/mopd/gsm8k_experience_opd_local.yaml
-    # fileroot + experiment_name must match the recipe YAML so the wrapper can
-    # resolve <fileroot>/checkpoints/<user>/<experiment_name>/<trial>/default.
-    fileroot: /storage/openpsi/rsi-experiments/gsm8k-exp-opd
-    experiment_name: gsm8k-experience-opd
-    trial_name: rsi
+    driver_script: examples/mopd/sbatch_experience_opd_qwen3_30b.sh
+    # fileroot + experiment_name must match the recipe so the wrapper resolves
+    # <fileroot>/checkpoints/<user>/<experiment_name>/<trial>/default.
+    fileroot: /storage/openpsi/rsi-experiments/swe-exp-opd
+    experiment_name: swe-experience-opd
+    # The 026 recipe is fixed at 4x8; a different topology needs a recipe/driver
+    # with a matching allocation_mode.
+    n_nodes: 4
+    n_gpus_per_node: 8
     environment_variables:
-      PYTHONPATH: /storage/openpsi/users/fenghui/AReaL
-    poll_interval_seconds: 30
-    job_timeout_seconds: 86400
+      AREAL_IMAGE: /storage/openpsi/images/areal-dev-20260508.sif
+      # Set these to your checkouts (required by the driver script):
+      AWEAGENT_ROOT: /storage/openpsi/users/fenghui/projects/AWEAgent
+      AWEX_ROOT: /storage/openpsi/users/fenghui/projects/AWEX
+      SGLANG_PYTHON_ROOT: /storage/openpsi/users/fenghui/projects/sglang/python
+      FLASH_LINEAR_ATTENTION_ROOT: /storage/openpsi/users/fenghui/projects/flash-linear-attention
+    poll_interval_seconds: 60
+    job_timeout_seconds: 604800

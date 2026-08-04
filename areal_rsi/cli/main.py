@@ -4,14 +4,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 
-from areal_rsi.agent import FakeRSIAgent, OpenAIAgentConfig, OpenAIRSIAgent
 from areal_rsi.config import RSIRunConfig
 from areal_rsi.controller import LocalRSIController
 from areal_rsi.memory import Memory
-from areal_rsi.schemas.actions import Action, AgentResponse
 from areal_rsi.services import (
     AReaLService,
     ClaudeResearchAgent,
@@ -52,17 +49,6 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("run_id", help="User-started Run id.")
     status.add_argument("--run-root", default="runs")
 
-    chat = subparsers.add_parser("chat", help="Ask RSIAgent for an action.")
-    chat.add_argument("message", nargs="*", help="Message to send. If omitted, an interactive REPL starts.")
-    chat.add_argument("--backend", choices=["fake", "openai"], default="fake")
-    chat.add_argument("--model", help="OpenAI model for --backend openai. Defaults to OPENAI_MODEL or gpt-5-mini.")
-    chat.add_argument("--run-id", help="Current user-started Run id.")
-    chat.add_argument("--run-root", default="runs")
-    chat.add_argument("--execute", action="store_true", help="Execute returned actions with the local controller.")
-    chat.add_argument("--yes", action="store_true", help="Execute actions that require confirmation.")
-    chat.add_argument("--harness", default="mock_harness")
-    chat.add_argument("--config", help="Base RSI config loaded before interpreting start_loop.")
-    chat.add_argument("--stdin", action="store_true", help="Read one message from stdin instead of starting REPL.")
     return parser
 
 
@@ -90,11 +76,6 @@ def main(argv: list[str] | None = None) -> int:
         controller = LocalRSIController(run_root=args.run_root)
         state = controller.get_status(args.run_id)
         print(json.dumps(state.to_dict(), indent=2, ensure_ascii=False, default=repr))
-        return 0
-    if args.command == "chat":
-        result = _chat(args)
-        if result is not None:
-            print(json.dumps(result, indent=2, ensure_ascii=False, default=repr))
         return 0
     parser.print_help()
     return 0
@@ -146,152 +127,6 @@ def _run_loop_mock(args: argparse.Namespace):
         method=args.method,
         harness_config={"harness": args.harness},
         max_iterations=args.max_iterations,
-    )
-
-
-def _chat(args: argparse.Namespace) -> dict | None:
-    message = " ".join(args.message).strip()
-    run_root = Path(args.run_root)
-    # This context belongs only to the user-facing chat agent. Researcher
-    # Memory is created independently inside each Run.
-    memory = Memory(run_root / ".agent_context")
-    base_config = RSIRunConfig.load(args.config) if args.config else None
-    controller = (
-        _controller_from_rsi_config(base_config, run_root, memory)
-        if base_config is not None
-        else _mock_controller(run_root, memory)
-    )
-    agent = _build_agent(args)
-    if not message:
-        if args.stdin:
-            message = sys.stdin.read().strip()
-        else:
-            _chat_repl(
-                args,
-                agent=agent,
-                controller=controller,
-                memory=memory,
-                base_config=base_config,
-            )
-            return None
-    if not message:
-        raise SystemExit("chat message is required")
-    return _chat_once(
-        args,
-        message,
-        agent=agent,
-        controller=controller,
-        memory=memory,
-        base_config=base_config,
-        run_id=args.run_id,
-    )
-
-
-def _build_agent(args: argparse.Namespace):
-    if args.backend == "fake":
-        return FakeRSIAgent()
-    return OpenAIRSIAgent(config=OpenAIAgentConfig(system_prompt=_openai_rsi_system_prompt(), model=args.model))
-
-
-def _chat_once(
-    args: argparse.Namespace,
-    message: str,
-    *,
-    agent,
-    controller: LocalRSIController,
-    memory: Memory,
-    base_config: RSIRunConfig | None,
-    run_id: str | None,
-) -> dict:
-    response = agent.chat(
-        message,
-        run_id=run_id,
-        controller=controller,
-        memory=memory,
-        workflow_spec=_workflow_spec(args.harness, base_config),
-    )
-    payload = _agent_response_to_dict(response)
-    if args.execute:
-        payload["executions"] = [
-            _execute_chat_action(controller, action, allow_confirmed=args.yes, base_config=base_config)
-            for action in response.actions
-        ]
-    return payload
-
-
-def _chat_repl(
-    args: argparse.Namespace,
-    *,
-    agent,
-    controller: LocalRSIController,
-    memory: Memory,
-    base_config: RSIRunConfig | None,
-) -> None:
-    current_run_id = args.run_id
-    config_note = f" config={base_config.source_path}" if base_config and base_config.source_path else ""
-    print(f"AReaL-RSI chat started.{config_note} Type 'exit' or 'quit' to leave.")
-    read_message = _repl_reader()
-    while True:
-        try:
-            message = read_message().strip()
-        except EOFError:
-            print()
-            return
-        if not message:
-            continue
-        if message.lower() in {"exit", "quit", ":q"} or message in {"退出", "再见"}:
-            return
-        try:
-            payload = _chat_once(
-                args,
-                message,
-                agent=agent,
-                controller=controller,
-                memory=memory,
-                base_config=base_config,
-                run_id=current_run_id,
-            )
-        except Exception as exc:
-            print(f"error: {exc}")
-            continue
-        print(payload["reply"])
-        for execution in payload.get("executions", []):
-            if not execution.get("executed"):
-                print(f"not executed: {execution.get('reason')}")
-                continue
-            result = execution.get("result", {})
-            current_run_id = result.get("run_id", current_run_id)
-            print(
-                "executed: "
-                f"run_id={result.get('run_id')} "
-                f"status={result.get('status')} "
-                f"iteration={result.get('iteration')} "
-                f"ckpt={result.get('ckpt')}"
-            )
-        if not payload.get("executions"):
-            for action in payload.get("actions", []):
-                print(f"action: {action['type']} args={json.dumps(action['args'], ensure_ascii=False)}")
-
-
-def _repl_reader():
-    if sys.stdin.isatty() and sys.stdout.isatty():
-        try:
-            from prompt_toolkit import PromptSession
-        except ImportError:
-            pass
-        else:
-            session = PromptSession()
-            return lambda: session.prompt("AReaL-RSI> ")
-    return lambda: input("AReaL-RSI> ")
-
-
-def _mock_controller(run_root: Path, memory: Memory) -> LocalRSIController:
-    return LocalRSIController(
-        run_root=run_root,
-        areal=MockAReaLService(),
-        envarena=MockEnvClient(),
-        research_agent=MockResearchAgent(),
-        memory=memory,
     )
 
 
@@ -411,75 +246,6 @@ def _research_agent_from_spec(spec: dict[str, object]):
             ClaudeResearchConfig.from_mapping(dict(spec))
         )
     raise ValueError(f"Unsupported research service backend: {backend!r}.")
-
-
-def _execute_chat_action(
-    controller: LocalRSIController,
-    action: Action,
-    *,
-    allow_confirmed: bool,
-    base_config: RSIRunConfig | None = None,
-) -> dict:
-    if action.requires_confirmation and not allow_confirmed:
-        return {
-            "action": _action_to_dict(action),
-            "executed": False,
-            "reason": "confirmation_required",
-        }
-    executable_action = action
-    if base_config is not None and action.type == "start_loop":
-        executable_action = Action(
-            type=action.type,
-            args=action.args,
-            requires_confirmation=action.requires_confirmation,
-            metadata={**action.metadata, "base_config": base_config},
-        )
-    return {
-        "action": _action_to_dict(action),
-        "executed": True,
-        "result": controller.execute_action(executable_action),
-    }
-
-
-def _agent_response_to_dict(response: AgentResponse) -> dict:
-    return {
-        "reply": response.reply,
-        "actions": [_action_to_dict(action) for action in response.actions],
-        "requires_confirmation": response.requires_confirmation,
-        "metadata": response.metadata,
-    }
-
-
-def _action_to_dict(action: Action) -> dict:
-    return {
-        "type": action.type,
-        "args": action.args,
-        "requires_confirmation": action.requires_confirmation,
-        "metadata": action.metadata,
-    }
-
-
-def _workflow_spec(harness: str, base_config: RSIRunConfig | None) -> dict:
-    spec = {"harness": harness}
-    if base_config is not None:
-        spec["base_config"] = base_config.to_dict()
-        spec["base_config_path"] = str(base_config.source_path) if base_config.source_path else None
-        spec["base_config_hash"] = base_config.source_hash
-    return spec
-
-
-def _openai_rsi_system_prompt() -> str:
-    return (
-        "You are RSIAgent, the user-facing coordinator for AReaL-RSI. "
-        "One user-started workflow is a Run; each loop round inside it is an iteration. "
-        "Choose exactly one action tool for user goals and queries: "
-        "start_loop, inspect_run, resume_run, or stop_run. "
-        "Answer brief progress or completion questions directly from context "
-        "without an action tool. "
-        "Do not expose internal workflow steps such as eval, train, or "
-        "holdout_eval as user actions. Ask for confirmation before expensive "
-        "or irreversible operations."
-    )
 
 
 if __name__ == "__main__":

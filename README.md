@@ -16,15 +16,16 @@ holdout eval current ckpt -> stop immediately if target is reached
 
 The system keeps two roles separate:
 
-- `RSIAgent`: conversational research interface. It explains state, proposes plans, incorporates human feedback, and emits structured actions.
 - `ResearchAgent`: trajectory-to-dataset worker agent. It analyzes EnvArena trajectories, synthesizes experience, and emits datasets.
 - `RSIController`: deterministic workflow executor. It runs jobs, persists state, supports resume/retry/stop, and records artifacts.
 
-The conversational RSIAgent has an OpenAI SDK scaffold. The worker ResearchAgent
-also has a Claude Agent SDK implementation that uses one resumable Claude Code
-session per iteration, reads one task trajectory file at a time, and writes the
-iteration SFT JSONL and complete AReaL training YAML. Mock services remain
-available for deterministic controller tests and demos.
+The interactive entry point is Claude Code (or Codex) via the
+`start-rsi-experiment` skill, which collects experiment parameters, confirms,
+and launches a Run through the controller — there is no separate conversational
+agent process. The worker ResearchAgent has a Claude Agent SDK implementation
+that uses one resumable Claude Code session per iteration, reads one task
+trajectory file at a time, and writes the iteration dataset and training config.
+Mock services remain available for deterministic controller tests and demos.
 
 One user command starts a **Run**. Each pre-training holdout → experience
 distillation → train round inside that Run is one **iteration**. The config key
@@ -46,7 +47,7 @@ Build a minimal but recoverable loop:
 3. Submit Experiences as an Arena Skill and collect skill-assisted training trajectories.
 4. Build SFT data from original prompts plus skill-assisted completions, with Experience removed from prompts.
 5. Run AReaL SFT training and evaluate its checkpoint at the next iteration's start.
-6. Record each iteration in Run-scoped Memory and let RSIAgent explain the Run.
+6. Record each iteration in Run-scoped Memory for later inspection.
 
 ## Local Mock Loop
 
@@ -66,38 +67,11 @@ Run from an RSI config file:
 python -m areal_rsi.cli.main run --config config/rsi.yaml
 ```
 
-Chat can generate a structured action without executing it:
-
-```bash
-python -m areal_rsi.cli.main chat --backend fake "run ckpt_000 on swe_verified"
-```
-
-If no message is provided, `chat` starts an interactive REPL:
-
-```bash
-python -m areal_rsi.cli.main chat --backend openai --config config/rsi.yaml --execute --yes
-```
-
-Use `--stdin` when you want a single non-interactive message from stdin.
-
-To execute a confirmed action in the local mock loop:
-
-```bash
-python -m areal_rsi.cli.main chat --backend fake --execute --yes "run ckpt_000 on swe_verified"
-```
-
-Chat can also load a base config and let the user message override only the
-fields it mentions:
-
-```bash
-python -m areal_rsi.cli.main chat --backend openai --config config/rsi.yaml --execute --yes \
-  "use ckpt_123 and run swe_verified for 2 iterations with sft"
-```
-
-`chat` emits user-facing commands such as `start_loop`, `inspect_run`,
-`stop_run`, and `resume_run`. Internal workflow steps like
-`eval`, `train`, and `holdout_eval` are recorded in `audit.jsonl` rather
-than exposed as chat actions.
+The interactive entry point is the `start-rsi-experiment` skill, run from Claude
+Code or Codex. It reads `config/rsi.yaml` (SFT) or `config/rsi.opd.yaml`
+(Experience OPD) as a baseline, collects experiment parameters, waits for
+explicit confirmation, generates an isolated config, and launches the Run
+through the controller. See `.agents/skills/start-rsi-experiment/SKILL.md`.
 
 For scripted state queries, use the CLI status command:
 

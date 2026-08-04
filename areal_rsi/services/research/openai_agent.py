@@ -5,7 +5,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from areal_rsi.agent.openai_agent import OpenAIAgentConfig, OpenAIClient, extract_json_object
+from areal_rsi.services.research.openai_client import (
+    OpenAIAgentConfig,
+    OpenAIClient,
+    extract_json_object,
+)
 from areal_rsi.schemas.core import Dataset, MemoryContext, ModelRef, TrainRun, Traj
 
 

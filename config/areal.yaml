@@ -17,4 +17,5 @@ areal:
       time_limit: "04:00:00"
       bind_paths: [/storage]
       container_environment: {}
-      # partition/account/reservation intentionally omitted; Slurm defaults apply.
+      # partition/account intentionally omitted; Slurm defaults apply.
+      reservation: rsi

@@ -1393,6 +1393,10 @@ def _wait_for_slurm_job(
     poll_interval_seconds: float,
 ) -> None:
     started = time.monotonic()
+    seen_active = False
+    active_states = {
+        "RUNNING", "PENDING", "COMPLETING", "CONFIGURING", "RESIZING", "REQUEUED", "SUSPENDED",
+    }
     while True:
         status = _slurm_job_state(job_id)
         if status == "COMPLETED":
@@ -1408,6 +1412,15 @@ def _wait_for_slurm_job(
             "TIMEOUT",
         }:
             raise RuntimeError(f"Slurm job {job_id} ended with status {status}.")
+        if status in active_states:
+            seen_active = True
+        elif status == "GONE" and (
+            seen_active or time.monotonic() - started > poll_interval_seconds
+        ):
+            # Left the queue and Slurm accounting (sacct) is unavailable, so a
+            # final state cannot be read. Treat it as finished; the caller
+            # confirms success by resolving the produced checkpoint.
+            return
         if time.monotonic() - started >= timeout_seconds:
             raise TimeoutError(
                 f"Slurm job {job_id} did not finish within {timeout_seconds:g} seconds."
@@ -1416,14 +1429,20 @@ def _wait_for_slurm_job(
 
 
 def _slurm_job_state(job_id: str) -> str:
-    sacct = subprocess.run(
-        ["sacct", "-j", job_id, "--format=State", "--noheader", "--parsable2"],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
-    if sacct.returncode == 0:
+    # sacct is the only source of a *final* state, but it is absent on clusters
+    # without accounting; fall back to squeue presence and report GONE once the
+    # job leaves the queue (the caller then verifies the checkpoint).
+    try:
+        sacct = subprocess.run(
+            ["sacct", "-j", job_id, "--format=State", "--noheader", "--parsable2"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    except FileNotFoundError:
+        sacct = None
+    if sacct is not None and sacct.returncode == 0:
         states = [
             line.split("|", 1)[0].strip().split("+", 1)[0].upper()
             for line in sacct.stdout.splitlines()
@@ -1431,15 +1450,21 @@ def _slurm_job_state(job_id: str) -> str:
         ]
         if states:
             return states[0]
-    squeue = subprocess.run(
-        ["squeue", "-h", "-j", job_id, "-o", "%T"],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
-    if squeue.returncode == 0 and squeue.stdout.strip():
-        return squeue.stdout.strip().splitlines()[0].upper().replace(" ", "_")
+    try:
+        squeue = subprocess.run(
+            ["squeue", "-h", "-j", job_id, "-o", "%T"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    except FileNotFoundError:
+        return "UNKNOWN"
+    if squeue.returncode == 0:
+        text = squeue.stdout.strip()
+        if text:
+            return text.splitlines()[0].upper().replace(" ", "_")
+        return "GONE"
     return "UNKNOWN"
 
 

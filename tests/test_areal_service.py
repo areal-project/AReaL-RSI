@@ -66,8 +66,10 @@ cluster:
     assert seen[0][1]["env"]["WANDB_MODE"] == "offline"
 
 
-def test_areal_service_opd_dispatches_locally_and_resolves_checkpoint(tmp_path: Path):
+def test_areal_service_opd_submits_driver_and_resolves_checkpoint(tmp_path: Path):
     fileroot = tmp_path / "root"
+    driver = tmp_path / "driver.sbatch"
+    driver.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
     checkpoint = (
         fileroot
         / "checkpoints"
@@ -75,61 +77,10 @@ def test_areal_service_opd_dispatches_locally_and_resolves_checkpoint(tmp_path: 
         / "exp-opd"
         / "trial-x"
         / "default"
-        / "epoch0epochstep1globalstep1"
-    )
-    recorded: dict[str, Any] = {}
-
-    def fake_runner(command, **kwargs):
-        recorded["command"] = list(command)
-        recorded["cwd"] = kwargs.get("cwd")
-        checkpoint.mkdir(parents=True, exist_ok=True)
-
-        class _Result:
-            returncode = 0
-
-        return _Result()
-
-    service = AReaLService(
-        opd_config=AReaLOPDConfig(
-            working_directory=tmp_path,
-            command=("python", "-m", "recipe"),
-            config_path="recipe.yaml",
-            fileroot=fileroot,
-            experiment_name="exp-opd",
-            scheduler_type="local",
-        ),
-        runner=fake_runner,
-    )
-    run = service.train(
-        "/models/base",
-        {"experience_path": "/exp.json", "train_data_path": "/train.jsonl"},
-        "opd",
-        {"trial_name": "trial-x"},
-    )
-
-    assert run["method"] == "opd"
-    assert run["base_ckpt"] == "/models/base"
-    assert run["ckpt"] == str(checkpoint)
-    assert recorded["cwd"] == str(tmp_path)
-    assert "--config" in recorded["command"]
-    assert "actor.path=/models/base" in recorded["command"]
-    assert "experience_path=/exp.json" in recorded["command"]
-    assert "train_dataset.path=/train.jsonl" in recorded["command"]
-    assert "trial_name=trial-x" in recorded["command"]
-
-
-def test_areal_service_opd_slurm_submits_sbatch_and_resolves_checkpoint(tmp_path: Path):
-    fileroot = tmp_path / "root"
-    checkpoint = (
-        fileroot
-        / "checkpoints"
-        / getpass.getuser()
-        / "exp-opd"
-        / "trial-x"
-        / "default"
-        / "epoch0epochstep1globalstep1"
+        / "epoch0epochstep0globalstep0"
     )
     calls: list[list[str]] = []
+    submit_env: dict[str, str] = {}
 
     class _Result:
         def __init__(self, code: int, out: str = "") -> None:
@@ -140,22 +91,22 @@ def test_areal_service_opd_slurm_submits_sbatch_and_resolves_checkpoint(tmp_path
         cmd = list(command)
         calls.append(cmd)
         if cmd[:2] == ["sbatch", "--parsable"]:
+            submit_env.update(kwargs.get("env") or {})
             checkpoint.mkdir(parents=True, exist_ok=True)
             return _Result(0, "947999\n")
         if cmd[:1] == ["squeue"]:
-            return _Result(0, "")  # job not in queue -> finished
+            return _Result(0, "")  # driver job not in queue -> finished
         return _Result(0, "")
 
     service = AReaLService(
         opd_config=AReaLOPDConfig(
             working_directory=tmp_path,
-            command=("python", "-m", "recipe"),
-            config_path="recipe.yaml",
+            driver_script=str(driver),
             fileroot=fileroot,
             experiment_name="exp-opd",
-            scheduler_type="slurm",
-            image="/img/areal.sif",
-            reservation="rsi",
+            n_nodes=4,
+            n_gpus_per_node=8,
+            environment_variables={"AREAL_IMAGE": "/img/areal.sif"},
             poll_interval_seconds=0.05,
             job_timeout_seconds=5.0,
         ),
@@ -171,12 +122,17 @@ def test_areal_service_opd_slurm_submits_sbatch_and_resolves_checkpoint(tmp_path
     assert run["method"] == "opd"
     assert run["ckpt"] == str(checkpoint)
     assert run["metadata"]["job_id"] == "947999"
-    assert any(c[:2] == ["sbatch", "--parsable"] for c in calls)
-    script = Path(run["metadata"]["script_path"]).read_text(encoding="utf-8")
-    assert "#SBATCH --reservation=rsi" in script
-    assert "--gres=gpu:8" in script
-    assert "actor.path=/models/base" in script
-    assert "experience_path=/exp.json" in script
+    # Submitted the checked-in driver script (not a self-rendered sbatch).
+    assert [str(driver)] == [c[2] for c in calls if c[:2] == ["sbatch", "--parsable"]]
+    # Per-iteration + deployment env contract handed to the driver.
+    assert submit_env["MODEL_PATH"] == "/models/base"
+    assert submit_env["EXPERIENCE_PATH"] == "/exp.json"
+    assert submit_env["TRAIN_DATA"] == "/train.jsonl"
+    assert submit_env["EXP_NAME"] == "exp-opd"
+    assert submit_env["TRIAL_NAME"] == "trial-x"
+    assert submit_env["N_NODES"] == "4" and submit_env["N_GPUS"] == "8"
+    assert submit_env["AREAL_IMAGE"] == "/img/areal.sif"
+    assert submit_env["AREAL_DIR"] == str(tmp_path)
 
 
 def test_areal_service_rejects_unsupported_async_or_incomplete_train_config():

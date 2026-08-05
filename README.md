@@ -73,6 +73,71 @@ Code or Codex. It reads `config/rsi.yaml` (SFT) or `config/rsi.opd.yaml`
 explicit confirmation, generates an isolated config, and launches the Run
 through the controller. See `.agents/skills/start-rsi-experiment/SKILL.md`.
 
+## Experience OPD Runs (multi-node Slurm)
+
+`--method opd` trains with AReaL's Experience OPD instead of SFT. The train step
+does not render its own job: it reuses a checked-in nested-Slurm driver. The
+`AReaLOPDWrapper` sets the driver's environment contract (`AREAL_DIR`,
+`MODEL_PATH`, `EXPERIENCE_PATH`, `TRAIN_DATA`, `FILEROOT`, `EXP_NAME`,
+`TRIAL_NAME`, `N_NODES`, ...), submits it with `sbatch --parsable <driver_script>`,
+then polls with `squeue` only (no `sacct` dependency) until the driver leaves the
+queue and the saved checkpoint is resolved from
+`<fileroot>/checkpoints/<user>/<exp>/<trial>/default/*globalstep*`. AReaL's own
+scheduler allocates the colocated actor/rollout/teacher workers inside the run.
+
+`config/areal.opd.yaml` holds only non-secret deployment paths. `driver_script`
+may be absolute — the validated 2-node setup points it at the launch scripts in a
+separate **ALab** checkout while `working_directory` (= `AREAL_DIR`) stays the
+full **AReaL** checkout:
+
+```yaml
+areal:
+  opd:
+    working_directory: /storage/openpsi/users/fenghui/AReaL          # AREAL_DIR (code)
+    driver_script: /storage/.../ALab/examples/mopd/sbatch_experience_opd_qwen3_30b_2node.sh
+    experiment_name: fh-opd-alab
+    n_nodes: 2
+```
+
+The driver runs the ALab launcher (`run_..._2node.sh` -> ALab's
+`train_experience_opd.py`; config = ALab's `swe_experience_opd_2node...yaml` with
+`n_nodes:2`, `allocation_mode: megatron[actor]:(attn:d1p4t4|ffn:d1p4e4)|sglang[rollout]:d4t4p1`,
+16 GPU). Code splits per subpackage: `examples.mopd.*` resolves to ALab (it is
+first on `PYTHONPATH`) and `examples.swe.*` falls back to AReaL because
+`ALab/examples/__init__.py` appends `$AREAL_DIR/examples` to its `__path__`; the
+`areal` framework comes from the image.
+
+Three setup gotchas the 2-node scripts already handle:
+- Slurm copies the batch script to `/var/spool/slurmd/jobNNN`, so `$BASH_SOURCE`
+  is not the ALab path — the driver locates the run script by absolute path.
+- `experiment_name` in `config/areal.opd.yaml` (not the launch `--experiment-name`,
+  which only sets `trial_name`) drives the checkpoint path.
+- AReaL's mopd validation requires rollout `scheduling_strategy.fork: false`
+  (the teacher stays `fork: true`).
+
+Launch through the skill's script (secrets are injected via the environment and
+are **never** stored in config files):
+
+```bash
+# secrets / URLs -> environment only, not config
+export AENV_SYSTEM_URL=...  WANDB_API_KEY=...  WANDB_BASE_URL=...
+
+python .agents/skills/start-rsi-experiment/scripts/launch.py \
+  --method opd \
+  --experiment-name fh-opd-alab \
+  --initial-ckpt /storage/openpsi/models/Qwen__Qwen3-Coder-30B-A3B-Instruct \
+  --benchmark swe-bench-verified@mock \
+  --holdout-benchmark swe-bench-verified@mock \
+  --harness claude-code-swe-baseline@mock \
+  --max-iterations 1 \
+  --target-mean-reward 1.0 \
+  --launch
+```
+
+`--method opd` defaults the base config to `config/rsi.opd.yaml`; the skill sets
+`trial_name = experiment_name` and starts a detached controller running
+`python -m areal_rsi.cli.main`.
+
 For scripted state queries, use the CLI status command:
 
 ```bash

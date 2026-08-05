@@ -1,49 +1,44 @@
-# End-to-end Experience OPD Run launched from RSI (single-node, local).
+# End-to-end Experience OPD Run launched from RSI (2-node nested-Slurm).
 #
-# `run --config config/rsi.opd.example.yaml` drives the full loop with a single
-# experience source: the Researcher extracts per-task experiences, RSI uses them
-# to condition skill_eval, and the SAME experiences become AReaL's OPD
-# experience_path (teacher-hook input) for reverse-KL distillation.
+# The train step submits AReaL's 2-node Experience OPD Slurm driver
+# (sbatch_experience_opd_qwen3_30b_2node.sh -> swe_experience_opd_2node...yaml,
+# 2x8=16 GPU). EnvArena stays mocked; the Researcher/skill steps run on the mock
+# client. A fixed experience_path is provided below, so the controller uses it
+# directly as the OPD experience_path (it does not override an explicitly
+# configured experience_path with the Researcher's).
 #
-# For ids to line up, the mock benchmark task set and the OPD train data are the
-# same gsm8k JSONL (task_id == instance_id). The mock emits `task_set_limit`
-# tasks; the OPD recipe filters train/valid rows to the experience-covered ids.
-# The experience content here is the mock Researcher's; a real ResearchAgent
-# would produce gsm8k-relevant experiences through the same wiring.
+# Needs a real 2-node GPU allocation + the deployment roots/secrets in the
+# environment (AWEX_ROOT/SGLANG_PYTHON_ROOT/FLASH_LINEAR_ATTENTION_ROOT/
+# AENV_SYSTEM_URL/WANDB_*/PYPI_INDEX_URL); not runnable on a single node.
 run:
-  initial_ckpt: /storage/openpsi/models/Qwen__Qwen3-4B
+  initial_ckpt: /storage/openpsi/models/Qwen__Qwen3-Coder-30B-A3B-Instruct
   method: opd
   max_iterations: 1
-  run_root: /storage/openpsi/rsi-runs/opd-gsm8k-demo
+  run_root: /storage/openpsi/rsi-runs/swe-opd-2node
 
 env:
-  benchmark: gsm8k@mock
-  holdout_benchmark: gsm8k@mock
+  benchmark: swe-bench-verified@mock
+  holdout_benchmark: swe-bench-verified@mock
   harness_config:
-    harness: gsm8k-mock@mock
+    harness: claude-code-swe-baseline@mock
 
 services:
   areal:
     config_path: areal.opd.yaml
   envarena:
     backend: mock
-    # Mock trajectory task_ids come from these gsm8k instances, so Researcher
-    # experiences line up with the OPD train data below. Keep the count aligned
-    # with the recipe's train_dataset.batch_size (32).
-    task_set_path: /storage/openpsi/rsi-experiments/gsm8k_experience/train.jsonl
-    task_set_limit: 32
+    task_set_path: /storage/openpsi/users/public/data/swe_areal_pengzai_overfit.jsonl
+    task_set_limit: 64
   research:
     backend: mock
 
 train:
   config:
-    # OPD train/valid data (instance_ids match the mock task set above).
-    # experience_path is NOT set here: the controller materializes it from the
-    # Researcher's experiences at train time. valid == train so the experience
-    # store (which only covers train ids) also covers the valid split.
-    train_data_path: /storage/openpsi/rsi-experiments/gsm8k_experience/train.jsonl
-    valid_data_path: /storage/openpsi/rsi-experiments/gsm8k_experience/train.jsonl
-    trial_name: rsi-demo
+    # Fixed experience map (used directly as the OPD experience_path).
+    experience_path: /storage/openpsi/users/wanghuaijie.whj/zeta/multitask_data/exp7_agent_qwen3_coder_user_claude.json
+    train_data_path: /storage/openpsi/users/public/data/swe_areal_pengzai_overfit.jsonl
+    valid_data_path: /storage/openpsi/users/public/data/swe_areal_pengzai_overfit.jsonl
+    trial_name: swe-opd-2node
 
 stop_criteria:
   target_mean_reward: 1.0

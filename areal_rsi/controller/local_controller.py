@@ -1295,12 +1295,22 @@ def _with_opd_experience_path(
     skill: dict[str, Any],
     experience_path: Path,
 ) -> dict[str, Any]:
-    """Materialize the Researcher's task experiences as the OPD experience_path."""
+    """Resolve the OPD experience_path for this iteration.
+
+    An explicitly configured ``experience_path`` (a fixed experience map) wins
+    and is used as-is. Otherwise the Researcher's task experiences are
+    materialized to ``experience_path`` and used.
+    """
+
+    configured = train_config.get("experience_path")
+    if isinstance(configured, str) and configured.strip():
+        return dict(train_config)
 
     experience_map = task_experience_map(skill)
     if not experience_map:
         raise ValueError(
-            "OPD training requires Researcher experiences, but the skill carried none."
+            "OPD training requires an experience_path: set one in train.config, or "
+            "have the Researcher produce experiences (the skill carried none)."
         )
     experience_path.parent.mkdir(parents=True, exist_ok=True)
     experience_path.write_text(

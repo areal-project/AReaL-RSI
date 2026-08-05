@@ -1,21 +1,22 @@
-"""Launcher for AReaL Experience OPD training (Slurm or local).
+"""Launcher for AReaL Experience OPD training via its Slurm driver script.
 
-The Experience OPD recipes drive AReaL's own scheduler from a single entrypoint
-invoked as ``<command> --config <yaml> key=value ...``. This wrapper prepares
-the per-iteration overrides (base checkpoint -> actor.path, experience map, and
-train/valid data, plus experiment/trial names) and launches that entrypoint.
+Experience OPD is a nested-scheduler recipe: a CPU driver job (e.g.
+``examples/mopd/sbatch_experience_opd_qwen3_30b.sh``) runs the training
+entrypoint which, through AReaL's own Slurm scheduler, allocates the colocated
+actor/rollout/teacher worker nodes. Re-rendering that sbatch here would mean
+reimplementing the driver (munge/slurm binds, dependency install, allocation
+mode, ...), so this wrapper instead *reuses* the checked-in driver script:
 
-Two schedulers:
+  set the driver's environment contract -> ``sbatch --parsable <driver>`` ->
+  wait (squeue only, no sacct) until the driver job leaves the queue ->
+  resolve the saved checkpoint.
 
-* ``slurm`` (default): render an sbatch that runs the entrypoint inside the
-  configured container (one allocation; the recipe's own scheduler manages the
-  GPUs within it), submit with ``sbatch --parsable``, then block until the job
-  leaves the queue and a checkpoint exists. Completion is detected with
-  ``squeue`` only, so it does not depend on ``sacct`` (absent on some clusters).
-* ``local``: run the entrypoint in-process and block. Useful for a bare GPU box.
-
-Either way ``train`` returns a completed ``TrainRun`` with the resolved
-checkpoint, so the RSI controller treats OPD like any other blocking train step.
+The environment-variable interface of the driver script is the integration
+contract. Per-iteration inputs (current checkpoint, the Researcher's experience
+map, the benchmark train data) are passed as MODEL_PATH / EXPERIENCE_PATH /
+TRAIN_DATA; deployment paths come from ``environment_variables``; secrets
+(AENV_SYSTEM_URL, WANDB_*, PYPI_INDEX_URL, ...) are inherited from the process
+environment at runtime and never stored in config.
 """
 
 from __future__ import annotations
@@ -23,8 +24,6 @@ from __future__ import annotations
 import getpass
 import os
 import re
-import secrets
-import shlex
 import subprocess
 import time
 from collections.abc import Mapping
@@ -38,16 +37,8 @@ from areal_rsi.schemas.core import TrainRun
 
 ProcessRunner = Any  # Callable[..., subprocess.CompletedProcess[str]]; kept loose for tests.
 
-_TERMINAL_SLURM_STATES = {
-    "COMPLETED",
-    "FAILED",
-    "CANCELLED",
-    "TIMEOUT",
-    "NODE_FAIL",
-    "OUT_OF_MEMORY",
-    "BOOT_FAIL",
-    "DEADLINE",
-    "PREEMPTED",
+_ACTIVE_SLURM_STATES = {
+    "RUNNING", "PENDING", "COMPLETING", "CONFIGURING", "RESIZING", "REQUEUED", "SUSPENDED",
 }
 
 
@@ -56,43 +47,29 @@ class AReaLOPDConfigurationError(ValueError):
 
 
 class AReaLOPDTrainingError(RuntimeError):
-    """Raised when an OPD launch exits non-zero or yields no checkpoint."""
+    """Raised when an OPD launch fails to submit or yields no checkpoint."""
 
 
 @dataclass(frozen=True, slots=True)
 class AReaLOPDConfig:
-    """How to launch an AReaL Experience OPD recipe.
+    """How to launch an AReaL Experience OPD driver on Slurm.
 
-    ``command`` is the entrypoint up to (but excluding) ``--config <yaml>``;
-    ``config_path`` is the AReaL experience YAML (absolute, or relative to
-    ``working_directory``). ``fileroot``/``experiment_name`` must match the
-    YAML's ``cluster.fileroot``/``experiment_name`` so saved checkpoints can be
-    resolved. Slurm launches additionally need ``image`` and container/resource
-    settings; per-iteration overrides are appended as ``key=value`` args.
+    ``driver_script`` is the checked-in AReaL sbatch driver (absolute, or
+    relative to ``working_directory``). ``fileroot``/``experiment_name`` must
+    match the recipe so the saved checkpoint can be resolved.
     """
 
     working_directory: Path
-    command: tuple[str, ...]
-    config_path: str
+    driver_script: str
     fileroot: Path
     experiment_name: str
     trial_name: str = "rsi"
     scheduler_type: str = "slurm"
-    environment_variables: Mapping[str, str] = field(default_factory=dict)
-    # Slurm-only settings.
-    image: str | None = None
-    reservation: str | None = None
-    partition: str | None = None
-    n_nodes: int = 1
+    n_nodes: int = 4
     n_gpus_per_node: int = 8
-    cpus_per_task: int = 32
-    memory: str = "400G"
-    time_limit: str = "24:00:00"
-    bind_paths: tuple[str, ...] = ("/storage",)
+    environment_variables: Mapping[str, str] = field(default_factory=dict)
     sbatch_command: tuple[str, ...] = ("sbatch", "--parsable")
-    srun_command: tuple[str, ...] = ("srun", "--mpi=none")
-    singularity_command: tuple[str, ...] = ("singularity", "exec")
-    poll_interval_seconds: float = 30.0
+    poll_interval_seconds: float = 60.0
     job_timeout_seconds: float = 604800.0
 
     @classmethod
@@ -115,11 +92,9 @@ class AReaLOPDConfig:
                 "OPD service config must contain an 'areal.opd' YAML mapping."
             )
         allowed = {
-            "working_directory", "command", "config_path", "fileroot",
-            "experiment_name", "trial_name", "scheduler_type", "environment_variables",
-            "image", "reservation", "partition", "n_nodes", "n_gpus_per_node",
-            "cpus_per_task", "memory", "time_limit", "bind_paths", "sbatch_command",
-            "srun_command", "singularity_command", "poll_interval_seconds",
+            "working_directory", "driver_script", "fileroot", "experiment_name",
+            "trial_name", "scheduler_type", "n_nodes", "n_gpus_per_node",
+            "environment_variables", "sbatch_command", "poll_interval_seconds",
             "job_timeout_seconds",
         }
         unknown = set(section) - allowed
@@ -127,15 +102,14 @@ class AReaLOPDConfig:
             raise AReaLOPDConfigurationError(
                 f"Unsupported areal.opd fields: {', '.join(sorted(map(str, unknown)))}."
             )
-        for required in ("working_directory", "command", "config_path", "fileroot", "experiment_name"):
+        for required in ("working_directory", "driver_script", "fileroot", "experiment_name"):
             if not section.get(required):
                 raise AReaLOPDConfigurationError(
                     f"areal.opd.{required} is required and must be non-empty."
                 )
         kwargs: dict[str, Any] = dict(
             working_directory=Path(str(section["working_directory"])).expanduser(),
-            command=_string_tuple(section["command"], "areal.opd.command"),
-            config_path=str(section["config_path"]),
+            driver_script=str(section["driver_script"]),
             fileroot=Path(str(section["fileroot"])).expanduser(),
             experiment_name=str(section["experiment_name"]),
             trial_name=str(section.get("trial_name", "rsi")),
@@ -144,35 +118,27 @@ class AReaLOPDConfig:
                 section.get("environment_variables", {}), "areal.opd.environment_variables"
             ),
         )
-        for key in ("image", "reservation", "partition", "memory", "time_limit"):
-            if section.get(key) is not None:
-                kwargs[key] = str(section[key])
-        for key in ("n_nodes", "n_gpus_per_node", "cpus_per_task"):
+        for key in ("n_nodes", "n_gpus_per_node"):
             if section.get(key) is not None:
                 kwargs[key] = int(section[key])
         for key in ("poll_interval_seconds", "job_timeout_seconds"):
             if section.get(key) is not None:
                 kwargs[key] = float(section[key])
-        for key in ("bind_paths", "sbatch_command", "srun_command", "singularity_command"):
-            if section.get(key) is not None:
-                kwargs[key] = _string_tuple(section[key], f"areal.opd.{key}")
+        if section.get("sbatch_command") is not None:
+            kwargs["sbatch_command"] = _string_tuple(section["sbatch_command"], "areal.opd.sbatch_command")
         return cls(**kwargs)
 
     def __post_init__(self) -> None:
-        if self.scheduler_type not in {"slurm", "local"}:
+        if self.scheduler_type != "slurm":
             raise AReaLOPDConfigurationError(
-                "areal.opd.scheduler_type must be 'slurm' or 'local'."
+                "areal.opd.scheduler_type must be 'slurm' (Experience OPD is nested-Slurm only)."
             )
-        if not self.command:
-            raise AReaLOPDConfigurationError("areal.opd.command must be non-empty.")
-        if self.scheduler_type == "slurm" and not self.image:
-            raise AReaLOPDConfigurationError(
-                "areal.opd.image is required when scheduler_type='slurm'."
-            )
+        if not self.driver_script:
+            raise AReaLOPDConfigurationError("areal.opd.driver_script must be non-empty.")
 
 
 class AReaLOPDWrapper:
-    """Launch an AReaL Experience OPD recipe and resolve its checkpoint."""
+    """Submit the AReaL Experience OPD Slurm driver and resolve its checkpoint."""
 
     def __init__(self, config: AReaLOPDConfig, *, runner: ProcessRunner | None = None) -> None:
         self.config = config
@@ -184,96 +150,50 @@ class AReaLOPDWrapper:
         dataset: Mapping[str, Any] | None,
         train_config: Mapping[str, Any],
     ) -> TrainRun:
-        """Launch OPD for one iteration and return the resulting checkpoint."""
+        """Launch the OPD driver for one iteration and return its checkpoint."""
 
         dataset = dataset or {}
         experience_path = self._require_path(dataset, train_config, "experience_path")
         train_data_path = self._require_path(dataset, train_config, "train_data_path")
-        valid_data_path = (
-            _first_str(dataset, train_config, "valid_data_path") or train_data_path
-        )
+        valid_data_path = _first_str(dataset, train_config, "valid_data_path")
         experiment_name = str(train_config.get("experiment_name") or self.config.experiment_name)
         trial_name = str(train_config.get("trial_name") or self.config.trial_name)
 
-        config_path = Path(self.config.config_path)
-        if not config_path.is_absolute():
-            config_path = self.config.working_directory / config_path
+        driver_script = Path(self.config.driver_script)
+        if not driver_script.is_absolute():
+            driver_script = self.config.working_directory / driver_script
+        if not driver_script.is_file():
+            raise AReaLOPDTrainingError(f"OPD driver script not found: {driver_script}")
 
-        overrides = [
-            f"actor.path={base_ckpt}",
-            f"experience_path={experience_path}",
-            f"train_dataset.path={train_data_path}",
-            f"valid_dataset.path={valid_data_path}",
-            f"experiment_name={experiment_name}",
-            f"trial_name={trial_name}",
-            f"cluster.fileroot={self.config.fileroot}",
-        ]
-        launch_command = [*self.config.command, "--config", str(config_path), *overrides]
-
-        metadata: dict[str, Any]
-        if self.config.scheduler_type == "slurm":
-            metadata = self._run_slurm(launch_command, experiment_name, trial_name)
-        else:
-            metadata = self._run_local(launch_command, experiment_name, trial_name)
-
-        checkpoint = self._latest_checkpoint(experiment_name, trial_name)
-        if checkpoint is None:
-            raise AReaLOPDTrainingError(
-                f"OPD training finished but no checkpoint was found under "
-                f"{self._checkpoint_root(experiment_name, trial_name)}. "
-                f"See logs: {metadata.get('log_path') or metadata.get('slurm_log_path')}"
-            )
-        return {
-            "train_run_id": f"{experiment_name}:{trial_name}",
-            "method": "opd",
-            "base_ckpt": base_ckpt,
-            "ckpt": str(checkpoint),
-            "metrics": {},
-            "metadata": {
-                "experiment_name": experiment_name,
-                "trial_name": trial_name,
-                "experience_path": str(experience_path),
-                "train_data_path": str(train_data_path),
-                **metadata,
-            },
-        }
-
-    # -- local -------------------------------------------------------------
-
-    def _run_local(self, command: list[str], experiment_name: str, trial_name: str) -> dict[str, Any]:
-        log_dir = self.config.fileroot / "rsi-opd-logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        log_path = log_dir / f"{experiment_name}-{trial_name}.log"
-        with log_path.open("w", encoding="utf-8") as log_file:
-            result = self._runner(
-                command,
-                cwd=str(self.config.working_directory),
-                env=self._environment(),
-                text=True,
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
-            )
-        if getattr(result, "returncode", 0) != 0:
-            raise AReaLOPDTrainingError(
-                f"OPD training exited with code {result.returncode}. See {log_path}.\n"
-                f"{_log_tail(log_path)}"
-            )
-        return {"scheduler_type": "local", "log_path": str(log_path)}
-
-    # -- slurm -------------------------------------------------------------
-
-    def _run_slurm(self, command: list[str], experiment_name: str, trial_name: str) -> dict[str, Any]:
         run_dir = self.config.fileroot / "rsi-opd-slurm" / f"{experiment_name}-{trial_name}"
         run_dir.mkdir(parents=True, exist_ok=True)
-        script_path = run_dir / "launch.sbatch"
-        script_path.write_text(
-            self._render_sbatch(command, experiment_name, trial_name, run_dir),
-            encoding="utf-8",
+
+        # Environment contract expected by the AReaL driver script. Deployment
+        # paths come from config; secrets (AENV_SYSTEM_URL, WANDB_*, ...) are
+        # inherited from the process environment; the loop supplies MODEL_PATH,
+        # EXPERIENCE_PATH and TRAIN_DATA.
+        env = {**os.environ, **{str(k): str(v) for k, v in self.config.environment_variables.items()}}
+        env.update(
+            {
+                "AREAL_DIR": str(self.config.working_directory),
+                "MODEL_PATH": base_ckpt,
+                "TOKENIZER_PATH": base_ckpt,
+                "TRAIN_DATA": train_data_path,
+                "EXPERIENCE_PATH": experience_path,
+                "FILEROOT": str(self.config.fileroot),
+                "EXP_NAME": experiment_name,
+                "TRIAL_NAME": trial_name,
+                "N_NODES": str(self.config.n_nodes),
+                "N_GPUS": str(self.config.n_gpus_per_node),
+            }
         )
+        if valid_data_path:
+            env["VALID_DATA"] = valid_data_path
+
         submit = self._runner(
-            [*self.config.sbatch_command, str(script_path)],
-            cwd=str(self.config.working_directory),
-            env={**os.environ},
+            [*self.config.sbatch_command, str(driver_script)],
+            cwd=str(run_dir),
+            env=env,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -288,72 +208,45 @@ class AReaLOPDWrapper:
                 f"sbatch did not return a parsable job id: {submit.stdout!r}"
             )
         self._wait_for_slurm_job(job_id)
-        return {
-            "scheduler_type": "slurm",
-            "job_id": job_id,
-            "script_path": str(script_path),
-            "slurm_log_path": str(run_dir / f"slurm-{job_id}.out"),
-        }
 
-    def _render_sbatch(
-        self, command: list[str], experiment_name: str, trial_name: str, run_dir: Path
-    ) -> str:
-        cfg = self.config
-        env = {
-            "PYTHONPATH": str(cfg.working_directory),
-            "AREAL_ADMIN_API_KEY": secrets.token_hex(16),
-            **{str(k): str(v) for k, v in cfg.environment_variables.items()},
+        checkpoint = self._latest_checkpoint(experiment_name, trial_name)
+        if checkpoint is None:
+            raise AReaLOPDTrainingError(
+                f"OPD driver job {job_id} finished but no checkpoint was found under "
+                f"{self._checkpoint_root(experiment_name, trial_name)}. See {run_dir}."
+            )
+        return {
+            "train_run_id": f"{experiment_name}:{trial_name}",
+            "method": "opd",
+            "base_ckpt": base_ckpt,
+            "ckpt": str(checkpoint),
+            "metrics": {},
+            "metadata": {
+                "scheduler_type": "slurm",
+                "job_id": job_id,
+                "experiment_name": experiment_name,
+                "trial_name": trial_name,
+                "experience_path": str(experience_path),
+                "train_data_path": str(train_data_path),
+                "driver_script": str(driver_script),
+                "run_dir": str(run_dir),
+            },
         }
-        container_args = [*cfg.singularity_command, "--nv", "--no-home", "--writable-tmpfs"]
-        for path in cfg.bind_paths:
-            container_args += ["--bind", path if ":" in path else f"{path}:{path}"]
-        for key, value in env.items():
-            container_args += ["--env", f"{key}={value}"]
-        inner = f"cd {shlex.quote(str(cfg.working_directory))}\nexec {shlex.join(command)}"
-        container_args += [str(cfg.image), "bash", "-lc", inner]
-        launch = shlex.join(
-            [
-                *cfg.srun_command,
-                f"--nodes={cfg.n_nodes}",
-                f"--ntasks={cfg.n_nodes}",
-                "--ntasks-per-node=1",
-                f"--cpus-per-task={cfg.cpus_per_task}",
-                f"--mem={cfg.memory}",
-                f"--gres=gpu:{cfg.n_gpus_per_node}",
-                *container_args,
-            ]
-        )
-        directives = [
-            f"#SBATCH --job-name=opd-{experiment_name}-{trial_name}",
-            f"#SBATCH --nodes={cfg.n_nodes}",
-            f"#SBATCH --ntasks={cfg.n_nodes}",
-            f"#SBATCH --gres=gpu:{cfg.n_gpus_per_node}",
-            f"#SBATCH --cpus-per-task={cfg.cpus_per_task}",
-            f"#SBATCH --mem={cfg.memory}",
-            f"#SBATCH --time={cfg.time_limit}",
-            f"#SBATCH --output={run_dir / 'slurm-%j.out'}",
-            f"#SBATCH --error={run_dir / 'slurm-%j.out'}",
-        ]
-        if cfg.partition:
-            directives.append(f"#SBATCH --partition={cfg.partition}")
-        if cfg.reservation:
-            directives.append(f"#SBATCH --reservation={cfg.reservation}")
-        return "\n".join(["#!/usr/bin/env bash", *directives, "", "set -euo pipefail", launch, ""])
 
     def _wait_for_slurm_job(self, job_id: str) -> None:
         started = time.monotonic()
-        seen_running = False
+        seen_active = False
         while True:
             active = self._squeue_active(job_id)
             if active:
-                seen_running = True
-            elif seen_running or time.monotonic() - started > self.config.poll_interval_seconds:
-                # Left the queue: completion detected without sacct. The caller
-                # then confirms success by resolving the saved checkpoint.
+                seen_active = True
+            elif seen_active or time.monotonic() - started > self.config.poll_interval_seconds:
+                # Driver job left the queue: training finished. Success is
+                # confirmed by resolving the checkpoint (no sacct required).
                 return
             if time.monotonic() - started >= self.config.job_timeout_seconds:
                 raise AReaLOPDTrainingError(
-                    f"OPD Slurm job {job_id} did not finish within "
+                    f"OPD driver job {job_id} did not finish within "
                     f"{self.config.job_timeout_seconds:g}s."
                 )
             time.sleep(max(1.0, self.config.poll_interval_seconds))
@@ -370,31 +263,17 @@ class AReaLOPDWrapper:
             return False
         return bool((result.stdout or "").strip())
 
-    # -- shared ------------------------------------------------------------
-
-    def _environment(self) -> dict[str, str]:
-        environment = {
-            **os.environ,
-            "PYTHONPATH": str(self.config.working_directory),
-            **{str(k): str(v) for k, v in self.config.environment_variables.items()},
-        }
-        environment.setdefault("AREAL_ADMIN_API_KEY", secrets.token_hex(16))
-        return environment
-
     def _checkpoint_root(self, experiment_name: str, trial_name: str) -> Path:
         return self.config.fileroot / "checkpoints" / getpass.getuser() / experiment_name / trial_name / "default"
 
     def _latest_checkpoint(self, experiment_name: str, trial_name: str) -> Path | None:
-        # The training job may run as a different user inside the container, so
-        # search across any <user> segment, not just the controller's user.
-        roots = list(
-            (self.config.fileroot / "checkpoints").glob(
-                f"*/{experiment_name}/{trial_name}/default"
-            )
-        )
+        # The workers may run as a different user inside the container, so search
+        # across any <user> segment, not just the controller's user.
         candidates = [
             path
-            for root in roots
+            for root in (self.config.fileroot / "checkpoints").glob(
+                f"*/{experiment_name}/{trial_name}/default"
+            )
             for path in root.glob("*globalstep*")
             if path.is_dir()
         ]
@@ -432,14 +311,6 @@ def _parse_job_id(stdout: str | None) -> str:
 def _globalstep(path: Path) -> int:
     match = re.search(r"globalstep(\d+)", path.name)
     return int(match.group(1)) if match else -1
-
-
-def _log_tail(log_path: Path, *, lines: int = 20) -> str:
-    try:
-        content = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return ""
-    return "\n".join(content[-lines:])
 
 
 def _string_tuple(value: Any, field_name: str) -> tuple[str, ...]:

@@ -29,10 +29,30 @@ from .generated.api.model_services import (
     get_openapi_v1_model_services_catalog_models_model_id_config,
     post_openapi_v1_model_services_service_id_instances_instance_id_stop,
 )
-from .generated.api.online import get_openapi_v1_online_harnesses
+from .generated.api.models import post_openapi_v1_models_register
+from .generated.api.online import (
+    get_openapi_v1_online_harnesses,
+    post_openapi_v1_streams_stream_id_launch_batch_task,
+)
 from .generated.client import AuthenticatedClient
 from .generated.models.concurrency_policy import ConcurrencyPolicy
+from .generated.models.create_agent_model_request import CreateAgentModelRequest
+from .generated.models.create_agent_model_request_env import CreateAgentModelRequestEnv
+from .generated.models.create_agent_model_request_metadata import (
+    CreateAgentModelRequestMetadata,
+)
+from .generated.models.create_agent_model_request_parameters import (
+    CreateAgentModelRequestParameters,
+)
+from .generated.models.create_agent_model_request_profile import (
+    CreateAgentModelRequestProfile,
+)
 from .generated.models.create_job_request import CreateJobRequest
+from .generated.models.launch_batch_task_item import LaunchBatchTaskItem
+from .generated.models.launch_batch_task_request import LaunchBatchTaskRequest
+from .generated.models.launch_batch_task_request_metadata import (
+    LaunchBatchTaskRequestMetadata,
+)
 from .generated.models.model_spec import ModelSpec
 from .generated.models.version_ref import VersionRef
 from .generated.types import UNSET
@@ -664,6 +684,89 @@ class EnvArenaClient(EnvClient):
     def publish_model_version(self, key: str, version: str) -> dict[str, Any]:
         return self.publish_registry_version("model", key, version)
 
+    def register_agent_model(
+        self,
+        gateway_model_id: str,
+        *,
+        key: str | None = None,
+        version: str = "1.0.0",
+        name: str | None = None,
+        description: str | None = None,
+        tags: Sequence[str] | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        supersedes: str | None = None,
+        storage_ref: str | None = None,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        profile: str | CreateAgentModelRequestProfile = CreateAgentModelRequestProfile.DUAL,
+        parameters: Mapping[str, Any] | None = None,
+        env: Mapping[str, str] | None = None,
+        publish: bool = True,
+    ) -> dict[str, Any]:
+        gateway_model_id = gateway_model_id.strip()
+        if not gateway_model_id:
+            raise EnvArenaConfigurationError("register_agent_model requires a non-empty gateway_model_id.")
+        model_key = str(key or self._derived_asset_key(gateway_model_id)).strip()
+        if not model_key:
+            raise EnvArenaConfigurationError("register_agent_model requires a non-empty model registry key.")
+        if not version.strip():
+            raise EnvArenaConfigurationError("register_agent_model requires a non-empty version.")
+
+        try:
+            profile_model = (
+                profile
+                if isinstance(profile, CreateAgentModelRequestProfile)
+                else CreateAgentModelRequestProfile(str(profile))
+            )
+        except ValueError as exc:
+            supported = ", ".join(item.value for item in CreateAgentModelRequestProfile)
+            raise EnvArenaConfigurationError(
+                f"Unsupported agent model profile {profile!r}; expected one of {supported}."
+            ) from exc
+
+        metadata_model: CreateAgentModelRequestMetadata | Any = UNSET
+        if metadata is not None:
+            metadata_model = CreateAgentModelRequestMetadata()
+            metadata_model.additional_properties = self._string_metadata(metadata)
+
+        parameters_model: CreateAgentModelRequestParameters | Any = UNSET
+        if parameters is not None:
+            parameters_model = CreateAgentModelRequestParameters()
+            parameters_model.additional_properties = dict(parameters)
+
+        env_model: CreateAgentModelRequestEnv | Any = UNSET
+        if env is not None:
+            env_model = CreateAgentModelRequestEnv()
+            env_model.additional_properties = {str(env_key): str(env_value) for env_key, env_value in env.items()}
+
+        body = CreateAgentModelRequest(
+            key=model_key,
+            version=version,
+            name=name if name is not None else UNSET,
+            description=description if description is not None else UNSET,
+            tags=list(tags) if tags is not None else UNSET,
+            metadata=metadata_model,
+            supersedes=supersedes if supersedes is not None else UNSET,
+            storage_ref=storage_ref if storage_ref is not None else UNSET,
+            model_name=gateway_model_id,
+            base_url=(base_url or self._default_llm_gateway_base_url()).rstrip("/"),
+            api_key=api_key or self.config.api_token,
+            profile=profile_model,
+            parameters=parameters_model,
+            env=env_model,
+            publish=publish,
+        )
+        body.additional_properties["gateway_model_id"] = gateway_model_id
+        body.additional_properties["model_id"] = gateway_model_id
+        return self._unwrap_generated(
+            post_openapi_v1_models_register.sync_detailed(
+                client=self._client,
+                body=body,
+            ),
+            "register agent model",
+            {201},
+        )
+
     def create_skill(self, **kwargs: Any) -> dict[str, Any]:
         return self.create_registry_entity("skill", **kwargs)
 
@@ -831,6 +934,18 @@ class EnvArenaClient(EnvClient):
         limit: int = 100,
         offset: int = 0,
     ) -> dict[str, Any]:
+        stream = self._stream_object(self.get_stream(stream_id))
+        fork_items = self._fork_stream_items_from_stream(stream)
+        if fork_items is not None:
+            page = fork_items[offset : offset + limit]
+            return {
+                "data_ids": [str(item.get("data_id", "")) for item in page],
+                "items": page,
+                "count": len(page),
+                "total": len(fork_items),
+                "offset": offset,
+                "limit": limit,
+            }
         body = {"selector": dict(selector)} if selector is not None else {}
         return self._request_json(
             "POST",
@@ -839,6 +954,91 @@ class EnvArenaClient(EnvClient):
             json_body=body,
             operation="select stream dataset",
         )
+
+    def fork_stream(
+        self,
+        source_stream_id: str,
+        items: Sequence[Mapping[str, Any]],
+        *,
+        stream_id: str | None = None,
+        name: str | None = None,
+        description: str | None = None,
+        default_harness_ref: EnvArenaVersionRef | Mapping[str, Any] | str | None = None,
+        default_reward_ref: EnvArenaVersionRef | Mapping[str, Any] | str | None = None,
+        selector: Mapping[str, Any] | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if not items:
+            raise EnvArenaConfigurationError("fork_stream requires at least one item.")
+
+        source_stream = self._stream_object(self.get_stream(source_stream_id))
+        requested_data_ids = [str(item.get("source_data_id") or item.get("data_id") or "") for item in items]
+        if any(not data_id for data_id in requested_data_ids):
+            raise EnvArenaConfigurationError("fork_stream items require data_id or source_data_id.")
+        source_items = self._select_stream_dataset_items(
+            source_stream_id,
+            requested_data_ids=requested_data_ids,
+            selector=selector,
+            page_size=max(len(requested_data_ids), 1),
+        )
+        source_by_data_id = {str(item.get("data_id", "")): item for item in source_items}
+
+        fork_items: list[dict[str, Any]] = []
+        harness_refs: list[EnvArenaVersionRef] = []
+        for item in items:
+            source_data_id = str(item.get("source_data_id") or item.get("data_id") or "")
+            source_item = source_by_data_id[source_data_id]
+            data_id = str(item.get("data_id") or source_data_id)
+            harness_ref = self._resolve_registry_ref("harnesses", item.get("harness_ref", item.get("harness")), "harness")
+            harness_refs.append(harness_ref)
+            env_ref = self._as_version_ref(item.get("env_ref") or source_item.get("env_ref") or source_data_id.removeprefix("env:"))
+            fork_item = {
+                "source_stream_id": source_stream_id,
+                "source_data_id": source_data_id,
+                "data_id": data_id,
+                "env_ref": env_ref.to_dict(),
+                "harness_ref": harness_ref.to_dict(),
+            }
+            if item.get("reward_ref") is not None or item.get("reward") is not None:
+                fork_item["reward_ref"] = self._resolve_registry_ref(
+                    "rewards",
+                    item.get("reward_ref", item.get("reward")),
+                    "reward",
+                ).to_dict()
+            fork_items.append(fork_item)
+
+        default_harness = self._fork_default_harness_ref(
+            harness_refs,
+            explicit_ref=default_harness_ref,
+            stream_ref=source_stream.get("default_harness_ref"),
+        )
+        default_reward = (
+            self._as_version_ref(default_reward_ref)
+            if default_reward_ref is not None
+            else self._as_version_ref(source_stream["default_reward_ref"])
+            if source_stream.get("default_reward_ref") is not None
+            else None
+        )
+        fork_stream_id = stream_id or self._derived_asset_key(f"{source_stream_id}-fork")
+        stream = self.create_stream(
+            stream_id=fork_stream_id,
+            name=name or f"{source_stream.get('name', source_stream_id)} fork",
+            description=description or f"AReaL-RSI fork of stream {source_stream_id}",
+            task=str(source_stream.get("task") or ""),
+            selector=dict(source_stream.get("selector", {})),
+            default_harness_ref=default_harness,
+            default_reward_ref=default_reward,
+            metadata={
+                **dict(metadata or {}),
+                "source_stream_id": source_stream_id,
+                "fork_schema": "areal-rsi.fork_stream.v1",
+                "fork_items": json.dumps(fork_items, ensure_ascii=True),
+                "generated_by": "areal-rsi",
+            },
+        )
+        stream["source_stream_id"] = source_stream_id
+        stream["items"] = fork_items
+        return stream
 
     def list_stream_tasks(
         self,
@@ -929,6 +1129,68 @@ class EnvArenaClient(EnvClient):
             json_body=body,
             operation="launch stream task",
             expected_statuses={201, 202},
+        )
+
+    def launch_stream_batch_task(
+        self,
+        stream_id: str,
+        *,
+        model_ref: EnvArenaVersionRef | Mapping[str, Any] | str,
+        tasks: Sequence[Mapping[str, Any] | str],
+        harness_ref: EnvArenaVersionRef | Mapping[str, Any] | str | None = None,
+        reward_ref: EnvArenaVersionRef | Mapping[str, Any] | str | None = None,
+        job_id: str | None = None,
+        concurrency_policy: Mapping[str, Any] | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        experiment: str | None = None,
+    ) -> dict[str, Any]:
+        registry_model_ref = self._as_version_ref(model_ref)
+        task_items = [self._launch_batch_task_item(task) for task in tasks]
+        if not task_items:
+            raise EnvArenaConfigurationError("launch_stream_batch_task requires at least one task.")
+
+        metadata_model: LaunchBatchTaskRequestMetadata | Any = UNSET
+        if metadata is not None:
+            metadata_model = LaunchBatchTaskRequestMetadata()
+            metadata_model.additional_properties = self._string_metadata(metadata)
+
+        body = LaunchBatchTaskRequest(
+            model_ref=VersionRef(**registry_model_ref.to_dict()),
+            tasks=task_items,
+            job_id=job_id if job_id else UNSET,
+            harness_ref=VersionRef(**self._as_version_ref(harness_ref).to_dict()) if harness_ref is not None else UNSET,
+            reward_ref=VersionRef(**self._as_version_ref(reward_ref).to_dict()) if reward_ref is not None else UNSET,
+            concurrency_policy=self._concurrency_policy(concurrency_policy),
+            metadata=metadata_model,
+            experiment=experiment if experiment else UNSET,
+        )
+        return self._unwrap_generated(
+            post_openapi_v1_streams_stream_id_launch_batch_task.sync_detailed(
+                stream_id,
+                client=self._client,
+                body=body,
+            ),
+            "launch stream batch task",
+            {202},
+        )
+
+    def _launch_batch_task_item(self, task: Mapping[str, Any] | str) -> LaunchBatchTaskItem:
+        if isinstance(task, str):
+            data_id = task
+            harness_ref = None
+            reward_ref = None
+        elif isinstance(task, Mapping):
+            data_id = str(task.get("data_id", "")).strip()
+            harness_ref = task.get("harness_ref", task.get("harness"))
+            reward_ref = task.get("reward_ref", task.get("reward"))
+        else:
+            raise EnvArenaConfigurationError("launch_stream_batch_task tasks must be strings or mappings.")
+        if not data_id:
+            raise EnvArenaConfigurationError("launch_stream_batch_task task requires non-empty data_id.")
+        return LaunchBatchTaskItem(
+            data_id=data_id,
+            harness_ref=VersionRef(**self._as_version_ref(harness_ref).to_dict()) if harness_ref is not None else UNSET,
+            reward_ref=VersionRef(**self._as_version_ref(reward_ref).to_dict()) if reward_ref is not None else UNSET,
         )
 
     def list_model_services(self) -> list[dict[str, Any]]:
@@ -1318,6 +1580,10 @@ class EnvArenaClient(EnvClient):
         env: Mapping[str, str] | None = None,
         supersedes: str | None = None,
         storage_ref: str | None = None,
+        gateway_model_id: str | None = None,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        profile: str | CreateAgentModelRequestProfile | None = None,
         create_entity: bool = True,
         publish: bool = True,
     ) -> dict[str, Any]:
@@ -1390,23 +1656,85 @@ class EnvArenaClient(EnvClient):
         if asset.get("model_path"):
             registry_metadata["model_path"] = str(asset["model_path"])
 
-        entity_payload: dict[str, Any] | None = None
         if create_entity:
-            entity_payload = self.create_model(
-                key=model_key,
-                name=str(name or registry_config.get("name") or model_key),
-                description=description if description is not None else registry_config.get("description"),
-                tags=list(tags if tags is not None else registry_config.get("tags", ["areal-rsi", "model-service"])),
-                metadata=registry_metadata,
+            entity_name = str(name or registry_config.get("name") or model_key)
+            entity_description = description if description is not None else registry_config.get("description")
+            entity_tags = list(tags if tags is not None else registry_config.get("tags", ["areal-rsi", "model-service"]))
+            register_error: Exception | None = None
+            try:
+                register_payload = self.register_agent_model(
+                    str(
+                        gateway_model_id
+                        or registry_config.get("gateway_model_id")
+                        or registry_config.get("model_id")
+                        or version_spec.get("model_name")
+                        or model_name
+                    ),
+                    key=model_key,
+                    version=model_version,
+                    name=entity_name,
+                    description=entity_description,
+                    tags=entity_tags,
+                    metadata=registry_metadata,
+                    supersedes=supersedes if supersedes is not None else registry_config.get("supersedes"),
+                    storage_ref=storage_ref if storage_ref is not None else registry_config.get("storage_ref"),
+                    base_url=base_url or registry_config.get("base_url") or registry_config.get("gateway_base_url"),
+                    api_key=api_key or registry_config.get("api_key") or registry_config.get("gateway_api_key"),
+                    profile=profile or registry_config.get("profile") or CreateAgentModelRequestProfile.DUAL,
+                    parameters=version_spec.get("parameters")
+                    if isinstance(version_spec.get("parameters"), Mapping)
+                    else None,
+                    env=version_spec.get("env") if isinstance(version_spec.get("env"), Mapping) else None,
+                    publish=publish,
+                )
+            except EnvArenaHTTPError as exc:
+                if exc.status_code not in {404, 405}:
+                    raise
+                register_error = exc
+            except json.JSONDecodeError as exc:
+                register_error = exc
+
+            if register_error is None:
+                registry_ref = EnvArenaVersionRef(
+                    key=str(register_payload.get("key") or model_key),
+                    version=str(register_payload.get("version") or model_version),
+                )
+                version_payload = register_payload
+                publish_payload = register_payload if publish else None
+                version_spec = dict(register_payload.get("spec") or version_spec)
+                entity_payload: dict[str, Any] | None = None
+            else:
+                warnings.warn(
+                    "EnvArena /openapi/v1/models-register is unavailable or returned a non-JSON error; "
+                    f"falling back to legacy model registry creation: {register_error}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                entity_payload = self.create_model(
+                    key=model_key,
+                    name=entity_name,
+                    description=entity_description,
+                    tags=entity_tags,
+                    metadata=registry_metadata,
+                )
+                version_payload = self.create_model_version(
+                    model_key,
+                    version=model_version,
+                    spec=version_spec,
+                    supersedes=supersedes if supersedes is not None else registry_config.get("supersedes"),
+                    storage_ref=storage_ref if storage_ref is not None else registry_config.get("storage_ref"),
+                )
+                publish_payload = self.publish_model_version(model_key, model_version) if publish else None
+        else:
+            entity_payload = None
+            version_payload = self.create_model_version(
+                model_key,
+                version=model_version,
+                spec=version_spec,
+                supersedes=supersedes if supersedes is not None else registry_config.get("supersedes"),
+                storage_ref=storage_ref if storage_ref is not None else registry_config.get("storage_ref"),
             )
-        version_payload = self.create_model_version(
-            model_key,
-            version=model_version,
-            spec=version_spec,
-            supersedes=supersedes if supersedes is not None else registry_config.get("supersedes"),
-            storage_ref=storage_ref if storage_ref is not None else registry_config.get("storage_ref"),
-        )
-        publish_payload = self.publish_model_version(model_key, model_version) if publish else None
+            publish_payload = self.publish_model_version(model_key, model_version) if publish else None
         return {
             "model_name": model_name,
             "registry_ref": registry_ref.to_dict(),
@@ -1419,6 +1747,7 @@ class EnvArenaClient(EnvClient):
             "model_entity": entity_payload,
             "model_version": version_payload,
             "model_publish": publish_payload,
+            "model_register": version_payload if create_entity else None,
             "spec": version_spec,
         }
 
@@ -1454,7 +1783,7 @@ class EnvArenaClient(EnvClient):
         job_config: Mapping[str, Any] | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> EvalJob:
-        return self._submit_stream_eval(
+        fork = self._fork_stream_for_eval(
             EnvArenaEvalRequest(
                 ckpt=ckpt,
                 stream_id=stream_id,
@@ -1464,18 +1793,38 @@ class EnvArenaClient(EnvClient):
                 reward=reward,
                 job_config=dict(job_config or {}),
                 metadata=dict(metadata or {}),
-            ),
-            fork=True,
+            )
         )
+        fork_stream_id = str(fork["stream_id"])
+        fork_data_ids = [str(item["data_id"]) for item in fork["items"]]
+        job_metadata = {
+            **dict(metadata or {}),
+            "source_stream_id": stream_id,
+            "fork_stream_id": fork_stream_id,
+        }
+        job = self.submit_eval_by_existed_stream(
+            ckpt,
+            fork_stream_id,
+            data_ids=fork_data_ids,
+            job_config=job_config,
+            metadata=job_metadata,
+        )
+        job["fork_stream_id"] = fork_stream_id
+        job["source_stream_id"] = stream_id
+        job["assets"] = {
+            **dict(job.get("assets", {})),
+            "fork_stream": fork,
+            "relationships": [dict(item) for item in relationships],
+        }
+        return job
 
-    def _submit_stream_eval(self, request: EnvArenaEvalRequest, *, fork: bool) -> EvalJob:
-        if fork and not request.data_ids:
+    def _fork_stream_for_eval(self, request: EnvArenaEvalRequest) -> dict[str, Any]:
+        if not request.data_ids:
             raise EnvArenaConfigurationError("fork stream evaluation requires at least one data_id.")
 
         job_config = self._merge_job_config(self.config.job_config, self.config.stream_eval_config)
         job_config = self._merge_job_config(job_config, request.job_config)
-        stream_payload = self.get_stream(request.stream_id)
-        source_stream = self._stream_object(stream_payload)
+        source_stream = self._stream_object(self.get_stream(request.stream_id))
         source_stream_id = str(source_stream.get("stream_id") or request.stream_id)
         selected_items = self._select_stream_dataset_items(
             source_stream_id,
@@ -1485,44 +1834,180 @@ class EnvArenaClient(EnvClient):
         )
         reward_ref = self._resolve_stream_reward_ref(source_stream, request.reward, job_config)
         base_harness_ref = self._resolve_stream_harness_ref(source_stream, job_config)
-        skill_refs = self._resolve_stream_skill_refs(request.skills) if fork else []
+        relationships_by_data_id = self._relationships_by_data_id(request.relationships)
+        global_skill_refs, skill_refs_by_data_id = self._resolve_stream_skill_bindings(
+            request.skills,
+            relationships=request.relationships,
+        )
+        harness_cache: dict[tuple[tuple[str, str], ...], EnvArenaVersionRef] = {}
+
+        def harness_for_skill_refs(
+            skill_refs: Sequence[EnvArenaVersionRef],
+            *,
+            data_id: str | None = None,
+        ) -> EnvArenaVersionRef:
+            key = tuple((ref.key, ref.version) for ref in skill_refs)
+            if not key:
+                return base_harness_ref
+            if key not in harness_cache:
+                harness_cache[key] = self._create_fork_harness(
+                    base_harness_ref,
+                    skill_refs,
+                    source_stream_id,
+                    job_config,
+                    key_seed=f"{base_harness_ref.key}-{data_id}-fork-harness" if data_id else None,
+                    extra_metadata={"data_id": data_id} if data_id else None,
+                )
+            return harness_cache[key]
+
+        default_harness_ref = harness_for_skill_refs(global_skill_refs) if global_skill_refs else base_harness_ref
+        fork_items: list[dict[str, Any]] = []
+        for item in selected_items:
+            data_id = str(item.get("data_id", "")).strip()
+            if not data_id:
+                raise EnvArenaConfigurationError("stream dataset item is missing data_id.")
+            relationships = relationships_by_data_id.get(data_id, [])
+            task_harness_ref = self._stream_item_or_relationship_ref(
+                item,
+                relationships,
+                field_names=("harness_ref", "harness"),
+                collection="harnesses",
+                asset_name="harness",
+            )
+            if task_harness_ref is None:
+                task_skill_refs = self._dedupe_refs([*global_skill_refs, *skill_refs_by_data_id.get(data_id, [])])
+                task_harness_ref = (
+                    default_harness_ref
+                    if task_skill_refs == global_skill_refs
+                    else harness_for_skill_refs(task_skill_refs, data_id=data_id)
+                )
+            fork_items.append(
+                {
+                    "data_id": data_id,
+                    "harness_ref": task_harness_ref.to_dict(),
+                    "env_ref": self._env_ref_for_stream_item(item).to_dict(),
+                }
+            )
+
+        fork_stream_id = str(job_config.get("fork_stream_id") or self._derived_asset_key(f"{source_stream_id}-fork"))
+        return self.fork_stream(
+            source_stream_id,
+            fork_items,
+            stream_id=fork_stream_id,
+            name=str(request.metadata.get("fork_stream_name") or f"{source_stream.get('name', source_stream_id)} fork"),
+            description=str(request.metadata.get("fork_stream_description") or f"AReaL-RSI fork of stream {source_stream_id}"),
+            default_harness_ref=default_harness_ref,
+            default_reward_ref=reward_ref,
+            selector=job_config.get("selector"),
+            metadata={
+                **dict(request.metadata),
+                "relationships": json.dumps([dict(item) for item in request.relationships], ensure_ascii=True),
+            },
+        )
+
+    def _submit_stream_eval(self, request: EnvArenaEvalRequest, *, fork: bool) -> EvalJob:
+        if fork and not request.data_ids:
+            raise EnvArenaConfigurationError("fork stream evaluation requires at least one data_id.")
+
+        job_config = self._merge_job_config(self.config.job_config, self.config.stream_eval_config)
+        job_config = self._merge_job_config(job_config, request.job_config)
+        stream_payload = self.get_stream(request.stream_id)
+        stream = self._stream_object(stream_payload)
+        stream_id = str(stream.get("stream_id") or request.stream_id)
+        source_stream_id = self._source_stream_id_for_stream(stream, stream_id)
+        selected_items = self._select_stream_dataset_items(
+            stream_id,
+            requested_data_ids=request.data_ids,
+            selector=job_config.get("selector"),
+            page_size=int(job_config.get("dataset_page_size", 1000)),
+        )
+        reward_ref = self._resolve_stream_reward_ref(stream, request.reward, job_config)
+        base_harness_ref = self._resolve_stream_harness_ref(stream, job_config)
+        global_skill_refs, skill_refs_by_data_id = (
+            self._resolve_stream_skill_bindings(request.skills) if fork else ([], {})
+        )
+        harness_cache: dict[tuple[tuple[str, str], ...], EnvArenaVersionRef] = {}
+
+        def harness_for_skill_refs(
+            skill_refs: Sequence[EnvArenaVersionRef],
+            *,
+            data_id: str | None = None,
+        ) -> EnvArenaVersionRef:
+            key = tuple((ref.key, ref.version) for ref in skill_refs)
+            if not key:
+                return base_harness_ref
+            if key not in harness_cache:
+                harness_cache[key] = self._create_fork_harness(
+                    base_harness_ref,
+                    skill_refs,
+                    source_stream_id,
+                    job_config,
+                    key_seed=f"{base_harness_ref.key}-{data_id}-fork-harness" if data_id else None,
+                    extra_metadata={"data_id": data_id} if data_id else None,
+                )
+            return harness_cache[key]
+
         harness_ref = (
-            self._create_fork_harness(base_harness_ref, skill_refs, source_stream_id, job_config)
-            if fork and skill_refs
+            harness_for_skill_refs(global_skill_refs)
+            if fork and global_skill_refs
             else base_harness_ref
         )
         fork_stream_id = (
-            str(job_config.get("fork_stream_id") or self._derived_asset_key(f"{source_stream_id}-fork"))
+            str(job_config.get("fork_stream_id") or self._derived_asset_key(f"{stream_id}-fork"))
             if fork
             else None
         )
         relationships_by_data_id = self._relationships_by_data_id(request.relationships)
-        benchmark_ref = self._create_stream_benchmark(
-            stream_id=source_stream_id,
-            data_items=selected_items,
-            reward_ref=reward_ref,
-            harness_ref=harness_ref,
-            skill_refs=skill_refs,
-            relationships_by_data_id=relationships_by_data_id,
-            fork_stream_id=fork_stream_id,
-            job_config=job_config,
-            request_metadata=request.metadata,
-        )
+        tasks: list[dict[str, Any]] = []
+        all_skill_refs: list[EnvArenaVersionRef] = list(global_skill_refs)
+        for item in selected_items:
+            data_id = str(item.get("data_id", "")).strip()
+            if not data_id:
+                raise EnvArenaConfigurationError("stream dataset item is missing data_id.")
+            relationships = relationships_by_data_id.get(data_id, [])
+            relationship_skill_refs = self._resolve_relationship_skill_refs(relationships)
+            task_skill_refs = self._dedupe_refs(
+                [*global_skill_refs, *skill_refs_by_data_id.get(data_id, []), *relationship_skill_refs]
+            )
+            all_skill_refs = self._dedupe_refs([*all_skill_refs, *task_skill_refs])
+            task_harness_ref = self._stream_item_or_relationship_ref(
+                item,
+                relationships,
+                field_names=("harness_ref", "harness"),
+                collection="harnesses",
+                asset_name="harness",
+            )
+            if task_harness_ref is None and task_skill_refs != global_skill_refs:
+                task_harness_ref = harness_for_skill_refs(task_skill_refs, data_id=data_id)
+            task_reward_ref = self._stream_item_or_relationship_ref(
+                item,
+                relationships,
+                field_names=("reward_ref", "reward"),
+                collection="rewards",
+                asset_name="reward",
+            )
+            task: dict[str, Any] = {"data_id": data_id}
+            if task_harness_ref is not None and task_harness_ref != harness_ref:
+                task["harness_ref"] = task_harness_ref.to_dict()
+            if task_reward_ref is not None and task_reward_ref != reward_ref:
+                task["reward_ref"] = task_reward_ref.to_dict()
+            tasks.append(task)
+
         fork_stream: dict[str, Any] | None = None
         if fork and fork_stream_id is not None:
             fork_stream = self._create_fork_stream_record(
                 fork_stream_id=fork_stream_id,
-                source_stream=source_stream,
-                benchmark_ref=benchmark_ref,
+                source_stream=stream,
+                benchmark_ref=None,
                 harness_ref=harness_ref,
                 reward_ref=reward_ref,
                 data_items=selected_items,
-                skill_refs=skill_refs,
+                skill_refs=all_skill_refs,
                 relationships=request.relationships,
                 metadata=request.metadata,
             )
 
-        model = self.ensure_model_service_for_ckpt(
+        model = self.ensure_model_registry_for_ckpt(
             request.ckpt,
             job_config=job_config,
             metadata={
@@ -1530,43 +2015,66 @@ class EnvArenaClient(EnvClient):
                 "source_stream_id": source_stream_id,
                 **({"fork_stream_id": fork_stream_id} if fork_stream_id else {}),
             },
+            wait_ready=bool(job_config.get("wait_model_ready", True)),
+            ready_timeout_seconds=float(job_config.get("model_ready_timeout_seconds", 1800)),
+            ready_poll_seconds=float(job_config.get("model_ready_poll_seconds", 15)),
+            parameters=job_config.get("model_parameters"),
+            env=job_config.get("model_env"),
         )
+        model_ref = self._as_version_ref(model["registry_ref"])
         job_metadata = {
             **dict(request.metadata),
             "source": request.metadata.get("source", "eval"),
             "stream_eval_mode": "fork" if fork else "existing",
             "source_stream_id": source_stream_id,
-            "benchmark_ref": f"{benchmark_ref.key}@{benchmark_ref.version}",
             **({"fork_stream_id": fork_stream_id} if fork_stream_id else {}),
         }
-        job = self._submit_benchmark_job(
-            benchmark_ref=benchmark_ref,
+        launch_stream_id = fork_stream_id or stream_id
+        payload = self.launch_stream_batch_task(
+            launch_stream_id,
+            model_ref=model_ref,
+            tasks=tasks,
             harness_ref=harness_ref,
-            model_name=model.get("model_name") or None,
-            model_ref=model.get("registry_ref"),
+            reward_ref=reward_ref,
             job_id=job_config.get("job_id"),
-            sample_numbers=int(job_config.get("sample_numbers", 1)),
             concurrency_policy=job_config.get("concurrency_policy"),
-            tags=list(job_config.get("tags", [])),
             metadata=job_metadata,
-            model_parameters=job_config.get("model_parameters") or model.get("parameters"),
-            model_env=job_config.get("model_env") or model.get("env"),
-            assets={
+            experiment=str(job_config.get("experiment")) if job_config.get("experiment") is not None else None,
+        )
+        job_payload = payload.get("job", {})
+        selected_data_ids = [task["data_id"] for task in tasks]
+        job: EvalJob = {
+            "eval_job_id": str(payload.get("job_id") or job_payload.get("job_id") or ""),
+            "status": job_payload.get("status", "PENDING"),
+            "model_ref": {
+                "model_name": model.get("model_name") or model_ref.key,
+                "runtime_model_name": model.get("model_name") or model_ref.key,
+                "registry_ref": model_ref.to_dict(),
+            },
+            "stream_id": launch_stream_id,
+            "source_stream_id": source_stream_id,
+            "harness_ref": harness_ref.to_dict(),
+            "harness_config": {"harness_ref": harness_ref.to_dict()},
+            "reward_ref": reward_ref.to_dict(),
+            "task_ids": list(payload.get("task_ids", [])),
+            "selected_data_ids": selected_data_ids,
+            "assets": {
                 "model": model["asset"],
-                "benchmark": benchmark_ref.to_dict(),
                 "harness": harness_ref.to_dict(),
                 "reward": reward_ref.to_dict(),
-                "source_stream": source_stream,
-                "data_ids": [str(item.get("data_id", "")) for item in selected_items],
-                **({"skills": [ref.to_dict() for ref in skill_refs]} if skill_refs else {}),
+                "stream": stream,
+                "data_ids": selected_data_ids,
+                "stream_tasks": tasks,
+                **({"skills": [ref.to_dict() for ref in all_skill_refs]} if all_skill_refs else {}),
                 **({"fork_stream": fork_stream or {"stream_id": fork_stream_id}} if fork_stream_id else {}),
                 **({"relationships": [dict(item) for item in request.relationships]} if request.relationships else {}),
             },
-            job_config=job_config,
-        )
-        job["stream_id"] = fork_stream_id or source_stream_id
-        job["source_stream_id"] = source_stream_id
-        job["selected_data_ids"] = [str(item.get("data_id", "")) for item in selected_items]
+            "job_config": dict(job_config),
+            "metadata": job_metadata,
+            "raw": payload,
+        }
+        if not job["eval_job_id"]:
+            raise EnvArenaError(f"EnvArena launch stream batch task returned no job_id: {payload}")
         if fork_stream_id:
             job["fork_stream_id"] = fork_stream_id
         return job
@@ -1577,6 +2085,62 @@ class EnvArenaClient(EnvClient):
         if not isinstance(stream, Mapping):
             raise EnvArenaError("EnvArena get stream returned no stream object.")
         return dict(stream)
+
+    @staticmethod
+    def _stream_metadata(stream: Mapping[str, Any]) -> dict[str, Any]:
+        metadata = stream.get("metadata", {})
+        return dict(metadata) if isinstance(metadata, Mapping) else {}
+
+    def _source_stream_id_for_stream(self, stream: Mapping[str, Any], stream_id: str) -> str:
+        metadata = self._stream_metadata(stream)
+        return str(metadata.get("source_stream_id") or stream.get("source_stream_id") or stream_id)
+
+    def _fork_stream_items_from_stream(self, stream: Mapping[str, Any]) -> list[dict[str, Any]] | None:
+        metadata = self._stream_metadata(stream)
+        raw_items = metadata.get("fork_items")
+        if raw_items is None:
+            return None
+        try:
+            decoded = json.loads(str(raw_items))
+        except ValueError as exc:
+            raise EnvArenaError(f"Fork stream {stream.get('stream_id', '')!r} has invalid fork_items metadata.") from exc
+        if not isinstance(decoded, list):
+            raise EnvArenaError(f"Fork stream {stream.get('stream_id', '')!r} fork_items metadata must be a list.")
+        items: list[dict[str, Any]] = []
+        for item in decoded:
+            if not isinstance(item, Mapping):
+                raise EnvArenaError(f"Fork stream {stream.get('stream_id', '')!r} contains a non-object fork item.")
+            data_id = str(item.get("data_id", "")).strip()
+            env_ref = item.get("env_ref")
+            harness_ref = item.get("harness_ref")
+            if not data_id or env_ref is None or harness_ref is None:
+                raise EnvArenaError(
+                    f"Fork stream {stream.get('stream_id', '')!r} items require data_id, env_ref, and harness_ref."
+                )
+            normalized = dict(item)
+            normalized["data_id"] = data_id
+            normalized["env_ref"] = self._as_version_ref(env_ref).to_dict()
+            normalized["harness_ref"] = self._as_version_ref(harness_ref).to_dict()
+            if normalized.get("reward_ref") is not None:
+                normalized["reward_ref"] = self._as_version_ref(normalized["reward_ref"]).to_dict()
+            items.append(normalized)
+        return items
+
+    def _fork_default_harness_ref(
+        self,
+        harness_refs: Sequence[EnvArenaVersionRef],
+        *,
+        explicit_ref: EnvArenaVersionRef | Mapping[str, Any] | str | None,
+        stream_ref: EnvArenaVersionRef | Mapping[str, Any] | str | None,
+    ) -> EnvArenaVersionRef:
+        if explicit_ref is not None:
+            return self._as_version_ref(explicit_ref)
+        unique = self._dedupe_refs(harness_refs)
+        if len(unique) == 1:
+            return unique[0]
+        if stream_ref is None:
+            raise EnvArenaConfigurationError("fork_stream requires default_harness_ref when item harness refs differ.")
+        return self._as_version_ref(stream_ref)
 
     def _resolve_stream_harness_ref(
         self,
@@ -1663,6 +2227,120 @@ class EnvArenaClient(EnvClient):
                 by_data_id.setdefault(data_id, []).append(dict(relationship))
         return by_data_id
 
+    def _stream_item_or_relationship_ref(
+        self,
+        item: Mapping[str, Any],
+        relationships: Sequence[Mapping[str, Any]],
+        *,
+        field_names: Sequence[str],
+        collection: str,
+        asset_name: str,
+    ) -> EnvArenaVersionRef | None:
+        for field_name in field_names:
+            if item.get(field_name) is not None:
+                return self._resolve_registry_ref(collection, item[field_name], asset_name)
+        for relationship in relationships:
+            for field_name in field_names:
+                if relationship.get(field_name) is not None:
+                    return self._resolve_registry_ref(collection, relationship[field_name], asset_name)
+        return None
+
+    def _resolve_stream_skill_bindings(
+        self,
+        skills: Sequence[Mapping[str, Any] | str],
+        *,
+        relationships: Sequence[Mapping[str, Any]] = (),
+    ) -> tuple[list[EnvArenaVersionRef], dict[str, list[EnvArenaVersionRef]]]:
+        global_refs: list[EnvArenaVersionRef] = []
+        refs_by_data_id: dict[str, list[EnvArenaVersionRef]] = {}
+        data_ids_by_experience_id = self._data_ids_by_experience_id(relationships)
+        for skill in skills:
+            ref = self._resolve_stream_skill_ref(skill)
+            bound_data_ids = self._skill_bound_data_ids(skill, data_ids_by_experience_id)
+            if not bound_data_ids:
+                global_refs = self._dedupe_refs([*global_refs, ref])
+                continue
+            for data_id in bound_data_ids:
+                refs_by_data_id[data_id] = self._dedupe_refs([*refs_by_data_id.get(data_id, []), ref])
+        return global_refs, refs_by_data_id
+
+    def _resolve_stream_skill_refs(
+        self,
+        skills: Sequence[Mapping[str, Any] | str],
+    ) -> list[EnvArenaVersionRef]:
+        return self._resolve_stream_skill_bindings(skills)[0]
+
+    def _resolve_stream_skill_ref(self, skill: Mapping[str, Any] | str) -> EnvArenaVersionRef:
+        if isinstance(skill, str):
+            return self._as_version_ref(skill)
+        if isinstance(skill, Mapping) and skill.get("type") in {"new", "ref"}:
+            resolved = self._resolve_optional_registry_asset("skills", skill)
+            if resolved is None:
+                raise EnvArenaConfigurationError("skill config did not resolve to a registry ref.")
+            return resolved
+        return self._resolve_registry_ref("skills", skill, "skill")
+
+    def _resolve_relationship_skill_refs(
+        self,
+        relationships: Sequence[Mapping[str, Any]],
+    ) -> list[EnvArenaVersionRef]:
+        refs: list[EnvArenaVersionRef] = []
+        for relationship in relationships:
+            for field_name in ("skill_ref", "skill_refs", "skill", "skills"):
+                if relationship.get(field_name) is None:
+                    continue
+                values = self._as_sequence(relationship[field_name])
+                for value in values:
+                    refs = self._dedupe_refs([*refs, self._resolve_stream_skill_ref(value)])
+        return refs
+
+    @staticmethod
+    def _data_ids_by_experience_id(relationships: Sequence[Mapping[str, Any]]) -> dict[str, list[str]]:
+        data_ids_by_experience_id: dict[str, list[str]] = {}
+        for relationship in relationships:
+            experience_id = str(relationship.get("experience_id", "")).strip()
+            data_id = str(relationship.get("data_id", "")).strip()
+            if experience_id and data_id:
+                data_ids_by_experience_id.setdefault(experience_id, []).append(data_id)
+        return data_ids_by_experience_id
+
+    @staticmethod
+    def _skill_bound_data_ids(
+        skill: Mapping[str, Any] | str,
+        data_ids_by_experience_id: Mapping[str, Sequence[str]],
+    ) -> list[str]:
+        if not isinstance(skill, Mapping):
+            return []
+        data_ids: list[str] = []
+        for field_name in ("experience_id", "experience_ids"):
+            if skill.get(field_name) is None:
+                continue
+            for experience_id in EnvArenaClient._as_sequence(skill[field_name]):
+                data_ids.extend(str(data_id) for data_id in data_ids_by_experience_id.get(str(experience_id), []))
+        if skill.get("data_ids") is not None:
+            data_ids.extend(str(data_id) for data_id in EnvArenaClient._as_sequence(skill["data_ids"]))
+        if skill.get("data_id") is not None:
+            data_ids.append(str(skill["data_id"]))
+        return [data_id for data_id in dict.fromkeys(data_ids) if data_id.strip()]
+
+    @staticmethod
+    def _as_sequence(value: Any) -> list[Any]:
+        if isinstance(value, str) or not isinstance(value, Sequence):
+            return [value]
+        return list(value)
+
+    @staticmethod
+    def _dedupe_refs(refs: Sequence[EnvArenaVersionRef]) -> list[EnvArenaVersionRef]:
+        deduped: list[EnvArenaVersionRef] = []
+        seen: set[tuple[str, str]] = set()
+        for ref in refs:
+            key = (ref.key, ref.version)
+            if key in seen:
+                continue
+            deduped.append(ref)
+            seen.add(key)
+        return deduped
+
     def _create_stream_benchmark(
         self,
         *,
@@ -1731,34 +2409,15 @@ class EnvArenaClient(EnvClient):
             data_id = data_id.removeprefix("env:")
         return self._as_version_ref(data_id)
 
-    def _resolve_stream_skill_refs(
-        self,
-        skills: Sequence[Mapping[str, Any] | str],
-    ) -> list[EnvArenaVersionRef]:
-        refs: list[EnvArenaVersionRef] = []
-        seen: set[tuple[str, str]] = set()
-        for skill in skills:
-            if isinstance(skill, str):
-                ref = self._as_version_ref(skill)
-            elif isinstance(skill, Mapping) and skill.get("type") in {"new", "ref"}:
-                resolved = self._resolve_optional_registry_asset("skills", skill)
-                if resolved is None:
-                    continue
-                ref = resolved
-            else:
-                ref = self._resolve_registry_ref("skills", skill, "skill")
-            key = (ref.key, ref.version)
-            if key not in seen:
-                refs.append(ref)
-                seen.add(key)
-        return refs
-
     def _create_fork_harness(
         self,
         base_harness_ref: EnvArenaVersionRef,
         skill_refs: Sequence[EnvArenaVersionRef],
         source_stream_id: str,
         job_config: Mapping[str, Any],
+        *,
+        key_seed: str | None = None,
+        extra_metadata: Mapping[str, Any] | None = None,
     ) -> EnvArenaVersionRef:
         version_payload = self.get_harness_version(base_harness_ref.key, base_harness_ref.version)
         base_spec = dict(version_payload.get("spec", {}))
@@ -1780,10 +2439,14 @@ class EnvArenaClient(EnvClient):
                 "source_stream_id": source_stream_id,
                 "base_harness_ref": base_harness_ref.to_dict(),
                 "generated_by": "areal-rsi",
+                **dict(extra_metadata or {}),
             }
         )
         base_spec["metadata"] = metadata
-        key = str(job_config.get("harness_key") or self._derived_asset_key(f"{base_harness_ref.key}-fork-harness"))
+        key = str(
+            job_config.get("harness_key") if key_seed is None and job_config.get("harness_key")
+            else self._derived_asset_key(key_seed or f"{base_harness_ref.key}-fork-harness")
+        )
         version = str(job_config.get("harness_version") or "1.0.0")
         self.create_harness(
             key=key,
@@ -1801,7 +2464,7 @@ class EnvArenaClient(EnvClient):
         *,
         fork_stream_id: str,
         source_stream: Mapping[str, Any],
-        benchmark_ref: EnvArenaVersionRef,
+        benchmark_ref: EnvArenaVersionRef | None,
         harness_ref: EnvArenaVersionRef,
         reward_ref: EnvArenaVersionRef,
         data_items: Sequence[Mapping[str, Any]],
@@ -1821,11 +2484,11 @@ class EnvArenaClient(EnvClient):
             metadata={
                 **dict(metadata),
                 "source_stream_id": source_stream_id,
-                "benchmark_ref": f"{benchmark_ref.key}@{benchmark_ref.version}",
                 "data_ids": json.dumps([str(item.get("data_id", "")) for item in data_items], ensure_ascii=True),
                 "skill_refs": json.dumps([ref.to_dict() for ref in skill_refs], ensure_ascii=True),
                 "relationships": json.dumps([dict(item) for item in relationships], ensure_ascii=True),
                 "generated_by": "areal-rsi",
+                **({"benchmark_ref": f"{benchmark_ref.key}@{benchmark_ref.version}"} if benchmark_ref else {}),
             },
         )
 
@@ -1916,13 +2579,6 @@ class EnvArenaClient(EnvClient):
                 model.additional_properties["parameters"] = dict(model_parameters)
             if model_env:
                 model.additional_properties["env"] = dict(model_env)
-        policy = None
-        if concurrency_policy is not None:
-            policy = ConcurrencyPolicy(
-                max_parallel=int(concurrency_policy.get("max_parallel", 1)),
-                max_retries=int(concurrency_policy.get("max_retries", 0)),
-                retry_backoff_seconds=int(concurrency_policy.get("retry_backoff_seconds", 30)),
-            )
         body = CreateJobRequest(
             benchmark_ref=VersionRef(**benchmark.to_dict()),
             harness_ref=VersionRef(**harness.to_dict()),
@@ -1930,7 +2586,7 @@ class EnvArenaClient(EnvClient):
             model=model,
             job_id=job_id if job_id else UNSET,
             sample_numbers=sample_numbers,
-            concurrency_policy=policy if policy is not None else UNSET,
+            concurrency_policy=self._concurrency_policy(concurrency_policy),
             tags=tags if tags else UNSET,
         )
         if metadata:
@@ -1959,6 +2615,16 @@ class EnvArenaClient(EnvClient):
             "metadata": dict(metadata or {}),
             "raw": payload,
         }
+
+    @staticmethod
+    def _concurrency_policy(concurrency_policy: Mapping[str, Any] | None) -> ConcurrencyPolicy | Any:
+        if concurrency_policy is None:
+            return UNSET
+        return ConcurrencyPolicy(
+            max_parallel=int(concurrency_policy.get("max_parallel", 1)),
+            max_retries=int(concurrency_policy.get("max_retries", 0)),
+            retry_backoff_seconds=int(concurrency_policy.get("retry_backoff_seconds", 30)),
+        )
 
     def submit_eval(self, request: EvalRequest) -> EvalJob:
         job_config = self._merge_job_config(self.config.job_config, request.job_config)
@@ -2300,6 +2966,14 @@ class EnvArenaClient(EnvClient):
                 operation=f"list {asset} versions",
             ).get("items", [])
         )
+
+    def _default_llm_gateway_base_url(self) -> str:
+        base_url = self.config.control_base_url.rstrip("/")
+        if base_url.endswith("/openapi/v1/llm"):
+            return base_url
+        if base_url.endswith("/openapi/v1"):
+            return f"{base_url}/llm"
+        return f"{base_url}/openapi/v1/llm"
 
     def _request_json(
         self,

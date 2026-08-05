@@ -14,6 +14,7 @@ def _get_kwargs(
     status: EntityStatus | Unset = UNSET,
     tag: list[str] | Unset = UNSET,
     keys: list[str] | Unset = UNSET,
+    q: str | Unset = UNSET,
     created_by: str | Unset = UNSET,
     dataset_task: str | Unset = UNSET,
     partition: str | Unset = UNSET,
@@ -40,6 +41,8 @@ def _get_kwargs(
         json_keys = keys
 
     params["keys"] = json_keys
+
+    params["q"] = q
 
     params["created_by"] = created_by
 
@@ -87,6 +90,7 @@ def sync_detailed(
     status: EntityStatus | Unset = UNSET,
     tag: list[str] | Unset = UNSET,
     keys: list[str] | Unset = UNSET,
+    q: str | Unset = UNSET,
     created_by: str | Unset = UNSET,
     dataset_task: str | Unset = UNSET,
     partition: str | Unset = UNSET,
@@ -99,6 +103,7 @@ def sync_detailed(
         status (EntityStatus | Unset):
         tag (list[str] | Unset):
         keys (list[str] | Unset):
+        q (str | Unset):
         created_by (str | Unset):
         dataset_task (str | Unset):
         partition (str | Unset):
@@ -117,6 +122,7 @@ def sync_detailed(
         status=status,
         tag=tag,
         keys=keys,
+        q=q,
         created_by=created_by,
         dataset_task=dataset_task,
         partition=partition,
@@ -137,6 +143,7 @@ def sync(
     status: EntityStatus | Unset = UNSET,
     tag: list[str] | Unset = UNSET,
     keys: list[str] | Unset = UNSET,
+    q: str | Unset = UNSET,
     created_by: str | Unset = UNSET,
     dataset_task: str | Unset = UNSET,
     partition: str | Unset = UNSET,
@@ -149,6 +156,7 @@ def sync(
         status (EntityStatus | Unset):
         tag (list[str] | Unset):
         keys (list[str] | Unset):
+        q (str | Unset):
         created_by (str | Unset):
         dataset_task (str | Unset):
         partition (str | Unset):
@@ -168,6 +176,7 @@ def sync(
         status=status,
         tag=tag,
         keys=keys,
+        q=q,
         created_by=created_by,
         dataset_task=dataset_task,
         partition=partition,
@@ -182,6 +191,7 @@ async def asyncio_detailed(
     status: EntityStatus | Unset = UNSET,
     tag: list[str] | Unset = UNSET,
     keys: list[str] | Unset = UNSET,
+    q: str | Unset = UNSET,
     created_by: str | Unset = UNSET,
     dataset_task: str | Unset = UNSET,
     partition: str | Unset = UNSET,
@@ -194,6 +204,7 @@ async def asyncio_detailed(
         status (EntityStatus | Unset):
         tag (list[str] | Unset):
         keys (list[str] | Unset):
+        q (str | Unset):
         created_by (str | Unset):
         dataset_task (str | Unset):
         partition (str | Unset):
@@ -212,6 +223,7 @@ async def asyncio_detailed(
         status=status,
         tag=tag,
         keys=keys,
+        q=q,
         created_by=created_by,
         dataset_task=dataset_task,
         partition=partition,
@@ -230,6 +242,7 @@ async def asyncio(
     status: EntityStatus | Unset = UNSET,
     tag: list[str] | Unset = UNSET,
     keys: list[str] | Unset = UNSET,
+    q: str | Unset = UNSET,
     created_by: str | Unset = UNSET,
     dataset_task: str | Unset = UNSET,
     partition: str | Unset = UNSET,
@@ -242,6 +255,7 @@ async def asyncio(
         status (EntityStatus | Unset):
         tag (list[str] | Unset):
         keys (list[str] | Unset):
+        q (str | Unset):
         created_by (str | Unset):
         dataset_task (str | Unset):
         partition (str | Unset):
@@ -262,6 +276,7 @@ async def asyncio(
             status=status,
             tag=tag,
             keys=keys,
+            q=q,
             created_by=created_by,
             dataset_task=dataset_task,
             partition=partition,

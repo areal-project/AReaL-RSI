@@ -25,6 +25,11 @@ from .cli_download import CLIDownload
 from .cli_manifest import CLIManifest
 from .cli_publish_request import CLIPublishRequest
 from .concurrency_policy import ConcurrencyPolicy
+from .create_agent_model_request import CreateAgentModelRequest
+from .create_agent_model_request_env import CreateAgentModelRequestEnv
+from .create_agent_model_request_metadata import CreateAgentModelRequestMetadata
+from .create_agent_model_request_parameters import CreateAgentModelRequestParameters
+from .create_agent_model_request_profile import CreateAgentModelRequestProfile
 from .create_benchmark_version_request import CreateBenchmarkVersionRequest
 from .create_entity_request import CreateEntityRequest
 from .create_entity_request_metadata import CreateEntityRequestMetadata
@@ -182,6 +187,10 @@ from .job_status import JobStatus
 from .job_summary_response import JobSummaryResponse
 from .job_task_counts import JobTaskCounts
 from .job_task_list_response import JobTaskListResponse
+from .launch_batch_task_item import LaunchBatchTaskItem
+from .launch_batch_task_request import LaunchBatchTaskRequest
+from .launch_batch_task_request_metadata import LaunchBatchTaskRequestMetadata
+from .launch_batch_task_response import LaunchBatchTaskResponse
 from .launch_one_task_response import LaunchOneTaskResponse
 from .leaderboard_row import LeaderboardRow
 from .llm_endpoint_health import LLMEndpointHealth
@@ -489,6 +498,11 @@ __all__ = (
     "CancelJobResponse",
     "CancelJobResponseSkippedSandboxes",
     "ConcurrencyPolicy",
+    "CreateAgentModelRequest",
+    "CreateAgentModelRequestEnv",
+    "CreateAgentModelRequestMetadata",
+    "CreateAgentModelRequestParameters",
+    "CreateAgentModelRequestProfile",
     "CreateBenchmarkVersionRequest",
     "CreateEntityRequest",
     "CreateEntityRequestMetadata",
@@ -606,6 +620,10 @@ __all__ = (
     "LLMModelEndpointUpstreamExtraParams",
     "LLMModelListResponse",
     "LLMModelMetadata",
+    "LaunchBatchTaskItem",
+    "LaunchBatchTaskRequest",
+    "LaunchBatchTaskRequestMetadata",
+    "LaunchBatchTaskResponse",
     "LaunchOneTaskResponse",
     "LeaderboardRow",
     "ModelService",

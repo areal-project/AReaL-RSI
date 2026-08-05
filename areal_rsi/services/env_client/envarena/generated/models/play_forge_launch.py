@@ -28,19 +28,23 @@ class PlayForgeLaunch:
         Attributes:
             runtime_profile (PlayForgeLaunchRuntimeProfile): Must be `playforge`; EnvArena maps this profile to
                 ARCA_PLAYFORGE_TEMPLATE_ID and ARENA_PLAYFORGE_STORAGE_REF.
-            harness (PlayForgeHarness):
             output_oss_path (str): PlayForge release OSS path mounted read-write at `/output`. It must be below
                 ARENA_PLAYFORGE_OUTPUT_PREFIX.
+            model_id (str | Unset): Optional model override used only when `harness` is absent or empty and EnvArena selects
+                its configured default harness. An explicit non-empty `harness` controls its own `model_id` and does not inherit
+                defaults.
             sandbox_ttl_minutes (int | Unset): Optional runtime TTL. When absent, EnvArena uses
                 ARENA_PLAYFORGE_SANDBOX_TTL_MINUTES (default 60).
+            harness (PlayForgeHarness | Unset):
             mounts (list[PlayForgeMount] | Unset):
             metadata (PlayForgeLaunchMetadata | Unset):
     """
 
     runtime_profile: PlayForgeLaunchRuntimeProfile
-    harness: PlayForgeHarness
     output_oss_path: str
+    model_id: str | Unset = UNSET
     sandbox_ttl_minutes: int | Unset = UNSET
+    harness: PlayForgeHarness | Unset = UNSET
     mounts: list[PlayForgeMount] | Unset = UNSET
     metadata: PlayForgeLaunchMetadata | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -48,11 +52,15 @@ class PlayForgeLaunch:
     def to_dict(self) -> dict[str, Any]:
         runtime_profile = self.runtime_profile.value
 
-        harness = self.harness.to_dict()
-
         output_oss_path = self.output_oss_path
 
+        model_id = self.model_id
+
         sandbox_ttl_minutes = self.sandbox_ttl_minutes
+
+        harness: dict[str, Any] | Unset = UNSET
+        if not isinstance(self.harness, Unset):
+            harness = self.harness.to_dict()
 
         mounts: list[dict[str, Any]] | Unset = UNSET
         if not isinstance(self.mounts, Unset):
@@ -70,12 +78,15 @@ class PlayForgeLaunch:
         field_dict.update(
             {
                 "runtime_profile": runtime_profile,
-                "harness": harness,
                 "output_oss_path": output_oss_path,
             }
         )
+        if model_id is not UNSET:
+            field_dict["model_id"] = model_id
         if sandbox_ttl_minutes is not UNSET:
             field_dict["sandbox_ttl_minutes"] = sandbox_ttl_minutes
+        if harness is not UNSET:
+            field_dict["harness"] = harness
         if mounts is not UNSET:
             field_dict["mounts"] = mounts
         if metadata is not UNSET:
@@ -92,11 +103,18 @@ class PlayForgeLaunch:
         d = dict(src_dict)
         runtime_profile = PlayForgeLaunchRuntimeProfile(d.pop("runtime_profile"))
 
-        harness = PlayForgeHarness.from_dict(d.pop("harness"))
-
         output_oss_path = d.pop("output_oss_path")
 
+        model_id = d.pop("model_id", UNSET)
+
         sandbox_ttl_minutes = d.pop("sandbox_ttl_minutes", UNSET)
+
+        _harness = d.pop("harness", UNSET)
+        harness: PlayForgeHarness | Unset
+        if isinstance(_harness, Unset):
+            harness = UNSET
+        else:
+            harness = PlayForgeHarness.from_dict(_harness)
 
         _mounts = d.pop("mounts", UNSET)
         mounts: list[PlayForgeMount] | Unset = UNSET
@@ -116,9 +134,10 @@ class PlayForgeLaunch:
 
         play_forge_launch = cls(
             runtime_profile=runtime_profile,
-            harness=harness,
             output_oss_path=output_oss_path,
+            model_id=model_id,
             sandbox_ttl_minutes=sandbox_ttl_minutes,
+            harness=harness,
             mounts=mounts,
             metadata=metadata,
         )

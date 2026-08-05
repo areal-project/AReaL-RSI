@@ -51,7 +51,8 @@ def sync_detailed(
 ) -> Response[Error | ModelServiceAISClustersResponse]:
     """List configured AIS clusters
 
-     Returns DB-backed AIS cluster defaults. The cluster selector value is app_name.
+     Returns DB-backed AIS cluster defaults plus the shared root AIS credential readiness flags. The
+    cluster selector value is app_name; secret values are never returned.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -76,7 +77,8 @@ def sync(
 ) -> Error | ModelServiceAISClustersResponse | None:
     """List configured AIS clusters
 
-     Returns DB-backed AIS cluster defaults. The cluster selector value is app_name.
+     Returns DB-backed AIS cluster defaults plus the shared root AIS credential readiness flags. The
+    cluster selector value is app_name; secret values are never returned.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -97,7 +99,8 @@ async def asyncio_detailed(
 ) -> Response[Error | ModelServiceAISClustersResponse]:
     """List configured AIS clusters
 
-     Returns DB-backed AIS cluster defaults. The cluster selector value is app_name.
+     Returns DB-backed AIS cluster defaults plus the shared root AIS credential readiness flags. The
+    cluster selector value is app_name; secret values are never returned.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -120,7 +123,8 @@ async def asyncio(
 ) -> Error | ModelServiceAISClustersResponse | None:
     """List configured AIS clusters
 
-     Returns DB-backed AIS cluster defaults. The cluster selector value is app_name.
+     Returns DB-backed AIS cluster defaults plus the shared root AIS credential readiness flags. The
+    cluster selector value is app_name; secret values are never returned.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.

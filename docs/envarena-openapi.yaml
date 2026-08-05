@@ -422,6 +422,7 @@ paths:
         - $ref: "#/components/parameters/StatusQuery"
         - $ref: "#/components/parameters/TagQuery"
         - $ref: "#/components/parameters/RegistryKeysQuery"
+        - $ref: "#/components/parameters/RegistrySearchQuery"
         - $ref: "#/components/parameters/CreatedByQuery"
         - $ref: "#/components/parameters/EnvDatasetTaskQuery"
         - $ref: "#/components/parameters/EnvPartitionQuery"
@@ -674,6 +675,7 @@ paths:
         - $ref: "#/components/parameters/StatusQuery"
         - $ref: "#/components/parameters/TagQuery"
         - $ref: "#/components/parameters/RegistryKeysQuery"
+        - $ref: "#/components/parameters/RegistrySearchQuery"
         - $ref: "#/components/parameters/CreatedByQuery"
         - $ref: "#/components/parameters/RegistryLimitQuery"
         - $ref: "#/components/parameters/RegistryOffsetQuery"
@@ -924,6 +926,7 @@ paths:
         - $ref: "#/components/parameters/StatusQuery"
         - $ref: "#/components/parameters/TagQuery"
         - $ref: "#/components/parameters/RegistryKeysQuery"
+        - $ref: "#/components/parameters/RegistrySearchQuery"
         - $ref: "#/components/parameters/CreatedByQuery"
         - $ref: "#/components/parameters/RegistryLimitQuery"
         - $ref: "#/components/parameters/RegistryOffsetQuery"
@@ -1173,6 +1176,7 @@ paths:
         - $ref: "#/components/parameters/StatusQuery"
         - $ref: "#/components/parameters/TagQuery"
         - $ref: "#/components/parameters/RegistryKeysQuery"
+        - $ref: "#/components/parameters/RegistrySearchQuery"
         - $ref: "#/components/parameters/CreatedByQuery"
         - $ref: "#/components/parameters/RegistryLimitQuery"
         - $ref: "#/components/parameters/RegistryOffsetQuery"
@@ -1483,6 +1487,7 @@ paths:
         - $ref: "#/components/parameters/StatusQuery"
         - $ref: "#/components/parameters/TagQuery"
         - $ref: "#/components/parameters/RegistryKeysQuery"
+        - $ref: "#/components/parameters/RegistrySearchQuery"
         - $ref: "#/components/parameters/CreatedByQuery"
         - $ref: "#/components/parameters/RegistryLimitQuery"
         - $ref: "#/components/parameters/RegistryOffsetQuery"
@@ -1778,6 +1783,7 @@ paths:
         - $ref: "#/components/parameters/StatusQuery"
         - $ref: "#/components/parameters/TagQuery"
         - $ref: "#/components/parameters/RegistryKeysQuery"
+        - $ref: "#/components/parameters/RegistrySearchQuery"
         - $ref: "#/components/parameters/CreatedByQuery"
         - $ref: "#/components/parameters/RegistryLimitQuery"
         - $ref: "#/components/parameters/RegistryOffsetQuery"
@@ -2028,6 +2034,7 @@ paths:
         - $ref: "#/components/parameters/StatusQuery"
         - $ref: "#/components/parameters/TagQuery"
         - $ref: "#/components/parameters/RegistryKeysQuery"
+        - $ref: "#/components/parameters/RegistrySearchQuery"
         - $ref: "#/components/parameters/CreatedByQuery"
         - $ref: "#/components/parameters/RegistryLimitQuery"
         - $ref: "#/components/parameters/RegistryOffsetQuery"
@@ -2056,6 +2063,27 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Model"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /openapi/v1/models-register:
+    post:
+      tags: [models]
+      summary: Register and publish a Model version
+      description: Convenience wrapper that creates or updates the Model key, creates a Model version, and publishes it by default. It generates ModelSpec.env for Claude Code and/or OpenAI-compatible agents. The default profile is dual. Use profile=openai when the runner should only see OPENAI_* variables; some runners prefer ANTHROPIC_* when both protocols are present.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAgentModelRequest"
+      responses:
+        "201":
+          description: Created Model version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelVersion"
         default:
           $ref: "#/components/responses/Error"
 
@@ -2568,7 +2596,7 @@ paths:
     get:
       tags: [model-services]
       summary: List configured AIS clusters
-      description: Returns DB-backed AIS cluster defaults. The cluster selector value is app_name.
+      description: Returns DB-backed AIS cluster defaults plus the shared root AIS credential readiness flags. The cluster selector value is app_name; secret values are never returned.
       responses:
         "200":
           description: AIS cluster defaults
@@ -3505,6 +3533,29 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/LaunchOneTaskResponse"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /openapi/v1/streams/{stream_id}/launch_batch_task:
+    post:
+      tags: [online]
+      summary: Launch one Stream evaluation Job containing multiple Tasks
+      description: Creates one Job and fans the requested data IDs into Tasks controlled by one concurrency policy. The model is resolved from the Model Registry; per-task Harness and Reward refs override the request defaults.
+      parameters:
+        - $ref: "#/components/parameters/StreamID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LaunchBatchTaskRequest"
+      responses:
+        "202":
+          description: Batch evaluation accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LaunchBatchTaskResponse"
         default:
           $ref: "#/components/responses/Error"
 
@@ -4703,6 +4754,14 @@ components:
         type: array
         items:
           type: string
+    RegistrySearchQuery:
+      name: q
+      in: query
+      required: false
+      description: Case-insensitive literal substring search across Registry entity key, name, description, tags, latest version, and creator.
+      schema:
+        type: string
+        maxLength: 200
     CreatedByQuery:
       name: created_by
       in: query
@@ -5471,15 +5530,78 @@ components:
         status:
           type: string
 
+    LaunchBatchTaskItem:
+      type: object
+      required: [data_id]
+      properties:
+        data_id:
+          type: string
+          example: env:tau3-retail-001@0.1.0
+        harness_ref:
+          $ref: "#/components/schemas/VersionRef"
+        reward_ref:
+          $ref: "#/components/schemas/VersionRef"
+
+    LaunchBatchTaskRequest:
+      type: object
+      required: [model_ref, tasks]
+      properties:
+        job_id:
+          type: string
+          description: Optional explicit Job ID. Omit it to generate a collision-free online Job ID.
+        model_ref:
+          $ref: "#/components/schemas/VersionRef"
+        harness_ref:
+          $ref: "#/components/schemas/VersionRef"
+          description: Default Harness for Tasks without their own harness_ref; falls back to the Stream default.
+        reward_ref:
+          $ref: "#/components/schemas/VersionRef"
+          description: Default Reward for Tasks without their own reward_ref; falls back to the Stream default.
+        tasks:
+          type: array
+          minItems: 1
+          maxItems: 1000
+          items:
+            $ref: "#/components/schemas/LaunchBatchTaskItem"
+        concurrency_policy:
+          $ref: "#/components/schemas/ConcurrencyPolicy"
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+        experiment:
+          type: string
+          description: Optional human grouping label; job_id is the concrete batch evaluation identity.
+
+    LaunchBatchTaskResponse:
+      type: object
+      required: [accepted, stream_id, job_id, task_ids, job]
+      properties:
+        accepted:
+          type: boolean
+        stream_id:
+          type: string
+        job_id:
+          type: string
+        task_ids:
+          type: array
+          items:
+            type: string
+        job:
+          $ref: "#/components/schemas/BenchmarkJob"
+
     PlayForgeLaunch:
       type: object
-      required: [runtime_profile, harness, output_oss_path]
+      required: [runtime_profile, output_oss_path]
       description: PlayForge inline Harness and controlled output contract. EnvArena resolves OSS storage and the ARCA template from `runtime_profile`; caller-selected network, storage, and template fields are not part of this schema. `mounts` are read-only additions inside the configured PlayForge OSS scope. EnvArena creates the fixed writable mounts `/output` and `/envarena/out`.
       properties:
         runtime_profile:
           type: string
           enum: [playforge]
           description: Must be `playforge`; EnvArena maps this profile to ARCA_PLAYFORGE_TEMPLATE_ID and ARENA_PLAYFORGE_STORAGE_REF.
+        model_id:
+          type: string
+          description: Optional model override used only when `harness` is absent or empty and EnvArena selects its configured default harness. An explicit non-empty `harness` controls its own `model_id` and does not inherit defaults.
         sandbox_ttl_minutes:
           type: integer
           minimum: 1
@@ -5512,7 +5634,7 @@ components:
           type: array
           items:
             type: string
-          description: Complete OSS directories inside `<scope>/skill-catalog/` or `<scope>/user_skills/`, mounted read-only at their canonical GameAgent selector roots.
+          description: Absolute traversal-free OSS directories mounted read-only. A path whose immediate parent is `user_skills` uses the `user` GameAgent selector; every other valid path uses `catalog`. Duplicate selector targets are rejected.
         envs:
           type: object
           additionalProperties:
@@ -6247,6 +6369,12 @@ components:
           $ref: "#/components/schemas/ModelServiceResourceSpec"
         sglang:
           $ref: "#/components/schemas/ModelServiceSglangSpec"
+        gateway:
+          allOf:
+            - $ref: "#/components/schemas/ModelServiceGatewayConfig"
+          description: >
+            Gateway endpoint settings snapshotted for this service. When supplied,
+            these values override catalog defaults and are used when READY instances register.
         metadata:
           type: object
           additionalProperties:
@@ -6451,16 +6579,22 @@ components:
 
     ModelServiceAISClustersResponse:
       type: object
-      required: [clusters]
+      required: [clusters, ais_user_configured, ais_token_configured]
       properties:
         clusters:
           type: array
           items:
             $ref: "#/components/schemas/ModelServiceAISClusterConfig"
+        ais_user_configured:
+          type: boolean
+          description: Whether the shared root AIS employee ID is configured in model-service runtime settings.
+        ais_token_configured:
+          type: boolean
+          description: Whether the shared root AIS token is configured in model-service runtime settings.
 
     ModelServiceSettings:
       type: object
-      required: [enabled, callback_base_url, register_token_configured, bridge_url, bridge_token_configured, bridge_timeout, endpoint_id_prefix, sglang_log_dir, ais, ais_clusters]
+      required: [enabled, callback_base_url, register_token_configured, bridge_url, bridge_token_configured, bridge_timeout, endpoint_id_prefix, sglang_log_dir, ais_user, ais_token_configured, ais, ais_clusters]
       properties:
         enabled:
           type: boolean
@@ -6487,6 +6621,14 @@ components:
           example: model-service-
         sglang_log_dir:
           type: string
+        ais_user:
+          type: string
+          description: Shared root AIS employee ID used for every model-service bridge request.
+        ais_token_configured:
+          type: boolean
+          description: Whether the shared root AIS token is configured.
+        ais_token_hint:
+          type: string
         ais:
           $ref: "#/components/schemas/ModelServiceAISRuntimeConfig"
         ais_clusters:
@@ -6497,7 +6639,7 @@ components:
     UpdateModelServiceSettingsRequest:
       type: object
       additionalProperties: false
-      required: [enabled, callback_base_url, bridge_url, bridge_timeout, endpoint_id_prefix, sglang_log_dir, ais, ais_clusters]
+      required: [enabled, callback_base_url, bridge_url, bridge_timeout, endpoint_id_prefix, sglang_log_dir, ais_user, ais, ais_clusters]
       properties:
         enabled:
           type: boolean
@@ -6519,6 +6661,12 @@ components:
           type: string
         sglang_log_dir:
           type: string
+        ais_user:
+          type: string
+          description: Shared root AIS employee ID used for every model-service bridge request.
+        ais_token:
+          type: string
+          description: New shared root AIS token. Omit to keep the current token.
         ais:
           $ref: "#/components/schemas/ModelServiceAISRuntimeConfig"
         ais_clusters:
@@ -6770,7 +6918,7 @@ components:
 
     ModelService:
       type: object
-      required: [service_id, served_model_name, replicas, status, created_at, updated_at, ready_replicas, instances]
+      required: [service_id, served_model_name, replicas, status, gateway, created_at, updated_at, ready_replicas, instances]
       properties:
         service_id:
           type: string
@@ -6781,6 +6929,10 @@ components:
         status:
           type: string
           enum: [PENDING, PARTIAL, READY, DEGRADED, STOPPED, FAILED]
+        gateway:
+          allOf:
+            - $ref: "#/components/schemas/ModelServiceGatewayConfig"
+          description: Effective gateway endpoint settings used by this service.
         metadata:
           type: object
           additionalProperties:
@@ -7458,7 +7610,7 @@ components:
           type: string
         version:
           type: string
-          default: 1.0.0
+          default: "1.0.0"
         name:
           type: string
         description:
@@ -7552,6 +7704,9 @@ components:
       properties:
         env_ref:
           $ref: "#/components/schemas/VersionRef"
+        harness_ref:
+          $ref: "#/components/schemas/VersionRef"
+          description: Optional Harness override for Tasks created from this Env; otherwise the Job default is used.
         weight:
           type: number
           default: 1
@@ -7822,6 +7977,60 @@ components:
           $ref: "#/components/schemas/StorageRef"
         spec:
           $ref: "#/components/schemas/BenchmarkSpec"
+
+    CreateAgentModelRequest:
+      type: object
+      required: [key, base_url, api_key]
+      properties:
+        key:
+          type: string
+          description: Model registry key to create or update.
+        version:
+          type: string
+          default: "1.0.0"
+        name:
+          type: string
+          description: Display name. Defaults to key.
+        description:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+        supersedes:
+          type: string
+        storage_ref:
+          $ref: "#/components/schemas/StorageRef"
+        model_name:
+          type: string
+          description: Runtime model name. Defaults to key.
+        base_url:
+          type: string
+          description: Gateway or provider base URL injected into generated env.
+        api_key:
+          type: string
+          description: Gateway or provider API key injected into generated env.
+        profile:
+          type: string
+          enum: [claude_code, openai, dual]
+          default: dual
+          description: claude_code generates ANTHROPIC_* plus Claude model aliases; openai generates OPENAI_*; dual generates both.
+        parameters:
+          type: object
+          additionalProperties: true
+        env:
+          type: object
+          description: Additional env overrides merged after generated values.
+          additionalProperties:
+            type: string
+        publish:
+          type: boolean
+          default: true
+          description: When false, keep the generated Model version as DRAFT.
 
     CreateModelVersionRequest:
       type: object

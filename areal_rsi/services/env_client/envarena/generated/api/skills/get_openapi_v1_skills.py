@@ -14,6 +14,7 @@ def _get_kwargs(
     status: EntityStatus | Unset = UNSET,
     tag: list[str] | Unset = UNSET,
     keys: list[str] | Unset = UNSET,
+    q: str | Unset = UNSET,
     created_by: str | Unset = UNSET,
     limit: int | Unset = 20,
     offset: int | Unset = 0,
@@ -38,6 +39,8 @@ def _get_kwargs(
         json_keys = keys
 
     params["keys"] = json_keys
+
+    params["q"] = q
 
     params["created_by"] = created_by
 
@@ -81,6 +84,7 @@ def sync_detailed(
     status: EntityStatus | Unset = UNSET,
     tag: list[str] | Unset = UNSET,
     keys: list[str] | Unset = UNSET,
+    q: str | Unset = UNSET,
     created_by: str | Unset = UNSET,
     limit: int | Unset = 20,
     offset: int | Unset = 0,
@@ -91,6 +95,7 @@ def sync_detailed(
         status (EntityStatus | Unset):
         tag (list[str] | Unset):
         keys (list[str] | Unset):
+        q (str | Unset):
         created_by (str | Unset):
         limit (int | Unset):  Default: 20.
         offset (int | Unset):  Default: 0.
@@ -107,6 +112,7 @@ def sync_detailed(
         status=status,
         tag=tag,
         keys=keys,
+        q=q,
         created_by=created_by,
         limit=limit,
         offset=offset,
@@ -125,6 +131,7 @@ def sync(
     status: EntityStatus | Unset = UNSET,
     tag: list[str] | Unset = UNSET,
     keys: list[str] | Unset = UNSET,
+    q: str | Unset = UNSET,
     created_by: str | Unset = UNSET,
     limit: int | Unset = 20,
     offset: int | Unset = 0,
@@ -135,6 +142,7 @@ def sync(
         status (EntityStatus | Unset):
         tag (list[str] | Unset):
         keys (list[str] | Unset):
+        q (str | Unset):
         created_by (str | Unset):
         limit (int | Unset):  Default: 20.
         offset (int | Unset):  Default: 0.
@@ -152,6 +160,7 @@ def sync(
         status=status,
         tag=tag,
         keys=keys,
+        q=q,
         created_by=created_by,
         limit=limit,
         offset=offset,
@@ -164,6 +173,7 @@ async def asyncio_detailed(
     status: EntityStatus | Unset = UNSET,
     tag: list[str] | Unset = UNSET,
     keys: list[str] | Unset = UNSET,
+    q: str | Unset = UNSET,
     created_by: str | Unset = UNSET,
     limit: int | Unset = 20,
     offset: int | Unset = 0,
@@ -174,6 +184,7 @@ async def asyncio_detailed(
         status (EntityStatus | Unset):
         tag (list[str] | Unset):
         keys (list[str] | Unset):
+        q (str | Unset):
         created_by (str | Unset):
         limit (int | Unset):  Default: 20.
         offset (int | Unset):  Default: 0.
@@ -190,6 +201,7 @@ async def asyncio_detailed(
         status=status,
         tag=tag,
         keys=keys,
+        q=q,
         created_by=created_by,
         limit=limit,
         offset=offset,
@@ -206,6 +218,7 @@ async def asyncio(
     status: EntityStatus | Unset = UNSET,
     tag: list[str] | Unset = UNSET,
     keys: list[str] | Unset = UNSET,
+    q: str | Unset = UNSET,
     created_by: str | Unset = UNSET,
     limit: int | Unset = 20,
     offset: int | Unset = 0,
@@ -216,6 +229,7 @@ async def asyncio(
         status (EntityStatus | Unset):
         tag (list[str] | Unset):
         keys (list[str] | Unset):
+        q (str | Unset):
         created_by (str | Unset):
         limit (int | Unset):  Default: 20.
         offset (int | Unset):  Default: 0.
@@ -234,6 +248,7 @@ async def asyncio(
             status=status,
             tag=tag,
             keys=keys,
+            q=q,
             created_by=created_by,
             limit=limit,
             offset=offset,

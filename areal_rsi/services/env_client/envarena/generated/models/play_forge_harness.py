@@ -24,8 +24,9 @@ class PlayForgeHarness:
         system_prompt (str | Unset): Complete OSS object path inside `<scope>/prompt-catalog/` or
             `<scope>/user_prompts/`. The object must be non-empty UTF-8, use `.md` or `.txt`, be at most 32 KiB, and not
             contain template-reserved prompt terms (`sandbox`, `mount`, `oss`, or `挂载`).
-        skills (list[str] | Unset): Complete OSS directories inside `<scope>/skill-catalog/` or `<scope>/user_skills/`,
-            mounted read-only at their canonical GameAgent selector roots.
+        skills (list[str] | Unset): Absolute traversal-free OSS directories mounted read-only. A path whose immediate
+            parent is `user_skills` uses the `user` GameAgent selector; every other valid path uses `catalog`. Duplicate
+            selector targets are rejected.
         envs (PlayForgeHarnessEnvs | Unset): User runtime environment values merged into the ARCA environment. EnvArena
             injects task, trace, output, trajectory, and OTel path variables after rejecting reserved platform keys.
             PlayForge does not receive EnvArena built-in OTLP exporter configuration because its template owns telemetry.

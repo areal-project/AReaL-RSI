@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from ..models.create_model_service_request_metadata import (
         CreateModelServiceRequestMetadata,
     )
+    from ..models.model_service_gateway_config import ModelServiceGatewayConfig
     from ..models.model_service_resource_spec import ModelServiceResourceSpec
     from ..models.model_service_sglang_spec import ModelServiceSglangSpec
 
@@ -30,6 +31,7 @@ class CreateModelServiceRequest:
         replicas (int | Unset):  Default: 1.
         resource_spec (ModelServiceResourceSpec | Unset):
         sglang (ModelServiceSglangSpec | Unset):
+        gateway (ModelServiceGatewayConfig | Unset):
         metadata (CreateModelServiceRequestMetadata | Unset):
     """
 
@@ -39,6 +41,7 @@ class CreateModelServiceRequest:
     replicas: int | Unset = 1
     resource_spec: ModelServiceResourceSpec | Unset = UNSET
     sglang: ModelServiceSglangSpec | Unset = UNSET
+    gateway: ModelServiceGatewayConfig | Unset = UNSET
     metadata: CreateModelServiceRequestMetadata | Unset = UNSET
 
     def to_dict(self) -> dict[str, Any]:
@@ -57,6 +60,10 @@ class CreateModelServiceRequest:
         sglang: dict[str, Any] | Unset = UNSET
         if not isinstance(self.sglang, Unset):
             sglang = self.sglang.to_dict()
+
+        gateway: dict[str, Any] | Unset = UNSET
+        if not isinstance(self.gateway, Unset):
+            gateway = self.gateway.to_dict()
 
         metadata: dict[str, Any] | Unset = UNSET
         if not isinstance(self.metadata, Unset):
@@ -78,6 +85,8 @@ class CreateModelServiceRequest:
             field_dict["resource_spec"] = resource_spec
         if sglang is not UNSET:
             field_dict["sglang"] = sglang
+        if gateway is not UNSET:
+            field_dict["gateway"] = gateway
         if metadata is not UNSET:
             field_dict["metadata"] = metadata
 
@@ -88,6 +97,7 @@ class CreateModelServiceRequest:
         from ..models.create_model_service_request_metadata import (
             CreateModelServiceRequestMetadata,
         )
+        from ..models.model_service_gateway_config import ModelServiceGatewayConfig
         from ..models.model_service_resource_spec import ModelServiceResourceSpec
         from ..models.model_service_sglang_spec import ModelServiceSglangSpec
 
@@ -114,6 +124,13 @@ class CreateModelServiceRequest:
         else:
             sglang = ModelServiceSglangSpec.from_dict(_sglang)
 
+        _gateway = d.pop("gateway", UNSET)
+        gateway: ModelServiceGatewayConfig | Unset
+        if isinstance(_gateway, Unset):
+            gateway = UNSET
+        else:
+            gateway = ModelServiceGatewayConfig.from_dict(_gateway)
+
         _metadata = d.pop("metadata", UNSET)
         metadata: CreateModelServiceRequestMetadata | Unset
         if isinstance(_metadata, Unset):
@@ -128,6 +145,7 @@ class CreateModelServiceRequest:
             replicas=replicas,
             resource_spec=resource_spec,
             sglang=sglang,
+            gateway=gateway,
             metadata=metadata,
         )
 

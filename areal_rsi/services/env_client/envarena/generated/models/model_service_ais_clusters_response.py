@@ -18,9 +18,14 @@ class ModelServiceAISClustersResponse:
     """
     Attributes:
         clusters (list[ModelServiceAISClusterConfig]):
+        ais_user_configured (bool): Whether the shared root AIS employee ID is configured in model-service runtime
+            settings.
+        ais_token_configured (bool): Whether the shared root AIS token is configured in model-service runtime settings.
     """
 
     clusters: list[ModelServiceAISClusterConfig]
+    ais_user_configured: bool
+    ais_token_configured: bool
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -29,11 +34,17 @@ class ModelServiceAISClustersResponse:
             clusters_item = clusters_item_data.to_dict()
             clusters.append(clusters_item)
 
+        ais_user_configured = self.ais_user_configured
+
+        ais_token_configured = self.ais_token_configured
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
             {
                 "clusters": clusters,
+                "ais_user_configured": ais_user_configured,
+                "ais_token_configured": ais_token_configured,
             }
         )
 
@@ -53,8 +64,14 @@ class ModelServiceAISClustersResponse:
 
             clusters.append(clusters_item)
 
+        ais_user_configured = d.pop("ais_user_configured")
+
+        ais_token_configured = d.pop("ais_token_configured")
+
         model_service_ais_clusters_response = cls(
             clusters=clusters,
+            ais_user_configured=ais_user_configured,
+            ais_token_configured=ais_token_configured,
         )
 
         model_service_ais_clusters_response.additional_properties = d

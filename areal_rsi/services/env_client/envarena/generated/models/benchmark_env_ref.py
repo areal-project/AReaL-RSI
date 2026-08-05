@@ -21,17 +21,23 @@ class BenchmarkEnvRef:
     """
     Attributes:
         env_ref (VersionRef):
+        harness_ref (VersionRef | Unset):
         weight (float | Unset):  Default: 1.0.
         params (BenchmarkEnvRefParams | Unset):
     """
 
     env_ref: VersionRef
+    harness_ref: VersionRef | Unset = UNSET
     weight: float | Unset = 1.0
     params: BenchmarkEnvRefParams | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         env_ref = self.env_ref.to_dict()
+
+        harness_ref: dict[str, Any] | Unset = UNSET
+        if not isinstance(self.harness_ref, Unset):
+            harness_ref = self.harness_ref.to_dict()
 
         weight = self.weight
 
@@ -46,6 +52,8 @@ class BenchmarkEnvRef:
                 "env_ref": env_ref,
             }
         )
+        if harness_ref is not UNSET:
+            field_dict["harness_ref"] = harness_ref
         if weight is not UNSET:
             field_dict["weight"] = weight
         if params is not UNSET:
@@ -61,6 +69,13 @@ class BenchmarkEnvRef:
         d = dict(src_dict)
         env_ref = VersionRef.from_dict(d.pop("env_ref"))
 
+        _harness_ref = d.pop("harness_ref", UNSET)
+        harness_ref: VersionRef | Unset
+        if isinstance(_harness_ref, Unset):
+            harness_ref = UNSET
+        else:
+            harness_ref = VersionRef.from_dict(_harness_ref)
+
         weight = d.pop("weight", UNSET)
 
         _params = d.pop("params", UNSET)
@@ -72,6 +87,7 @@ class BenchmarkEnvRef:
 
         benchmark_env_ref = cls(
             env_ref=env_ref,
+            harness_ref=harness_ref,
             weight=weight,
             params=params,
         )

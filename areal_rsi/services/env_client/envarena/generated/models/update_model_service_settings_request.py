@@ -25,10 +25,12 @@ class UpdateModelServiceSettingsRequest:
         bridge_timeout (str):  Example: 5m.
         endpoint_id_prefix (str):
         sglang_log_dir (str):
+        ais_user (str): Shared root AIS employee ID used for every model-service bridge request.
         ais (ModelServiceAISRuntimeConfig):
         ais_clusters (list[ModelServiceAISClusterConfig]):
         register_token (str | Unset): New model-service callback register token. Omit to keep the current token.
         bridge_token (str | Unset): New Go-side bridge bearer token. Omit to keep the current token.
+        ais_token (str | Unset): New shared root AIS token. Omit to keep the current token.
     """
 
     enabled: bool
@@ -37,10 +39,12 @@ class UpdateModelServiceSettingsRequest:
     bridge_timeout: str
     endpoint_id_prefix: str
     sglang_log_dir: str
+    ais_user: str
     ais: ModelServiceAISRuntimeConfig
     ais_clusters: list[ModelServiceAISClusterConfig]
     register_token: str | Unset = UNSET
     bridge_token: str | Unset = UNSET
+    ais_token: str | Unset = UNSET
 
     def to_dict(self) -> dict[str, Any]:
         enabled = self.enabled
@@ -55,6 +59,8 @@ class UpdateModelServiceSettingsRequest:
 
         sglang_log_dir = self.sglang_log_dir
 
+        ais_user = self.ais_user
+
         ais = self.ais.to_dict()
 
         ais_clusters = []
@@ -66,6 +72,8 @@ class UpdateModelServiceSettingsRequest:
 
         bridge_token = self.bridge_token
 
+        ais_token = self.ais_token
+
         field_dict: dict[str, Any] = {}
 
         field_dict.update(
@@ -76,6 +84,7 @@ class UpdateModelServiceSettingsRequest:
                 "bridge_timeout": bridge_timeout,
                 "endpoint_id_prefix": endpoint_id_prefix,
                 "sglang_log_dir": sglang_log_dir,
+                "ais_user": ais_user,
                 "ais": ais,
                 "ais_clusters": ais_clusters,
             }
@@ -84,6 +93,8 @@ class UpdateModelServiceSettingsRequest:
             field_dict["register_token"] = register_token
         if bridge_token is not UNSET:
             field_dict["bridge_token"] = bridge_token
+        if ais_token is not UNSET:
+            field_dict["ais_token"] = ais_token
 
         return field_dict
 
@@ -109,6 +120,8 @@ class UpdateModelServiceSettingsRequest:
 
         sglang_log_dir = d.pop("sglang_log_dir")
 
+        ais_user = d.pop("ais_user")
+
         ais = ModelServiceAISRuntimeConfig.from_dict(d.pop("ais"))
 
         ais_clusters = []
@@ -124,6 +137,8 @@ class UpdateModelServiceSettingsRequest:
 
         bridge_token = d.pop("bridge_token", UNSET)
 
+        ais_token = d.pop("ais_token", UNSET)
+
         update_model_service_settings_request = cls(
             enabled=enabled,
             callback_base_url=callback_base_url,
@@ -131,10 +146,12 @@ class UpdateModelServiceSettingsRequest:
             bridge_timeout=bridge_timeout,
             endpoint_id_prefix=endpoint_id_prefix,
             sglang_log_dir=sglang_log_dir,
+            ais_user=ais_user,
             ais=ais,
             ais_clusters=ais_clusters,
             register_token=register_token,
             bridge_token=bridge_token,
+            ais_token=ais_token,
         )
 
         return update_model_service_settings_request

@@ -2,7 +2,7 @@ envarena:
   # Set one of control_base_url or control_base_url_env. An explicit YAML value
   # wins; the default environment variable is ENVARENA_CONTROL_BASE_URL.
   # The value may be the service root or end in /openapi/v1.
-  control_base_url: https://envarena-prod.alipay.com
+  control_base_url: http://33.214.157.35:8080
   token_env: ENVARENA_API_TOKEN
   timeout_seconds: 30
   verify_ssl: true

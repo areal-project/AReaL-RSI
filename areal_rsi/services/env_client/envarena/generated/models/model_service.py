@@ -12,6 +12,7 @@ from ..models.model_service_status import ModelServiceStatus
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
+    from ..models.model_service_gateway_config import ModelServiceGatewayConfig
     from ..models.model_service_instance import ModelServiceInstance
     from ..models.model_service_metadata import ModelServiceMetadata
 
@@ -27,6 +28,7 @@ class ModelService:
         served_model_name (str):
         replicas (int):
         status (ModelServiceStatus):
+        gateway (ModelServiceGatewayConfig):
         created_at (datetime.datetime):
         updated_at (datetime.datetime):
         ready_replicas (int):
@@ -39,6 +41,7 @@ class ModelService:
     served_model_name: str
     replicas: int
     status: ModelServiceStatus
+    gateway: ModelServiceGatewayConfig
     created_at: datetime.datetime
     updated_at: datetime.datetime
     ready_replicas: int
@@ -55,6 +58,8 @@ class ModelService:
         replicas = self.replicas
 
         status = self.status.value
+
+        gateway = self.gateway.to_dict()
 
         created_at = self.created_at.isoformat()
 
@@ -81,6 +86,7 @@ class ModelService:
                 "served_model_name": served_model_name,
                 "replicas": replicas,
                 "status": status,
+                "gateway": gateway,
                 "created_at": created_at,
                 "updated_at": updated_at,
                 "ready_replicas": ready_replicas,
@@ -96,6 +102,7 @@ class ModelService:
 
     @classmethod
     def from_dict(cls, src_dict: Mapping[str, Any]) -> Self:
+        from ..models.model_service_gateway_config import ModelServiceGatewayConfig
         from ..models.model_service_instance import ModelServiceInstance
         from ..models.model_service_metadata import ModelServiceMetadata
 
@@ -107,6 +114,8 @@ class ModelService:
         replicas = d.pop("replicas")
 
         status = ModelServiceStatus(d.pop("status"))
+
+        gateway = ModelServiceGatewayConfig.from_dict(d.pop("gateway"))
 
         created_at = isoparse(d.pop("created_at"))
 
@@ -135,6 +144,7 @@ class ModelService:
             served_model_name=served_model_name,
             replicas=replicas,
             status=status,
+            gateway=gateway,
             created_at=created_at,
             updated_at=updated_at,
             ready_replicas=ready_replicas,

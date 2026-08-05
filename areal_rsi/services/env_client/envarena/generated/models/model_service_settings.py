@@ -28,10 +28,13 @@ class ModelServiceSettings:
         bridge_timeout (str):  Example: 5m.
         endpoint_id_prefix (str):  Example: model-service-.
         sglang_log_dir (str):
+        ais_user (str): Shared root AIS employee ID used for every model-service bridge request.
+        ais_token_configured (bool): Whether the shared root AIS token is configured.
         ais (ModelServiceAISRuntimeConfig):
         ais_clusters (list[ModelServiceAISClusterConfig]):
         register_token_hint (str | Unset):
         bridge_token_hint (str | Unset):
+        ais_token_hint (str | Unset):
     """
 
     enabled: bool
@@ -42,10 +45,13 @@ class ModelServiceSettings:
     bridge_timeout: str
     endpoint_id_prefix: str
     sglang_log_dir: str
+    ais_user: str
+    ais_token_configured: bool
     ais: ModelServiceAISRuntimeConfig
     ais_clusters: list[ModelServiceAISClusterConfig]
     register_token_hint: str | Unset = UNSET
     bridge_token_hint: str | Unset = UNSET
+    ais_token_hint: str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -65,6 +71,10 @@ class ModelServiceSettings:
 
         sglang_log_dir = self.sglang_log_dir
 
+        ais_user = self.ais_user
+
+        ais_token_configured = self.ais_token_configured
+
         ais = self.ais.to_dict()
 
         ais_clusters = []
@@ -75,6 +85,8 @@ class ModelServiceSettings:
         register_token_hint = self.register_token_hint
 
         bridge_token_hint = self.bridge_token_hint
+
+        ais_token_hint = self.ais_token_hint
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
@@ -88,6 +100,8 @@ class ModelServiceSettings:
                 "bridge_timeout": bridge_timeout,
                 "endpoint_id_prefix": endpoint_id_prefix,
                 "sglang_log_dir": sglang_log_dir,
+                "ais_user": ais_user,
+                "ais_token_configured": ais_token_configured,
                 "ais": ais,
                 "ais_clusters": ais_clusters,
             }
@@ -96,6 +110,8 @@ class ModelServiceSettings:
             field_dict["register_token_hint"] = register_token_hint
         if bridge_token_hint is not UNSET:
             field_dict["bridge_token_hint"] = bridge_token_hint
+        if ais_token_hint is not UNSET:
+            field_dict["ais_token_hint"] = ais_token_hint
 
         return field_dict
 
@@ -125,6 +141,10 @@ class ModelServiceSettings:
 
         sglang_log_dir = d.pop("sglang_log_dir")
 
+        ais_user = d.pop("ais_user")
+
+        ais_token_configured = d.pop("ais_token_configured")
+
         ais = ModelServiceAISRuntimeConfig.from_dict(d.pop("ais"))
 
         ais_clusters = []
@@ -140,6 +160,8 @@ class ModelServiceSettings:
 
         bridge_token_hint = d.pop("bridge_token_hint", UNSET)
 
+        ais_token_hint = d.pop("ais_token_hint", UNSET)
+
         model_service_settings = cls(
             enabled=enabled,
             callback_base_url=callback_base_url,
@@ -149,10 +171,13 @@ class ModelServiceSettings:
             bridge_timeout=bridge_timeout,
             endpoint_id_prefix=endpoint_id_prefix,
             sglang_log_dir=sglang_log_dir,
+            ais_user=ais_user,
+            ais_token_configured=ais_token_configured,
             ais=ais,
             ais_clusters=ais_clusters,
             register_token_hint=register_token_hint,
             bridge_token_hint=bridge_token_hint,
+            ais_token_hint=ais_token_hint,
         )
 
         model_service_settings.additional_properties = d

@@ -14,21 +14,28 @@
 areal:
   opd:
     scheduler_type: slurm
+    # Launch scripts + recipe + examples.mopd code come from ALab (its examples
+    # package is first on PYTHONPATH). examples.swe is resolved from AREAL_DIR:
+    # ALab/examples/__init__.py appends $AREAL_DIR/examples to its __path__, so
+    # ALab-owned submodules win and swe falls back to the full AReaL checkout.
+    # The `areal` framework itself is provided by the image.
     working_directory: /storage/openpsi/users/fenghui/AReaL
-    driver_script: examples/mopd/sbatch_experience_opd_qwen3_30b_2node.sh
+    driver_script: /storage/openpsi/users/fenghui/projects/ALab/examples/mopd/sbatch_experience_opd_qwen3_30b_2node.sh
     # fileroot + experiment_name must match the recipe so the wrapper resolves
     # <fileroot>/checkpoints/<user>/<experiment_name>/<trial>/default.
     fileroot: /storage/openpsi/rsi-experiments/swe-exp-opd
-    experiment_name: swe-experience-opd
+    experiment_name: fh-opd-alab
     # 2-node variant (swe_experience_opd_2node_qwen3_30b.yaml, 2x8=16 GPU).
     n_nodes: 2
     n_gpus_per_node: 8
     environment_variables:
       AREAL_IMAGE: /storage/openpsi/images/areal-dev-20260508.sif
-      # Set these to your checkouts (required by the driver script):
-      AWEAGENT_ROOT: /storage/openpsi/users/fenghui/projects/AWEAgent
-      AWEX_ROOT: /storage/openpsi/users/fenghui/projects/AWEX
-      SGLANG_PYTHON_ROOT: /storage/openpsi/users/fenghui/projects/sglang/python
-      FLASH_LINEAR_ATTENTION_ROOT: /storage/openpsi/users/fenghui/projects/flash-linear-attention
+      AWEAGENT_ROOT: /storage/openpsi/users/public/projects/release-v0.3-alpha/AWEAgent
+      AWEX_ROOT: /storage/openpsi/users/chucai.dzq/codes/ant-code/asystem-awex
+      SGLANG_PYTHON_ROOT: /storage/openpsi/users/wanghaitao.wht/project/colcate-opd/AReaL/artifacts/sglang-v0.5.10.post1/python
+      FLASH_LINEAR_ATTENTION_ROOT: /storage/openpsi/users/public/projects/flash-linear-attention
+      PYPI_INDEX_URL: https://artifacts.antgroup-inc.cn/simple
+      # Secrets/URLs injected at launch (NOT stored here): AENV_SYSTEM_URL,
+      # WANDB_API_KEY, WANDB_BASE_URL.
     poll_interval_seconds: 60
     job_timeout_seconds: 604800

@@ -3628,7 +3628,7 @@ class EnvArenaClient(EnvClient):
                 "skill_ref": f"{new_skill_ref.key}@{new_skill_ref.version}",
             }
         )
-        spec["metadata"] = spec_metadata
+        spec["metadata"] = self._string_metadata(spec_metadata)
         return spec
 
     def _harness_spec_with_replaced_skill(
@@ -3689,7 +3689,7 @@ class EnvArenaClient(EnvClient):
                 "skill_ref": f"{new_skill_ref.key}@{new_skill_ref.version}",
             }
         )
-        spec["metadata"] = spec_metadata
+        spec["metadata"] = self._string_metadata(spec_metadata)
         return spec
 
     def _resolve_stream_skill_bindings(
@@ -4438,13 +4438,13 @@ class EnvArenaClient(EnvClient):
     def get_job_result(self, job_id: str) -> dict[str, Any]:
         return self._request_json("GET", f"/openapi/v1/jobs/{job_id}/result", operation="get job result")
 
-    def get_eval_progress(self, job: EvalJob) -> dict[str, Any]:
-        """Return EnvArena's current summary for a platform-neutral evaluation job."""
+    def get_eval_progress(self, job: EvalJob | str) -> dict[str, Any]:
+        """Return EnvArena's current summary for an evaluation job or job ID."""
 
         return self.get_job_summary(self._job_id(job))
 
-    def get_eval_result(self, job: EvalJob) -> dict[str, Any]:
-        """Return EnvArena's aggregate result for a platform-neutral evaluation job."""
+    def get_eval_result(self, job: EvalJob | str) -> dict[str, Any]:
+        """Return EnvArena's aggregate result for an evaluation job or job ID."""
 
         return self.get_job_result(self._job_id(job))
 
@@ -4485,12 +4485,13 @@ class EnvArenaClient(EnvClient):
             operation="get task trajectory",
         )
 
-    def get_trajs(self, job: EvalJob, include_messages: bool = False) -> list[Traj]:
+    def get_trajs(self, job: EvalJob | str, include_messages: bool = False) -> list[Traj]:
         job_id = self._job_id(job)
         tasks = {str(task.get("task_id")): task for task in self.list_job_tasks(job_id)}
-        model_ref = job.get("model_ref", {})
+        job_payload = job if isinstance(job, Mapping) else {}
+        model_ref = job_payload.get("model_ref", {})
         model_name = str(model_ref.get("model_name") or model_ref.get("runtime_model_name") or "")
-        source = str(job.get("metadata", {}).get("source", "eval"))
+        source = str(job_payload.get("metadata", {}).get("source", "eval"))
         trajs: list[Traj] = []
         for trajectory in self.list_job_trajectories(job_id, inline=include_messages):
             task_id = str(trajectory.get("task_id", ""))
@@ -4499,7 +4500,7 @@ class EnvArenaClient(EnvClient):
                 "traj_id": f"{job_id}:{task_id}:{attempt or 0}",
                 "task_id": task_id,
                 "model_ref": model_name,
-                "harness_id": job.get("harness_ref", {}).get("key"),
+                "harness_id": job_payload.get("harness_ref", {}).get("key"),
                 "reward": task.get("score"),
                 "status": task.get("status", trajectory.get("status")),
                 "metadata": {
@@ -4601,8 +4602,11 @@ class EnvArenaClient(EnvClient):
         return value if isinstance(value, EnvArenaVersionRef) else EnvArenaVersionRef.parse(value)
 
     @staticmethod
-    def _job_id(job: EvalJob) -> str:
-        job_id = str(job.get("eval_job_id") or job.get("job_id") or "")
+    def _job_id(job: EvalJob | str) -> str:
+        if isinstance(job, str):
+            job_id = job.strip()
+        else:
+            job_id = str(job.get("eval_job_id") or job.get("job_id") or "")
         if not job_id:
             raise EnvArenaConfigurationError("EvalJob has no eval_job_id/job_id.")
         return job_id

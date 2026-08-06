@@ -239,7 +239,9 @@ def test_eval_with_model_path_starts_mock_model_instance_and_collects_results():
 
     assert job["eval_job_id"] == "job_001"
     assert client.get_eval_progress(job)["job"]["status"] == "RUNNING"
+    assert client.get_eval_progress("job_001")["job"]["status"] == "RUNNING"
     assert client.get_eval_result(job)["aggregate_score"] == 0.8
+    assert client.get_eval_result("job_001")["aggregate_score"] == 0.8
     trajs = client.get_trajs(job, include_messages=True)
     assert trajs == [
         {
@@ -275,7 +277,7 @@ def test_eval_with_model_path_starts_mock_model_instance_and_collects_results():
         "status": "mock_started",
         "backend": "mock_envarena_model_instance",
     }
-    assert len(seen) == 7
+    assert len(seen) == 9
 
 
 def test_submit_eval_requires_explicit_published_harness_and_benchmark_refs():
@@ -605,6 +607,10 @@ def test_get_trajs_omits_messages_without_inline_events():
 
     assert trajs[0]["reward"] == 1.0
     assert "messages" not in trajs[0]
+
+    job_id_trajs = client.get_trajs("job_003")
+    assert job_id_trajs[0]["metadata"]["source"] == "eval"
+    assert job_id_trajs[0]["reward"] == 1.0
 
 
 def test_non_json_and_transport_failures_are_normalized():
@@ -1579,6 +1585,7 @@ def test_submit_eval_by_stream_updates_stream_data_skill_and_harness_versions_fr
             assert payload["supersedes"] == "1.0.0"
             assert payload["spec"]["skill_refs"] == [{"key": "skill-a", "version": "1.0.1"}]
             assert payload["spec"]["metadata"]["data_id"] == data_id
+            assert payload["spec"]["metadata"]["seed"] == "20260806"
             return httpx.Response(201, json={"key": "env-a-harness", "version": "1.0.1", "spec": payload["spec"]})
         if request.method == "POST" and path == "/envarena/openapi/v1/harnesses/env-a-harness/versions/1.0.1/publish":
             return httpx.Response(200, json={"key": "env-a-harness", "version": "1.0.1", "status": "PUBLISHED"})
@@ -1612,6 +1619,7 @@ def test_submit_eval_by_stream_updates_stream_data_skill_and_harness_versions_fr
             "experience_skill": {"version": "1.0.1"},
             "experience_harness": {"version": "1.0.1"},
         },
+        metadata={"seed": 20260806},
     )
 
     assert job["eval_job_id"] == "job-stream"
@@ -1693,6 +1701,7 @@ def test_submit_eval_by_stream_creates_skill_and_harness_when_base_harness_has_n
             assert payload["version"] == "1.0.0"
             assert payload["spec"]["runtime"] == {"type": "claude_code", "uri": "oss://runtime"}
             assert payload["spec"]["skill_refs"] == [{"key": keys["skill"], "version": "1.0.0"}]
+            assert payload["spec"]["metadata"]["seed"] == "20260806"
             return httpx.Response(201, json={"key": keys["harness"], "version": "1.0.0", "spec": payload["spec"]})
         if request.method == "POST" and path == f"/envarena/openapi/v1/harnesses/{keys.get('harness')}/versions/1.0.0/publish":
             return httpx.Response(200, json={"key": keys["harness"], "version": "1.0.0", "status": "PUBLISHED"})
@@ -1722,6 +1731,7 @@ def test_submit_eval_by_stream_creates_skill_and_harness_when_base_harness_has_n
         "source-stream",
         data_ids=[data_id],
         skills=[{"data_id": data_id, "type": "experience", "content": "new hint"}],
+        metadata={"seed": 20260806},
     )
 
     assert job["eval_job_id"] == "job-stream"

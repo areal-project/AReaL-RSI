@@ -78,6 +78,64 @@ def _model_version_payload(
     return payload
 
 
+def _model_service_catalog_payload(
+    model_id: str = "base-model",
+    *,
+    model_name: str = "base-served",
+    model_path: str = "/models/base",
+) -> dict[str, object]:
+    return {
+        "model_id": model_id,
+        "model_name": model_name,
+        "model_path": model_path,
+        "gateway": {},
+        "exists": True,
+        "readable": True,
+        "weights_exist": True,
+        "weights_readable": True,
+        "availability_status": "AVAILABLE",
+        "created_at": "2026-08-03T00:00:00Z",
+        "updated_at": "2026-08-03T00:00:00Z",
+    }
+
+
+def _stream_validation_handler(data_ids: list[str]):
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "GET" and path == "/envarena/openapi/v1/streams/train-stream":
+            return httpx.Response(
+                200,
+                json={
+                    "stream": {
+                        "stream_id": "train-stream",
+                        "name": "Train Stream",
+                        "task": "swe",
+                        "default_harness_ref": {"key": "base-harness", "version": "1.0.0"},
+                        "default_reward_ref": {"key": "base-reward", "version": "1.0.0"},
+                        "status": "ACTIVE",
+                    }
+                },
+            )
+        if request.method == "POST" and path == "/envarena/openapi/v1/streams/train-stream/dataset":
+            return httpx.Response(
+                200,
+                json={
+                    "data_ids": data_ids,
+                    "items": [
+                        {"data_id": data_id, "env_ref": {"key": f"env-{index}", "version": "1.0.0"}}
+                        for index, data_id in enumerate(data_ids)
+                    ],
+                    "count": len(data_ids),
+                    "total": len(data_ids),
+                    "offset": 0,
+                    "limit": 1000,
+                },
+            )
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    return handler
+
+
 def test_config_loads_environment_values_and_normalizes_generated_sdk_base_url(tmp_path):
     config_path = tmp_path / "envarena.yaml"
     config_path.write_text(
@@ -616,6 +674,8 @@ def test_registry_crud_helpers_use_consistent_asset_paths_and_payloads():
 
 def test_model_service_can_be_created_from_checkpoint_when_enabled():
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/envarena/openapi/v1/model-services/catalog/models/base-model":
+            return httpx.Response(200, json=_model_service_catalog_payload())
         assert request.method == "POST"
         assert request.url.path == "/envarena/openapi/v1/model-services"
         payload = json.loads(request.content)
@@ -661,12 +721,51 @@ def test_model_service_can_be_created_from_checkpoint_when_enabled():
     )
 
     model = client.ensure_model_service_for_ckpt(
-        {"model_path": "/models/ckpt", "served_model_name": "ckpt-alias"},
+        {
+            "type": "ckpt",
+            "model_path": "/models/ckpt",
+            "served_model_name": "ckpt-alias",
+            "base_model_id": "base-model",
+        },
         metadata={"run_id": "run-1"},
     )
 
     assert model["model_name"] == "ckpt-alias"
     assert model["asset"]["model_service"]["service_id"] == "svc-1"
+
+
+@pytest.mark.parametrize(
+    "model_config",
+    [
+        "/models/ckpt",
+        {"model_path": "/models/ckpt", "served_model_name": "ckpt-alias", "base_model_id": "base-model"},
+        {"type": "ckpt", "model_path": "/models/ckpt", "served_model_name": "ckpt-alias"},
+        {"type": "ref", "ref": ""},
+        {"type": "new", "model_path": "/models/ckpt"},
+    ],
+)
+def test_ensure_model_service_for_ckpt_rejects_non_strict_model_config(model_config):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    with pytest.raises(EnvArenaConfigurationError):
+        _client(handler).ensure_model_service_for_ckpt(model_config)
+
+
+def test_ensure_model_service_for_ckpt_uses_model_ref_without_http_requests():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    model = _client(handler).ensure_model_service_for_ckpt(
+        {"type": "ref", "ref": "model-a@1.0.0"}
+    )
+
+    assert model["model_name"] == "model-a"
+    assert model["registry_ref"].to_dict() == {"key": "model-a", "version": "1.0.0"}
+    assert model["asset"] == {
+        "model_name": "model-a",
+        "registry_ref": {"key": "model-a", "version": "1.0.0"},
+    }
 
 
 def test_create_model_service_merges_base_model_catalog_config_with_overrides():
@@ -854,6 +953,8 @@ def test_ensure_model_registry_for_ckpt_creates_service_waits_ready_and_publishe
         payload = json.loads(request.content or b"{}")
         seen.append((request.method, request.url.path, payload))
         path = request.url.path
+        if request.method == "GET" and path == "/envarena/openapi/v1/model-services/catalog/models/base-model":
+            return httpx.Response(200, json=_model_service_catalog_payload())
         if request.method == "POST" and path == "/envarena/openapi/v1/model-services":
             assert payload == {
                 "served_model_name": "ckpt-alias",
@@ -901,7 +1002,12 @@ def test_ensure_model_registry_for_ckpt_creates_service_waits_ready_and_publishe
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
     result = _client(handler).ensure_model_registry_for_ckpt(
-        {"model_path": "/models/ckpt", "served_model_name": "ckpt-alias"},
+        {
+            "type": "ckpt",
+            "model_path": "/models/ckpt",
+            "served_model_name": "ckpt-alias",
+            "base_model_id": "base-model",
+        },
         key="model-key",
         version="2.0.0",
         name="Model Key",
@@ -920,7 +1026,7 @@ def test_ensure_model_registry_for_ckpt_creates_service_waits_ready_and_publishe
     assert result["asset"]["model_service"]["status"] == "READY"
     assert result["model_register"]["status"] == "PUBLISHED"
     assert get_attempts == 2
-    assert [method for method, _, _ in seen] == ["POST", "GET", "GET", "POST"]
+    assert [method for method, _, _ in seen] == ["GET", "POST", "GET", "GET", "POST"]
 
 
 def test_ensure_model_registry_for_ckpt_forces_model_service_creation():
@@ -929,6 +1035,8 @@ def test_ensure_model_registry_for_ckpt_forces_model_service_creation():
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content or b"{}")
         seen.append((request.method, request.url.path, payload))
+        if request.method == "GET" and request.url.path == "/envarena/openapi/v1/model-services/catalog/models/base-model":
+            return httpx.Response(200, json=_model_service_catalog_payload())
         if request.method == "POST" and request.url.path == "/envarena/openapi/v1/model-services":
             assert payload == {
                 "served_model_name": "ckpt-alias",
@@ -957,7 +1065,12 @@ def test_ensure_model_registry_for_ckpt_forces_model_service_creation():
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
     result = _client(handler).ensure_model_registry_for_ckpt(
-        {"model_path": "/models/ckpt", "served_model_name": "ckpt-alias"},
+        {
+            "type": "ckpt",
+            "model_path": "/models/ckpt",
+            "served_model_name": "ckpt-alias",
+            "base_model_id": "base-model",
+        },
         key="model-key",
         wait_ready=False,
         create_entity=False,
@@ -967,10 +1080,10 @@ def test_ensure_model_registry_for_ckpt_forces_model_service_creation():
 
     assert result["registry_ref"] == {"key": "model-key", "version": "1.0.0"}
     assert result["asset"]["model_service"]["service_id"] == "svc-1"
-    assert [method for method, _, _ in seen] == ["POST", "POST"]
+    assert [method for method, _, _ in seen] == ["GET", "POST", "POST"]
 
 
-def test_submit_eval_by_existed_stream_launches_batch_task_with_model_ref():
+def test_submit_eval_by_stream_launches_batch_task_with_model_ref():
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
         payload = json.loads(request.content or b"{}")
@@ -1020,9 +1133,9 @@ def test_submit_eval_by_existed_stream_launches_batch_task_with_model_ref():
             )
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
-    job = _client(handler).submit_eval_by_existed_stream(
-        {"type": "ref", "ref": "model-a@1.0.0"},
-        "train-stream",
+    job = _client(handler).submit_eval_by_stream(
+        model={"type": "ref", "ref": "model-a@1.0.0"},
+        stream_id="train-stream",
     )
 
     assert job["eval_job_id"] == "job-stream"
@@ -1032,7 +1145,159 @@ def test_submit_eval_by_existed_stream_launches_batch_task_with_model_ref():
     assert job["assets"]["stream_tasks"] == [{"data_id": "env:env-a@1.0.0"}]
 
 
-def test_submit_eval_by_fork_stream_creates_skill_harness_fork_stream_and_launches_batch_task():
+def test_submit_eval_by_stream_defaults_to_all_data_ids_and_applies_per_data_rewards():
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        payload = json.loads(request.content or b"{}")
+        if request.method == "GET" and path == "/envarena/openapi/v1/streams/train-stream":
+            return httpx.Response(
+                200,
+                json={
+                    "stream": {
+                        "stream_id": "train-stream",
+                        "name": "Train Stream",
+                        "task": "swe",
+                        "default_harness_ref": {"key": "base-harness", "version": "1.0.0"},
+                        "default_reward_ref": {"key": "base-reward", "version": "1.0.0"},
+                        "status": "ACTIVE",
+                    }
+                },
+            )
+        if request.method == "POST" and path == "/envarena/openapi/v1/streams/train-stream/dataset":
+            return httpx.Response(
+                200,
+                json={
+                    "data_ids": ["env:env-a@1.0.0", "env:env-b@1.0.0"],
+                    "items": [
+                        {"data_id": "env:env-a@1.0.0", "env_ref": {"key": "env-a", "version": "1.0.0"}},
+                        {"data_id": "env:env-b@1.0.0", "env_ref": {"key": "env-b", "version": "1.0.0"}},
+                    ],
+                    "count": 2,
+                    "total": 2,
+                    "offset": 0,
+                    "limit": 1000,
+                },
+            )
+        if request.method == "POST" and path == "/envarena/openapi/v1/streams/train-stream/launch_batch_task":
+            assert payload["reward_ref"] == {"key": "base-reward", "version": "1.0.0"}
+            assert payload["tasks"] == [
+                {
+                    "data_id": "env:env-a@1.0.0",
+                    "reward_ref": {"key": "reward-a", "version": "1.0.0"},
+                },
+                {
+                    "data_id": "env:env-b@1.0.0",
+                    "reward_ref": {"key": "reward-b", "version": "2.0.0"},
+                },
+            ]
+            return httpx.Response(
+                202,
+                json={
+                    "accepted": True,
+                    "stream_id": "train-stream",
+                    "job_id": "job-stream",
+                    "task_ids": ["task-1", "task-2"],
+                    "job": _benchmark_job_payload("job-stream"),
+                },
+            )
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    job = _client(handler).submit_eval_by_stream(
+        {"type": "ref", "ref": "model-a@1.0.0"},
+        "train-stream",
+        rewards=[
+            {"data_id": "env:env-a@1.0.0", "ref": "reward-a@1.0.0"},
+            {"data_id": "env:env-b@1.0.0", "ref": {"type": "ref", "ref": "reward-b@2.0.0"}},
+        ],
+    )
+
+    assert job["selected_data_ids"] == ["env:env-a@1.0.0", "env:env-b@1.0.0"]
+    assert job["assets"]["stream_tasks"][1]["reward_ref"] == {"key": "reward-b", "version": "2.0.0"}
+
+
+def test_submit_eval_by_stream_requires_skill_bindings_for_all_selected_data_ids():
+    with pytest.raises(EnvArenaConfigurationError, match="skills are missing bindings"):
+        _client(_stream_validation_handler(["env:env-a@1.0.0", "env:env-b@1.0.0"])).submit_eval_by_stream(
+            {"type": "ref", "ref": "model-a@1.0.0"},
+            "train-stream",
+            skills=[
+                {
+                    "data_id": "env:env-a@1.0.0",
+                    "type": "experience",
+                    "content": "new hint",
+                }
+            ],
+        )
+
+
+def test_submit_eval_by_stream_rejects_multiple_skill_bindings_for_same_data_id():
+    with pytest.raises(EnvArenaConfigurationError, match="multiple skill bindings"):
+        _client(_stream_validation_handler(["env:env-a@1.0.0"])).submit_eval_by_stream(
+            {"type": "ref", "ref": "model-a@1.0.0"},
+            "train-stream",
+            skills=[
+                {
+                    "data_id": "env:env-a@1.0.0",
+                    "type": "experience",
+                    "content": "new hint",
+                },
+                {
+                    "data_id": "env:env-a@1.0.0",
+                    "type": "ref",
+                    "ref": "skill-a@1.0.0",
+                },
+            ],
+        )
+
+
+def test_submit_eval_by_stream_rejects_ref_skill_without_ref_field():
+    with pytest.raises(EnvArenaConfigurationError, match="ref skill bindings require ref"):
+        _client(_stream_validation_handler(["env:env-a@1.0.0"])).submit_eval_by_stream(
+            {"type": "ref", "ref": "model-a@1.0.0"},
+            "train-stream",
+            skills=[
+                {
+                    "data_id": "env:env-a@1.0.0",
+                    "type": "ref",
+                    "content": "skill-a@1.0.0",
+                }
+            ],
+        )
+
+
+@pytest.mark.parametrize(
+    ("rewards", "error_match"),
+    [
+        (
+            [
+                {"data_id": "env:env-a@1.0.0", "ref": "reward-a@1.0.0"},
+                {"data_id": "env:env-a@1.0.0", "ref": "reward-b@1.0.0"},
+            ],
+            "multiple reward bindings",
+        ),
+        (
+            [{"data_id": "env:env-b@1.0.0", "ref": "reward-b@1.0.0"}],
+            "is not selected",
+        ),
+        (
+            [{"data_id": "env:env-a@1.0.0"}],
+            "requires ref",
+        ),
+    ],
+)
+def test_submit_eval_by_stream_rejects_invalid_reward_bindings(
+    rewards: list[dict[str, str]],
+    error_match: str,
+):
+    with pytest.raises(EnvArenaConfigurationError, match=error_match):
+        _client(_stream_validation_handler(["env:env-a@1.0.0"])).submit_eval_by_stream(
+            {"type": "ref", "ref": "model-a@1.0.0"},
+            "train-stream",
+            rewards=rewards,
+        )
+
+
+def test_submit_eval_by_stream_creates_skill_harness_and_launches_batch_task():
     keys: dict[str, str] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1049,22 +1314,6 @@ def test_submit_eval_by_fork_stream_creates_skill_harness_fork_stream_and_launch
                         "selector": {"include_tags": ["train"]},
                         "default_harness_ref": {"key": "base-harness", "version": "1.0.0"},
                         "default_reward_ref": {"key": "base-reward", "version": "1.0.0"},
-                        "status": "ACTIVE",
-                    }
-                },
-            )
-        if request.method == "GET" and keys.get("fork_stream") and path == f"/envarena/openapi/v1/streams/{keys['fork_stream']}":
-            return httpx.Response(
-                200,
-                json={
-                    "stream": {
-                        "stream_id": keys["fork_stream"],
-                        "name": "Fork",
-                        "task": "swe",
-                        "selector": {"include_tags": ["train"]},
-                        "default_harness_ref": {"key": keys["harness"], "version": "1.0.0"},
-                        "default_reward_ref": {"key": "base-reward", "version": "1.0.0"},
-                        "metadata": keys["fork_metadata"],
                         "status": "ACTIVE",
                     }
                 },
@@ -1084,14 +1333,6 @@ def test_submit_eval_by_fork_stream_creates_skill_harness_fork_stream_and_launch
                     "limit": 1000,
                 },
             )
-        if request.method == "POST" and path == "/envarena/openapi/v1/skills":
-            assert payload["key"] == "skill-new"
-            return httpx.Response(201, json={})
-        if request.method == "POST" and path == "/envarena/openapi/v1/skills/skill-new/versions":
-            assert payload["spec"] == {"bundle": {"uri": "oss://skill"}, "manifest": {"name": "skill-new", "description": "d"}}
-            return httpx.Response(201, json={})
-        if request.method == "POST" and path == "/envarena/openapi/v1/skills/skill-new/versions/1.0.0/publish":
-            return httpx.Response(200, json={})
         if request.method == "GET" and path == "/envarena/openapi/v1/harnesses/base-harness/versions/1.0.0":
             return httpx.Response(
                 200,
@@ -1106,75 +1347,65 @@ def test_submit_eval_by_fork_stream_creates_skill_harness_fork_stream_and_launch
             )
         if request.method == "POST" and path == "/envarena/openapi/v1/harnesses":
             keys["harness"] = payload["key"]
-            assert keys["harness"].startswith("areal-rsi-base-harness-fork-harness-")
+            assert keys["harness"].startswith("areal-rsi-base-harness-env-env-a-1.0.0-stream-harness-")
             return httpx.Response(201, json={})
         if request.method == "POST" and path == f"/envarena/openapi/v1/harnesses/{keys['harness']}/versions":
-            assert payload["spec"]["skill_refs"] == [
-                {"key": "skill-new", "version": "1.0.0"},
-                {"key": "skill-existing", "version": "2.0.0"},
-            ]
+            assert payload["spec"]["skill_refs"] == [{"key": "skill-a", "version": "1.0.0"}]
             return httpx.Response(201, json={})
         if request.method == "POST" and path == f"/envarena/openapi/v1/harnesses/{keys['harness']}/versions/1.0.0/publish":
             return httpx.Response(200, json={})
-        if request.method == "POST" and path == "/envarena/openapi/v1/streams":
-            keys["fork_stream"] = payload["stream_id"]
-            keys["fork_metadata"] = payload["metadata"]
-            assert payload["default_harness_ref"] == {"key": keys["harness"], "version": "1.0.0"}
-            assert "benchmark_ref" not in payload["metadata"]
-            assert json.loads(payload["metadata"]["relationships"]) == [
-                {"data_id": "env:env-a@1.0.0", "experience_id": "exp-1"}
-            ]
-            fork_items = json.loads(payload["metadata"]["fork_items"])
-            assert fork_items == [
+        if request.method == "POST" and path == "/envarena/openapi/v1/streams/source-stream/launch_batch_task":
+            assert payload["model_ref"] == {"key": "model-a", "version": "1.0.0"}
+            assert payload["harness_ref"] == {"key": "base-harness", "version": "1.0.0"}
+            assert payload["reward_ref"] == {"key": "base-reward", "version": "1.0.0"}
+            assert payload["tasks"] == [
                 {
-                    "source_stream_id": "source-stream",
-                    "source_data_id": "env:env-a@1.0.0",
                     "data_id": "env:env-a@1.0.0",
-                    "env_ref": {"key": "env-a", "version": "1.0.0"},
                     "harness_ref": {"key": keys["harness"], "version": "1.0.0"},
                 }
             ]
-            return httpx.Response(201, json={"stream_id": keys["fork_stream"], "status": "ACTIVE"})
-        if request.method == "POST" and path == f"/envarena/openapi/v1/streams/{keys['fork_stream']}/launch_batch_task":
-            assert payload["model_ref"] == {"key": "model-a", "version": "1.0.0"}
-            assert payload["harness_ref"] == {"key": keys["harness"], "version": "1.0.0"}
-            assert payload["reward_ref"] == {"key": "base-reward", "version": "1.0.0"}
-            assert payload["tasks"] == [{"data_id": "env:env-a@1.0.0"}]
-            assert payload["metadata"]["fork_stream_id"] == keys["fork_stream"]
+            assert payload["metadata"]["source_stream_id"] == "source-stream"
+            assert payload["metadata"]["stream_eval_mode"] == "stream"
+            assert "fork_stream_id" not in payload["metadata"]
             return httpx.Response(
                 202,
                 json={
                     "accepted": True,
-                    "stream_id": keys["fork_stream"],
-                    "job_id": "job-fork",
+                    "stream_id": "source-stream",
+                    "job_id": "job-stream",
                     "task_ids": ["task-1"],
-                    "job": _benchmark_job_payload("job-fork", harness_key=keys["harness"]),
+                    "job": _benchmark_job_payload("job-stream", harness_key="base-harness"),
                 },
             )
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
-    job = _client(handler).submit_eval_by_fork_stream(
+    job = _client(handler).submit_eval_by_stream(
         {"type": "ref", "ref": "model-a@1.0.0"},
         "source-stream",
-        ["env:env-a@1.0.0"],
-        [
+        data_ids=["env:env-a@1.0.0"],
+        skills=[
             {
-                "type": "new",
-                "key": "skill-new",
-                "version": "1.0.0",
-                "spec": {"bundle": {"uri": "oss://skill"}, "manifest": {"name": "skill-new", "description": "d"}},
+                "data_id": "env:env-a@1.0.0",
+                "type": "ref",
+                "ref": "skill-a@1.0.0",
             },
-            "skill-existing@2.0.0",
         ],
-        [{"data_id": "env:env-a@1.0.0", "experience_id": "exp-1"}],
     )
 
-    assert job["eval_job_id"] == "job-fork"
-    assert job["fork_stream_id"] == keys["fork_stream"]
+    assert job["eval_job_id"] == "job-stream"
+    assert "fork_stream_id" not in job
+    assert "fork_stream" not in job["assets"]
+    assert job["stream_id"] == "source-stream"
     assert job["selected_data_ids"] == ["env:env-a@1.0.0"]
+    assert job["assets"]["stream_tasks"] == [
+        {
+            "data_id": "env:env-a@1.0.0",
+            "harness_ref": {"key": keys["harness"], "version": "1.0.0"},
+        }
+    ]
 
 
-def test_submit_eval_by_fork_stream_uses_experience_bound_skill_as_task_harness_override():
+def test_submit_eval_by_stream_uses_bound_skill_as_task_harness_override():
     keys: dict[str, str] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1191,22 +1422,6 @@ def test_submit_eval_by_fork_stream_uses_experience_bound_skill_as_task_harness_
                         "selector": {"include_tags": ["train"]},
                         "default_harness_ref": {"key": "base-harness", "version": "1.0.0"},
                         "default_reward_ref": {"key": "base-reward", "version": "1.0.0"},
-                        "status": "ACTIVE",
-                    }
-                },
-            )
-        if request.method == "GET" and keys.get("fork_stream") and path == f"/envarena/openapi/v1/streams/{keys['fork_stream']}":
-            return httpx.Response(
-                200,
-                json={
-                    "stream": {
-                        "stream_id": keys["fork_stream"],
-                        "name": "Fork",
-                        "task": "swe",
-                        "selector": {"include_tags": ["train"]},
-                        "default_harness_ref": {"key": "base-harness", "version": "1.0.0"},
-                        "default_reward_ref": {"key": "base-reward", "version": "1.0.0"},
-                        "metadata": keys["fork_metadata"],
                         "status": "ACTIVE",
                     }
                 },
@@ -1234,7 +1449,7 @@ def test_submit_eval_by_fork_stream_uses_experience_bound_skill_as_task_harness_
             )
         if request.method == "POST" and path == "/envarena/openapi/v1/harnesses":
             keys["task_harness"] = payload["key"]
-            assert keys["task_harness"].startswith("areal-rsi-base-harness-env-env-a-1.0.0-fork-harness-")
+            assert keys["task_harness"].startswith("areal-rsi-base-harness-env-env-a-1.0.0-stream-harness-")
             return httpx.Response(201, json={})
         if request.method == "POST" and path == f"/envarena/openapi/v1/harnesses/{keys['task_harness']}/versions":
             assert payload["spec"]["skill_refs"] == [{"key": "skill-a", "version": "1.0.0"}]
@@ -1242,22 +1457,7 @@ def test_submit_eval_by_fork_stream_uses_experience_bound_skill_as_task_harness_
             return httpx.Response(201, json={})
         if request.method == "POST" and path == f"/envarena/openapi/v1/harnesses/{keys['task_harness']}/versions/1.0.0/publish":
             return httpx.Response(200, json={})
-        if request.method == "POST" and path == "/envarena/openapi/v1/streams":
-            keys["fork_stream"] = payload["stream_id"]
-            keys["fork_metadata"] = payload["metadata"]
-            assert payload["default_harness_ref"] == {"key": "base-harness", "version": "1.0.0"}
-            fork_items = json.loads(payload["metadata"]["fork_items"])
-            assert fork_items == [
-                {
-                    "source_stream_id": "source-stream",
-                    "source_data_id": "env:env-a@1.0.0",
-                    "data_id": "env:env-a@1.0.0",
-                    "env_ref": {"key": "env-a", "version": "1.0.0"},
-                    "harness_ref": {"key": keys["task_harness"], "version": "1.0.0"},
-                }
-            ]
-            return httpx.Response(201, json={"stream_id": keys["fork_stream"], "status": "ACTIVE"})
-        if request.method == "POST" and path == f"/envarena/openapi/v1/streams/{keys['fork_stream']}/launch_batch_task":
+        if request.method == "POST" and path == "/envarena/openapi/v1/streams/source-stream/launch_batch_task":
             assert payload["harness_ref"] == {"key": "base-harness", "version": "1.0.0"}
             assert payload["tasks"] == [
                 {
@@ -1269,20 +1469,19 @@ def test_submit_eval_by_fork_stream_uses_experience_bound_skill_as_task_harness_
                 202,
                 json={
                     "accepted": True,
-                    "stream_id": keys["fork_stream"],
-                    "job_id": "job-fork",
+                    "stream_id": "source-stream",
+                    "job_id": "job-stream",
                     "task_ids": ["task-1"],
-                    "job": _benchmark_job_payload("job-fork", harness_key="base-harness"),
+                    "job": _benchmark_job_payload("job-stream", harness_key="base-harness"),
                 },
             )
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
-    job = _client(handler).submit_eval_by_fork_stream(
+    job = _client(handler).submit_eval_by_stream(
         {"type": "ref", "ref": "model-a@1.0.0"},
         "source-stream",
-        ["env:env-a@1.0.0"],
-        [{"type": "ref", "ref": "skill-a@1.0.0", "experience_id": "exp-1"}],
-        [{"data_id": "env:env-a@1.0.0", "experience_id": "exp-1"}],
+        data_ids=["env:env-a@1.0.0"],
+        skills=[{"data_id": "env:env-a@1.0.0", "type": "ref", "ref": "skill-a@1.0.0"}],
     )
 
     assert job["assets"]["stream_tasks"] == [
@@ -1291,3 +1490,388 @@ def test_submit_eval_by_fork_stream_uses_experience_bound_skill_as_task_harness_
             "harness_ref": {"key": keys["task_harness"], "version": "1.0.0"},
         }
     ]
+
+
+def test_submit_eval_by_stream_updates_stream_data_skill_and_harness_versions_from_experience():
+    keys: dict[str, str | dict] = {}
+    data_id = "env:env-a@1.0.0"
+
+    def source_stream() -> dict[str, object]:
+        return {
+            "stream": {
+                "stream_id": "source-stream",
+                "name": "Source",
+                "task": "swe",
+                "selector": {"include_tags": ["train"]},
+                "default_harness_ref": {"key": "base-harness", "version": "1.0.0"},
+                "default_reward_ref": {"key": "base-reward", "version": "1.0.0"},
+                "status": "ACTIVE",
+            }
+        }
+
+    def dataset() -> dict[str, object]:
+        return {
+            "data_ids": [data_id],
+            "items": [
+                {
+                    "data_id": data_id,
+                    "env_ref": {"key": "env-a", "version": "1.0.0"},
+                    "harness_ref": {"key": "env-a-harness", "version": "1.0.0"},
+                }
+            ],
+            "count": 1,
+            "total": 1,
+            "offset": 0,
+            "limit": 1000,
+        }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        payload = json.loads(request.content or b"{}")
+        if request.method == "GET" and path == "/envarena/openapi/v1/streams/source-stream":
+            return httpx.Response(200, json=source_stream())
+        if request.method == "POST" and path == "/envarena/openapi/v1/streams/source-stream/dataset":
+            return httpx.Response(200, json=dataset())
+        if request.method == "GET" and path == "/envarena/openapi/v1/harnesses/env-a-harness/versions/1.0.0":
+            return httpx.Response(
+                200,
+                json={
+                    "key": "env-a-harness",
+                    "version": "1.0.0",
+                    "spec": {
+                        "runtime": {"type": "claude_code", "uri": "oss://runtime"},
+                        "ttl_seconds": 600,
+                        "skill_refs": [{"key": "skill-a", "version": "1.0.0"}],
+                    },
+                },
+            )
+        if request.method == "GET" and path == "/envarena/openapi/v1/skills/skill-a/versions/1.0.0":
+            return httpx.Response(
+                200,
+                json={
+                    "key": "skill-a",
+                    "version": "1.0.0",
+                    "spec": {
+                        "bundle": {"uri": "oss://skills/skill-a"},
+                        "manifest": {"name": "skill-a", "description": "base skill"},
+                    },
+                },
+            )
+        if request.method == "POST" and path == "/envarena/openapi/v1/skills/skill-a/versions":
+            assert payload["version"] == "1.0.1"
+            assert payload["supersedes"] == "1.0.0"
+            assert payload["spec"]["bundle"] == {"uri": "oss://skills/skill-a"}
+            assert payload["spec"]["task_experiences"] == [
+                {
+                    "schema_version": "task-experience.v1",
+                    "task_id": data_id,
+                    "status": "completed",
+                    "experience": "new hint",
+                }
+            ]
+            return httpx.Response(201, json={"key": "skill-a", "version": "1.0.1", "spec": payload["spec"]})
+        if request.method == "POST" and path == "/envarena/openapi/v1/skills/skill-a/versions/1.0.1/publish":
+            return httpx.Response(200, json={"key": "skill-a", "version": "1.0.1", "status": "PUBLISHED"})
+        if request.method == "POST" and path == "/envarena/openapi/v1/harnesses":
+            raise AssertionError("experience updates must not create a new harness entity")
+        if request.method == "POST" and path == "/envarena/openapi/v1/harnesses/env-a-harness/versions":
+            assert payload["version"] == "1.0.1"
+            assert payload["supersedes"] == "1.0.0"
+            assert payload["spec"]["skill_refs"] == [{"key": "skill-a", "version": "1.0.1"}]
+            assert payload["spec"]["metadata"]["data_id"] == data_id
+            return httpx.Response(201, json={"key": "env-a-harness", "version": "1.0.1", "spec": payload["spec"]})
+        if request.method == "POST" and path == "/envarena/openapi/v1/harnesses/env-a-harness/versions/1.0.1/publish":
+            return httpx.Response(200, json={"key": "env-a-harness", "version": "1.0.1", "status": "PUBLISHED"})
+        if request.method == "POST" and path == "/envarena/openapi/v1/streams/source-stream/launch_batch_task":
+            assert payload["model_ref"] == {"key": "model-a", "version": "1.0.0"}
+            assert payload["harness_ref"] == {"key": "base-harness", "version": "1.0.0"}
+            assert payload["tasks"] == [
+                {
+                    "data_id": data_id,
+                    "harness_ref": {"key": "env-a-harness", "version": "1.0.1"},
+                }
+            ]
+            return httpx.Response(
+                202,
+                json={
+                    "accepted": True,
+                    "stream_id": "source-stream",
+                    "job_id": "job-stream",
+                    "task_ids": ["task-1"],
+                    "job": _benchmark_job_payload("job-stream", harness_key="base-harness"),
+                },
+            )
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    job = _client(handler).submit_eval_by_stream(
+        {"type": "ref", "ref": "model-a@1.0.0"},
+        "source-stream",
+        data_ids=[data_id],
+        skills=[{"data_id": data_id, "type": "experience", "content": "new hint"}],
+        job_config={
+            "experience_skill": {"version": "1.0.1"},
+            "experience_harness": {"version": "1.0.1"},
+        },
+    )
+
+    assert job["eval_job_id"] == "job-stream"
+    assert job["assets"]["experience_updates"][0]["skill_ref"] == {"key": "skill-a", "version": "1.0.1"}
+    assert job["assets"]["skills"] == [{"key": "skill-a", "version": "1.0.1"}]
+    assert job["assets"]["stream_tasks"] == [
+        {
+            "data_id": data_id,
+            "harness_ref": {"key": "env-a-harness", "version": "1.0.1"},
+        }
+    ]
+
+
+def test_submit_eval_by_stream_creates_skill_and_harness_when_base_harness_has_no_skill_refs():
+    keys: dict[str, str | dict] = {}
+    data_id = "env:env-a@1.0.0"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        payload = json.loads(request.content or b"{}")
+        if request.method == "GET" and path == "/envarena/openapi/v1/streams/source-stream":
+            return httpx.Response(
+                200,
+                json={
+                    "stream": {
+                        "stream_id": "source-stream",
+                        "name": "Source",
+                        "task": "swe",
+                        "selector": {"include_tags": ["train"]},
+                        "default_harness_ref": {"key": "base-harness", "version": "1.0.0"},
+                        "default_reward_ref": {"key": "base-reward", "version": "1.0.0"},
+                        "status": "ACTIVE",
+                    }
+                },
+            )
+        if request.method == "POST" and path == "/envarena/openapi/v1/streams/source-stream/dataset":
+            return httpx.Response(
+                200,
+                json={
+                    "data_ids": [data_id],
+                    "items": [{"data_id": data_id, "env_ref": {"key": "env-a", "version": "1.0.0"}}],
+                    "count": 1,
+                    "total": 1,
+                    "offset": 0,
+                    "limit": 1000,
+                },
+            )
+        if request.method == "GET" and path == "/envarena/openapi/v1/harnesses/base-harness/versions/1.0.0":
+            return httpx.Response(
+                200,
+                json={
+                    "key": "base-harness",
+                    "version": "1.0.0",
+                    "spec": {
+                        "runtime": {"type": "claude_code", "uri": "oss://runtime"},
+                        "ttl_seconds": 600,
+                    },
+                },
+            )
+        if request.method == "POST" and path == "/envarena/openapi/v1/skills":
+            keys["skill"] = str(payload["key"])
+            assert keys["skill"].startswith("areal-rsi-source-stream-env-env-a-1.0.0-experience-skill-")
+            assert payload["metadata"]["base_harness_ref"] == "base-harness@1.0.0"
+            return httpx.Response(201, json={"key": keys["skill"]})
+        if request.method == "POST" and path == f"/envarena/openapi/v1/skills/{keys.get('skill')}/versions":
+            assert payload["version"] == "1.0.0"
+            assert payload["spec"]["bundle"]["uri"] == "inline://areal-rsi/experience-skill"
+            assert payload["spec"]["manifest"]["name"] == f"AReaL-RSI experience skill for {data_id}"
+            assert payload["spec"]["task_experiences"][0]["experience"] == "new hint"
+            return httpx.Response(201, json={"key": keys["skill"], "version": "1.0.0", "spec": payload["spec"]})
+        if request.method == "POST" and path == f"/envarena/openapi/v1/skills/{keys.get('skill')}/versions/1.0.0/publish":
+            return httpx.Response(200, json={"key": keys["skill"], "version": "1.0.0", "status": "PUBLISHED"})
+        if request.method == "POST" and path == "/envarena/openapi/v1/harnesses":
+            keys["harness"] = str(payload["key"])
+            assert keys["harness"].startswith("areal-rsi-base-harness-env-env-a-1.0.0-experience-harness-")
+            assert payload["metadata"]["skill_ref"] == f"{keys['skill']}@1.0.0"
+            return httpx.Response(201, json={"key": keys["harness"]})
+        if request.method == "POST" and path == f"/envarena/openapi/v1/harnesses/{keys.get('harness')}/versions":
+            assert payload["version"] == "1.0.0"
+            assert payload["spec"]["runtime"] == {"type": "claude_code", "uri": "oss://runtime"}
+            assert payload["spec"]["skill_refs"] == [{"key": keys["skill"], "version": "1.0.0"}]
+            return httpx.Response(201, json={"key": keys["harness"], "version": "1.0.0", "spec": payload["spec"]})
+        if request.method == "POST" and path == f"/envarena/openapi/v1/harnesses/{keys.get('harness')}/versions/1.0.0/publish":
+            return httpx.Response(200, json={"key": keys["harness"], "version": "1.0.0", "status": "PUBLISHED"})
+        if request.method == "POST" and path == "/envarena/openapi/v1/streams/source-stream/launch_batch_task":
+            assert payload["model_ref"] == {"key": "model-a", "version": "1.0.0"}
+            assert payload["harness_ref"] == {"key": "base-harness", "version": "1.0.0"}
+            assert payload["tasks"] == [
+                {
+                    "data_id": data_id,
+                    "harness_ref": {"key": keys["harness"], "version": "1.0.0"},
+                }
+            ]
+            return httpx.Response(
+                202,
+                json={
+                    "accepted": True,
+                    "stream_id": "source-stream",
+                    "job_id": "job-stream",
+                    "task_ids": ["task-1"],
+                    "job": _benchmark_job_payload("job-stream", harness_key="base-harness"),
+                },
+            )
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    job = _client(handler).submit_eval_by_stream(
+        {"type": "ref", "ref": "model-a@1.0.0"},
+        "source-stream",
+        data_ids=[data_id],
+        skills=[{"data_id": data_id, "type": "experience", "content": "new hint"}],
+    )
+
+    assert job["eval_job_id"] == "job-stream"
+    assert job["assets"]["experience_updates"][0]["previous_skill_ref"] is None
+    assert job["assets"]["skills"] == [{"key": keys["skill"], "version": "1.0.0"}]
+    assert job["assets"]["stream_tasks"] == [
+        {
+            "data_id": data_id,
+            "harness_ref": {"key": keys["harness"], "version": "1.0.0"},
+        }
+    ]
+
+
+def test_update_stream_data_skill_experience_requires_skill_key_for_multi_skill_harness():
+    data_id = "env:env-a@1.0.0"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "GET" and path == "/envarena/openapi/v1/streams/source-stream":
+            return httpx.Response(
+                200,
+                json={
+                    "stream": {
+                        "stream_id": "source-stream",
+                        "task": "swe",
+                        "default_harness_ref": {"key": "multi-harness", "version": "1.0.0"},
+                        "default_reward_ref": {"key": "base-reward", "version": "1.0.0"},
+                    }
+                },
+            )
+        if request.method == "POST" and path == "/envarena/openapi/v1/streams/source-stream/dataset":
+            return httpx.Response(
+                200,
+                json={
+                    "data_ids": [data_id],
+                    "items": [{"data_id": data_id, "env_ref": {"key": "env-a", "version": "1.0.0"}}],
+                    "count": 1,
+                    "total": 1,
+                    "offset": 0,
+                    "limit": 1000,
+                },
+            )
+        if request.method == "GET" and path == "/envarena/openapi/v1/harnesses/multi-harness/versions/1.0.0":
+            return httpx.Response(
+                200,
+                json={
+                    "key": "multi-harness",
+                    "version": "1.0.0",
+                    "spec": {
+                        "runtime": {"type": "claude_code", "uri": "oss://runtime"},
+                        "ttl_seconds": 600,
+                        "skill_refs": [
+                            {"key": "skill-a", "version": "1.0.0"},
+                            {"key": "skill-b", "version": "2.0.0"},
+                        ],
+                    },
+                },
+            )
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    with pytest.raises(EnvArenaConfigurationError, match="multiple skill_refs"):
+        _client(handler).update_stream_data_skill_experience("source-stream", data_id, {"experience": "new hint"})
+
+
+def test_update_stream_data_skill_experience_can_target_skill_key_in_multi_skill_harness():
+    data_id = "env:env-a@1.0.0"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        payload = json.loads(request.content or b"{}")
+        if request.method == "GET" and path == "/envarena/openapi/v1/streams/source-stream":
+            return httpx.Response(
+                200,
+                json={
+                    "stream": {
+                        "stream_id": "source-stream",
+                        "task": "swe",
+                        "default_harness_ref": {"key": "multi-harness", "version": "1.0.0"},
+                        "default_reward_ref": {"key": "base-reward", "version": "1.0.0"},
+                    }
+                },
+            )
+        if request.method == "POST" and path == "/envarena/openapi/v1/streams/source-stream/dataset":
+            return httpx.Response(
+                200,
+                json={
+                    "data_ids": [data_id],
+                    "items": [{"data_id": data_id, "env_ref": {"key": "env-a", "version": "1.0.0"}}],
+                    "count": 1,
+                    "total": 1,
+                    "offset": 0,
+                    "limit": 1000,
+                },
+            )
+        if request.method == "GET" and path == "/envarena/openapi/v1/harnesses/multi-harness/versions/1.0.0":
+            return httpx.Response(
+                200,
+                json={
+                    "key": "multi-harness",
+                    "version": "1.0.0",
+                    "spec": {
+                        "runtime": {"type": "claude_code", "uri": "oss://runtime"},
+                        "ttl_seconds": 600,
+                        "skill_refs": [
+                            {"key": "skill-a", "version": "1.0.0"},
+                            {"key": "skill-b", "version": "2.0.0"},
+                        ],
+                    },
+                },
+            )
+        if request.method == "GET" and path == "/envarena/openapi/v1/skills/skill-b/versions/2.0.0":
+            return httpx.Response(
+                200,
+                json={
+                    "key": "skill-b",
+                    "version": "2.0.0",
+                    "spec": {
+                        "bundle": {"uri": "oss://skills/skill-b"},
+                        "manifest": {"name": "skill-b", "description": "second skill"},
+                    },
+                },
+            )
+        if request.method == "POST" and path == "/envarena/openapi/v1/skills/skill-b/versions":
+            assert payload["version"] == "2.0.1"
+            assert payload["spec"]["task_experiences"][0]["experience"] == "target b"
+            return httpx.Response(201, json={"key": "skill-b", "version": "2.0.1", "spec": payload["spec"]})
+        if request.method == "POST" and path == "/envarena/openapi/v1/skills/skill-b/versions/2.0.1/publish":
+            return httpx.Response(200, json={"key": "skill-b", "version": "2.0.1", "status": "PUBLISHED"})
+        if request.method == "POST" and path == "/envarena/openapi/v1/harnesses/multi-harness/versions":
+            assert payload["version"] == "1.0.1"
+            assert payload["spec"]["skill_refs"] == [
+                {"key": "skill-a", "version": "1.0.0"},
+                {"key": "skill-b", "version": "2.0.1"},
+            ]
+            return httpx.Response(201, json={"key": "multi-harness", "version": "1.0.1", "spec": payload["spec"]})
+        if request.method == "POST" and path == "/envarena/openapi/v1/harnesses/multi-harness/versions/1.0.1/publish":
+            return httpx.Response(200, json={"key": "multi-harness", "version": "1.0.1", "status": "PUBLISHED"})
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    result = _client(handler).update_stream_data_skill_experience(
+        "source-stream",
+        data_id,
+        {
+            "experience": "target b",
+            "skill_key": "skill-b",
+            "version": "2.0.1",
+            "harness_version": "1.0.1",
+        },
+    )
+
+    assert result["previous_skill_ref"] == {"key": "skill-b", "version": "2.0.0"}
+    assert result["skill_ref"] == {"key": "skill-b", "version": "2.0.1"}
+    assert result["harness_ref"] == {"key": "multi-harness", "version": "1.0.1"}

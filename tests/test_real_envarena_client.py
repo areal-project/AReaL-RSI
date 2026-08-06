@@ -17,6 +17,7 @@ REAL_MODEL_REGISTRY_GATEWAY_MODEL_ID = "areal-rsi-real-reg-26a3a0d9"
 REAL_MODEL_REGISTRY_CLEAN = False
 REAL_MODEL_REGISTRY_READY_TIMEOUT_SECONDS = 1800
 REAL_MODEL_REGISTRY_READY_POLL_SECONDS = 15
+REAL_SKILL_BUNDLE_URI = "oss://areal-rsi/real-tests/skills/noop-skill/"
 MAX_PRINT_DICT_ITEMS = 40
 MAX_PRINT_LIST_ITEMS = 2
 MAX_PRINT_STRING_CHARS = 500
@@ -240,6 +241,88 @@ def test_real_envarena_register_model_registry_from_gateway_model():
         client.close()
 
 
+def test_real_envarena_create_publish_skill_registry():
+    client = EnvArenaClient(
+        EnvArenaConfig(
+            control_base_url=REAL_ENVARENA_BASE_URL,
+            api_token=REAL_ENVARENA_API_KEY,
+            timeout_seconds=60,
+        )
+    )
+    suffix = uuid4().hex[:8]
+    skill_key = f"areal-rsi-real-skill-{suffix}"
+    skill_version = "1.0.0"
+    try:
+        _pretty(
+            "create skill registry config",
+            {
+                "skill_ref": f"{skill_key}@{skill_version}",
+                "bundle_uri": REAL_SKILL_BUNDLE_URI,
+            },
+        )
+        entity = client.create_skill(
+            key=skill_key,
+            name=f"AReaL RSI real skill test {suffix}",
+            description="Created by AReaL-RSI real EnvArenaClient skill registry test.",
+            tags=["areal-rsi-real-test", "skill"],
+            metadata={
+                "source": "areal-rsi-real-test",
+            },
+        )
+        _pretty("created skill entity", entity)
+        assert entity["key"] == skill_key
+
+        version = client.create_skill_version(
+            skill_key,
+            version=skill_version,
+            spec={
+                "source": {
+                    "kind": "local_path",
+                    "uri": REAL_SKILL_BUNDLE_URI,
+                },
+                "bundle": {
+                    "uri": REAL_SKILL_BUNDLE_URI,
+                    "media_type": "application/vnd.areal.skill.bundle",
+                },
+                "manifest": {
+                    "name": f"AReaL RSI real skill test {suffix}",
+                    "description": "No-op skill used to verify EnvArena skill registry creation.",
+                    "license": "UNLICENSED",
+                    "metadata": {
+                        "source": "areal-rsi-real-test",
+                    },
+                },
+                "metadata": {
+                    "source": "areal-rsi-real-test",
+                },
+            },
+        )
+        _pretty("created skill version", version)
+        assert version["key"] == skill_key
+        assert version["version"] == skill_version
+        assert version["spec"]["manifest"]["name"] == f"AReaL RSI real skill test {suffix}"
+
+        published = client.publish_skill_version(skill_key, skill_version)
+        _pretty("published skill version", published)
+        assert published["key"] == skill_key
+        assert published["version"] == skill_version
+        assert published["status"] == "PUBLISHED"
+
+        queried_entity = client.get_skill(skill_key)
+        _pretty("queried skill entity", queried_entity)
+        assert queried_entity["key"] == skill_key
+
+        queried_version = client.get_skill_version(skill_key, skill_version)
+        _pretty("queried skill version", queried_version)
+        assert queried_version["key"] == skill_key
+        assert queried_version["version"] == skill_version
+        assert queried_version["status"] == "PUBLISHED"
+        assert queried_version["spec"]["bundle"]["uri"] == REAL_SKILL_BUNDLE_URI
+
+    finally:
+        client.close()
+
+
 @pytest.mark.parametrize("clean", [REAL_MODEL_REGISTRY_CLEAN])
 def test_real_envarena_ensure_model_registry_for_ckpt_full_chain(clean: bool):
     client = EnvArenaClient(
@@ -260,6 +343,7 @@ def test_real_envarena_ensure_model_registry_for_ckpt_full_chain(clean: bool):
             "ensure model registry for ckpt config",
             {
                 "clean": clean,
+                "type": "ckpt",
                 "base_model_id": REAL_MODEL_SERVICE_BASE_MODEL_ID,
                 "model_path": REAL_MODEL_SERVICE_MODEL_PATH,
                 "served_model_name": served_model_name,
@@ -270,6 +354,7 @@ def test_real_envarena_ensure_model_registry_for_ckpt_full_chain(clean: bool):
         )
         result = client.ensure_model_registry_for_ckpt(
             {
+                "type": "ckpt",
                 "model_path": REAL_MODEL_SERVICE_MODEL_PATH,
                 "served_model_name": served_model_name,
                 "base_model_id": REAL_MODEL_SERVICE_BASE_MODEL_ID,

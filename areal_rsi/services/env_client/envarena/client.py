@@ -70,14 +70,42 @@ class EnvArenaVersionRef:
     version: str
 
     def __post_init__(self) -> None:
+        """Validate the immutable registry reference.
+
+        Raises:
+            EnvArenaConfigurationError: If either ``key`` or ``version`` is an
+                empty string after trimming whitespace.
+        """
+
         if not self.key.strip() or not self.version.strip():
             raise EnvArenaConfigurationError("Version references require non-empty key and version.")
 
     def to_dict(self) -> dict[str, str]:
+        """Serialize the reference into EnvArena's public JSON shape.
+
+        Returns:
+            Mapping with ``key`` and ``version`` string fields suitable for
+            request payloads and normalized client return values.
+        """
+
         return {"key": self.key, "version": self.version}
 
     @classmethod
     def parse(cls, value: str | Mapping[str, Any]) -> "EnvArenaVersionRef":
+        """Parse a supported registry reference representation.
+
+        Parameters:
+            value: Either a ``"key@version"`` string or a mapping containing
+                ``key`` and ``version`` fields.
+
+        Returns:
+            Normalized immutable ``EnvArenaVersionRef``.
+
+        Raises:
+            EnvArenaConfigurationError: If a string omits ``@`` or a mapping
+                lacks a non-empty key/version.
+        """
+
         if isinstance(value, Mapping):
             return cls(key=str(value.get("key", "")), version=str(value.get("version", "")))
         key, separator, version = value.rpartition("@")
@@ -102,6 +130,17 @@ class EnvArenaConfig:
     stream_eval_config: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        """Validate and freeze mutable EnvArena configuration sections.
+
+        The dataclass is frozen, but incoming mapping objects could otherwise
+        be mutated by callers. This method checks required scalar fields,
+        validates mapping-typed sections, and stores defensive deep copies.
+
+        Raises:
+            EnvArenaConfigurationError: If URLs, tokens, timeouts, prefixes, or
+                mapping sections are invalid.
+        """
+
         if not self.control_base_url.strip():
             raise EnvArenaConfigurationError("envarena.control_base_url is required.")
         if not self.api_token.strip():
@@ -122,7 +161,17 @@ class EnvArenaConfig:
 
     @property
     def sdk_base_url(self) -> str:
-        """Return the base before the generated SDK's hard-coded `/openapi/v1` path."""
+        """Return the generated SDK base URL.
+
+        The generated openapi-python-client functions append ``/openapi/v1``
+        themselves. When ``control_base_url`` already includes that suffix, the
+        suffix is stripped here so generated calls and raw calls share one
+        configuration value.
+
+        Returns:
+            Base URL without a trailing slash and without the generated API
+            suffix.
+        """
 
         base_url = self.control_base_url.rstrip("/")
         suffix = "/openapi/v1"
@@ -132,6 +181,21 @@ class EnvArenaConfig:
     def from_yaml(
         cls, path: str | Path, *, environ: Mapping[str, str] | None = None
     ) -> "EnvArenaConfig":
+        """Load EnvArena configuration from a YAML file.
+
+        Parameters:
+            path: YAML path containing a top-level ``envarena`` mapping.
+            environ: Optional environment mapping used for tests. When omitted,
+                ``os.environ`` is consulted for configured URL/token variables.
+
+        Returns:
+            Validated ``EnvArenaConfig`` instance.
+
+        Raises:
+            EnvArenaConfigurationError: If the file shape is invalid or legacy
+                removed defaults such as ``harness``/``benchmarks`` are present.
+        """
+
         payload = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
         if not isinstance(payload, Mapping):
             raise EnvArenaConfigurationError("YAML configuration must contain a top-level mapping.")
@@ -174,6 +238,14 @@ class EnvArenaHTTPError(EnvArenaError):
     """An EnvArena control-plane response outside the operation's success codes."""
 
     def __init__(self, operation: str, status_code: int, detail: Any):
+        """Create a normalized EnvArena HTTP error.
+
+        Parameters:
+            operation: Human-readable operation name used in error messages.
+            status_code: HTTP status returned by EnvArena.
+            detail: Decoded JSON error payload or synthesized non-JSON detail.
+        """
+
         self.operation, self.status_code, self.detail = operation, status_code, detail
         super().__init__(f"EnvArena {operation} failed with HTTP {status_code}: {detail}")
 
@@ -221,6 +293,18 @@ class EnvArenaClient(EnvClient):
         sdk_client: AuthenticatedClient | None = None,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
+        """Initialize the EnvArena control-plane client.
+
+        Parameters:
+            config: Validated EnvArena runtime configuration.
+            sdk_client: Optional preconfigured generated SDK client. This is
+                primarily useful for tests or callers that need custom client
+                lifecycle handling.
+            transport: Optional httpx transport installed on the generated SDK
+                client, used by tests to mock EnvArena responses without
+                touching the network.
+        """
+
         self.config = config
         self._client = sdk_client or AuthenticatedClient(
             base_url=config.sdk_base_url,
@@ -242,13 +326,47 @@ class EnvArenaClient(EnvClient):
 
     @classmethod
     def from_yaml(cls, path: str | Path, **kwargs: Any) -> "EnvArenaClient":
+        """Build an EnvArena client from a YAML configuration file.
+
+        Parameters:
+            path: Path accepted by ``EnvArenaConfig.from_yaml``.
+            **kwargs: Extra constructor arguments such as ``sdk_client`` or
+                ``transport``.
+
+        Returns:
+            Configured ``EnvArenaClient`` instance.
+        """
+
         return cls(EnvArenaConfig.from_yaml(path), **kwargs)
 
     def close(self) -> None:
+        """Close the underlying httpx client owned by the generated SDK.
+
+        This releases connection pools and should be called when the client is
+        used outside a short-lived process or test.
+
+        Returns:
+            None.
+        """
+
         self._client.get_httpx_client().close()
 
     @staticmethod
     def _registry_collection(kind: str) -> str:
+        """Normalize a registry asset kind to its collection path segment.
+
+        Parameters:
+            kind: Singular or plural registry kind such as ``"skill"``,
+                ``"skills"``, ``"benchmark"``, or ``"models"``.
+
+        Returns:
+            Plural collection path segment used by EnvArena.
+
+        Raises:
+            EnvArenaConfigurationError: If the kind is not supported by this
+                client.
+        """
+
         collection = _REGISTRY_COLLECTIONS.get(kind.strip().lower())
         if collection is None:
             supported = ", ".join(sorted(_COLLECTION_SINGULAR))
@@ -263,6 +381,21 @@ class EnvArenaClient(EnvClient):
         operation: str,
         page_size: int = 200,
     ) -> list[dict[str, Any]]:
+        """Fetch all pages from an EnvArena list endpoint.
+
+        Parameters:
+            path: Raw OpenAPI path relative to the configured base URL.
+            params: Optional query parameters merged into every page request.
+            operation: Operation label used for normalized errors.
+            page_size: Limit requested per page.
+
+        Returns:
+            Concatenated ``items`` list from every returned page.
+
+        Raises:
+            EnvArenaError: If any page request fails or returns non-object JSON.
+        """
+
         items: list[dict[str, Any]] = []
         offset = 0
         while True:
@@ -279,6 +412,15 @@ class EnvArenaClient(EnvClient):
 
     @staticmethod
     def _clean_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+        """Drop absent fields from a JSON request payload.
+
+        Parameters:
+            payload: Mapping containing optional values.
+
+        Returns:
+            New dictionary retaining only entries whose value is not ``None``.
+        """
+
         return {str(key): value for key, value in payload.items() if value is not None}
 
     def _version_body(
@@ -289,6 +431,18 @@ class EnvArenaClient(EnvClient):
         supersedes: str | None = None,
         storage_ref: str | Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """Build a registry version request body.
+
+        Parameters:
+            spec: Registry version spec copied into the request.
+            version: Optional version string for create operations.
+            supersedes: Optional previous version marker.
+            storage_ref: Optional storage reference accepted by EnvArena.
+
+        Returns:
+            JSON-serializable request body with unset optional fields removed.
+        """
+
         return self._clean_payload(
             {
                 "version": version,
@@ -299,6 +453,21 @@ class EnvArenaClient(EnvClient):
         )
 
     def _set_registry_version_status(self, kind: str, key: str, version: str, action: str) -> dict[str, Any]:
+        """Apply a lifecycle action to one registry version.
+
+        Parameters:
+            kind: Registry kind accepted by ``_registry_collection``.
+            key: Registry entity key.
+            version: Registry version string.
+            action: One of ``"publish"``, ``"deprecate"``, or ``"archive"``.
+
+        Returns:
+            Decoded EnvArena action response.
+
+        Raises:
+            EnvArenaConfigurationError: If ``action`` or ``kind`` is invalid.
+        """
+
         if action not in {"publish", "deprecate", "archive"}:
             raise EnvArenaConfigurationError(f"Unsupported registry version action {action!r}.")
         collection = self._registry_collection(kind)
@@ -319,6 +488,20 @@ class EnvArenaClient(EnvClient):
         created_by: str | None = None,
         limit: int = 200,
     ) -> list[dict[str, Any]]:
+        """List registry entities for one asset kind across all pages.
+
+        Parameters:
+            kind: Registry kind, singular or plural.
+            status: Optional entity status filter.
+            tag: Optional tag filters forwarded to EnvArena.
+            keys: Optional explicit entity keys, encoded as EnvArena expects.
+            created_by: Optional creator filter.
+            limit: Page size used for every paged request.
+
+        Returns:
+            List of registry entity dictionaries.
+        """
+
         collection = self._registry_collection(kind)
         params: dict[str, Any] = {"limit": limit}
         if status:
@@ -347,6 +530,24 @@ class EnvArenaClient(EnvClient):
         limit: int = 200,
         offset: int = 0,
     ) -> dict[str, Any]:
+        """Fetch one registry entity page without following pagination.
+
+        Parameters:
+            kind: Registry kind, singular or plural.
+            status: Optional entity status filter.
+            tag: Optional tag filters.
+            keys: Optional explicit entity keys.
+            created_by: Optional creator filter.
+            limit: Positive page size.
+            offset: Non-negative offset.
+
+        Returns:
+            Raw page response, including ``items`` and pagination metadata.
+
+        Raises:
+            EnvArenaConfigurationError: If ``limit`` or ``offset`` is invalid.
+        """
+
         if limit <= 0:
             raise EnvArenaConfigurationError("Registry page limit must be positive.")
         if offset < 0:
@@ -378,6 +579,20 @@ class EnvArenaClient(EnvClient):
         tags: Sequence[str] | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """Create a registry entity without creating a version.
+
+        Parameters:
+            kind: Registry kind, singular or plural.
+            key: Entity key.
+            name: Optional display name. Defaults to ``key``.
+            description: Optional human-readable description.
+            tags: Optional tag list.
+            metadata: Optional metadata; values are stringified for EnvArena.
+
+        Returns:
+            Decoded created entity response.
+        """
+
         collection = self._registry_collection(kind)
         body = self._clean_payload(
             {
@@ -397,6 +612,16 @@ class EnvArenaClient(EnvClient):
         )
 
     def get_registry_entity(self, kind: str, key: str) -> dict[str, Any]:
+        """Fetch one registry entity by kind and key.
+
+        Parameters:
+            kind: Registry kind, singular or plural.
+            key: Entity key.
+
+        Returns:
+            Decoded registry entity payload.
+        """
+
         collection = self._registry_collection(kind)
         return self._request_json(
             "GET",
@@ -414,6 +639,20 @@ class EnvArenaClient(EnvClient):
         tags: Sequence[str] | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """Patch mutable fields on a registry entity.
+
+        Parameters:
+            kind: Registry kind, singular or plural.
+            key: Entity key.
+            name: Optional replacement display name.
+            description: Optional replacement description.
+            tags: Optional replacement tag list.
+            metadata: Optional replacement metadata; values are stringified.
+
+        Returns:
+            Decoded updated entity payload.
+        """
+
         collection = self._registry_collection(kind)
         body = self._clean_payload(
             {
@@ -431,6 +670,16 @@ class EnvArenaClient(EnvClient):
         )
 
     def delete_registry_entity(self, kind: str, key: str) -> dict[str, Any]:
+        """Delete one registry entity by kind and key.
+
+        Parameters:
+            kind: Registry kind, singular or plural.
+            key: Entity key to delete.
+
+        Returns:
+            Empty mapping for EnvArena's successful 204 response.
+        """
+
         collection = self._registry_collection(kind)
         return self._request_json(
             "DELETE",
@@ -446,6 +695,17 @@ class EnvArenaClient(EnvClient):
         *,
         status: str | None = None,
     ) -> list[dict[str, Any]]:
+        """List versions under a single registry entity.
+
+        Parameters:
+            kind: Registry kind, singular or plural.
+            key: Entity key.
+            status: Optional version status filter.
+
+        Returns:
+            List of version payloads from EnvArena.
+        """
+
         collection = self._registry_collection(kind)
         params = {"status": status} if status else None
         return list(
@@ -466,6 +726,19 @@ class EnvArenaClient(EnvClient):
         created_by: str | None = None,
         limit: int = 200,
     ) -> list[dict[str, Any]]:
+        """List version summaries across entities of one registry kind.
+
+        Parameters:
+            kind: Registry kind, singular or plural.
+            status: Optional version status filter.
+            keys: Optional entity keys to include.
+            created_by: Optional creator filter.
+            limit: Page size used while following pagination.
+
+        Returns:
+            List of version summary dictionaries.
+        """
+
         collection = self._registry_collection(kind)
         params: dict[str, Any] = {"limit": limit}
         if status:
@@ -491,6 +764,20 @@ class EnvArenaClient(EnvClient):
         supersedes: str | None = None,
         storage_ref: str | None = None,
     ) -> dict[str, Any]:
+        """Create a registry version for an existing entity.
+
+        Parameters:
+            kind: Registry kind, singular or plural.
+            key: Entity key under which to create the version.
+            version: New version string.
+            spec: Version spec mapping.
+            supersedes: Optional previous version marker.
+            storage_ref: Optional backing storage reference.
+
+        Returns:
+            Decoded created version payload.
+        """
+
         collection = self._registry_collection(kind)
         body = self._version_body(version=version, spec=spec, supersedes=supersedes, storage_ref=storage_ref)
         return self._request_json(
@@ -502,6 +789,17 @@ class EnvArenaClient(EnvClient):
         )
 
     def get_registry_version(self, kind: str, key: str, version: str) -> dict[str, Any]:
+        """Fetch one registry version by kind, key, and version.
+
+        Parameters:
+            kind: Registry kind, singular or plural.
+            key: Entity key.
+            version: Version string.
+
+        Returns:
+            Decoded version payload.
+        """
+
         collection = self._registry_collection(kind)
         return self._request_json(
             "GET",
@@ -519,6 +817,20 @@ class EnvArenaClient(EnvClient):
         supersedes: str | None = None,
         storage_ref: str | None = None,
     ) -> dict[str, Any]:
+        """Patch the spec and optional lineage fields for one registry version.
+
+        Parameters:
+            kind: Registry kind, singular or plural.
+            key: Entity key.
+            version: Existing version string.
+            spec: Replacement version spec mapping.
+            supersedes: Optional replacement supersedes marker.
+            storage_ref: Optional replacement storage reference.
+
+        Returns:
+            Decoded updated version payload.
+        """
+
         collection = self._registry_collection(kind)
         body = self._version_body(spec=spec, supersedes=supersedes, storage_ref=storage_ref)
         return self._request_json(
@@ -529,15 +841,59 @@ class EnvArenaClient(EnvClient):
         )
 
     def publish_registry_version(self, kind: str, key: str, version: str) -> dict[str, Any]:
+        """Publish one registry version.
+
+        Parameters:
+            kind: Registry kind, singular or plural.
+            key: Entity key.
+            version: Version string to publish.
+
+        Returns:
+            Decoded EnvArena publish response.
+        """
+
         return self._set_registry_version_status(kind, key, version, "publish")
 
     def deprecate_registry_version(self, kind: str, key: str, version: str) -> dict[str, Any]:
+        """Deprecate one registry version.
+
+        Parameters:
+            kind: Registry kind, singular or plural.
+            key: Entity key.
+            version: Version string to deprecate.
+
+        Returns:
+            Decoded EnvArena deprecate response.
+        """
+
         return self._set_registry_version_status(kind, key, version, "deprecate")
 
     def archive_registry_version(self, kind: str, key: str, version: str) -> dict[str, Any]:
+        """Archive one registry version.
+
+        Parameters:
+            kind: Registry kind, singular or plural.
+            key: Entity key.
+            version: Version string to archive.
+
+        Returns:
+            Decoded EnvArena archive response.
+        """
+
         return self._set_registry_version_status(kind, key, version, "archive")
 
     def delete_registry_version(self, kind: str, key: str, version: str) -> dict[str, Any]:
+        """Delete one registry version by kind, key, and version.
+
+        Parameters:
+            kind: Registry kind, singular or plural.
+            key: Entity key.
+            version: Version string to delete.
+
+        Returns:
+            Empty mapping for EnvArena's successful 204 response.
+        """
+
         collection = self._registry_collection(kind)
         return self._request_json(
             "DELETE",
@@ -547,141 +903,599 @@ class EnvArenaClient(EnvClient):
         )
 
     def list_envs(self, **kwargs: Any) -> list[dict[str, Any]]:
+        """List Env registry entities.
+
+        Parameters:
+            **kwargs: Filters accepted by ``list_registry_entities`` such as
+                ``status``, ``tag``, ``keys``, ``created_by``, and ``limit``.
+
+        Returns:
+            List of Env entity payloads.
+        """
+
         return self.list_registry_entities("env", **kwargs)
 
     def create_env(self, **kwargs: Any) -> dict[str, Any]:
+        """Create an Env registry entity.
+
+        Parameters:
+            **kwargs: Entity fields accepted by ``create_registry_entity``,
+                including ``key``, ``name``, ``description``, ``tags``, and
+                ``metadata``.
+
+        Returns:
+            Decoded created Env entity payload.
+        """
+
         return self.create_registry_entity("env", **kwargs)
 
     def get_env(self, key: str) -> dict[str, Any]:
+        """Fetch an Env registry entity by key.
+
+        Parameters:
+            key: Env entity key.
+
+        Returns:
+            Decoded Env entity payload.
+        """
+
         return self.get_registry_entity("env", key)
 
     def update_env(self, key: str, **kwargs: Any) -> dict[str, Any]:
+        """Update an Env registry entity.
+
+        Parameters:
+            key: Env entity key.
+            **kwargs: Mutable entity fields accepted by
+                ``update_registry_entity``.
+
+        Returns:
+            Decoded updated Env entity payload.
+        """
+
         return self.update_registry_entity("env", key, **kwargs)
 
     def delete_env(self, key: str) -> dict[str, Any]:
+        """Delete an Env registry entity.
+
+        Parameters:
+            key: Env entity key.
+
+        Returns:
+            Empty mapping for EnvArena's successful 204 response.
+        """
+
         return self.delete_registry_entity("env", key)
 
     def list_env_versions(self, key: str, **kwargs: Any) -> list[dict[str, Any]]:
+        """List versions for an Env registry entity.
+
+        Parameters:
+            key: Env entity key.
+            **kwargs: Version filters accepted by ``list_registry_versions``,
+                such as ``status``.
+
+        Returns:
+            List of Env version payloads.
+        """
+
         return self.list_registry_versions("env", key, **kwargs)
 
     def create_env_version(self, key: str, **kwargs: Any) -> dict[str, Any]:
+        """Create a version for an Env registry entity.
+
+        Parameters:
+            key: Env entity key.
+            **kwargs: Version fields accepted by ``create_registry_version``,
+                including ``version``, ``spec``, ``supersedes``, and
+                ``storage_ref``.
+
+        Returns:
+            Decoded created Env version payload.
+        """
+
         return self.create_registry_version("env", key, **kwargs)
 
     def get_env_version(self, key: str, version: str) -> dict[str, Any]:
+        """Fetch an Env registry version.
+
+        Parameters:
+            key: Env entity key.
+            version: Env version string.
+
+        Returns:
+            Decoded Env version payload.
+        """
+
         return self.get_registry_version("env", key, version)
 
     def update_env_version(self, key: str, version: str, **kwargs: Any) -> dict[str, Any]:
+        """Update an Env registry version.
+
+        Parameters:
+            key: Env entity key.
+            version: Env version string.
+            **kwargs: Version fields accepted by ``update_registry_version``.
+
+        Returns:
+            Decoded updated Env version payload.
+        """
+
         return self.update_registry_version("env", key, version, **kwargs)
 
     def publish_env_version(self, key: str, version: str) -> dict[str, Any]:
+        """Publish an Env registry version.
+
+        Parameters:
+            key: Env entity key.
+            version: Env version string.
+
+        Returns:
+            Decoded EnvArena publish response.
+        """
+
         return self.publish_registry_version("env", key, version)
 
     def create_harness(self, **kwargs: Any) -> dict[str, Any]:
+        """Create a Harness registry entity.
+
+        Parameters:
+            **kwargs: Entity fields accepted by ``create_registry_entity``.
+
+        Returns:
+            Decoded created Harness entity payload.
+        """
+
         return self.create_registry_entity("harness", **kwargs)
 
     def get_harness(self, key: str) -> dict[str, Any]:
+        """Fetch a Harness registry entity by key.
+
+        Parameters:
+            key: Harness entity key.
+
+        Returns:
+            Decoded Harness entity payload.
+        """
+
         return self.get_registry_entity("harness", key)
 
     def update_harness(self, key: str, **kwargs: Any) -> dict[str, Any]:
+        """Update a Harness registry entity.
+
+        Parameters:
+            key: Harness entity key.
+            **kwargs: Mutable entity fields accepted by
+                ``update_registry_entity``.
+
+        Returns:
+            Decoded updated Harness entity payload.
+        """
+
         return self.update_registry_entity("harness", key, **kwargs)
 
     def delete_harness(self, key: str) -> dict[str, Any]:
+        """Delete a Harness registry entity.
+
+        Parameters:
+            key: Harness entity key.
+
+        Returns:
+            Empty mapping for EnvArena's successful 204 response.
+        """
+
         return self.delete_registry_entity("harness", key)
 
     def create_harness_version(self, key: str, **kwargs: Any) -> dict[str, Any]:
+        """Create a version for a Harness registry entity.
+
+        Parameters:
+            key: Harness entity key.
+            **kwargs: Version fields accepted by ``create_registry_version``.
+
+        Returns:
+            Decoded created Harness version payload.
+        """
+
         return self.create_registry_version("harness", key, **kwargs)
 
     def get_harness_version(self, key: str, version: str) -> dict[str, Any]:
+        """Fetch a Harness registry version.
+
+        Parameters:
+            key: Harness entity key.
+            version: Harness version string.
+
+        Returns:
+            Decoded Harness version payload.
+        """
+
         return self.get_registry_version("harness", key, version)
 
     def update_harness_version(self, key: str, version: str, **kwargs: Any) -> dict[str, Any]:
+        """Update a Harness registry version.
+
+        Parameters:
+            key: Harness entity key.
+            version: Harness version string.
+            **kwargs: Version fields accepted by ``update_registry_version``.
+
+        Returns:
+            Decoded updated Harness version payload.
+        """
+
         return self.update_registry_version("harness", key, version, **kwargs)
 
     def publish_harness_version(self, key: str, version: str) -> dict[str, Any]:
+        """Publish a Harness registry version.
+
+        Parameters:
+            key: Harness entity key.
+            version: Harness version string.
+
+        Returns:
+            Decoded EnvArena publish response.
+        """
+
         return self.publish_registry_version("harness", key, version)
 
     def list_rewards(self, **kwargs: Any) -> list[dict[str, Any]]:
+        """List Reward registry entities.
+
+        Parameters:
+            **kwargs: Filters accepted by ``list_registry_entities``.
+
+        Returns:
+            List of Reward entity payloads.
+        """
+
         return self.list_registry_entities("reward", **kwargs)
 
     def create_reward(self, **kwargs: Any) -> dict[str, Any]:
+        """Create a Reward registry entity.
+
+        Parameters:
+            **kwargs: Entity fields accepted by ``create_registry_entity``.
+
+        Returns:
+            Decoded created Reward entity payload.
+        """
+
         return self.create_registry_entity("reward", **kwargs)
 
     def get_reward(self, key: str) -> dict[str, Any]:
+        """Fetch a Reward registry entity by key.
+
+        Parameters:
+            key: Reward entity key.
+
+        Returns:
+            Decoded Reward entity payload.
+        """
+
         return self.get_registry_entity("reward", key)
 
     def update_reward(self, key: str, **kwargs: Any) -> dict[str, Any]:
+        """Update a Reward registry entity.
+
+        Parameters:
+            key: Reward entity key.
+            **kwargs: Mutable entity fields accepted by
+                ``update_registry_entity``.
+
+        Returns:
+            Decoded updated Reward entity payload.
+        """
+
         return self.update_registry_entity("reward", key, **kwargs)
 
     def delete_reward(self, key: str) -> dict[str, Any]:
+        """Delete a Reward registry entity.
+
+        Parameters:
+            key: Reward entity key.
+
+        Returns:
+            Empty mapping for EnvArena's successful 204 response.
+        """
+
         return self.delete_registry_entity("reward", key)
 
     def list_reward_versions(self, key: str, **kwargs: Any) -> list[dict[str, Any]]:
+        """List versions for a Reward registry entity.
+
+        Parameters:
+            key: Reward entity key.
+            **kwargs: Version filters accepted by ``list_registry_versions``.
+
+        Returns:
+            List of Reward version payloads.
+        """
+
         return self.list_registry_versions("reward", key, **kwargs)
 
     def create_reward_version(self, key: str, **kwargs: Any) -> dict[str, Any]:
+        """Create a version for a Reward registry entity.
+
+        Parameters:
+            key: Reward entity key.
+            **kwargs: Version fields accepted by ``create_registry_version``.
+
+        Returns:
+            Decoded created Reward version payload.
+        """
+
         return self.create_registry_version("reward", key, **kwargs)
 
     def get_reward_version(self, key: str, version: str) -> dict[str, Any]:
+        """Fetch a Reward registry version.
+
+        Parameters:
+            key: Reward entity key.
+            version: Reward version string.
+
+        Returns:
+            Decoded Reward version payload.
+        """
+
         return self.get_registry_version("reward", key, version)
 
     def update_reward_version(self, key: str, version: str, **kwargs: Any) -> dict[str, Any]:
+        """Update a Reward registry version.
+
+        Parameters:
+            key: Reward entity key.
+            version: Reward version string.
+            **kwargs: Version fields accepted by ``update_registry_version``.
+
+        Returns:
+            Decoded updated Reward version payload.
+        """
+
         return self.update_registry_version("reward", key, version, **kwargs)
 
     def publish_reward_version(self, key: str, version: str) -> dict[str, Any]:
+        """Publish a Reward registry version.
+
+        Parameters:
+            key: Reward entity key.
+            version: Reward version string.
+
+        Returns:
+            Decoded EnvArena publish response.
+        """
+
         return self.publish_registry_version("reward", key, version)
 
     def create_benchmark(self, **kwargs: Any) -> dict[str, Any]:
+        """Create a Benchmark registry entity.
+
+        Parameters:
+            **kwargs: Entity fields accepted by ``create_registry_entity``.
+
+        Returns:
+            Decoded created Benchmark entity payload.
+        """
+
         return self.create_registry_entity("benchmark", **kwargs)
 
     def get_benchmark(self, key: str) -> dict[str, Any]:
+        """Fetch a Benchmark registry entity by key.
+
+        Parameters:
+            key: Benchmark entity key.
+
+        Returns:
+            Decoded Benchmark entity payload.
+        """
+
         return self.get_registry_entity("benchmark", key)
 
     def update_benchmark(self, key: str, **kwargs: Any) -> dict[str, Any]:
+        """Update a Benchmark registry entity.
+
+        Parameters:
+            key: Benchmark entity key.
+            **kwargs: Mutable entity fields accepted by
+                ``update_registry_entity``.
+
+        Returns:
+            Decoded updated Benchmark entity payload.
+        """
+
         return self.update_registry_entity("benchmark", key, **kwargs)
 
     def delete_benchmark(self, key: str) -> dict[str, Any]:
+        """Delete a Benchmark registry entity.
+
+        Parameters:
+            key: Benchmark entity key.
+
+        Returns:
+            Empty mapping for EnvArena's successful 204 response.
+        """
+
         return self.delete_registry_entity("benchmark", key)
 
     def create_benchmark_version(self, key: str, **kwargs: Any) -> dict[str, Any]:
+        """Create a version for a Benchmark registry entity.
+
+        Parameters:
+            key: Benchmark entity key.
+            **kwargs: Version fields accepted by ``create_registry_version``.
+
+        Returns:
+            Decoded created Benchmark version payload.
+        """
+
         return self.create_registry_version("benchmark", key, **kwargs)
 
     def get_benchmark_version(self, key: str, version: str) -> dict[str, Any]:
+        """Fetch a Benchmark registry version.
+
+        Parameters:
+            key: Benchmark entity key.
+            version: Benchmark version string.
+
+        Returns:
+            Decoded Benchmark version payload.
+        """
+
         return self.get_registry_version("benchmark", key, version)
 
     def update_benchmark_version(self, key: str, version: str, **kwargs: Any) -> dict[str, Any]:
+        """Update a Benchmark registry version.
+
+        Parameters:
+            key: Benchmark entity key.
+            version: Benchmark version string.
+            **kwargs: Version fields accepted by ``update_registry_version``.
+
+        Returns:
+            Decoded updated Benchmark version payload.
+        """
+
         return self.update_registry_version("benchmark", key, version, **kwargs)
 
     def publish_benchmark_version(self, key: str, version: str) -> dict[str, Any]:
+        """Publish a Benchmark registry version.
+
+        Parameters:
+            key: Benchmark entity key.
+            version: Benchmark version string.
+
+        Returns:
+            Decoded EnvArena publish response.
+        """
+
         return self.publish_registry_version("benchmark", key, version)
 
     def list_model_entities(self, **kwargs: Any) -> list[dict[str, Any]]:
+        """List Model registry entities.
+
+        Parameters:
+            **kwargs: Filters accepted by ``list_registry_entities``.
+
+        Returns:
+            List of Model entity payloads.
+        """
+
         return self.list_registry_entities("model", **kwargs)
 
     def create_model(self, **kwargs: Any) -> dict[str, Any]:
+        """Create a Model registry entity.
+
+        Parameters:
+            **kwargs: Entity fields accepted by ``create_registry_entity``.
+
+        Returns:
+            Decoded created Model entity payload.
+        """
+
         return self.create_registry_entity("model", **kwargs)
 
     def get_model(self, key: str) -> dict[str, Any]:
+        """Fetch a Model registry entity by key.
+
+        Parameters:
+            key: Model entity key.
+
+        Returns:
+            Decoded Model entity payload.
+        """
+
         return self.get_registry_entity("model", key)
 
     def update_model(self, key: str, **kwargs: Any) -> dict[str, Any]:
+        """Update a Model registry entity.
+
+        Parameters:
+            key: Model entity key.
+            **kwargs: Mutable entity fields accepted by
+                ``update_registry_entity``.
+
+        Returns:
+            Decoded updated Model entity payload.
+        """
+
         return self.update_registry_entity("model", key, **kwargs)
 
     def delete_model(self, key: str) -> dict[str, Any]:
+        """Delete a Model registry entity.
+
+        Parameters:
+            key: Model entity key.
+
+        Returns:
+            Empty mapping for EnvArena's successful 204 response.
+        """
+
         return self.delete_registry_entity("model", key)
 
     def list_model_versions(self, key: str, **kwargs: Any) -> list[dict[str, Any]]:
+        """List versions for a Model registry entity.
+
+        Parameters:
+            key: Model entity key.
+            **kwargs: Version filters accepted by ``list_registry_versions``.
+
+        Returns:
+            List of Model version payloads.
+        """
+
         return self.list_registry_versions("model", key, **kwargs)
 
     def create_model_version(self, key: str, **kwargs: Any) -> dict[str, Any]:
+        """Create a version for a Model registry entity.
+
+        Parameters:
+            key: Model entity key.
+            **kwargs: Version fields accepted by ``create_registry_version``.
+
+        Returns:
+            Decoded created Model version payload.
+        """
+
         return self.create_registry_version("model", key, **kwargs)
 
     def get_model_version(self, key: str, version: str) -> dict[str, Any]:
+        """Fetch a Model registry version.
+
+        Parameters:
+            key: Model entity key.
+            version: Model version string.
+
+        Returns:
+            Decoded Model version payload.
+        """
+
         return self.get_registry_version("model", key, version)
 
     def update_model_version(self, key: str, version: str, **kwargs: Any) -> dict[str, Any]:
+        """Update a Model registry version.
+
+        Parameters:
+            key: Model entity key.
+            version: Model version string.
+            **kwargs: Version fields accepted by ``update_registry_version``.
+
+        Returns:
+            Decoded updated Model version payload.
+        """
+
         return self.update_registry_version("model", key, version, **kwargs)
 
     def publish_model_version(self, key: str, version: str) -> dict[str, Any]:
+        """Publish a Model registry version.
+
+        Parameters:
+            key: Model entity key.
+            version: Model version string.
+
+        Returns:
+            Decoded EnvArena publish response.
+        """
+
         return self.publish_registry_version("model", key, version)
 
     def register_agent_model(
@@ -703,6 +1517,35 @@ class EnvArenaClient(EnvClient):
         env: Mapping[str, str] | None = None,
         publish: bool = True,
     ) -> dict[str, Any]:
+        """Register a gateway model as an EnvArena agent model version.
+
+        Parameters:
+            gateway_model_id: Model ID already known to the EnvArena gateway.
+                The backend injects the environment expected by agent runtimes.
+            key: Optional registry model key. A derived key is used when empty.
+            version: Registry model version to create.
+            name: Optional registry display name.
+            description: Optional registry description.
+            tags: Optional registry tags.
+            metadata: Optional registry metadata; values are stringified.
+            supersedes: Optional previous version marker.
+            storage_ref: Optional storage reference.
+            base_url: Optional gateway base URL. Defaults to the configured
+                EnvArena LLM gateway URL.
+            api_key: Optional API key. Defaults to the EnvArena API token.
+            profile: Agent runtime profile enum or string.
+            parameters: Optional model parameters recorded in the registry.
+            env: Optional environment variables recorded in the model spec.
+            publish: Whether to publish the new version immediately.
+
+        Returns:
+            Decoded created model registry payload.
+
+        Raises:
+            EnvArenaConfigurationError: If required IDs are empty or the
+                profile is unsupported.
+        """
+
         gateway_model_id = gateway_model_id.strip()
         if not gateway_model_id:
             raise EnvArenaConfigurationError("register_agent_model requires a non-empty gateway_model_id.")
@@ -768,60 +1611,246 @@ class EnvArenaClient(EnvClient):
         )
 
     def create_skill(self, **kwargs: Any) -> dict[str, Any]:
+        """Create a Skill registry entity.
+
+        Parameters:
+            **kwargs: Entity fields accepted by ``create_registry_entity``.
+
+        Returns:
+            Decoded created Skill entity payload.
+        """
+
         return self.create_registry_entity("skill", **kwargs)
 
     def get_skill(self, key: str) -> dict[str, Any]:
+        """Fetch a Skill registry entity by key.
+
+        Parameters:
+            key: Skill entity key.
+
+        Returns:
+            Decoded Skill entity payload.
+        """
+
         return self.get_registry_entity("skill", key)
 
     def update_skill(self, key: str, **kwargs: Any) -> dict[str, Any]:
+        """Update a Skill registry entity.
+
+        Parameters:
+            key: Skill entity key.
+            **kwargs: Mutable entity fields accepted by
+                ``update_registry_entity``.
+
+        Returns:
+            Decoded updated Skill entity payload.
+        """
+
         return self.update_registry_entity("skill", key, **kwargs)
 
     def delete_skill(self, key: str) -> dict[str, Any]:
+        """Delete a Skill registry entity.
+
+        Parameters:
+            key: Skill entity key.
+
+        Returns:
+            Empty mapping for EnvArena's successful 204 response.
+        """
+
         return self.delete_registry_entity("skill", key)
 
     def create_skill_version(self, key: str, **kwargs: Any) -> dict[str, Any]:
+        """Create a version for a Skill registry entity.
+
+        Parameters:
+            key: Skill entity key.
+            **kwargs: Version fields accepted by ``create_registry_version``.
+
+        Returns:
+            Decoded created Skill version payload.
+        """
+
         return self.create_registry_version("skill", key, **kwargs)
 
     def get_skill_version(self, key: str, version: str) -> dict[str, Any]:
+        """Fetch a Skill registry version.
+
+        Parameters:
+            key: Skill entity key.
+            version: Skill version string.
+
+        Returns:
+            Decoded Skill version payload.
+        """
+
         return self.get_registry_version("skill", key, version)
 
     def update_skill_version(self, key: str, version: str, **kwargs: Any) -> dict[str, Any]:
+        """Update a Skill registry version.
+
+        Parameters:
+            key: Skill entity key.
+            version: Skill version string.
+            **kwargs: Version fields accepted by ``update_registry_version``.
+
+        Returns:
+            Decoded updated Skill version payload.
+        """
+
         return self.update_registry_version("skill", key, version, **kwargs)
 
     def publish_skill_version(self, key: str, version: str) -> dict[str, Any]:
+        """Publish a Skill registry version.
+
+        Parameters:
+            key: Skill entity key.
+            version: Skill version string.
+
+        Returns:
+            Decoded EnvArena publish response.
+        """
+
         return self.publish_registry_version("skill", key, version)
 
     def list_tools(self, **kwargs: Any) -> list[dict[str, Any]]:
+        """List Tool registry entities.
+
+        Parameters:
+            **kwargs: Filters accepted by ``list_registry_entities``.
+
+        Returns:
+            List of Tool entity payloads.
+        """
+
         return self.list_registry_entities("tool", **kwargs)
 
     def create_tool(self, **kwargs: Any) -> dict[str, Any]:
+        """Create a Tool registry entity.
+
+        Parameters:
+            **kwargs: Entity fields accepted by ``create_registry_entity``.
+
+        Returns:
+            Decoded created Tool entity payload.
+        """
+
         return self.create_registry_entity("tool", **kwargs)
 
     def get_tool(self, key: str) -> dict[str, Any]:
+        """Fetch a Tool registry entity by key.
+
+        Parameters:
+            key: Tool entity key.
+
+        Returns:
+            Decoded Tool entity payload.
+        """
+
         return self.get_registry_entity("tool", key)
 
     def update_tool(self, key: str, **kwargs: Any) -> dict[str, Any]:
+        """Update a Tool registry entity.
+
+        Parameters:
+            key: Tool entity key.
+            **kwargs: Mutable entity fields accepted by
+                ``update_registry_entity``.
+
+        Returns:
+            Decoded updated Tool entity payload.
+        """
+
         return self.update_registry_entity("tool", key, **kwargs)
 
     def delete_tool(self, key: str) -> dict[str, Any]:
+        """Delete a Tool registry entity.
+
+        Parameters:
+            key: Tool entity key.
+
+        Returns:
+            Empty mapping for EnvArena's successful 204 response.
+        """
+
         return self.delete_registry_entity("tool", key)
 
     def list_tool_versions(self, key: str, **kwargs: Any) -> list[dict[str, Any]]:
+        """List versions for a Tool registry entity.
+
+        Parameters:
+            key: Tool entity key.
+            **kwargs: Version filters accepted by ``list_registry_versions``.
+
+        Returns:
+            List of Tool version payloads.
+        """
+
         return self.list_registry_versions("tool", key, **kwargs)
 
     def create_tool_version(self, key: str, **kwargs: Any) -> dict[str, Any]:
+        """Create a version for a Tool registry entity.
+
+        Parameters:
+            key: Tool entity key.
+            **kwargs: Version fields accepted by ``create_registry_version``.
+
+        Returns:
+            Decoded created Tool version payload.
+        """
+
         return self.create_registry_version("tool", key, **kwargs)
 
     def get_tool_version(self, key: str, version: str) -> dict[str, Any]:
+        """Fetch a Tool registry version.
+
+        Parameters:
+            key: Tool entity key.
+            version: Tool version string.
+
+        Returns:
+            Decoded Tool version payload.
+        """
+
         return self.get_registry_version("tool", key, version)
 
     def update_tool_version(self, key: str, version: str, **kwargs: Any) -> dict[str, Any]:
+        """Update a Tool registry version.
+
+        Parameters:
+            key: Tool entity key.
+            version: Tool version string.
+            **kwargs: Version fields accepted by ``update_registry_version``.
+
+        Returns:
+            Decoded updated Tool version payload.
+        """
+
         return self.update_registry_version("tool", key, version, **kwargs)
 
     def publish_tool_version(self, key: str, version: str) -> dict[str, Any]:
+        """Publish a Tool registry version.
+
+        Parameters:
+            key: Tool entity key.
+            version: Tool version string.
+
+        Returns:
+            Decoded EnvArena publish response.
+        """
+
         return self.publish_registry_version("tool", key, version)
 
     def list_streams(self, *, status: str | None = None) -> list[dict[str, Any]]:
+        """List EnvArena stream definitions.
+
+        Parameters:
+            status: Optional stream status filter forwarded to EnvArena.
+
+        Returns:
+            List of stream payloads from the ``items`` field.
+        """
+
         params = {"status": status} if status else None
         return list(
             self._request_json(
@@ -844,6 +1873,22 @@ class EnvArenaClient(EnvClient):
         default_reward_ref: EnvArenaVersionRef | Mapping[str, Any] | str | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """Create an EnvArena stream with optional defaults and selector.
+
+        Parameters:
+            name: Human-readable stream name.
+            task: Task family/type associated with the stream.
+            stream_id: Optional caller-specified stream ID.
+            description: Optional stream description.
+            selector: Optional dataset selector stored on the stream.
+            default_harness_ref: Optional default Harness registry ref.
+            default_reward_ref: Optional default Reward registry ref.
+            metadata: Optional stream metadata; values are stringified.
+
+        Returns:
+            Decoded created stream payload.
+        """
+
         body = self._clean_payload(
             {
                 "stream_id": stream_id,
@@ -869,6 +1914,16 @@ class EnvArenaClient(EnvClient):
         )
 
     def get_stream(self, stream_id: str) -> dict[str, Any]:
+        """Fetch one EnvArena stream by ID.
+
+        Parameters:
+            stream_id: Existing EnvArena stream ID.
+
+        Returns:
+            Decoded stream payload. Backends may return either a raw stream or
+            a wrapper containing a ``stream`` field.
+        """
+
         return self._request_json(
             "GET",
             f"/openapi/v1/streams/{quote(stream_id, safe='')}",
@@ -888,6 +1943,23 @@ class EnvArenaClient(EnvClient):
         status: str | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """Update mutable fields on an EnvArena stream.
+
+        Parameters:
+            stream_id: Existing EnvArena stream ID.
+            name: Optional replacement display name.
+            description: Optional replacement description.
+            task: Optional replacement task family/type.
+            selector: Optional replacement dataset selector.
+            default_harness_ref: Optional replacement default Harness ref.
+            default_reward_ref: Optional replacement default Reward ref.
+            status: Optional replacement stream status.
+            metadata: Optional replacement metadata; values are stringified.
+
+        Returns:
+            Decoded updated stream payload.
+        """
+
         body = self._clean_payload(
             {
                 "name": name,
@@ -912,6 +1984,15 @@ class EnvArenaClient(EnvClient):
         )
 
     def archive_stream(self, stream_id: str) -> dict[str, Any]:
+        """Archive one EnvArena stream.
+
+        Parameters:
+            stream_id: Existing EnvArena stream ID.
+
+        Returns:
+            Decoded EnvArena archive response.
+        """
+
         return self._request_json(
             "POST",
             f"/openapi/v1/streams/{quote(stream_id, safe='')}/archive",
@@ -919,6 +2000,15 @@ class EnvArenaClient(EnvClient):
         )
 
     def delete_stream(self, stream_id: str) -> dict[str, Any]:
+        """Delete one EnvArena stream.
+
+        Parameters:
+            stream_id: Existing EnvArena stream ID.
+
+        Returns:
+            Empty mapping for EnvArena's successful 204 response.
+        """
+
         return self._request_json(
             "DELETE",
             f"/openapi/v1/streams/{quote(stream_id, safe='')}",
@@ -934,6 +2024,20 @@ class EnvArenaClient(EnvClient):
         limit: int = 100,
         offset: int = 0,
     ) -> dict[str, Any]:
+        """Select a page of data IDs from a stream dataset.
+
+        Parameters:
+            stream_id: Existing EnvArena stream ID.
+            selector: Optional selector overriding or refining stream defaults.
+            limit: Maximum number of dataset items to return.
+            offset: Dataset offset for pagination.
+
+        Returns:
+            Selection payload with ``data_ids``, ``items``, and pagination
+            fields. Logical fork streams stored by this client are served from
+            their embedded metadata without calling EnvArena's selector API.
+        """
+
         stream = self._stream_object(self.get_stream(stream_id))
         fork_items = self._fork_stream_items_from_stream(stream)
         if fork_items is not None:
@@ -968,6 +2072,35 @@ class EnvArenaClient(EnvClient):
         selector: Mapping[str, Any] | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """Create a logical fork stream record from selected source items.
+
+        This method predates direct batch submission and is retained for
+        compatibility. It stores fork item metadata on a new stream record
+        rather than asking EnvArena to physically duplicate data.
+
+        Parameters:
+            source_stream_id: Existing source stream ID.
+            items: Fork item specs. Each item must include ``data_id`` or
+                ``source_data_id`` and a Harness ref via ``harness_ref`` or
+                ``harness``; optional ``reward_ref``/``reward`` overrides are
+                copied into fork metadata.
+            stream_id: Optional destination stream ID.
+            name: Optional destination stream name.
+            description: Optional destination description.
+            default_harness_ref: Optional default Harness for the fork.
+            default_reward_ref: Optional default Reward for the fork.
+            selector: Optional selector used when resolving source data.
+            metadata: Optional metadata merged into the fork stream.
+
+        Returns:
+            Created stream payload augmented with ``source_stream_id`` and
+            normalized ``items``.
+
+        Raises:
+            EnvArenaConfigurationError: If no items are provided or an item
+                lacks a source data ID or Harness ref.
+        """
+
         if not items:
             raise EnvArenaConfigurationError("fork_stream requires at least one item.")
 
@@ -1049,6 +2182,19 @@ class EnvArenaClient(EnvClient):
         all_experiments: bool = False,
         limit: int = 100,
     ) -> list[dict[str, Any]]:
+        """List stream task rows for a stream and optional experiment filter.
+
+        Parameters:
+            stream_id: Existing EnvArena stream ID.
+            status: Task status filter. ``"ALL"`` requests all statuses.
+            experiment: Optional experiment name filter.
+            all_experiments: Whether to ignore the default experiment scope.
+            limit: Page size used while following pagination.
+
+        Returns:
+            List of stream task row payloads.
+        """
+
         params: dict[str, Any] = {
             "status": status,
             "limit": limit,
@@ -1064,6 +2210,16 @@ class EnvArenaClient(EnvClient):
         )
 
     def get_stream_task(self, stream_id: str, task_id: str) -> dict[str, Any]:
+        """Fetch one stream task row by stream ID and task ID.
+
+        Parameters:
+            stream_id: Existing EnvArena stream ID.
+            task_id: Task ID returned by a Job or stream task listing.
+
+        Returns:
+            Decoded stream task payload, typically including ``data_id``.
+        """
+
         return self._request_json(
             "GET",
             f"/openapi/v1/streams/{quote(stream_id, safe='')}/tasks/{quote(task_id, safe='')}",
@@ -1077,6 +2233,17 @@ class EnvArenaClient(EnvClient):
         experiment: str | None = None,
         all_experiments: bool = False,
     ) -> dict[str, Any]:
+        """Fetch aggregate task statistics for one stream.
+
+        Parameters:
+            stream_id: Existing EnvArena stream ID.
+            experiment: Optional experiment name filter.
+            all_experiments: Whether to include tasks from all experiments.
+
+        Returns:
+            Decoded EnvArena stream statistics payload.
+        """
+
         params: dict[str, Any] = {"all_experiments": str(all_experiments).lower()}
         if experiment is not None:
             params["experiment"] = experiment
@@ -1331,7 +2498,10 @@ class EnvArenaClient(EnvClient):
         """List EnvArena model services.
 
         Returns:
-            List of model service objects from ``/model-services``.
+            List of model service objects from ``/model-services``. Each item
+            is returned as raw backend JSON and may include service ID, served
+            model name, status, and instance summaries depending on backend
+            version.
         """
 
         return list(
@@ -1463,6 +2633,13 @@ class EnvArenaClient(EnvClient):
         EnvArena API servers and storage are not necessarily co-located, so a
         catalog model can exist even when its filesystem config.json is not
         readable by the API server.
+
+        Parameters:
+            model_id: Catalog/base model identifier.
+
+        Returns:
+            Decoded config payload returned by EnvArena's catalog diagnostics
+            endpoint.
         """
 
         return self._unwrap_generated(
@@ -2164,8 +3341,8 @@ class EnvArenaClient(EnvClient):
                 "experience", "content": "Prefer editing the failing test
                 first."}]``. Existing skill JSON example: ``[{"data_id":
                 "env:repo__issue-1@1.0.0", "type": "ref", "ref":
-                "skill-a@1.0.0"}]``. When provided, every selected data ID must
-                have exactly one skill binding.
+                "skill-a@1.0.0"}]``. Bindings may cover any subset of selected
+                data IDs; unbound data uses the stream/default harness.
             rewards: Optional per-data reward list. JSON list example:
                 ``[{"data_id": "env:repo__issue-1@1.0.0", "ref":
                 "reward-a@1.0.0"}]``. Data IDs without an item use the
@@ -2359,6 +3536,7 @@ class EnvArenaClient(EnvClient):
             **dict(request.metadata),
             "source": request.metadata.get("source", "eval"),
             "stream_eval_mode": "stream",
+            "stream_id": stream_id,
             "source_stream_id": source_stream_id,
         }
         payload = self.launch_stream_batch_task(
@@ -3706,12 +4884,14 @@ class EnvArenaClient(EnvClient):
                 ``type="experience"`` uses ``content`` for experience
                 text/config. ``type="ref"`` uses ``ref`` for an existing skill
                 registry ref. Each selected data ID may appear at most once.
-            data_ids: Selected data IDs. Skill bindings must target these IDs.
+            data_ids: Selected data IDs. Skill bindings must target these IDs
+                but do not need to cover all of them.
 
         Returns:
             Tuple of ``(experiences_by_data_id, skill_refs_by_data_id)``.
             Experience items create skill/harness versions; ref items create
-            task-level harness overrides.
+            task-level harness overrides. Data IDs without a binding keep the
+            stream/default harness.
         """
 
         selected = {str(data_id) for data_id in data_ids}
@@ -3737,13 +4917,6 @@ class EnvArenaClient(EnvClient):
                 self._resolve_registry_ref("skills", self._stream_skill_ref_payload(skill), "skill")
             ]
 
-        if skills:
-            covered = set(experiences_by_data_id) | set(refs_by_data_id)
-            missing = [data_id for data_id in data_ids if data_id not in covered]
-            if missing:
-                raise EnvArenaConfigurationError(
-                    "skills are missing bindings for selected data_ids: " + ", ".join(missing)
-                )
         return experiences_by_data_id, refs_by_data_id
 
     def _stream_skill_item_type(self, skill: Mapping[str, Any]) -> str:
@@ -4074,8 +5247,12 @@ class EnvArenaClient(EnvClient):
     def list_models(self, *, disable_stream: bool = True) -> list[dict[str, Any]]:
         """List model routes configured in EnvArena.
 
-        ``disable_stream`` excludes dynamically registered stream model names,
-        which keeps the result suitable for selecting a stable RSI model route.
+        Parameters:
+            disable_stream: When true, excludes dynamically registered stream
+                model routes so callers see only stable selectable routes.
+
+        Returns:
+            List of model route payloads from EnvArena's LLM model endpoint.
         """
 
         payload = self._unwrap_generated(
@@ -4089,6 +5266,13 @@ class EnvArenaClient(EnvClient):
         return list(payload.get("items", []))
 
     def list_online_harnesses(self) -> list[str]:
+        """List online harness names exposed by EnvArena.
+
+        Returns:
+            Harness name strings from the online-harness endpoint. These are
+            runtime harness identifiers, not Harness registry version refs.
+        """
+
         payload = self._unwrap_generated(
             get_openapi_v1_online_harnesses.sync_detailed(client=self._client),
             "list online harnesses",
@@ -4097,21 +5281,78 @@ class EnvArenaClient(EnvClient):
         return list(payload.get("harness", []))
 
     def list_benchmarks(self, *, tag: list[str] | None = None) -> list[dict[str, Any]]:
+        """List benchmark registry entities through the raw registry endpoint.
+
+        Parameters:
+            tag: Optional tag filters passed as query parameters.
+
+        Returns:
+            List of Benchmark entity payloads.
+        """
+
         return self._list_registry("benchmarks", tag=tag)
 
     def list_skills(self, *, tag: list[str] | None = None) -> list[dict[str, Any]]:
+        """List skill registry entities through the raw registry endpoint.
+
+        Parameters:
+            tag: Optional tag filters passed as query parameters.
+
+        Returns:
+            List of Skill entity payloads.
+        """
+
         return self._list_registry("skills", tag=tag)
 
     def list_harnesses(self, *, tag: list[str] | None = None) -> list[dict[str, Any]]:
+        """List harness registry entities through the raw registry endpoint.
+
+        Parameters:
+            tag: Optional tag filters passed as query parameters.
+
+        Returns:
+            List of Harness entity payloads.
+        """
+
         return self._list_registry("harnesses", tag=tag)
 
     def list_benchmark_versions(self, key: str, *, status: str = "PUBLISHED") -> list[dict[str, Any]]:
+        """List benchmark versions for one benchmark key.
+
+        Parameters:
+            key: Benchmark entity key.
+            status: Version status filter, defaulting to published versions.
+
+        Returns:
+            List of Benchmark version payloads.
+        """
+
         return self._list_versions("benchmarks", key, status=status)
 
     def list_skill_versions(self, key: str, *, status: str = "PUBLISHED") -> list[dict[str, Any]]:
+        """List skill versions for one skill key.
+
+        Parameters:
+            key: Skill entity key.
+            status: Version status filter, defaulting to published versions.
+
+        Returns:
+            List of Skill version payloads.
+        """
+
         return self._list_versions("skills", key, status=status)
 
     def list_harness_versions(self, key: str, *, status: str = "PUBLISHED") -> list[dict[str, Any]]:
+        """List harness versions for one harness key.
+
+        Parameters:
+            key: Harness entity key.
+            status: Version status filter, defaulting to published versions.
+
+        Returns:
+            List of Harness version payloads.
+        """
+
         return self._list_versions("harnesses", key, status=status)
 
     def _submit_benchmark_job(
@@ -4131,6 +5372,33 @@ class EnvArenaClient(EnvClient):
         assets: Mapping[str, Any] | None = None,
         job_config: Mapping[str, Any] | None = None,
     ) -> EvalJob:
+        """Submit a benchmark-style EnvArena job and normalize the response.
+
+        Parameters:
+            benchmark_ref: Published Benchmark version ref.
+            harness_ref: Published Harness version ref.
+            model_name: Optional runtime model name for inline model execution.
+            model_ref: Optional published Model version ref. Either
+                ``model_name`` or ``model_ref`` is required.
+            job_id: Optional caller-provided EnvArena job ID.
+            sample_numbers: Number of samples per benchmark environment.
+            concurrency_policy: Optional max parallelism/retry policy mapping.
+            tags: Optional job tags.
+            metadata: Optional job metadata; values are stringified.
+            model_parameters: Optional inline model parameter overrides.
+            model_env: Optional inline model environment overrides.
+            assets: Optional already-resolved asset refs copied into EvalJob.
+            job_config: Optional normalized job config copied into EvalJob.
+
+        Returns:
+            Platform-neutral ``EvalJob`` containing IDs, refs, task IDs, raw
+            EnvArena payload, and resolved assets.
+
+        Raises:
+            EnvArenaConfigurationError: If neither runtime model name nor
+                model registry ref is available.
+        """
+
         benchmark, harness = self._as_version_ref(benchmark_ref), self._as_version_ref(harness_ref)
         registry_model = self._as_version_ref(model_ref) if model_ref is not None else None
         inline_model_name = (model_name or "").strip()
@@ -4191,6 +5459,17 @@ class EnvArenaClient(EnvClient):
 
     @staticmethod
     def _concurrency_policy(concurrency_policy: Mapping[str, Any] | None) -> ConcurrencyPolicy | Any:
+        """Convert a plain concurrency mapping into the generated SDK model.
+
+        Parameters:
+            concurrency_policy: Optional mapping with ``max_parallel``,
+                ``max_retries``, and ``retry_backoff_seconds`` fields.
+
+        Returns:
+            ``ConcurrencyPolicy`` for generated requests, or ``UNSET`` when no
+            policy is provided.
+        """
+
         if concurrency_policy is None:
             return UNSET
         return ConcurrencyPolicy(
@@ -4200,6 +5479,20 @@ class EnvArenaClient(EnvClient):
         )
 
     def submit_eval(self, request: EvalRequest) -> EvalJob:
+        """Submit the generic benchmark evaluation request to EnvArena.
+
+        Parameters:
+            request: Platform-neutral ``EvalRequest`` with model, benchmark,
+                harness, optional skill, job config, and metadata.
+
+        Returns:
+            Normalized ``EvalJob`` for the submitted benchmark job.
+
+        Raises:
+            EnvArenaConfigurationError: If required refs are missing or a
+                config uses unsupported asset forms.
+        """
+
         job_config = self._merge_job_config(self.config.job_config, request.job_config)
         skill_ref = self._resolve_optional_registry_asset("skills", request.skill)
         benchmark_ref = self._resolve_registry_ref("benchmarks", request.benchmark, "benchmark")
@@ -4231,6 +5524,17 @@ class EnvArenaClient(EnvClient):
         defaults: Mapping[str, Any],
         overrides: Mapping[str, Any],
     ) -> dict[str, Any]:
+        """Merge nested job configuration mappings without mutating inputs.
+
+        Parameters:
+            defaults: Base mapping, usually from client configuration.
+            overrides: Per-call overrides. Nested mappings are shallow-merged;
+                other values replace defaults.
+
+        Returns:
+            Deep-copied merged configuration mapping.
+        """
+
         merged = deepcopy(dict(defaults))
         for key, value in overrides.items():
             if isinstance(value, Mapping) and isinstance(merged.get(key), Mapping):
@@ -4244,6 +5548,17 @@ class EnvArenaClient(EnvClient):
     def _resolve_optional_registry_asset(
         self, collection: str, config: Mapping[str, Any] | None
     ) -> EnvArenaVersionRef | None:
+        """Resolve an optional new/ref registry asset config.
+
+        Parameters:
+            collection: Registry collection path such as ``"skills"``.
+            config: Optional asset config. ``type="ref"`` resolves an existing
+                ref; ``type="new"`` creates and publishes a registry version.
+
+        Returns:
+            Resolved version ref, or ``None`` when ``config`` is absent.
+        """
+
         if config is None:
             return None
         asset = self._asset_config(config, collection.removesuffix("s"))
@@ -4257,6 +5572,22 @@ class EnvArenaClient(EnvClient):
         config: EnvArenaVersionRef | Mapping[str, Any] | str,
         asset_name: str,
     ) -> EnvArenaVersionRef:
+        """Resolve a required existing registry ref.
+
+        Parameters:
+            collection: Registry collection path used for error messages.
+            config: Ref expressed as ``EnvArenaVersionRef``, ``"key@version"``,
+                ``{key, version}``, or an asset config with ``type="ref"``.
+            asset_name: Human-readable asset name in validation errors.
+
+        Returns:
+            Normalized ``EnvArenaVersionRef``.
+
+        Raises:
+            EnvArenaConfigurationError: If the ref is missing or attempts to use
+                ``type="new"`` for assets that must already exist.
+        """
+
         if isinstance(config, EnvArenaVersionRef):
             return config
         if isinstance(config, str):
@@ -4276,6 +5607,22 @@ class EnvArenaClient(EnvClient):
         return ref
 
     def _resolve_model_asset(self, config: Mapping[str, Any]) -> dict[str, Any]:
+        """Resolve a model config into runtime model name or registry ref.
+
+        Parameters:
+            config: Model asset config. ``type="ref"`` may point to a registry
+                model or raw runtime model name. ``type="new"`` may provide a
+                registry ``spec`` or a checkpoint ``model_path``.
+
+        Returns:
+            Mapping with normalized runtime fields, optional ``registry_ref``,
+            optional parameters/env, and an ``asset`` summary.
+
+        Raises:
+            EnvArenaConfigurationError: If the model config cannot resolve to a
+                runtime model or registry model.
+        """
+
         asset = self._asset_config(config, "model")
         if asset["type"] == "ref":
             registry_ref = self._optional_registry_ref_from_asset(asset)
@@ -4321,7 +5668,15 @@ class EnvArenaClient(EnvClient):
         }
 
     def _start_model_instance(self, model_path: str, config: Mapping[str, Any]) -> dict[str, Any]:
-        """Mock EnvArena model-instance startup until the control-plane API exists."""
+        """Mock EnvArena model-instance startup until the control-plane API exists.
+
+        Parameters:
+            model_path: Checkpoint path to serve.
+            config: Model asset config, optionally containing ``model_name``.
+
+        Returns:
+            Mock model instance summary with runtime model name and source path.
+        """
 
         model_name = str(config.get("model_name") or self._model_instance_name_for(model_path))
         return {
@@ -4338,6 +5693,22 @@ class EnvArenaClient(EnvClient):
         *,
         spec: Mapping[str, Any] | None = None,
     ) -> EnvArenaVersionRef:
+        """Create a registry entity/version pair from a new asset config.
+
+        Parameters:
+            collection: Registry collection path such as ``"skills"``.
+            asset: Asset config containing ``key``, ``version``, optional
+                entity fields, optional ``spec``, and optional publish flags.
+            spec: Optional explicit version spec overriding ``asset["spec"]``.
+
+        Returns:
+            Version ref for the created registry version.
+
+        Raises:
+            EnvArenaConfigurationError: If required key/version/spec fields are
+                missing.
+        """
+
         key = self._required_asset_string(asset, "key")
         version = self._required_asset_string(asset, "version")
         if bool(asset.get("create_entity", True)):
@@ -4376,6 +5747,20 @@ class EnvArenaClient(EnvClient):
 
     @staticmethod
     def _asset_config(config: Mapping[str, Any], asset_name: str) -> dict[str, Any]:
+        """Validate and copy an asset config with ``type`` new/ref.
+
+        Parameters:
+            config: User-provided asset config mapping.
+            asset_name: Human-readable asset name used in errors.
+
+        Returns:
+            Mutable copy of the asset config.
+
+        Raises:
+            EnvArenaConfigurationError: If the config is not a mapping or its
+                ``type`` is not ``"new"`` or ``"ref"``.
+        """
+
         if not isinstance(config, Mapping):
             raise EnvArenaConfigurationError(f"{asset_name} asset config must be a mapping.")
         asset = dict(config)
@@ -4388,6 +5773,19 @@ class EnvArenaClient(EnvClient):
 
     @staticmethod
     def _asset_spec(asset: Mapping[str, Any], asset_name: str) -> dict[str, Any]:
+        """Return the spec mapping from a new asset config.
+
+        Parameters:
+            asset: Asset config mapping.
+            asset_name: Human-readable asset name used in errors.
+
+        Returns:
+            Copy of the ``spec`` mapping.
+
+        Raises:
+            EnvArenaConfigurationError: If ``spec`` is absent or not a mapping.
+        """
+
         spec = asset.get("spec")
         if not isinstance(spec, Mapping):
             raise EnvArenaConfigurationError(
@@ -4398,6 +5796,20 @@ class EnvArenaClient(EnvClient):
     def _registry_ref_from_asset(
         self, asset: Mapping[str, Any], collection: str
     ) -> EnvArenaVersionRef:
+        """Require and return a registry ref from an asset config.
+
+        Parameters:
+            asset: Asset config that should contain ``ref``, ``registry_ref``,
+                or ``key`` plus ``version``.
+            collection: Registry collection name used in validation errors.
+
+        Returns:
+            Normalized version ref.
+
+        Raises:
+            EnvArenaConfigurationError: If no supported ref field is present.
+        """
+
         ref = self._optional_registry_ref_from_asset(asset)
         if ref is None:
             raise EnvArenaConfigurationError(
@@ -4408,6 +5820,17 @@ class EnvArenaClient(EnvClient):
     def _optional_registry_ref_from_asset(
         self, asset: Mapping[str, Any]
     ) -> EnvArenaVersionRef | None:
+        """Return a registry ref from an asset config when present.
+
+        Parameters:
+            asset: Asset config that may contain ``registry_ref``, ``ref``, or
+                ``key``/``version``. A bare ``ref`` without ``@`` is treated as
+                a runtime model name and not as a registry version.
+
+        Returns:
+            Normalized version ref or ``None`` when no registry ref is encoded.
+        """
+
         if asset.get("registry_ref") is not None:
             return self._as_version_ref(asset["registry_ref"])
         if asset.get("ref") is not None:
@@ -4421,6 +5844,19 @@ class EnvArenaClient(EnvClient):
 
     @staticmethod
     def _required_asset_string(asset: Mapping[str, Any], field_name: str) -> str:
+        """Read a required non-empty string field from an asset config.
+
+        Parameters:
+            asset: Asset config mapping.
+            field_name: Field that must be present and non-empty.
+
+        Returns:
+            Trimmed string value.
+
+        Raises:
+            EnvArenaConfigurationError: If the field is absent or empty.
+        """
+
         value = str(asset.get(field_name, "")).strip()
         if not value:
             raise EnvArenaConfigurationError(
@@ -4429,26 +5865,80 @@ class EnvArenaClient(EnvClient):
         return value
 
     def _model_instance_name_for(self, model_path: str) -> str:
+        """Derive a stable mock model instance name from a model path.
+
+        Parameters:
+            model_path: Checkpoint/model path.
+
+        Returns:
+            Sanitized name with the configured model instance prefix, truncated
+            to EnvArena-friendly length.
+        """
+
         normalized = re.sub(r"[^A-Za-z0-9_.-]", "-", model_path.strip()).strip("-")
         return f"{self.config.model_instance_name_prefix}{normalized or 'model'}"[:128]
 
     def get_job_summary(self, job_id: str) -> dict[str, Any]:
+        """Fetch EnvArena's summary payload for one job ID.
+
+        Parameters:
+            job_id: EnvArena job ID.
+
+        Returns:
+            Decoded summary payload, usually containing Job metadata and task
+            counts.
+        """
+
         return self._request_json("GET", f"/openapi/v1/jobs/{job_id}/summary", operation="get job summary")
 
     def get_job_result(self, job_id: str) -> dict[str, Any]:
+        """Fetch EnvArena's aggregate result payload for one job ID.
+
+        Parameters:
+            job_id: EnvArena job ID.
+
+        Returns:
+            Decoded result payload with aggregate metrics produced by EnvArena.
+        """
+
         return self._request_json("GET", f"/openapi/v1/jobs/{job_id}/result", operation="get job result")
 
     def get_eval_progress(self, job: EvalJob | str) -> dict[str, Any]:
-        """Return EnvArena's current summary for an evaluation job or job ID."""
+        """Return EnvArena's current summary for an evaluation job or job ID.
+
+        Parameters:
+            job: EvalJob mapping or raw EnvArena job ID string.
+
+        Returns:
+            Current backend job summary from ``get_job_summary``.
+        """
 
         return self.get_job_summary(self._job_id(job))
 
     def get_eval_result(self, job: EvalJob | str) -> dict[str, Any]:
-        """Return EnvArena's aggregate result for an evaluation job or job ID."""
+        """Return EnvArena's aggregate result for an evaluation job or job ID.
+
+        Parameters:
+            job: EvalJob mapping or raw EnvArena job ID string.
+
+        Returns:
+            Aggregate backend result from ``get_job_result``.
+        """
 
         return self.get_job_result(self._job_id(job))
 
     def list_job_tasks(self, job_id: str, *, status: str = "ALL") -> list[dict[str, Any]]:
+        """List all task rows for one job across pages.
+
+        Parameters:
+            job_id: EnvArena job ID.
+            status: Optional task status filter. ``"ALL"`` includes every
+                status.
+
+        Returns:
+            List of task row payloads, preserving backend order.
+        """
+
         items: list[dict[str, Any]] = []
         offset = 0
         while True:
@@ -4465,6 +5955,17 @@ class EnvArenaClient(EnvClient):
                 return items
 
     def list_job_trajectories(self, job_id: str, *, inline: bool = False) -> list[dict[str, Any]]:
+        """List trajectory summaries for all tasks in one job.
+
+        Parameters:
+            job_id: EnvArena job ID.
+            inline: Whether EnvArena should include trajectory events inline.
+
+        Returns:
+            List of per-task trajectory summary payloads from the response's
+            ``tasks`` field.
+        """
+
         return list(
             self._request_json(
                 "GET",
@@ -4475,6 +5976,18 @@ class EnvArenaClient(EnvClient):
         )
 
     def get_task_trajectory(self, job_id: str, task_id: str, *, attempt: int | None = None) -> dict[str, Any]:
+        """Fetch one task trajectory JSON payload.
+
+        Parameters:
+            job_id: EnvArena job ID.
+            task_id: EnvArena task ID within the job.
+            attempt: Optional attempt number. When omitted, EnvArena returns
+                its default/latest attempt.
+
+        Returns:
+            Decoded task trajectory payload.
+        """
+
         params: dict[str, Any] = {"format": "json"}
         if attempt is not None:
             params["attempt"] = attempt
@@ -4485,10 +5998,37 @@ class EnvArenaClient(EnvClient):
             operation="get task trajectory",
         )
 
-    def get_trajs(self, job: EvalJob | str, include_messages: bool = False) -> list[Traj]:
+    def get_trajs(
+        self,
+        job: EvalJob | str,
+        include_messages: bool = False,
+    ) -> list[Traj]:
+        """Fetch normalized trajectory records for an EnvArena job.
+
+        Parameters:
+            job: Eval job returned by ``submit_eval`` or
+                ``submit_eval_by_stream``. When it contains ``task_ids`` plus
+                ``selected_data_ids`` or ``assets.stream_tasks``, those fields
+                are used to map tasks back to data IDs. If only an ID-like job
+                object is available, the client lazily reads the backend Job
+                summary and uses ``metadata.stream_id`` to resolve stream tasks.
+                A raw job ID string is also accepted.
+            include_messages: Whether to request inline trajectory events and
+                copy them into each returned trajectory's ``messages`` field.
+
+        Returns:
+            Normalized trajectory dictionaries with ``task_id``, ``traj_id``,
+            status/reward fields, raw EnvArena payloads, and ``data_id`` when
+            it can be resolved.
+        """
+
         job_id = self._job_id(job)
         tasks = {str(task.get("task_id")): task for task in self.list_job_tasks(job_id)}
         job_payload = job if isinstance(job, Mapping) else {}
+        data_ids_by_task_id = self._job_task_data_ids(job_payload)
+        lookup_stream_id = self._job_stream_id(job_payload)
+        should_lookup_job_stream = self._should_lookup_job_stream(job_payload)
+        job_summary: dict[str, Any] | None = None
         model_ref = job_payload.get("model_ref", {})
         model_name = str(model_ref.get("model_name") or model_ref.get("runtime_model_name") or "")
         source = str(job_payload.get("metadata", {}).get("source", "eval"))
@@ -4496,6 +6036,15 @@ class EnvArenaClient(EnvClient):
         for trajectory in self.list_job_trajectories(job_id, inline=include_messages):
             task_id = str(trajectory.get("task_id", ""))
             task, attempt = tasks.get(task_id, {}), trajectory.get("latest_attempt")
+            data_id = data_ids_by_task_id.get(task_id) or self._task_data_id(task) or self._task_data_id(trajectory)
+            if not data_id and lookup_stream_id and task_id:
+                data_id = self._stream_task_data_id(lookup_stream_id, task_id)
+            if not data_id and task_id and should_lookup_job_stream:
+                if job_summary is None:
+                    job_summary = self.get_job_summary(job_id)
+                    lookup_stream_id = self._job_stream_id(job_summary)
+                if lookup_stream_id:
+                    data_id = self._stream_task_data_id(lookup_stream_id, task_id)
             traj: Traj = {
                 "traj_id": f"{job_id}:{task_id}:{attempt or 0}",
                 "task_id": task_id,
@@ -4512,12 +6061,199 @@ class EnvArenaClient(EnvClient):
                 },
                 "raw": {"task": task, "trajectory": trajectory},
             }
+            if data_id:
+                traj["data_id"] = data_id
+                traj["metadata"]["data_id"] = data_id
             if include_messages:
                 traj["messages"] = list(trajectory.get("events", []))
             trajs.append(traj)
         return trajs
 
+    @staticmethod
+    def _should_lookup_job_stream(job: Mapping[str, Any]) -> bool:
+        """Return whether missing stream metadata should trigger summary lookup.
+
+        Parameters:
+            job: EvalJob or backend Job-like mapping.
+
+        Returns:
+            ``False`` for explicit benchmark jobs, where stream lookup would be
+            wasteful; ``True`` for unknown shapes that may be persisted stream
+            jobs with metadata only available from the backend summary.
+        """
+
+        if EnvArenaClient._job_stream_id(job):
+            return False
+        if job.get("benchmark") is not None or job.get("benchmark_ref") is not None:
+            return False
+        assets = job.get("assets")
+        if isinstance(assets, Mapping) and assets.get("benchmark") is not None:
+            return False
+        return True
+
+    @staticmethod
+    def _job_stream_id(job: Mapping[str, Any]) -> str:
+        """Resolve a stream ID from an EvalJob or backend Job payload.
+
+        Parameters:
+            job: Mapping that may contain top-level ``stream_id`` or nested
+                ``metadata.stream_id`` / ``metadata.source_stream_id``.
+
+        Returns:
+            First discovered stream ID, or an empty string when unavailable.
+        """
+
+        for candidate in EnvArenaClient._job_mapping_candidates(job):
+            value = str(candidate.get("stream_id") or "").strip()
+            if value:
+                return value
+            metadata = candidate.get("metadata")
+            if isinstance(metadata, Mapping):
+                value = str(metadata.get("stream_id") or metadata.get("source_stream_id") or "").strip()
+                if value:
+                    return value
+        return ""
+
+    @staticmethod
+    def _job_mapping_candidates(job: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+        """Return likely nested job payload mappings without assuming one shape.
+
+        Parameters:
+            job: EvalJob, backend summary, raw payload, or wrapper mapping.
+
+        Returns:
+            Breadth-first list of mappings reachable through common wrapper
+            keys such as ``job``, ``raw``, ``payload``, and ``data``.
+        """
+
+        candidates: list[Mapping[str, Any]] = []
+        stack: list[Mapping[str, Any]] = [job]
+        seen: set[int] = set()
+        while stack:
+            candidate = stack.pop(0)
+            identity = id(candidate)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            candidates.append(candidate)
+            for key in ("job", "raw", "payload", "data"):
+                nested = candidate.get(key)
+                if isinstance(nested, Mapping):
+                    stack.append(nested)
+        return candidates
+
+    def _stream_task_data_id(self, stream_id: str, task_id: str) -> str | None:
+        """Fetch a stream task and resolve its data ID.
+
+        Parameters:
+            stream_id: Source EnvArena stream ID.
+            task_id: Task ID from a Job trajectory or task row.
+
+        Returns:
+            Data ID string when the stream task payload exposes or implies one;
+            otherwise ``None``.
+        """
+
+        payload = self.get_stream_task(stream_id, task_id)
+        candidates: list[Any] = [payload]
+        for key in ("task", "item", "data"):
+            nested = payload.get(key)
+            if isinstance(nested, Mapping):
+                candidates.append(nested)
+        for candidate in candidates:
+            if isinstance(candidate, Mapping):
+                data_id = self._task_data_id(candidate)
+                if data_id:
+                    return data_id
+        return None
+
+    @staticmethod
+    def _job_task_data_ids(job: EvalJob) -> dict[str, str]:
+        """Build a task ID to data ID map from the EvalJob returned by submit.
+
+        EnvArena task rows do not always include ``data_id``. For jobs created
+        by ``submit_eval_by_stream``, the client already knows the submitted
+        task order, so ``task_ids`` can be zipped with ``selected_data_ids`` or
+        ``assets.stream_tasks``.
+
+        Parameters:
+            job: EvalJob mapping that may include ``task_ids``,
+                ``selected_data_ids``, and ``assets.stream_tasks``.
+
+        Returns:
+            Mapping from EnvArena task ID to stream data ID.
+        """
+
+        task_ids = [
+            str(task_id).strip()
+            for task_id in job.get("task_ids", [])
+            if task_id is not None and str(task_id).strip()
+        ]
+        data_ids_by_task_id: dict[str, str] = {}
+        selected_data_ids = [
+            str(data_id).strip()
+            for data_id in job.get("selected_data_ids", [])
+            if data_id is not None and str(data_id).strip()
+        ]
+        if len(task_ids) == len(selected_data_ids):
+            data_ids_by_task_id.update(zip(task_ids, selected_data_ids, strict=True))
+
+        assets = job.get("assets", {})
+        stream_tasks = assets.get("stream_tasks", []) if isinstance(assets, Mapping) else []
+        if isinstance(stream_tasks, Sequence) and not isinstance(stream_tasks, (str, bytes)):
+            for index, stream_task in enumerate(stream_tasks):
+                if index >= len(task_ids) or not isinstance(stream_task, Mapping):
+                    continue
+                data_id = str(stream_task.get("data_id") or stream_task.get("source_data_id") or "").strip()
+                if data_id:
+                    data_ids_by_task_id.setdefault(task_ids[index], data_id)
+        return data_ids_by_task_id
+
+    @staticmethod
+    def _task_data_id(task: Mapping[str, Any]) -> str | None:
+        """Resolve the stream data ID represented by a task-like payload.
+
+        Parameters:
+            task: Task, trajectory, stream task, or nested task mapping.
+
+        Returns:
+            Canonical data ID. Direct ``data_id``/``source_data_id`` fields are
+            preferred; otherwise ``env_ref`` or ``env_key`` plus version are
+            converted into ``env:key@version`` form. Returns ``None`` when no
+            reliable identifier is present.
+        """
+
+        data_id = str(task.get("data_id") or task.get("source_data_id") or "").strip()
+        if data_id:
+            return data_id
+
+        env_ref = task.get("env_ref") or task.get("env")
+        if isinstance(env_ref, Mapping):
+            key = str(env_ref.get("key") or env_ref.get("name") or "").strip()
+            version = str(env_ref.get("version") or "").strip()
+            if key and version:
+                return f"env:{key}@{version}"
+        elif isinstance(env_ref, str) and env_ref.strip():
+            value = env_ref.strip()
+            return value if value.startswith("env:") else f"env:{value}"
+
+        env_key = str(task.get("env_key") or "").strip()
+        env_version = str(task.get("env_version") or task.get("version") or "").strip()
+        if env_key and env_version:
+            return f"env:{env_key}@{env_version}"
+        return None
+
     def _list_registry(self, asset: str, *, tag: list[str] | None) -> list[dict[str, Any]]:
+        """List registry entities from a raw registry collection endpoint.
+
+        Parameters:
+            asset: Raw collection path segment, for example ``"benchmarks"``.
+            tag: Optional tag filters forwarded to EnvArena.
+
+        Returns:
+            Concatenated entity payloads from all fetched pages.
+        """
+
         items: list[dict[str, Any]] = []
         offset = 0
         while True:
@@ -4532,6 +6268,17 @@ class EnvArenaClient(EnvClient):
                 return items
 
     def _list_versions(self, asset: str, key: str, *, status: str) -> list[dict[str, Any]]:
+        """List versions for one raw registry collection and key.
+
+        Parameters:
+            asset: Raw collection path segment.
+            key: Registry entity key.
+            status: Version status filter.
+
+        Returns:
+            List of version payloads from the response's ``items`` field.
+        """
+
         return list(
             self._request_json(
                 "GET",
@@ -4542,6 +6289,14 @@ class EnvArenaClient(EnvClient):
         )
 
     def _default_llm_gateway_base_url(self) -> str:
+        """Derive the LLM gateway base URL from the configured control URL.
+
+        Returns:
+            URL ending in ``/openapi/v1/llm`` regardless of whether
+            ``control_base_url`` was configured at the service root or OpenAPI
+            root.
+        """
+
         base_url = self.config.control_base_url.rstrip("/")
         if base_url.endswith("/openapi/v1/llm"):
             return base_url
@@ -4559,6 +6314,25 @@ class EnvArenaClient(EnvClient):
         operation: str,
         expected_statuses: set[int] | None = None,
     ) -> dict[str, Any]:
+        """Send a raw JSON HTTP request through the generated SDK client.
+
+        Parameters:
+            method: HTTP method.
+            path: Path relative to the generated SDK client's base URL.
+            params: Optional query parameters.
+            json_body: Optional JSON object request body.
+            operation: Human-readable operation name used in errors.
+            expected_statuses: Optional accepted HTTP status set. Defaults to
+                ``{200}``.
+
+        Returns:
+            Decoded JSON object payload.
+
+        Raises:
+            EnvArenaError: For transport errors or non-object JSON payloads.
+            EnvArenaHTTPError: For HTTP statuses outside ``expected_statuses``.
+        """
+
         expected = expected_statuses or {200}
         try:
             response = self._client.get_httpx_client().request(
@@ -4578,6 +6352,18 @@ class EnvArenaClient(EnvClient):
 
     @staticmethod
     def _decode_json(response: httpx.Response, operation: str) -> Any:
+        """Decode an HTTP response as JSON, preserving non-JSON details.
+
+        Parameters:
+            response: httpx response object.
+            operation: Human-readable operation name used in synthesized
+                non-JSON errors.
+
+        Returns:
+            Decoded JSON value, empty mapping for empty content, or a mapping
+            describing a non-JSON response body.
+        """
+
         if not response.content:
             return {}
         try:
@@ -4586,6 +6372,21 @@ class EnvArenaClient(EnvClient):
             return {"error": f"non-JSON response for {operation}", "body": response.text[:1000]}
 
     def _unwrap_generated(self, response: Any, operation: str, expected_statuses: set[int]) -> dict[str, Any]:
+        """Validate and unwrap a generated SDK detailed response.
+
+        Parameters:
+            response: Detailed response object returned by generated SDK calls.
+            operation: Human-readable operation name used in errors.
+            expected_statuses: Accepted HTTP status codes.
+
+        Returns:
+            Parsed response payload as a dictionary.
+
+        Raises:
+            EnvArenaHTTPError: If the status code is unexpected.
+            EnvArenaError: If the parsed payload is not a dictionary.
+        """
+
         payload = response.parsed.to_dict() if hasattr(response.parsed, "to_dict") else {"error": "non-JSON response"}
         if int(response.status_code) not in expected_statuses:
             raise EnvArenaHTTPError(operation, int(response.status_code), payload)
@@ -4595,14 +6396,46 @@ class EnvArenaClient(EnvClient):
 
     @staticmethod
     def _string_metadata(metadata: Mapping[str, Any]) -> dict[str, str]:
+        """Convert metadata values to EnvArena's string-only metadata shape.
+
+        Parameters:
+            metadata: Arbitrary metadata mapping.
+
+        Returns:
+            Dictionary with string keys and string values.
+        """
+
         return {str(key): str(value) for key, value in metadata.items()}
 
     @staticmethod
     def _as_version_ref(value: EnvArenaVersionRef | Mapping[str, Any] | str) -> EnvArenaVersionRef:
+        """Normalize a supported version-ref representation.
+
+        Parameters:
+            value: Existing ``EnvArenaVersionRef``, ``"key@version"`` string,
+                or mapping with ``key`` and ``version``.
+
+        Returns:
+            Normalized ``EnvArenaVersionRef``.
+        """
+
         return value if isinstance(value, EnvArenaVersionRef) else EnvArenaVersionRef.parse(value)
 
     @staticmethod
     def _job_id(job: EvalJob | str) -> str:
+        """Extract a required EnvArena job ID from an EvalJob or string.
+
+        Parameters:
+            job: Raw EnvArena job ID string, or mapping containing
+                ``eval_job_id`` or ``job_id``.
+
+        Returns:
+            Job ID string.
+
+        Raises:
+            EnvArenaConfigurationError: If no job ID is present.
+        """
+
         if isinstance(job, str):
             job_id = job.strip()
         else:

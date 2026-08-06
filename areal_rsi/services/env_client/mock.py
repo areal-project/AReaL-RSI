@@ -15,6 +15,8 @@ class MockEnvClient:
     """Deterministic EnvClient implementation used by local tests and demos."""
 
     def __init__(self, *, task_set: list[dict[str, Any]] | None = None) -> None:
+        """Initialize the mock client with an optional fixed task set."""
+
         self._job_counts: defaultdict[str, int] = defaultdict(int)
         # When a task set is supplied, emitted trajectory task_ids ARE its entry
         # ids (e.g. real gsm8k instance_ids), so a Researcher experience keyed by
@@ -23,6 +25,8 @@ class MockEnvClient:
         self._task_set = [dict(entry) for entry in task_set] if task_set else None
 
     def submit_eval(self, request: EvalRequest) -> EvalJob:
+        """Create a deterministic completed mock evaluation job."""
+
         model_name = _asset_label(request.model, "mock_ckpt")
         benchmark_name = _ref_label(request.benchmark, "mock_benchmark")
         harness_name = _ref_label(request.harness, "mock_harness")
@@ -42,6 +46,8 @@ class MockEnvClient:
         )
 
     def get_eval_progress(self, job: EvalJob) -> dict[str, object]:
+        """Return completed progress for a mock evaluation job."""
+
         return {
             "eval_job_id": job["eval_job_id"],
             "status": job.get("status", "done"),
@@ -50,6 +56,8 @@ class MockEnvClient:
         }
 
     def get_eval_result(self, job: EvalJob) -> dict[str, object]:
+        """Return aggregate mock metrics for a mock evaluation job."""
+
         return {
             "eval_job_id": job["eval_job_id"],
             "status": job.get("status", "done"),
@@ -57,6 +65,8 @@ class MockEnvClient:
         }
 
     def get_trajs(self, job: EvalJob, include_messages: bool = False) -> list[Traj]:
+        """Return deterministic mock trajectories for an evaluation job."""
+
         benchmark = job.get("benchmark", job.get("task_set", "mock_benchmark"))
         source = job.get("metadata", {}).get("source", "eval")
         model_ref = job.get("model_ref", {}).get("model_ref", "mock_ckpt")
@@ -125,6 +135,8 @@ class MockEnvClient:
         job_config: dict[str, Any],
         metadata: dict[str, Any] | None,
     ) -> EvalJob:
+        """Allocate and return a new deterministic mock job payload."""
+
         self._job_counts[prefix] += 1
         job_id = f"{prefix}_{self._job_counts[prefix]:04d}"
         return {
@@ -141,6 +153,8 @@ class MockEnvClient:
 
 
 def _asset_label(config: Mapping[str, Any], default: str) -> str:
+    """Return a readable label for an asset config or default."""
+
     if config.get("ref") is not None:
         if isinstance(config["ref"], Mapping) and config["ref"].get("key") and config["ref"].get("version"):
             return f"{config['ref']['key']}@{config['ref']['version']}"
@@ -154,16 +168,22 @@ def _asset_label(config: Mapping[str, Any], default: str) -> str:
 
 
 def _ref_label(config: Mapping[str, Any] | str, default: str) -> str:
+    """Return a readable label for a ref string or asset config."""
+
     if isinstance(config, str):
         return config
     return _asset_label(config, default)
 
 
 def _asset_dict(config: Mapping[str, Any] | str) -> dict[str, Any]:
+    """Normalize a ref string or mapping to a dictionary payload."""
+
     return {"ref": config} if isinstance(config, str) else dict(config)
 
 
 def _task_experience_map(skill: object) -> dict[str, str]:
+    """Extract task-id keyed experience strings from a skill spec."""
+
     if not isinstance(skill, Mapping):
         return {}
     spec = skill.get("spec")

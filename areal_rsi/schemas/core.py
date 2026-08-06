@@ -17,7 +17,7 @@ ModelRef: TypeAlias = dict[str, Any]
 EvalJob: TypeAlias = dict[str, Any]
 EvalAssetConfig: TypeAlias = Mapping[str, Any]
 EvalRegistryRef: TypeAlias = str | Mapping[str, Any]
-EnvArenaCkpt: TypeAlias = str | Mapping[str, Any]
+EnvArenaModel: TypeAlias = Mapping[str, Any]
 Traj: TypeAlias = dict[str, Any]
 Dataset: TypeAlias = dict[str, Any]
 TrainRun: TypeAlias = dict[str, Any]
@@ -59,21 +59,24 @@ class EvalRequest:
 class EnvArenaEvalRequest:
     """EnvArena stream-oriented evaluation request.
 
-    ``ckpt`` is either a checkpoint/model path or a mapping with model-service
-    options such as ``model_path`` and ``served_model_name``.
+    ``model`` is a strict JSON object. ``{"type": "ref", "ref": ...}`` points to
+    an existing model registry version. ``{"type": "ckpt", "model_path": ...,
+    "served_model_name": ..., "base_model_id": ...}`` creates/registers a model
+    from a checkpoint.
 
-    ``skills`` accepts published refs or new/ref asset configs. ``relationships``
-    is intentionally mapping-shaped because EnvArena does not currently define
-    a server-side relationship entity; callers can pass fields such as
-    ``experience_id`` and ``data_id`` and the EnvArena adapter persists them in
-    generated benchmark/stream metadata.
+    ``skills`` is a JSON-list-style sequence of objects. Each item uses
+    ``data_id`` to bind to a stream data item. ``type="experience"`` uses
+    ``content`` for the experience text/config; ``type="ref"`` uses ``ref`` for
+    the existing skill registry ref.
+
+    ``rewards`` follows the same per-data list shape. Each item uses ``data_id``
+    and ``ref`` for the reward registry ref.
     """
 
-    ckpt: EnvArenaCkpt
+    model: EnvArenaModel
     stream_id: str
     data_ids: Sequence[str] = field(default_factory=tuple)
-    skills: Sequence[EvalRegistryRef | EvalAssetConfig] = field(default_factory=tuple)
-    relationships: Sequence[Mapping[str, Any]] = field(default_factory=tuple)
-    reward: EvalRegistryRef | EvalAssetConfig | None = None
+    skills: Sequence[Mapping[str, Any]] = field(default_factory=tuple)
+    rewards: Sequence[Mapping[str, Any]] = field(default_factory=tuple)
     job_config: Mapping[str, Any] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)

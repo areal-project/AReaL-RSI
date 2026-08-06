@@ -1088,6 +1088,15 @@ class EnvArenaClient(EnvClient):
         )
 
     def list_stream_experiments(self, stream_id: str) -> dict[str, Any]:
+        """List experiments associated with one stream.
+
+        Parameters:
+            stream_id: Existing EnvArena stream ID.
+
+        Returns:
+            Decoded EnvArena response containing experiment names and metadata.
+        """
+
         return self._request_json(
             "GET",
             f"/openapi/v1/streams/{quote(stream_id, safe='')}/experiments",
@@ -1109,6 +1118,28 @@ class EnvArenaClient(EnvClient):
         metadata: Mapping[str, Any] | None = None,
         experiment: str | None = None,
     ) -> dict[str, Any]:
+        """Launch one stream task against a runtime model endpoint.
+
+        Parameters:
+            stream_id: Existing EnvArena stream ID.
+            data_id: Stream data ID to evaluate.
+            base_url: Runtime model API base URL.
+            api_key: Runtime model API key.
+            model_name: Optional served model name used by the runtime endpoint.
+            harness_ref: Optional harness registry ref. Accepted forms are
+                ``EnvArenaVersionRef``, ``"key@version"``, or
+                ``{"key": key, "version": version}``.
+            reward_ref: Optional reward registry ref in the same accepted forms
+                as ``harness_ref``.
+            job_id: Optional caller-supplied job ID.
+            envs: Optional environment variables passed to the task.
+            metadata: Optional metadata stringified into the launch request.
+            experiment: Optional experiment name.
+
+        Returns:
+            Decoded EnvArena launch-one-task response.
+        """
+
         body = self._clean_payload(
             {
                 "job_id": job_id,
@@ -1144,6 +1175,32 @@ class EnvArenaClient(EnvClient):
         metadata: Mapping[str, Any] | None = None,
         experiment: str | None = None,
     ) -> dict[str, Any]:
+        """Launch multiple stream tasks through EnvArena's batch task API.
+
+        Parameters:
+            stream_id: ID of the existing EnvArena stream to run against.
+            model_ref: Published model registry ref. Accepted forms are
+                ``EnvArenaVersionRef``, ``"key@version"``, or
+                ``{"key": key, "version": version}``.
+            tasks: Per-data task specs. Each item may be a data ID string or a
+                mapping with ``data_id`` plus optional ``harness_ref``/``harness``
+                and ``reward_ref``/``reward`` overrides.
+            harness_ref: Optional default harness registry ref for the batch.
+                Individual tasks may override it.
+            reward_ref: Optional default reward registry ref for the batch.
+                Individual tasks may override it.
+            job_id: Optional caller-supplied job identifier.
+            concurrency_policy: Optional EnvArena concurrency policy mapping,
+                for example max parallelism and retry controls.
+            metadata: Optional job metadata. Values are stringified before
+                sending to the generated SDK model.
+            experiment: Optional EnvArena experiment name.
+
+        Returns:
+            Decoded EnvArena response containing the accepted job ID, task IDs,
+            and raw job payload.
+        """
+
         registry_model_ref = self._as_version_ref(model_ref)
         task_items = [self._launch_batch_task_item(task) for task in tasks]
         if not task_items:
@@ -1174,7 +1231,84 @@ class EnvArenaClient(EnvClient):
             {202},
         )
 
+    def update_stream_data_skill_experience(
+        self,
+        stream_id: str,
+        data_id: str,
+        experience: Mapping[str, Any] | str,
+        *,
+        selector: Mapping[str, Any] | None = None,
+        job_config: Mapping[str, Any] | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Create updated skill and harness versions for one stream data item.
+
+        This helper resolves the current harness for ``data_id`` from the
+        stream dataset item. If the harness already has a selectable experience
+        skill, the function creates a new version of that skill and a new
+        harness version pointing to it. If no such skill exists, it creates a
+        new skill entity/version and a new harness entity/version for the data
+        item.
+
+        Parameters:
+            stream_id: Existing EnvArena stream ID.
+            data_id: Stream data ID to update, for example
+                ``"env:repo__issue@1.0.0"``.
+            experience: New experience content. Accepted forms are a non-empty
+                string or a mapping with fields such as ``experience``, ``text``,
+                ``task_experiences``, ``skill_key``, version overrides, and
+                publish/storage metadata.
+            selector: Optional selector passed to stream dataset selection.
+            job_config: Optional overrides for version naming and defaults,
+                including ``experience_skill`` and ``experience_harness``.
+            metadata: Optional metadata copied into generated skill/harness
+                specs and entities.
+
+        Returns:
+            A summary containing previous and new skill/harness refs plus the
+            raw create/publish responses.
+        """
+
+        merged_job_config = self._merge_job_config(self.config.job_config, self.config.stream_eval_config)
+        merged_job_config = self._merge_job_config(merged_job_config, job_config or {})
+        stream_payload = self.get_stream(stream_id)
+        stream = self._stream_object(stream_payload)
+        resolved_stream_id = str(stream.get("stream_id") or stream_id)
+        item = self._select_stream_dataset_items(
+            resolved_stream_id,
+            requested_data_ids=(data_id,),
+            selector=selector if selector is not None else merged_job_config.get("selector"),
+            page_size=int(merged_job_config.get("dataset_page_size", 1000)),
+        )[0]
+        resolved_data_id = str(item.get("data_id") or data_id).strip()
+        base_harness_ref = self._resolve_stream_harness_ref(stream, merged_job_config)
+        current_harness_ref = self._stream_item_ref(
+            item,
+            field_names=("harness_ref", "harness"),
+            collection="harnesses",
+            asset_name="harness",
+        ) or base_harness_ref
+        return self._create_stream_data_experience_harness_version(
+            stream_id=self._source_stream_id_for_stream(stream, resolved_stream_id),
+            data_id=resolved_data_id,
+            harness_ref=current_harness_ref,
+            experience=self._stream_experience_config(experience),
+            job_config=merged_job_config,
+            metadata=metadata or {},
+        )
+
     def _launch_batch_task_item(self, task: Mapping[str, Any] | str) -> LaunchBatchTaskItem:
+        """Convert a user task spec into the generated SDK task model.
+
+        Parameters:
+            task: Either a data ID string or a mapping. Mapping form requires
+                ``data_id`` and may include ``harness_ref``/``harness`` and
+                ``reward_ref``/``reward`` as registry refs.
+
+        Returns:
+            ``LaunchBatchTaskItem`` with normalized ``VersionRef`` overrides.
+        """
+
         if isinstance(task, str):
             data_id = task
             harness_ref = None
@@ -1194,6 +1328,12 @@ class EnvArenaClient(EnvClient):
         )
 
     def list_model_services(self) -> list[dict[str, Any]]:
+        """List EnvArena model services.
+
+        Returns:
+            List of model service objects from ``/model-services``.
+        """
+
         return list(
             self._request_json(
                 "GET",
@@ -1215,6 +1355,30 @@ class EnvArenaClient(EnvClient):
         sglang: Mapping[str, Any] | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """Create a model service and initial model instance in EnvArena.
+
+        Parameters:
+            served_model_name: Name exposed by the inference service. May be
+                supplied by ``base_model_id`` defaults.
+            model_path: Checkpoint/model path to serve. May be supplied by
+                ``base_model_id`` defaults.
+            base_model_id: Optional catalog model ID. When present, catalog
+                defaults are loaded first; explicit function parameters override
+                those defaults.
+            image: Optional serving image.
+            replicas: Optional replica count.
+            readiness_policy: Optional backend readiness policy name.
+            resource_spec: Optional resource mapping such as GPU and CPU
+                requirements.
+            sglang: Optional SGLang serving configuration.
+            metadata: Optional metadata for the service. Values are stringified
+                before sending.
+
+        Returns:
+            Created model service payload. Backends may include service and
+            instance identifiers in this response.
+        """
+
         config: dict[str, Any] = {}
         if base_model_id:
             config = self._load_model_service_base_config(base_model_id)
@@ -1273,6 +1437,16 @@ class EnvArenaClient(EnvClient):
         )
 
     def get_model_service_catalog_model(self, model_id: str) -> dict[str, Any]:
+        """Fetch catalog details for a base model.
+
+        Parameters:
+            model_id: Catalog/base model identifier.
+
+        Returns:
+            Catalog model payload, including availability and optional serving
+            defaults when provided by EnvArena.
+        """
+
         return self._unwrap_generated(
             get_openapi_v1_model_services_catalog_models_model_id.sync_detailed(
                 model_id,
@@ -1301,6 +1475,16 @@ class EnvArenaClient(EnvClient):
         )
 
     def _load_model_service_base_config(self, model_id: str) -> dict[str, Any]:
+        """Load usable model-service defaults from a catalog model.
+
+        Parameters:
+            model_id: Catalog/base model identifier.
+
+        Returns:
+            Normalized config mapping. Returns an empty mapping and emits a
+            warning when the catalog model cannot be read or is unavailable.
+        """
+
         try:
             payload = self.get_model_service_catalog_model(model_id)
         except (EnvArenaError, httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
@@ -1330,6 +1514,16 @@ class EnvArenaClient(EnvClient):
 
     @staticmethod
     def _model_service_base_config_from_catalog(payload: Mapping[str, Any]) -> dict[str, Any]:
+        """Convert catalog model payload into model-service config fields.
+
+        Parameters:
+            payload: Catalog model payload. Fields may appear at top level or
+                inside a nested ``config`` mapping.
+
+        Returns:
+            Config mapping using ``create_model_service`` field names.
+        """
+
         config: dict[str, Any] = {}
         nested = payload.get("config")
         if isinstance(nested, Mapping):
@@ -1357,6 +1551,16 @@ class EnvArenaClient(EnvClient):
         return config
 
     def get_model_service(self, service_id: str) -> dict[str, Any]:
+        """Fetch one EnvArena model service by ID.
+
+        Parameters:
+            service_id: Model service ID, for example ``svc-...``.
+
+        Returns:
+            Model service payload, usually including service status and
+            instances.
+        """
+
         return self._request_json(
             "GET",
             f"/openapi/v1/model-services/{quote(service_id, safe='')}",
@@ -1364,6 +1568,15 @@ class EnvArenaClient(EnvClient):
         )
 
     def stop_model_service(self, service_id: str) -> dict[str, Any]:
+        """Stop an entire model service.
+
+        Parameters:
+            service_id: Model service ID.
+
+        Returns:
+            EnvArena stop-service response.
+        """
+
         return self._request_json(
             "POST",
             f"/openapi/v1/model-services/{quote(service_id, safe='')}/stop",
@@ -1371,6 +1584,16 @@ class EnvArenaClient(EnvClient):
         )
 
     def stop_model_service_instance(self, service_id: str, instance_id: str) -> dict[str, Any]:
+        """Stop one model service instance without stopping the whole service.
+
+        Parameters:
+            service_id: Parent model service ID.
+            instance_id: Instance ID to stop, for example ``inst-...``.
+
+        Returns:
+            EnvArena stop-instance response.
+        """
+
         return self._unwrap_generated(
             post_openapi_v1_model_services_service_id_instances_instance_id_stop.sync_detailed(
                 service_id,
@@ -1382,6 +1605,16 @@ class EnvArenaClient(EnvClient):
         )
 
     def get_model_service_instance_from_service(self, service_id: str, instance_id: str) -> dict[str, Any] | None:
+        """Find one instance inside a fetched model service payload.
+
+        Parameters:
+            service_id: Parent model service ID.
+            instance_id: Instance ID to locate.
+
+        Returns:
+            Instance mapping when found, otherwise ``None``.
+        """
+
         return self._model_service_instance_from_payload(self.get_model_service(service_id), instance_id)
 
     def wait_model_service_instance_status(
@@ -1393,6 +1626,19 @@ class EnvArenaClient(EnvClient):
         timeout_seconds: float = 90,
         poll_seconds: float = 5,
     ) -> dict[str, Any]:
+        """Poll until one model service instance reaches a target status.
+
+        Parameters:
+            service_id: Parent model service ID.
+            instance_id: Instance ID to poll.
+            status: Desired status string, default ``"STOPPED"``.
+            timeout_seconds: Maximum wait time in seconds.
+            poll_seconds: Delay between polls in seconds.
+
+        Returns:
+            Latest instance payload once it reaches ``status``.
+        """
+
         if timeout_seconds <= 0:
             raise EnvArenaConfigurationError("timeout_seconds must be positive.")
         if poll_seconds <= 0:
@@ -1418,6 +1664,19 @@ class EnvArenaClient(EnvClient):
         ready_statuses: Sequence[str] = ("READY",),
         terminal_statuses: Sequence[str] = ("FAILED", "STOPPED"),
     ) -> dict[str, Any]:
+        """Poll until a model service becomes ready.
+
+        Parameters:
+            service_id: Model service ID to poll.
+            timeout_seconds: Maximum wait time in seconds.
+            poll_seconds: Delay between polls in seconds.
+            ready_statuses: Status values treated as successful readiness.
+            terminal_statuses: Status values that fail fast.
+
+        Returns:
+            Latest model service payload once its status is ready.
+        """
+
         if timeout_seconds <= 0:
             raise EnvArenaConfigurationError("timeout_seconds must be positive.")
         if poll_seconds <= 0:
@@ -1451,6 +1710,19 @@ class EnvArenaClient(EnvClient):
         timeout_seconds: float = 90,
         poll_seconds: float = 5,
     ) -> dict[str, Any]:
+        """Stop one model instance and wait until it reaches a target status.
+
+        Parameters:
+            service_id: Parent model service ID.
+            instance_id: Instance ID to stop.
+            status: Desired post-stop status, default ``"STOPPED"``.
+            timeout_seconds: Maximum wait time in seconds.
+            poll_seconds: Delay between status polls in seconds.
+
+        Returns:
+            Instance payload once the target status is reached.
+        """
+
         self.stop_model_service_instance(service_id, instance_id)
         return self.wait_model_service_instance_status(
             service_id,
@@ -1465,6 +1737,17 @@ class EnvArenaClient(EnvClient):
         payload: Mapping[str, Any],
         instance_id: str,
     ) -> dict[str, Any] | None:
+        """Extract a model service instance from a service payload.
+
+        Parameters:
+            payload: Model service payload that may contain an ``instances``
+                list.
+            instance_id: Instance ID to search for.
+
+        Returns:
+            Instance dict when present, otherwise ``None``.
+        """
+
         instances = payload.get("instances")
         if not isinstance(instances, list):
             return None
@@ -1474,6 +1757,15 @@ class EnvArenaClient(EnvClient):
         return None
 
     def delete_model_service(self, service_id: str) -> dict[str, Any]:
+        """Delete a model service.
+
+        Parameters:
+            service_id: Model service ID to delete.
+
+        Returns:
+            Empty or decoded EnvArena delete response.
+        """
+
         return self._request_json(
             "DELETE",
             f"/openapi/v1/model-services/{quote(service_id, safe='')}",
@@ -1481,34 +1773,80 @@ class EnvArenaClient(EnvClient):
             expected_statuses={204},
         )
 
+    @staticmethod
+    def _strict_model_config(model: Mapping[str, Any]) -> dict[str, Any]:
+        """Validate and normalize the public EnvArena model config.
+
+        Parameters:
+            model: Public model JSON object. Only ``type='ref'`` and
+                ``type='ckpt'`` are accepted.
+
+        Returns:
+            Normalized config with lower-cased ``type``.
+        """
+
+        if not isinstance(model, Mapping):
+            raise EnvArenaConfigurationError(
+                "model must be a JSON object with type='ckpt' or type='ref'."
+            )
+        config = dict(model)
+        kind = str(config.get("type") or "").strip().lower()
+        if kind not in {"ckpt", "ref"}:
+            raise EnvArenaConfigurationError("model.type must be 'ckpt' or 'ref'.")
+        config["type"] = kind
+        if kind == "ref":
+            ref = config.get("ref")
+            if ref is None or (isinstance(ref, str) and not ref.strip()):
+                raise EnvArenaConfigurationError("model type='ref' requires non-empty ref.")
+            return {"type": "ref", "ref": ref}
+
+        for field_name in ("model_path", "served_model_name", "base_model_id"):
+            value = str(config.get(field_name) or "").strip()
+            if not value:
+                raise EnvArenaConfigurationError(
+                    f"model type='ckpt' requires non-empty {field_name}."
+                )
+            config[field_name] = value
+        return config
+
     def ensure_model_service_for_ckpt(
         self,
-        ckpt: str | Mapping[str, Any],
+        model: Mapping[str, Any],
         *,
         job_config: Mapping[str, Any] | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        ckpt_config = dict(ckpt) if isinstance(ckpt, Mapping) else {"model_path": str(ckpt)}
-        if ckpt_config.get("type") == "ref" or (
-            "model_path" not in ckpt_config and any(key in ckpt_config for key in ("ref", "registry_ref", "key", "version"))
-        ):
-            registry_ref = self._optional_registry_ref_from_asset(ckpt_config)
-            model_name = str(ckpt_config.get("model_name") or ckpt_config.get("served_model_name") or "")
-            if registry_ref is None and ckpt_config.get("ref") is not None and "@" not in str(ckpt_config["ref"]):
-                model_name = str(ckpt_config["ref"])
-            if registry_ref is None and not model_name:
-                raise EnvArenaConfigurationError("ckpt ref requires model_name/served_model_name or registry ref.")
+        """Ensure a runtime model service or model registry ref for a model config.
+
+        Parameters:
+            model: Strict model config. Accepted forms are
+                ``{"type": "ref", "ref": "model@version"}`` for an existing
+                model registry version, or ``{"type": "ckpt", "model_path":
+                path, "served_model_name": name, "base_model_id": id}`` for a
+                checkpoint that should be served/registered. Extra fields are
+                treated as model-service overrides.
+            job_config: Optional job config. ``model_service`` may override
+                default service creation settings and can enable backend service
+                creation with ``enabled``/``create``/``create_service``.
+            metadata: Optional metadata merged into service creation metadata.
+
+        Returns:
+            Mapping with ``model_name`` and ``asset``. When ``model`` is already
+            a registry ref, ``registry_ref`` is included and no service is
+            started.
+        """
+
+        model_config = self._strict_model_config(model)
+        if model_config["type"] == "ref":
+            registry_ref = self._resolve_registry_ref("models", model_config["ref"], "model")
             return {
-                "model_name": model_name,
-                **({"registry_ref": registry_ref} if registry_ref is not None else {}),
+                "model_name": registry_ref.key,
+                "registry_ref": registry_ref,
                 "asset": {
-                    **({"model_name": model_name} if model_name else {}),
-                    **({"registry_ref": registry_ref.to_dict()} if registry_ref is not None else {}),
+                    "model_name": registry_ref.key,
+                    "registry_ref": registry_ref.to_dict(),
                 },
             }
-        if ckpt_config.get("model_name") and "model_path" not in ckpt_config:
-            model_name = str(ckpt_config["model_name"])
-            return {"model_name": model_name, "asset": {"model_name": model_name}}
 
         model_service_overrides = (job_config or {}).get("model_service") or {}
         if not isinstance(model_service_overrides, Mapping):
@@ -1517,26 +1855,20 @@ class EnvArenaClient(EnvClient):
             self.config.model_service_config,
             model_service_overrides,
         )
-        model_service_config = self._merge_job_config(model_service_config, ckpt_config)
+        model_service_config = self._merge_job_config(model_service_config, model_config)
         base_model_id = str(model_service_config.get("base_model_id") or "").strip()
-        model_path = str(model_service_config.get("model_path") or model_service_config.get("path") or "").strip()
+        model_path = str(model_service_config.get("model_path") or "").strip()
+        served_model_name = str(model_service_config.get("served_model_name") or "").strip()
         create_model_service_enabled = bool(
             model_service_config.get("enabled")
             or model_service_config.get("create")
             or model_service_config.get("create_service")
         )
-        if not model_path and not (base_model_id and create_model_service_enabled):
-            raise EnvArenaConfigurationError("ckpt must be a model path, runtime model ref, or registry model ref.")
-        served_model_name = str(
-            model_service_config.get("served_model_name")
-            or model_service_config.get("model_name")
-            or (self._model_instance_name_for(model_path) if model_path else "")
-        )
         if create_model_service_enabled:
             service = self.create_model_service(
-                served_model_name=served_model_name or None,
-                model_path=model_path or None,
-                base_model_id=base_model_id or None,
+                served_model_name=served_model_name,
+                model_path=model_path,
+                base_model_id=base_model_id,
                 image=model_service_config.get("image"),
                 replicas=model_service_config.get("replicas"),
                 readiness_policy=model_service_config.get("readiness_policy"),
@@ -1562,7 +1894,7 @@ class EnvArenaClient(EnvClient):
 
     def ensure_model_registry_for_ckpt(
         self,
-        ckpt: str | Mapping[str, Any],
+        model: Mapping[str, Any],
         *,
         key: str | None = None,
         version: str | None = None,
@@ -1587,25 +1919,71 @@ class EnvArenaClient(EnvClient):
         create_entity: bool = True,
         publish: bool = True,
     ) -> dict[str, Any]:
+        """Ensure a model registry version exists for a checkpoint/model input.
+
+        The method first resolves or creates a runtime model service through
+        ``ensure_model_service_for_ckpt``. If the input already contains a
+        registry ref, that ref is returned. Otherwise this method optionally
+        waits for the model service to become ready and then registers a model
+        version through EnvArena's agent-model registration API, falling back to
+        the older model-version API when necessary.
+
+        Parameters:
+            model: Strict model config. Use ``type='ref'`` with ``ref`` for
+                an existing model registry version, or ``type='ckpt'`` with
+                ``model_path``, ``served_model_name``, and ``base_model_id`` for
+                a checkpoint that should be served and registered.
+            key: Optional registry model key override.
+            version: Optional registry model version override.
+            name: Optional model entity display name.
+            description: Optional model entity description.
+            tags: Optional model entity tags.
+            metadata: Optional metadata for model service and registry assets.
+            job_config: Optional config. ``model_service`` controls service
+                creation; ``model_registry`` controls registry defaults.
+            wait_ready: Whether to poll model service readiness before
+                registering.
+            ready_timeout_seconds: Maximum readiness wait time.
+            ready_poll_seconds: Delay between readiness polls.
+            ready_statuses: Service statuses considered ready.
+            spec: Optional registry version spec overrides.
+            parameters: Optional model parameters injected into version spec.
+            env: Optional environment variables injected into version spec.
+            supersedes: Optional superseded model version.
+            storage_ref: Optional storage reference for the model version.
+            gateway_model_id: Optional gateway model ID passed to the register
+                endpoint. Defaults to runtime model name when absent.
+            base_url: Optional gateway base URL for agent-model registration.
+            api_key: Optional gateway API key for agent-model registration.
+            profile: Optional agent model profile enum or string.
+            create_entity: Whether to create/register the model entity.
+            publish: Whether to publish the created model version.
+
+        Returns:
+            Mapping containing ``model_name``, ``registry_ref``, source
+            ``asset``, model service details, registry responses, and final
+            version spec.
+        """
+
         raw_registry_config = (job_config or {}).get("model_registry") or {}
         if not isinstance(raw_registry_config, Mapping):
             raise EnvArenaConfigurationError("job_config.model_registry must be a mapping when set.")
         registry_config = dict(raw_registry_config)
         service_job_config = self._merge_job_config(job_config or {}, {"model_service": {"enabled": True}})
-        model = self.ensure_model_service_for_ckpt(ckpt, job_config=service_job_config, metadata=metadata)
-        existing_ref = model.get("registry_ref")
+        resolved_model = self.ensure_model_service_for_ckpt(model, job_config=service_job_config, metadata=metadata)
+        existing_ref = resolved_model.get("registry_ref")
         if existing_ref is not None:
             registry_ref = self._as_version_ref(existing_ref)
             return {
-                "model_name": model.get("model_name", ""),
+                "model_name": resolved_model.get("model_name", ""),
                 "registry_ref": registry_ref.to_dict(),
-                "asset": model.get("asset", {}),
+                "asset": resolved_model.get("asset", {}),
             }
 
-        model_name = str(model.get("model_name") or "").strip()
+        model_name = str(resolved_model.get("model_name") or "").strip()
         if not model_name:
             raise EnvArenaError("Cannot create a model registry version without a runtime model name.")
-        asset = dict(model.get("asset", {}))
+        asset = dict(resolved_model.get("asset", {}))
         model_service = asset.get("model_service")
         ready_service: dict[str, Any] | None = None
         if isinstance(model_service, Mapping):
@@ -1751,163 +2129,93 @@ class EnvArenaClient(EnvClient):
             "spec": version_spec,
         }
 
-    def submit_eval_by_existed_stream(
+    def submit_eval_by_stream(
         self,
-        ckpt: str | Mapping[str, Any],
+        model: Mapping[str, Any],
         stream_id: str,
         *,
         data_ids: Sequence[str] | None = None,
+        skills: Sequence[Mapping[str, Any]] | None = None,
+        rewards: Sequence[Mapping[str, Any]] | None = None,
         job_config: Mapping[str, Any] | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> EvalJob:
+        """Submit an evaluation directly against an existing EnvArena stream.
+
+        The method does not create or fork streams. It selects data from
+        ``stream_id``, resolves model/harness/reward refs, builds per-data batch
+        task overrides, and calls ``launch_stream_batch_task`` on the original
+        stream.
+
+        Parameters:
+            model: Strict model input. Existing registry model JSON example:
+                ``{"type": "ref", "ref": "model-a@1.0.0"}``. Checkpoint model
+                JSON example: ``{"type": "ckpt", "model_path": "/models/ckpt",
+                "served_model_name": "run-model", "base_model_id":
+                "bailing-v3"}``.
+            stream_id: Existing EnvArena stream ID. JSON string example:
+                ``"swe-bench-verified"``.
+            data_ids: Optional ordered subset of stream data IDs. JSON list
+                example: ``["env:repo__issue-1@1.0.0",
+                "env:repo__issue-2@1.0.0"]``. When omitted or empty, all
+                selected data IDs from the stream dataset API are used.
+            skills: Optional per-data skill list. Experience JSON example:
+                ``[{"data_id": "env:repo__issue-1@1.0.0", "type":
+                "experience", "content": "Prefer editing the failing test
+                first."}]``. Existing skill JSON example: ``[{"data_id":
+                "env:repo__issue-1@1.0.0", "type": "ref", "ref":
+                "skill-a@1.0.0"}]``. When provided, every selected data ID must
+                have exactly one skill binding.
+            rewards: Optional per-data reward list. JSON list example:
+                ``[{"data_id": "env:repo__issue-1@1.0.0", "ref":
+                "reward-a@1.0.0"}]``. Data IDs without an item use the
+                stream/job default reward.
+            job_config: Optional submit overrides. JSON object example:
+                ``{"selector": {"include_tags": ["train"]},
+                "concurrency_policy": {"max_concurrency": 8}, "experiment":
+                "rsi-eval", "model_ready_timeout_seconds": 1800}``.
+            metadata: Optional metadata copied to model registration and the
+                EnvArena batch job. JSON object example:
+                ``{"run_id": "run-1", "source": "train_eval"}``.
+
+        Returns:
+            ``EvalJob`` with the EnvArena job ID, selected data IDs, model ref,
+            default harness/reward refs, task IDs, generated assets, and raw
+            launch response.
+        """
+
         return self._submit_stream_eval(
             EnvArenaEvalRequest(
-                ckpt=ckpt,
+                model=model,
                 stream_id=stream_id,
                 data_ids=tuple(data_ids or ()),
-                job_config=dict(job_config or {}),
-                metadata=dict(metadata or {}),
-            ),
-            fork=False,
-        )
-
-    def submit_eval_by_fork_stream(
-        self,
-        ckpt: str | Mapping[str, Any],
-        stream_id: str,
-        data_ids: Sequence[str],
-        skills: Sequence[Mapping[str, Any] | str],
-        relationships: Sequence[Mapping[str, Any]],
-        reward: Mapping[str, Any] | str | None = None,
-        *,
-        job_config: Mapping[str, Any] | None = None,
-        metadata: Mapping[str, Any] | None = None,
-    ) -> EvalJob:
-        fork = self._fork_stream_for_eval(
-            EnvArenaEvalRequest(
-                ckpt=ckpt,
-                stream_id=stream_id,
-                data_ids=tuple(data_ids),
-                skills=tuple(skills),
-                relationships=tuple(relationships),
-                reward=reward,
+                skills=tuple(skills or ()),
+                rewards=tuple(rewards or ()),
                 job_config=dict(job_config or {}),
                 metadata=dict(metadata or {}),
             )
         )
-        fork_stream_id = str(fork["stream_id"])
-        fork_data_ids = [str(item["data_id"]) for item in fork["items"]]
-        job_metadata = {
-            **dict(metadata or {}),
-            "source_stream_id": stream_id,
-            "fork_stream_id": fork_stream_id,
-        }
-        job = self.submit_eval_by_existed_stream(
-            ckpt,
-            fork_stream_id,
-            data_ids=fork_data_ids,
-            job_config=job_config,
-            metadata=job_metadata,
-        )
-        job["fork_stream_id"] = fork_stream_id
-        job["source_stream_id"] = stream_id
-        job["assets"] = {
-            **dict(job.get("assets", {})),
-            "fork_stream": fork,
-            "relationships": [dict(item) for item in relationships],
-        }
-        return job
 
-    def _fork_stream_for_eval(self, request: EnvArenaEvalRequest) -> dict[str, Any]:
-        if not request.data_ids:
-            raise EnvArenaConfigurationError("fork stream evaluation requires at least one data_id.")
+    def _submit_stream_eval(self, request: EnvArenaEvalRequest) -> EvalJob:
+        """Execute the normalized stream evaluation request.
 
-        job_config = self._merge_job_config(self.config.job_config, self.config.stream_eval_config)
-        job_config = self._merge_job_config(job_config, request.job_config)
-        source_stream = self._stream_object(self.get_stream(request.stream_id))
-        source_stream_id = str(source_stream.get("stream_id") or request.stream_id)
-        selected_items = self._select_stream_dataset_items(
-            source_stream_id,
-            requested_data_ids=request.data_ids,
-            selector=job_config.get("selector"),
-            page_size=int(job_config.get("dataset_page_size", 1000)),
-        )
-        reward_ref = self._resolve_stream_reward_ref(source_stream, request.reward, job_config)
-        base_harness_ref = self._resolve_stream_harness_ref(source_stream, job_config)
-        relationships_by_data_id = self._relationships_by_data_id(request.relationships)
-        global_skill_refs, skill_refs_by_data_id = self._resolve_stream_skill_bindings(
-            request.skills,
-            relationships=request.relationships,
-        )
-        harness_cache: dict[tuple[tuple[str, str], ...], EnvArenaVersionRef] = {}
+        Parameters:
+            request: Fully normalized ``EnvArenaEvalRequest``. ``request.model``
+                describes the model, ``request.stream_id`` points to the source
+                stream, ``request.data_ids`` controls selection,
+                ``request.skills`` supplies per-data skill ref or experience
+                bindings, and ``request.rewards`` supplies per-data reward refs.
 
-        def harness_for_skill_refs(
-            skill_refs: Sequence[EnvArenaVersionRef],
-            *,
-            data_id: str | None = None,
-        ) -> EnvArenaVersionRef:
-            key = tuple((ref.key, ref.version) for ref in skill_refs)
-            if not key:
-                return base_harness_ref
-            if key not in harness_cache:
-                harness_cache[key] = self._create_fork_harness(
-                    base_harness_ref,
-                    skill_refs,
-                    source_stream_id,
-                    job_config,
-                    key_seed=f"{base_harness_ref.key}-{data_id}-fork-harness" if data_id else None,
-                    extra_metadata={"data_id": data_id} if data_id else None,
-                )
-            return harness_cache[key]
+        Returns:
+            ``EvalJob`` assembled from model registration output and the
+            EnvArena batch task response.
 
-        default_harness_ref = harness_for_skill_refs(global_skill_refs) if global_skill_refs else base_harness_ref
-        fork_items: list[dict[str, Any]] = []
-        for item in selected_items:
-            data_id = str(item.get("data_id", "")).strip()
-            if not data_id:
-                raise EnvArenaConfigurationError("stream dataset item is missing data_id.")
-            relationships = relationships_by_data_id.get(data_id, [])
-            task_harness_ref = self._stream_item_or_relationship_ref(
-                item,
-                relationships,
-                field_names=("harness_ref", "harness"),
-                collection="harnesses",
-                asset_name="harness",
-            )
-            if task_harness_ref is None:
-                task_skill_refs = self._dedupe_refs([*global_skill_refs, *skill_refs_by_data_id.get(data_id, [])])
-                task_harness_ref = (
-                    default_harness_ref
-                    if task_skill_refs == global_skill_refs
-                    else harness_for_skill_refs(task_skill_refs, data_id=data_id)
-                )
-            fork_items.append(
-                {
-                    "data_id": data_id,
-                    "harness_ref": task_harness_ref.to_dict(),
-                    "env_ref": self._env_ref_for_stream_item(item).to_dict(),
-                }
-            )
-
-        fork_stream_id = str(job_config.get("fork_stream_id") or self._derived_asset_key(f"{source_stream_id}-fork"))
-        return self.fork_stream(
-            source_stream_id,
-            fork_items,
-            stream_id=fork_stream_id,
-            name=str(request.metadata.get("fork_stream_name") or f"{source_stream.get('name', source_stream_id)} fork"),
-            description=str(request.metadata.get("fork_stream_description") or f"AReaL-RSI fork of stream {source_stream_id}"),
-            default_harness_ref=default_harness_ref,
-            default_reward_ref=reward_ref,
-            selector=job_config.get("selector"),
-            metadata={
-                **dict(request.metadata),
-                "relationships": json.dumps([dict(item) for item in request.relationships], ensure_ascii=True),
-            },
-        )
-
-    def _submit_stream_eval(self, request: EnvArenaEvalRequest, *, fork: bool) -> EvalJob:
-        if fork and not request.data_ids:
-            raise EnvArenaConfigurationError("fork stream evaluation requires at least one data_id.")
+        Raises:
+            EnvArenaConfigurationError: If required stream/model/harness/reward
+                refs are missing, selected data IDs cannot be found, or
+                experience/reward bindings are ambiguous.
+            EnvArenaError: If EnvArena accepts the request but returns no job ID.
+        """
 
         job_config = self._merge_job_config(self.config.job_config, self.config.stream_eval_config)
         job_config = self._merge_job_config(job_config, request.job_config)
@@ -1921,11 +2229,26 @@ class EnvArenaClient(EnvClient):
             selector=job_config.get("selector"),
             page_size=int(job_config.get("dataset_page_size", 1000)),
         )
-        reward_ref = self._resolve_stream_reward_ref(stream, request.reward, job_config)
+        selected_data_ids: list[str] = []
+        for item in selected_items:
+            data_id = str(item.get("data_id", "")).strip()
+            if not data_id:
+                raise EnvArenaConfigurationError("stream dataset item is missing data_id.")
+            selected_data_ids.append(data_id)
+
         base_harness_ref = self._resolve_stream_harness_ref(stream, job_config)
-        global_skill_refs, skill_refs_by_data_id = (
-            self._resolve_stream_skill_bindings(request.skills) if fork else ([], {})
+        reward_ref, reward_refs_by_data_id = self._resolve_stream_reward_bindings(
+            stream,
+            request.rewards,
+            job_config,
+            data_ids=selected_data_ids,
         )
+        experiences_by_data_id, skill_refs_by_data_id = self._resolve_stream_skill_bindings(
+            request.skills,
+            data_ids=selected_data_ids,
+        )
+        global_skill_refs: list[EnvArenaVersionRef] = []
+
         harness_cache: dict[tuple[tuple[str, str], ...], EnvArenaVersionRef] = {}
 
         def harness_for_skill_refs(
@@ -1933,6 +2256,19 @@ class EnvArenaClient(EnvClient):
             *,
             data_id: str | None = None,
         ) -> EnvArenaVersionRef:
+            """Return or create the harness ref for a skill-ref set.
+
+            Parameters:
+                skill_refs: Skill refs that should be present in the derived
+                    harness.
+                data_id: Optional data ID used when deriving task-specific
+                    harness keys and metadata.
+
+            Returns:
+                Base harness ref when ``skill_refs`` is empty, otherwise a
+                cached or newly created derived harness ref.
+            """
+
             key = tuple((ref.key, ref.version) for ref in skill_refs)
             if not key:
                 return base_harness_ref
@@ -1942,50 +2278,62 @@ class EnvArenaClient(EnvClient):
                     skill_refs,
                     source_stream_id,
                     job_config,
-                    key_seed=f"{base_harness_ref.key}-{data_id}-fork-harness" if data_id else None,
+                    key_seed=(
+                        f"{base_harness_ref.key}-{data_id}-stream-harness"
+                        if data_id
+                        else f"{base_harness_ref.key}-stream-harness"
+                    ),
                     extra_metadata={"data_id": data_id} if data_id else None,
                 )
             return harness_cache[key]
 
         harness_ref = (
             harness_for_skill_refs(global_skill_refs)
-            if fork and global_skill_refs
+            if global_skill_refs
             else base_harness_ref
         )
-        fork_stream_id = (
-            str(job_config.get("fork_stream_id") or self._derived_asset_key(f"{stream_id}-fork"))
-            if fork
-            else None
-        )
-        relationships_by_data_id = self._relationships_by_data_id(request.relationships)
         tasks: list[dict[str, Any]] = []
         all_skill_refs: list[EnvArenaVersionRef] = list(global_skill_refs)
+        experience_updates: list[dict[str, Any]] = []
         for item in selected_items:
             data_id = str(item.get("data_id", "")).strip()
-            if not data_id:
-                raise EnvArenaConfigurationError("stream dataset item is missing data_id.")
-            relationships = relationships_by_data_id.get(data_id, [])
-            relationship_skill_refs = self._resolve_relationship_skill_refs(relationships)
-            task_skill_refs = self._dedupe_refs(
-                [*global_skill_refs, *skill_refs_by_data_id.get(data_id, []), *relationship_skill_refs]
-            )
-            all_skill_refs = self._dedupe_refs([*all_skill_refs, *task_skill_refs])
-            task_harness_ref = self._stream_item_or_relationship_ref(
+            task_harness_ref = self._stream_item_ref(
                 item,
-                relationships,
                 field_names=("harness_ref", "harness"),
                 collection="harnesses",
                 asset_name="harness",
             )
-            if task_harness_ref is None and task_skill_refs != global_skill_refs:
-                task_harness_ref = harness_for_skill_refs(task_skill_refs, data_id=data_id)
-            task_reward_ref = self._stream_item_or_relationship_ref(
-                item,
-                relationships,
-                field_names=("reward_ref", "reward"),
-                collection="rewards",
-                asset_name="reward",
-            )
+            if data_id in experiences_by_data_id:
+                experience = experiences_by_data_id.get(data_id)
+                if experience is None:
+                    raise EnvArenaConfigurationError(f"stream data_id {data_id!r} has no bound experience.")
+                update = self._create_stream_data_experience_harness_version(
+                    stream_id=source_stream_id,
+                    data_id=data_id,
+                    harness_ref=task_harness_ref or base_harness_ref,
+                    experience=experience,
+                    job_config=job_config,
+                    metadata=request.metadata,
+                )
+                task_harness_ref = self._as_version_ref(update["harness_ref"])
+                all_skill_refs = self._dedupe_refs([*all_skill_refs, self._as_version_ref(update["skill_ref"])])
+                experience_updates.append(update)
+            else:
+                task_skill_refs = self._dedupe_refs(
+                    [*global_skill_refs, *skill_refs_by_data_id.get(data_id, [])]
+                )
+                all_skill_refs = self._dedupe_refs([*all_skill_refs, *task_skill_refs])
+                if task_harness_ref is None and task_skill_refs != global_skill_refs:
+                    task_harness_ref = harness_for_skill_refs(task_skill_refs, data_id=data_id)
+
+            task_reward_ref = reward_refs_by_data_id.get(data_id)
+            if task_reward_ref is None:
+                task_reward_ref = self._stream_item_ref(
+                    item,
+                    field_names=("reward_ref", "reward"),
+                    collection="rewards",
+                    asset_name="reward",
+                )
             task: dict[str, Any] = {"data_id": data_id}
             if task_harness_ref is not None and task_harness_ref != harness_ref:
                 task["harness_ref"] = task_harness_ref.to_dict()
@@ -1993,27 +2341,12 @@ class EnvArenaClient(EnvClient):
                 task["reward_ref"] = task_reward_ref.to_dict()
             tasks.append(task)
 
-        fork_stream: dict[str, Any] | None = None
-        if fork and fork_stream_id is not None:
-            fork_stream = self._create_fork_stream_record(
-                fork_stream_id=fork_stream_id,
-                source_stream=stream,
-                benchmark_ref=None,
-                harness_ref=harness_ref,
-                reward_ref=reward_ref,
-                data_items=selected_items,
-                skill_refs=all_skill_refs,
-                relationships=request.relationships,
-                metadata=request.metadata,
-            )
-
         model = self.ensure_model_registry_for_ckpt(
-            request.ckpt,
+            request.model,
             job_config=job_config,
             metadata={
                 **dict(request.metadata),
                 "source_stream_id": source_stream_id,
-                **({"fork_stream_id": fork_stream_id} if fork_stream_id else {}),
             },
             wait_ready=bool(job_config.get("wait_model_ready", True)),
             ready_timeout_seconds=float(job_config.get("model_ready_timeout_seconds", 1800)),
@@ -2025,13 +2358,11 @@ class EnvArenaClient(EnvClient):
         job_metadata = {
             **dict(request.metadata),
             "source": request.metadata.get("source", "eval"),
-            "stream_eval_mode": "fork" if fork else "existing",
+            "stream_eval_mode": "stream",
             "source_stream_id": source_stream_id,
-            **({"fork_stream_id": fork_stream_id} if fork_stream_id else {}),
         }
-        launch_stream_id = fork_stream_id or stream_id
         payload = self.launch_stream_batch_task(
-            launch_stream_id,
+            stream_id,
             model_ref=model_ref,
             tasks=tasks,
             harness_ref=harness_ref,
@@ -2051,23 +2382,22 @@ class EnvArenaClient(EnvClient):
                 "runtime_model_name": model.get("model_name") or model_ref.key,
                 "registry_ref": model_ref.to_dict(),
             },
-            "stream_id": launch_stream_id,
+            "stream_id": stream_id,
             "source_stream_id": source_stream_id,
             "harness_ref": harness_ref.to_dict(),
             "harness_config": {"harness_ref": harness_ref.to_dict()},
             "reward_ref": reward_ref.to_dict(),
             "task_ids": list(payload.get("task_ids", [])),
-            "selected_data_ids": selected_data_ids,
+            "selected_data_ids": list(selected_data_ids),
             "assets": {
                 "model": model["asset"],
                 "harness": harness_ref.to_dict(),
                 "reward": reward_ref.to_dict(),
                 "stream": stream,
-                "data_ids": selected_data_ids,
+                "data_ids": list(selected_data_ids),
                 "stream_tasks": tasks,
                 **({"skills": [ref.to_dict() for ref in all_skill_refs]} if all_skill_refs else {}),
-                **({"fork_stream": fork_stream or {"stream_id": fork_stream_id}} if fork_stream_id else {}),
-                **({"relationships": [dict(item) for item in request.relationships]} if request.relationships else {}),
+                **({"experience_updates": experience_updates} if experience_updates else {}),
             },
             "job_config": dict(job_config),
             "metadata": job_metadata,
@@ -2075,12 +2405,20 @@ class EnvArenaClient(EnvClient):
         }
         if not job["eval_job_id"]:
             raise EnvArenaError(f"EnvArena launch stream batch task returned no job_id: {payload}")
-        if fork_stream_id:
-            job["fork_stream_id"] = fork_stream_id
         return job
 
     @staticmethod
     def _stream_object(payload: Mapping[str, Any]) -> dict[str, Any]:
+        """Extract the stream object from an EnvArena get-stream response.
+
+        Parameters:
+            payload: Either a raw stream mapping or a wrapper mapping with a
+                ``stream`` field.
+
+        Returns:
+            Mutable ``dict`` copy of the stream object.
+        """
+
         stream = payload.get("stream", payload)
         if not isinstance(stream, Mapping):
             raise EnvArenaError("EnvArena get stream returned no stream object.")
@@ -2088,14 +2426,46 @@ class EnvArenaClient(EnvClient):
 
     @staticmethod
     def _stream_metadata(stream: Mapping[str, Any]) -> dict[str, Any]:
+        """Return normalized metadata from a stream object.
+
+        Parameters:
+            stream: Stream mapping returned by EnvArena.
+
+        Returns:
+            Metadata as a dict. Non-mapping metadata is treated as empty.
+        """
+
         metadata = stream.get("metadata", {})
         return dict(metadata) if isinstance(metadata, Mapping) else {}
 
     def _source_stream_id_for_stream(self, stream: Mapping[str, Any], stream_id: str) -> str:
+        """Resolve the original source stream ID for a stream-like object.
+
+        Parameters:
+            stream: Stream mapping that may contain ``source_stream_id`` either
+                directly or inside metadata.
+            stream_id: Fallback stream ID, usually the requested stream ID.
+
+        Returns:
+            The source stream ID if present, otherwise ``stream_id``.
+        """
+
         metadata = self._stream_metadata(stream)
         return str(metadata.get("source_stream_id") or stream.get("source_stream_id") or stream_id)
 
     def _fork_stream_items_from_stream(self, stream: Mapping[str, Any]) -> list[dict[str, Any]] | None:
+        """Decode legacy fork-stream item metadata.
+
+        Parameters:
+            stream: Stream object whose metadata may contain JSON-encoded
+                ``fork_items``.
+
+        Returns:
+            Normalized fork item list when metadata is present, otherwise
+            ``None``. This exists for backward compatibility with old fork
+            stream records; new submit flow does not create fork streams.
+        """
+
         metadata = self._stream_metadata(stream)
         raw_items = metadata.get("fork_items")
         if raw_items is None:
@@ -2133,6 +2503,17 @@ class EnvArenaClient(EnvClient):
         explicit_ref: EnvArenaVersionRef | Mapping[str, Any] | str | None,
         stream_ref: EnvArenaVersionRef | Mapping[str, Any] | str | None,
     ) -> EnvArenaVersionRef:
+        """Choose the default harness ref for legacy fork stream creation.
+
+        Parameters:
+            harness_refs: Per-item harness refs.
+            explicit_ref: Optional explicit default harness ref.
+            stream_ref: Optional source stream default harness ref.
+
+        Returns:
+            Explicit ref, sole unique item harness ref, or source stream ref.
+        """
+
         if explicit_ref is not None:
             return self._as_version_ref(explicit_ref)
         unique = self._dedupe_refs(harness_refs)
@@ -2147,6 +2528,17 @@ class EnvArenaClient(EnvClient):
         stream: Mapping[str, Any],
         job_config: Mapping[str, Any],
     ) -> EnvArenaVersionRef:
+        """Resolve the default harness ref for stream evaluation.
+
+        Parameters:
+            stream: Stream object that may define ``default_harness_ref``.
+            job_config: Merged job config. ``harness_ref`` or ``harness`` takes
+                precedence over the stream default.
+
+        Returns:
+            Normalized harness ``EnvArenaVersionRef``.
+        """
+
         config_ref = job_config.get("harness_ref", job_config.get("harness"))
         if config_ref is not None:
             return self._resolve_registry_ref("harnesses", config_ref, "harness")
@@ -2157,12 +2549,138 @@ class EnvArenaClient(EnvClient):
             )
         return self._as_version_ref(stream_ref)
 
+    def _resolve_stream_reward_bindings(
+        self,
+        stream: Mapping[str, Any],
+        rewards_config: Sequence[Mapping[str, Any]],
+        job_config: Mapping[str, Any],
+        *,
+        data_ids: Sequence[str],
+    ) -> tuple[EnvArenaVersionRef, dict[str, EnvArenaVersionRef]]:
+        """Resolve default and per-data reward refs for stream batch tasks.
+
+        Parameters:
+            stream: Stream object that may provide ``default_reward_ref``.
+            rewards_config: JSON-list-style reward bindings. Each item must be
+                a mapping with ``data_id`` and ``ref``. ``ref`` accepts
+                ``"key@version"``, ``{"key": ..., "version": ...}``, or
+                ``{"type": "ref", ...}``.
+            job_config: Merged job config. ``reward_ref`` or ``reward`` is used
+                as the default reward fallback when present.
+            data_ids: Selected data IDs. Reward bindings may only target these
+                IDs.
+
+        Returns:
+            Tuple of ``(default_reward_ref, per_data_reward_refs)``.
+        """
+
+        refs_by_data_id = self._stream_reward_config_bindings(rewards_config, data_ids=data_ids)
+        default_config = job_config.get("reward_ref", job_config.get("reward"))
+
+        if default_config is not None:
+            default_ref = self._resolve_stream_reward_config(default_config)
+        else:
+            stream_ref = stream.get("default_reward_ref")
+            if stream_ref is None:
+                raise EnvArenaConfigurationError(
+                    "stream evaluation requires rewards/reward_ref in request/job_config or stream.default_reward_ref."
+                )
+            default_ref = self._as_version_ref(stream_ref)
+        return default_ref, refs_by_data_id
+
+    def _stream_reward_config_bindings(
+        self,
+        config: Sequence[Mapping[str, Any]],
+        *,
+        data_ids: Sequence[str],
+    ) -> dict[str, EnvArenaVersionRef]:
+        """Parse JSON-list-style per-data reward bindings.
+
+        Parameters:
+            config: Sequence of mappings. Each mapping must contain ``data_id``
+                and ``ref``.
+            data_ids: Selected data IDs. Bindings outside this set are rejected.
+
+        Returns:
+            Mapping from data ID to reward ref.
+        """
+
+        refs_by_data_id: dict[str, EnvArenaVersionRef] = {}
+        selected = {str(data_id) for data_id in data_ids}
+        for item in config:
+            if not isinstance(item, Mapping):
+                raise EnvArenaConfigurationError("rewards items must be mappings with data_id and ref.")
+            data_id = str(item.get("data_id") or "").strip()
+            if not data_id:
+                raise EnvArenaConfigurationError("rewards items require non-empty data_id.")
+            if data_id not in selected:
+                raise EnvArenaConfigurationError(f"reward binding for data_id {data_id!r} is not selected.")
+            if data_id in refs_by_data_id:
+                raise EnvArenaConfigurationError(f"data_id {data_id!r} has multiple reward bindings.")
+            if item.get("ref") is None:
+                raise EnvArenaConfigurationError(f"reward binding for data_id {data_id!r} requires ref.")
+            refs_by_data_id[data_id] = self._resolve_registry_ref("rewards", item["ref"], "reward")
+        return refs_by_data_id
+
+    def _resolve_stream_reward_config(self, config: Any) -> EnvArenaVersionRef:
+        """Resolve one reward config into a registry version ref.
+
+        Parameters:
+            config: Reward ref/config. Accepted forms are ``EnvArenaVersionRef``,
+                ``"key@version"``, ``{"key": ..., "version": ...}``,
+                ``{"type": "ref", ...}``, or ``{"type": "new", ...}``.
+
+        Returns:
+            Published reward version ref. ``type='new'`` configs create the
+            reward asset before returning its ref.
+        """
+
+        if isinstance(config, Mapping) and config.get("type") in {"new", "ref"}:
+            ref = self._resolve_optional_registry_asset("rewards", config)
+            if ref is None:
+                raise EnvArenaConfigurationError("reward config did not resolve to a registry ref.")
+            return ref
+        return self._resolve_registry_ref("rewards", config, "reward")
+
+    @staticmethod
+    def _looks_like_registry_ref_or_asset_config(config: Mapping[str, Any]) -> bool:
+        """Return whether a mapping is a single registry ref or asset config.
+
+        Parameters:
+            config: Candidate mapping.
+
+        Returns:
+            ``True`` for ``type='new'``/``type='ref'``, ``ref``,
+            ``registry_ref``, or direct ``key``/``version`` mappings.
+        """
+
+        if str(config.get("type") or "").strip().lower() in {"new", "ref"}:
+            return True
+        if config.get("ref") is not None or config.get("registry_ref") is not None:
+            return True
+        return config.get("key") is not None and config.get("version") is not None
+
     def _resolve_stream_reward_ref(
         self,
         stream: Mapping[str, Any],
         reward_config: Mapping[str, Any] | str | None,
         job_config: Mapping[str, Any],
     ) -> EnvArenaVersionRef:
+        """Resolve the legacy single reward ref for stream evaluation.
+
+        Parameters:
+            stream: Stream object that may define ``default_reward_ref``.
+            reward_config: Optional explicit reward ref/config from older call
+                paths. Accepted forms are ``"key@version"``, ``{"key":
+                ..., "version": ...}``, or ``type='new'``/``type='ref'`` asset
+                config.
+            job_config: Merged job config; ``reward_ref`` or ``reward`` is used
+                when ``reward_config`` is not provided.
+
+        Returns:
+            Normalized reward registry ref.
+        """
+
         config_ref = reward_config if reward_config is not None else job_config.get("reward_ref", job_config.get("reward"))
         if config_ref is not None:
             if isinstance(config_ref, Mapping) and config_ref.get("type") in {"new", "ref"}:
@@ -2186,6 +2704,20 @@ class EnvArenaClient(EnvClient):
         selector: Mapping[str, Any] | None,
         page_size: int,
     ) -> list[dict[str, Any]]:
+        """Select stream dataset items and preserve requested order.
+
+        Parameters:
+            stream_id: Existing EnvArena stream ID.
+            requested_data_ids: Optional ordered data IDs. When empty, all
+                items returned by paginated selection are included.
+            selector: Optional EnvArena dataset selector mapping.
+            page_size: Number of dataset items requested per page.
+
+        Returns:
+            List of selected dataset item mappings. For explicit
+            ``requested_data_ids``, the return order matches the request.
+        """
+
         wanted = [str(data_id) for data_id in requested_data_ids]
         wanted_set = set(wanted)
         found: dict[str, dict[str, Any]] = {}
@@ -2218,119 +2750,1086 @@ class EnvArenaClient(EnvClient):
             raise EnvArenaConfigurationError(f"stream {stream_id!r} selected no data_ids.")
         return items
 
-    @staticmethod
-    def _relationships_by_data_id(relationships: Sequence[Mapping[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-        by_data_id: dict[str, list[dict[str, Any]]] = {}
-        for relationship in relationships:
-            data_id = str(relationship.get("data_id", "")).strip()
-            if data_id:
-                by_data_id.setdefault(data_id, []).append(dict(relationship))
-        return by_data_id
-
-    def _stream_item_or_relationship_ref(
+    def _stream_item_ref(
         self,
         item: Mapping[str, Any],
-        relationships: Sequence[Mapping[str, Any]],
         *,
         field_names: Sequence[str],
         collection: str,
         asset_name: str,
     ) -> EnvArenaVersionRef | None:
+        """Resolve a registry ref from a stream item.
+
+        Parameters:
+            item: Stream dataset item. It may carry fields such as
+                ``harness_ref`` or ``reward_ref``.
+            field_names: Candidate field names to inspect in order.
+            collection: Registry collection name, for example ``harnesses`` or
+                ``rewards``.
+            asset_name: Human-readable asset name used in validation errors.
+
+        Returns:
+            Resolved registry ref, or ``None`` when no candidate field is set.
+        """
+
         for field_name in field_names:
             if item.get(field_name) is not None:
                 return self._resolve_registry_ref(collection, item[field_name], asset_name)
-        for relationship in relationships:
-            for field_name in field_names:
-                if relationship.get(field_name) is not None:
-                    return self._resolve_registry_ref(collection, relationship[field_name], asset_name)
         return None
+
+    @staticmethod
+    def _stream_experience_config(experience: Mapping[str, Any] | str) -> dict[str, Any]:
+        """Normalize raw experience input into a mutable mapping.
+
+        Parameters:
+            experience: Non-empty string experience text or mapping-shaped
+                experience config.
+
+        Returns:
+            Experience mapping. String input is wrapped as
+            ``{"experience": text}``.
+        """
+
+        if isinstance(experience, str):
+            text = experience.strip()
+            if not text:
+                raise EnvArenaConfigurationError("stream experience update text must be non-empty.")
+            return {"experience": text}
+        if not isinstance(experience, Mapping):
+            raise EnvArenaConfigurationError("stream experience update must be a mapping or non-empty string.")
+        return dict(experience)
+
+    def _create_stream_data_experience_harness_version(
+        self,
+        *,
+        stream_id: str,
+        data_id: str,
+        harness_ref: EnvArenaVersionRef,
+        experience: Mapping[str, Any],
+        job_config: Mapping[str, Any],
+        metadata: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Create skill and harness versions for one data item's experience.
+
+        Parameters:
+            stream_id: Source stream ID used for generated metadata.
+            data_id: Stream data ID receiving the new experience.
+            harness_ref: Current harness version for this data item.
+            experience: Normalized experience config. It may include target
+                skill selectors, explicit version names, supersedes values,
+                storage refs, publish flags, and entity/spec metadata.
+            job_config: Merged job config used for default generated version
+                names and policy.
+            metadata: Submit metadata copied into generated specs.
+
+        Returns:
+            Summary containing previous/new harness refs, previous/new skill
+            refs, normalized experience record, and raw create/publish payloads.
+        """
+
+        harness_payload = self.get_harness_version(harness_ref.key, harness_ref.version)
+        harness_spec = deepcopy(dict(harness_payload.get("spec") or {}))
+        if not harness_spec:
+            raise EnvArenaError(f"Harness {harness_ref.key}@{harness_ref.version} has no spec.")
+
+        old_skill_ref = self._select_harness_experience_skill_ref(
+            harness_ref=harness_ref,
+            harness_spec=harness_spec,
+            experience=experience,
+        )
+        experience_record = self._experience_record_for_data_id(data_id, experience)
+        if old_skill_ref is None:
+            return self._create_new_stream_data_experience_skill_and_harness(
+                stream_id=stream_id,
+                data_id=data_id,
+                harness_ref=harness_ref,
+                harness_spec=harness_spec,
+                experience=experience,
+                experience_record=experience_record,
+                job_config=job_config,
+                metadata=metadata,
+            )
+
+        skill_payload = self.get_skill_version(old_skill_ref.key, old_skill_ref.version)
+        skill_spec = deepcopy(dict(skill_payload.get("spec") or {}))
+        if not skill_spec:
+            raise EnvArenaError(f"Skill {old_skill_ref.key}@{old_skill_ref.version} has no spec.")
+
+        new_skill_ref = EnvArenaVersionRef(
+            key=old_skill_ref.key,
+            version=self._experience_update_version(
+                experience,
+                job_config,
+                old_version=old_skill_ref.version,
+                field_names=("version", "skill_version", "new_skill_version"),
+                config_section="experience_skill",
+            ),
+        )
+        updated_skill_spec = self._skill_spec_with_experience(
+            base_spec=skill_spec,
+            data_id=data_id,
+            experience=experience,
+            experience_record=experience_record,
+            old_skill_ref=old_skill_ref,
+            new_skill_ref=new_skill_ref,
+            stream_id=stream_id,
+            harness_ref=harness_ref,
+            metadata=metadata,
+        )
+        skill_version_payload = self.create_skill_version(
+            old_skill_ref.key,
+            version=new_skill_ref.version,
+            spec=updated_skill_spec,
+            supersedes=str(experience.get("skill_supersedes") or experience.get("supersedes") or old_skill_ref.version),
+            storage_ref=experience.get("skill_storage_ref", experience.get("storage_ref")),
+        )
+        skill_publish_payload = (
+            self.publish_skill_version(new_skill_ref.key, new_skill_ref.version)
+            if bool(experience.get("publish_skill", experience.get("publish", True)))
+            else None
+        )
+
+        new_harness_ref = EnvArenaVersionRef(
+            key=harness_ref.key,
+            version=self._experience_update_version(
+                experience,
+                job_config,
+                old_version=harness_ref.version,
+                field_names=("harness_version", "new_harness_version"),
+                config_section="experience_harness",
+            ),
+        )
+        updated_harness_spec = self._harness_spec_with_replaced_skill(
+            harness_spec=harness_spec,
+            old_harness_ref=harness_ref,
+            new_harness_ref=new_harness_ref,
+            old_skill_ref=old_skill_ref,
+            new_skill_ref=new_skill_ref,
+            stream_id=stream_id,
+            data_id=data_id,
+            metadata=metadata,
+        )
+        harness_version_payload = self.create_harness_version(
+            harness_ref.key,
+            version=new_harness_ref.version,
+            spec=updated_harness_spec,
+            supersedes=str(experience.get("harness_supersedes") or harness_ref.version),
+            storage_ref=experience.get("harness_storage_ref"),
+        )
+        harness_publish_payload = (
+            self.publish_harness_version(new_harness_ref.key, new_harness_ref.version)
+            if bool(experience.get("publish_harness", experience.get("publish", True)))
+            else None
+        )
+        return {
+            "stream_id": stream_id,
+            "data_id": data_id,
+            "previous_harness_ref": harness_ref.to_dict(),
+            "harness_ref": new_harness_ref.to_dict(),
+            "previous_skill_ref": old_skill_ref.to_dict(),
+            "skill_ref": new_skill_ref.to_dict(),
+            "experience_record": experience_record,
+            "skill_version": skill_version_payload,
+            "skill_publish": skill_publish_payload,
+            "harness_version": harness_version_payload,
+            "harness_publish": harness_publish_payload,
+        }
+
+    def _create_new_stream_data_experience_skill_and_harness(
+        self,
+        *,
+        stream_id: str,
+        data_id: str,
+        harness_ref: EnvArenaVersionRef,
+        harness_spec: Mapping[str, Any],
+        experience: Mapping[str, Any],
+        experience_record: Mapping[str, Any],
+        job_config: Mapping[str, Any],
+        metadata: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Create a new experience skill and harness when none exists.
+
+        Parameters:
+            stream_id: Source stream ID used in generated metadata.
+            data_id: Stream data ID receiving the experience.
+            harness_ref: Base harness version used as the template.
+            harness_spec: Spec of the base harness.
+            experience: Normalized experience config with optional key,
+                version, name, description, tags, publish, and storage fields.
+            experience_record: Structured per-task experience record to embed
+                into the generated skill spec.
+            job_config: Merged job config used for generated key/version
+                defaults.
+            metadata: Submit metadata copied to generated assets.
+
+        Returns:
+            Summary containing created skill and harness refs plus raw
+            create/publish payloads.
+        """
+
+        new_skill_ref = self._new_experience_skill_ref(
+            stream_id=stream_id,
+            data_id=data_id,
+            experience=experience,
+            job_config=job_config,
+        )
+        skill_name = str(
+            experience.get("skill_name")
+            or experience.get("name")
+            or f"AReaL-RSI experience skill for {data_id}"
+        )
+        skill_description = str(
+            experience.get("skill_description")
+            or experience.get("description")
+            or f"Task-specific experience generated for stream data {data_id}."
+        )
+        skill_entity = self.create_skill(
+            key=new_skill_ref.key,
+            name=skill_name,
+            description=skill_description,
+            tags=list(experience.get("skill_tags", ["areal-rsi", "experience-update"])),
+            metadata={
+                **dict(metadata),
+                **(
+                    dict(experience.get("skill_entity_metadata", {}))
+                    if isinstance(experience.get("skill_entity_metadata"), Mapping)
+                    else {}
+                ),
+                "generated_by": "areal-rsi",
+                "source_stream_id": stream_id,
+                "data_id": data_id,
+                "base_harness_ref": f"{harness_ref.key}@{harness_ref.version}",
+            },
+        )
+        updated_skill_spec = self._skill_spec_with_experience(
+            base_spec=self._new_experience_skill_base_spec(
+                name=skill_name,
+                description=skill_description,
+                experience=experience,
+            ),
+            data_id=data_id,
+            experience=experience,
+            experience_record=experience_record,
+            old_skill_ref=None,
+            new_skill_ref=new_skill_ref,
+            stream_id=stream_id,
+            harness_ref=harness_ref,
+            metadata=metadata,
+        )
+        skill_version_payload = self.create_skill_version(
+            new_skill_ref.key,
+            version=new_skill_ref.version,
+            spec=updated_skill_spec,
+            supersedes=experience.get("skill_supersedes", experience.get("supersedes")),
+            storage_ref=experience.get("skill_storage_ref", experience.get("storage_ref")),
+        )
+        skill_publish_payload = (
+            self.publish_skill_version(new_skill_ref.key, new_skill_ref.version)
+            if bool(experience.get("publish_skill", experience.get("publish", True)))
+            else None
+        )
+
+        new_harness_ref = self._new_experience_harness_ref(
+            base_harness_ref=harness_ref,
+            data_id=data_id,
+            experience=experience,
+            job_config=job_config,
+        )
+        harness_name = str(
+            experience.get("harness_name")
+            or f"AReaL-RSI experience harness for {data_id}"
+        )
+        harness_description = str(
+            experience.get("harness_description")
+            or f"AReaL-RSI harness derived from {harness_ref.key}@{harness_ref.version}."
+        )
+        harness_entity = self.create_harness(
+            key=new_harness_ref.key,
+            name=harness_name,
+            description=harness_description,
+            tags=list(experience.get("harness_tags", ["areal-rsi", "experience-update"])),
+            metadata={
+                **dict(metadata),
+                **(
+                    dict(experience.get("harness_entity_metadata", {}))
+                    if isinstance(experience.get("harness_entity_metadata"), Mapping)
+                    else {}
+                ),
+                "generated_by": "areal-rsi",
+                "source_stream_id": stream_id,
+                "data_id": data_id,
+                "base_harness_ref": f"{harness_ref.key}@{harness_ref.version}",
+                "skill_ref": f"{new_skill_ref.key}@{new_skill_ref.version}",
+            },
+        )
+        updated_harness_spec = self._harness_spec_with_added_skill(
+            harness_spec=harness_spec,
+            old_harness_ref=harness_ref,
+            new_harness_ref=new_harness_ref,
+            new_skill_ref=new_skill_ref,
+            stream_id=stream_id,
+            data_id=data_id,
+            metadata=metadata,
+        )
+        harness_version_payload = self.create_harness_version(
+            new_harness_ref.key,
+            version=new_harness_ref.version,
+            spec=updated_harness_spec,
+            supersedes=experience.get("harness_supersedes"),
+            storage_ref=experience.get("harness_storage_ref"),
+        )
+        harness_publish_payload = (
+            self.publish_harness_version(new_harness_ref.key, new_harness_ref.version)
+            if bool(experience.get("publish_harness", experience.get("publish", True)))
+            else None
+        )
+        return {
+            "stream_id": stream_id,
+            "data_id": data_id,
+            "previous_harness_ref": harness_ref.to_dict(),
+            "harness_ref": new_harness_ref.to_dict(),
+            "previous_skill_ref": None,
+            "skill_ref": new_skill_ref.to_dict(),
+            "experience_record": dict(experience_record),
+            "skill_entity": skill_entity,
+            "skill_version": skill_version_payload,
+            "skill_publish": skill_publish_payload,
+            "harness_entity": harness_entity,
+            "harness_version": harness_version_payload,
+            "harness_publish": harness_publish_payload,
+        }
+
+    def _select_harness_experience_skill_ref(
+        self,
+        *,
+        harness_ref: EnvArenaVersionRef,
+        harness_spec: Mapping[str, Any],
+        experience: Mapping[str, Any],
+    ) -> EnvArenaVersionRef | None:
+        """Choose the existing harness skill that should receive experience.
+
+        Parameters:
+            harness_ref: Current harness registry ref, used for error messages.
+            harness_spec: Harness spec containing optional ``skill_refs``.
+            experience: Experience config. It may select a skill with
+                ``skill_ref``/``target_skill_ref`` or
+                ``skill_key``/``target_skill_key``.
+
+        Returns:
+            Selected skill ref, ``None`` when the harness has no skill refs, or
+            raises if multiple skills exist and no unambiguous target is given.
+        """
+
+        raw_skill_refs = harness_spec.get("skill_refs", [])
+        if raw_skill_refs is None:
+            raw_skill_refs = []
+        if isinstance(raw_skill_refs, str) or not isinstance(raw_skill_refs, Sequence):
+            raise EnvArenaError(f"Harness {harness_ref.key}@{harness_ref.version} has invalid skill_refs.")
+        skill_refs = [self._as_version_ref(ref) for ref in raw_skill_refs]
+        if not skill_refs:
+            return None
+
+        target_ref = self._experience_target_skill_ref(experience)
+        if target_ref is not None:
+            for skill_ref in skill_refs:
+                if skill_ref == target_ref:
+                    return skill_ref
+            return None
+
+        target_key = self._experience_target_skill_key(experience)
+        if target_key:
+            matches = [skill_ref for skill_ref in skill_refs if skill_ref.key == target_key]
+            if len(matches) == 1:
+                return matches[0]
+            if not matches:
+                return None
+            raise EnvArenaConfigurationError(
+                f"Harness {harness_ref.key}@{harness_ref.version} contains multiple versions of skill "
+                f"{target_key!r}; use skill_ref to select one."
+            )
+
+        if len(skill_refs) == 1:
+            return skill_refs[0]
+        raise EnvArenaConfigurationError(
+            f"Harness {harness_ref.key}@{harness_ref.version} has multiple skill_refs; "
+            "stream experience update requires skill_key or skill_ref."
+        )
+
+    def _experience_target_skill_ref(self, experience: Mapping[str, Any]) -> EnvArenaVersionRef | None:
+        """Read an explicit target skill ref from experience config.
+
+        Parameters:
+            experience: Experience config that may contain ``skill_ref`` or
+                ``target_skill_ref``.
+
+        Returns:
+            Parsed skill ref, or ``None`` when no explicit ref is set.
+        """
+
+        for field_name in ("skill_ref", "target_skill_ref"):
+            if experience.get(field_name) is not None:
+                return self._as_version_ref(experience[field_name])
+        return None
+
+    @staticmethod
+    def _experience_target_skill_key(experience: Mapping[str, Any]) -> str:
+        """Read an explicit target skill key from experience config.
+
+        Parameters:
+            experience: Experience config that may contain ``skill_key`` or
+                ``target_skill_key``.
+
+        Returns:
+            Non-empty skill key, or an empty string when absent.
+        """
+
+        for field_name in ("skill_key", "target_skill_key"):
+            value = str(experience.get(field_name) or "").strip()
+            if value:
+                return value
+        return ""
+
+    def _new_experience_skill_ref(
+        self,
+        *,
+        stream_id: str,
+        data_id: str,
+        experience: Mapping[str, Any],
+        job_config: Mapping[str, Any],
+    ) -> EnvArenaVersionRef:
+        """Build the new skill ref for a generated experience skill.
+
+        Parameters:
+            stream_id: Source stream ID used in derived-key seed.
+            data_id: Stream data ID used in derived-key seed.
+            experience: Experience config. It may provide explicit
+                ``skill_ref``, ``skill_key``, ``target_skill_key``,
+                ``new_skill_key``, ``version``, ``skill_version``, or
+                ``new_skill_version``.
+            job_config: Merged job config. ``experience_skill`` may provide
+                default ``key``/``version`` values.
+
+        Returns:
+            New skill registry ref.
+        """
+
+        target_ref = self._experience_target_skill_ref(experience)
+        key = (
+            str(target_ref.key)
+            if target_ref is not None
+            else self._new_experience_asset_key(
+                experience,
+                job_config,
+                field_names=("skill_key", "target_skill_key", "new_skill_key"),
+                config_section="experience_skill",
+                seed=f"{stream_id}-{data_id}-experience-skill",
+            )
+        )
+        version = self._new_experience_asset_version(
+            experience,
+            job_config,
+            field_names=("version", "skill_version", "new_skill_version"),
+            config_section="experience_skill",
+            default=str(target_ref.version) if target_ref is not None else "1.0.0",
+        )
+        return EnvArenaVersionRef(key=key, version=version)
+
+    def _new_experience_harness_ref(
+        self,
+        *,
+        base_harness_ref: EnvArenaVersionRef,
+        data_id: str,
+        experience: Mapping[str, Any],
+        job_config: Mapping[str, Any],
+    ) -> EnvArenaVersionRef:
+        """Build the new harness ref for a generated experience harness.
+
+        Parameters:
+            base_harness_ref: Harness ref used as the template and derived-key
+                seed.
+            data_id: Stream data ID used in derived-key seed.
+            experience: Experience config. It may provide ``harness_key``,
+                ``target_harness_key``, ``new_harness_key``,
+                ``harness_version``, or ``new_harness_version``.
+            job_config: Merged job config. ``experience_harness`` may provide
+                default ``key``/``version`` values.
+
+        Returns:
+            New harness registry ref.
+        """
+
+        key = self._new_experience_asset_key(
+            experience,
+            job_config,
+            field_names=("harness_key", "target_harness_key", "new_harness_key"),
+            config_section="experience_harness",
+            seed=f"{base_harness_ref.key}-{data_id}-experience-harness",
+        )
+        version = self._new_experience_asset_version(
+            experience,
+            job_config,
+            field_names=("harness_version", "new_harness_version"),
+            config_section="experience_harness",
+            default="1.0.0",
+        )
+        return EnvArenaVersionRef(key=key, version=version)
+
+    def _new_experience_asset_key(
+        self,
+        experience: Mapping[str, Any],
+        job_config: Mapping[str, Any],
+        *,
+        field_names: Sequence[str],
+        config_section: str,
+        seed: str,
+    ) -> str:
+        """Resolve a generated experience asset key.
+
+        Parameters:
+            experience: Experience config checked first for explicit key fields.
+            job_config: Merged job config checked second for ``config_section``.
+            field_names: Experience/job-config field names to inspect.
+            config_section: Job config section name, such as
+                ``experience_skill`` or ``experience_harness``.
+            seed: Fallback seed used to derive a unique Arena key.
+
+        Returns:
+            Explicit key when provided, otherwise a derived asset key.
+        """
+
+        for field_name in field_names:
+            value = str(experience.get(field_name) or "").strip()
+            if value:
+                return value
+        section = job_config.get(config_section)
+        if isinstance(section, Mapping):
+            for field_name in ("key", *field_names):
+                value = str(section.get(field_name) or "").strip()
+                if value:
+                    return value
+        return self._derived_asset_key(seed)
+
+    @staticmethod
+    def _new_experience_asset_version(
+        experience: Mapping[str, Any],
+        job_config: Mapping[str, Any],
+        *,
+        field_names: Sequence[str],
+        config_section: str,
+        default: str,
+    ) -> str:
+        """Resolve a generated experience asset version.
+
+        Parameters:
+            experience: Experience config checked first for explicit version
+                fields.
+            job_config: Merged job config checked second for ``config_section``.
+            field_names: Experience/job-config version field names to inspect.
+            config_section: Job config section name, such as
+                ``experience_skill`` or ``experience_harness``.
+            default: Version returned when no explicit value is found.
+
+        Returns:
+            Resolved version string.
+        """
+
+        for field_name in field_names:
+            value = str(experience.get(field_name) or "").strip()
+            if value:
+                return value
+        section = job_config.get(config_section)
+        if isinstance(section, Mapping):
+            for field_name in ("version", *field_names):
+                value = str(section.get(field_name) or "").strip()
+                if value:
+                    return value
+        return default
+
+    @staticmethod
+    def _new_experience_skill_base_spec(
+        *,
+        name: str,
+        description: str,
+        experience: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Create the base spec for a new inline experience skill.
+
+        Parameters:
+            name: Skill display name used in the manifest when absent from
+                ``experience.spec``.
+            description: Skill description used in the manifest when absent.
+            experience: Experience config. Optional fields include ``spec``,
+                ``bundle_uri``, ``bundle_media_type``, ``manifest_metadata``,
+                ``source_uri``, and ``source_kind``.
+
+        Returns:
+            Skill spec with ``bundle`` and ``manifest`` populated.
+        """
+
+        spec = deepcopy(dict(experience.get("spec") or {})) if isinstance(experience.get("spec"), Mapping) else {}
+        bundle = dict(spec.get("bundle", {})) if isinstance(spec.get("bundle"), Mapping) else {}
+        if not bundle:
+            bundle = {
+                "uri": str(experience.get("bundle_uri") or "inline://areal-rsi/experience-skill"),
+                "media_type": str(
+                    experience.get("bundle_media_type") or "application/vnd.areal.skill.experience+json"
+                ),
+            }
+        spec["bundle"] = bundle
+
+        manifest = dict(spec.get("manifest", {})) if isinstance(spec.get("manifest"), Mapping) else {}
+        manifest.setdefault("name", name)
+        manifest.setdefault("description", description)
+        if isinstance(experience.get("manifest_metadata"), Mapping):
+            manifest_metadata = dict(manifest.get("metadata", {})) if isinstance(manifest.get("metadata"), Mapping) else {}
+            manifest_metadata.update(dict(experience["manifest_metadata"]))
+            manifest["metadata"] = manifest_metadata
+        spec["manifest"] = manifest
+        if experience.get("source_uri") is not None and "source" not in spec:
+            spec["source"] = {
+                "kind": str(experience.get("source_kind") or "url"),
+                "uri": str(experience["source_uri"]),
+            }
+        return spec
+
+    def _experience_update_version(
+        self,
+        experience: Mapping[str, Any],
+        job_config: Mapping[str, Any],
+        *,
+        old_version: str,
+        field_names: Sequence[str],
+        config_section: str,
+    ) -> str:
+        """Resolve the next version for updating an existing asset.
+
+        Parameters:
+            experience: Experience config checked first for explicit version
+                fields.
+            job_config: Merged job config checked second for ``config_section``.
+            old_version: Current version used as the fallback prefix.
+            field_names: Version field names to inspect.
+            config_section: Job config section name, such as
+                ``experience_skill`` or ``experience_harness``.
+
+        Returns:
+            Explicit version when provided, otherwise ``old_version`` suffixed
+            with an RSI-generated identifier.
+        """
+
+        for field_name in field_names:
+            value = str(experience.get(field_name) or "").strip()
+            if value:
+                return value
+        section = job_config.get(config_section)
+        if isinstance(section, Mapping):
+            for field_name in ("version", *field_names):
+                value = str(section.get(field_name) or "").strip()
+                if value:
+                    return value
+        return f"{old_version}-rsi-{uuid4().hex[:8]}"
+
+    def _experience_record_for_data_id(
+        self,
+        data_id: str,
+        experience: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Build the structured task-experience record for one data ID.
+
+        Parameters:
+            data_id: Stream data ID used as the canonical ``task_id``.
+            experience: Experience config. Supported forms include nested
+                ``experience_record``, ``task_experience``, mapping-shaped
+                ``experience``, or text fields ``experience``, ``content``, and
+                ``text``. Optional metadata fields include ``source_traj_ids``,
+                ``analysis``, ``training_recommendation``, ``metadata``,
+                ``status``, and ``task_id``.
+
+        Returns:
+            Normalized task-experience record with schema version, canonical
+            task ID, status, experience text, and optional metadata.
+        """
+
+        if isinstance(experience.get("experience_record"), Mapping):
+            record = dict(experience["experience_record"])
+        elif isinstance(experience.get("task_experience"), Mapping):
+            record = dict(experience["task_experience"])
+        elif isinstance(experience.get("experience"), Mapping):
+            record = dict(experience["experience"])
+        else:
+            record = {}
+
+        if "experience" not in record:
+            for field_name in ("experience", "content", "text"):
+                value = experience.get(field_name)
+                if isinstance(value, str) and value.strip():
+                    record["experience"] = value.strip()
+                    break
+        if not isinstance(record.get("experience"), str) or not str(record["experience"]).strip():
+            raise EnvArenaConfigurationError(f"stream data_id {data_id!r} experience text must be non-empty.")
+        record["experience"] = str(record["experience"]).strip()
+
+        original_task_id = str(record.get("task_id") or experience.get("task_id") or "").strip()
+        record["schema_version"] = str(record.get("schema_version") or "task-experience.v1")
+        record["task_id"] = data_id
+        record["status"] = str(record.get("status") or experience.get("status") or "completed")
+        for field_name in ("source_traj_ids", "analysis", "training_recommendation"):
+            if field_name not in record and experience.get(field_name) is not None:
+                value = experience[field_name]
+                record[field_name] = (
+                    list(value)
+                    if isinstance(value, Sequence) and not isinstance(value, str)
+                    else value
+                )
+
+        record_metadata = dict(record.get("metadata", {})) if isinstance(record.get("metadata"), Mapping) else {}
+        if isinstance(experience.get("metadata"), Mapping):
+            record_metadata.update(dict(experience["metadata"]))
+        if original_task_id and original_task_id != data_id:
+            record_metadata.setdefault("source_task_id", original_task_id)
+        if record_metadata:
+            record["metadata"] = record_metadata
+        return record
+
+    def _skill_spec_with_experience(
+        self,
+        *,
+        base_spec: Mapping[str, Any],
+        data_id: str,
+        experience: Mapping[str, Any],
+        experience_record: Mapping[str, Any],
+        old_skill_ref: EnvArenaVersionRef | None,
+        new_skill_ref: EnvArenaVersionRef,
+        stream_id: str,
+        harness_ref: EnvArenaVersionRef,
+        metadata: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Merge a task-experience record into a skill spec.
+
+        Parameters:
+            base_spec: Existing or generated skill spec.
+            data_id: Stream data ID whose prior record should be replaced.
+            experience: Experience config. ``spec`` is merged over
+                ``base_spec`` and ``skill_metadata`` is merged into spec
+                metadata.
+            experience_record: Normalized record produced by
+                ``_experience_record_for_data_id``.
+            old_skill_ref: Previous skill ref when updating an existing skill,
+                or ``None`` for newly created skills.
+            new_skill_ref: New skill version ref.
+            stream_id: Source stream ID for metadata.
+            harness_ref: Harness ref that uses this skill.
+            metadata: Submit metadata copied into the spec metadata.
+
+        Returns:
+            Updated skill spec with ``task_experiences`` and injection defaults.
+        """
+
+        spec = deepcopy(dict(base_spec))
+        if isinstance(experience.get("spec"), Mapping):
+            spec = self._merge_job_config(spec, experience["spec"])
+
+        raw_records = spec.get("task_experiences", [])
+        records = (
+            [dict(record) for record in raw_records if isinstance(record, Mapping)]
+            if isinstance(raw_records, list)
+            else []
+        )
+        records = [record for record in records if str(record.get("task_id") or "") != data_id]
+        records.append(dict(experience_record))
+        spec["task_experiences"] = records
+        spec.setdefault("schema_version", "rsi-experience-skill.v1")
+        injection = dict(spec.get("injection", {})) if isinstance(spec.get("injection"), Mapping) else {}
+        injection.setdefault("target_role", "user")
+        injection.setdefault("position", "append")
+        injection.setdefault("selection_key", "task_id")
+        spec["injection"] = injection
+
+        spec_metadata = dict(spec.get("metadata", {})) if isinstance(spec.get("metadata"), Mapping) else {}
+        spec_metadata.update(
+            {
+                **dict(metadata),
+                "generated_by": "areal-rsi",
+                "source_stream_id": stream_id,
+                "data_id": data_id,
+                **(
+                    {"previous_skill_ref": f"{old_skill_ref.key}@{old_skill_ref.version}"}
+                    if old_skill_ref is not None
+                    else {}
+                ),
+                "skill_ref": f"{new_skill_ref.key}@{new_skill_ref.version}",
+                "harness_ref": f"{harness_ref.key}@{harness_ref.version}",
+            }
+        )
+        if isinstance(experience.get("skill_metadata"), Mapping):
+            spec_metadata.update(dict(experience["skill_metadata"]))
+        spec["metadata"] = self._string_metadata(spec_metadata)
+        return spec
+
+    def _harness_spec_with_added_skill(
+        self,
+        *,
+        harness_spec: Mapping[str, Any],
+        old_harness_ref: EnvArenaVersionRef,
+        new_harness_ref: EnvArenaVersionRef,
+        new_skill_ref: EnvArenaVersionRef,
+        stream_id: str,
+        data_id: str,
+        metadata: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Add a generated skill ref to a derived harness spec.
+
+        Parameters:
+            harness_spec: Base harness spec.
+            old_harness_ref: Source harness ref used for metadata and
+                validation.
+            new_harness_ref: New harness ref written into metadata.
+            new_skill_ref: Skill ref to append to ``skill_refs``.
+            stream_id: Source stream ID for metadata.
+            data_id: Stream data ID for metadata.
+            metadata: Submit metadata copied into harness spec metadata.
+
+        Returns:
+            Harness spec with deduplicated ``skill_refs`` plus the new skill.
+        """
+
+        spec = deepcopy(dict(harness_spec))
+        raw_skill_refs = spec.get("skill_refs", [])
+        if raw_skill_refs is None:
+            raw_skill_refs = []
+        if isinstance(raw_skill_refs, str) or not isinstance(raw_skill_refs, Sequence):
+            raise EnvArenaError(
+                f"Harness {old_harness_ref.key}@{old_harness_ref.version} has invalid skill_refs."
+            )
+
+        updated_skill_refs: list[dict[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for raw_ref in raw_skill_refs:
+            skill_ref = self._as_version_ref(raw_ref)
+            key = (skill_ref.key, skill_ref.version)
+            if key in seen:
+                continue
+            updated_skill_refs.append(skill_ref.to_dict())
+            seen.add(key)
+        new_key = (new_skill_ref.key, new_skill_ref.version)
+        if new_key not in seen:
+            updated_skill_refs.append(new_skill_ref.to_dict())
+        spec["skill_refs"] = updated_skill_refs
+
+        spec_metadata = dict(spec.get("metadata", {})) if isinstance(spec.get("metadata"), Mapping) else {}
+        spec_metadata.update(
+            {
+                **dict(metadata),
+                "generated_by": "areal-rsi",
+                "source_stream_id": stream_id,
+                "data_id": data_id,
+                "previous_harness_ref": f"{old_harness_ref.key}@{old_harness_ref.version}",
+                "harness_ref": f"{new_harness_ref.key}@{new_harness_ref.version}",
+                "skill_ref": f"{new_skill_ref.key}@{new_skill_ref.version}",
+            }
+        )
+        spec["metadata"] = spec_metadata
+        return spec
+
+    def _harness_spec_with_replaced_skill(
+        self,
+        *,
+        harness_spec: Mapping[str, Any],
+        old_harness_ref: EnvArenaVersionRef,
+        new_harness_ref: EnvArenaVersionRef,
+        old_skill_ref: EnvArenaVersionRef,
+        new_skill_ref: EnvArenaVersionRef,
+        stream_id: str,
+        data_id: str,
+        metadata: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Replace one existing skill ref in a harness spec.
+
+        Parameters:
+            harness_spec: Existing harness spec.
+            old_harness_ref: Source harness ref used for metadata and errors.
+            new_harness_ref: New harness ref written into metadata.
+            old_skill_ref: Skill ref to replace.
+            new_skill_ref: Replacement skill ref.
+            stream_id: Source stream ID for metadata.
+            data_id: Stream data ID for metadata.
+            metadata: Submit metadata copied into harness spec metadata.
+
+        Returns:
+            Harness spec with ``old_skill_ref`` replaced by ``new_skill_ref``.
+        """
+
+        spec = deepcopy(dict(harness_spec))
+        replaced = False
+        updated_skill_refs: list[dict[str, str]] = []
+        for raw_ref in self._as_sequence(spec.get("skill_refs", [])):
+            skill_ref = self._as_version_ref(raw_ref)
+            if skill_ref == old_skill_ref and not replaced:
+                updated_skill_refs.append(new_skill_ref.to_dict())
+                replaced = True
+            else:
+                updated_skill_refs.append(skill_ref.to_dict())
+        if not replaced:
+            raise EnvArenaError(
+                f"Harness {old_harness_ref.key}@{old_harness_ref.version} did not contain selected skill "
+                f"{old_skill_ref.key}@{old_skill_ref.version}."
+            )
+        spec["skill_refs"] = updated_skill_refs
+
+        spec_metadata = dict(spec.get("metadata", {})) if isinstance(spec.get("metadata"), Mapping) else {}
+        spec_metadata.update(
+            {
+                **dict(metadata),
+                "generated_by": "areal-rsi",
+                "source_stream_id": stream_id,
+                "data_id": data_id,
+                "previous_harness_ref": f"{old_harness_ref.key}@{old_harness_ref.version}",
+                "harness_ref": f"{new_harness_ref.key}@{new_harness_ref.version}",
+                "previous_skill_ref": f"{old_skill_ref.key}@{old_skill_ref.version}",
+                "skill_ref": f"{new_skill_ref.key}@{new_skill_ref.version}",
+            }
+        )
+        spec["metadata"] = spec_metadata
+        return spec
 
     def _resolve_stream_skill_bindings(
         self,
-        skills: Sequence[Mapping[str, Any] | str],
+        skills: Sequence[Mapping[str, Any]],
         *,
-        relationships: Sequence[Mapping[str, Any]] = (),
-    ) -> tuple[list[EnvArenaVersionRef], dict[str, list[EnvArenaVersionRef]]]:
-        global_refs: list[EnvArenaVersionRef] = []
+        data_ids: Sequence[str],
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, list[EnvArenaVersionRef]]]:
+        """Resolve JSON-list-style skill bindings into per-data maps.
+
+        Parameters:
+            skills: Sequence of mappings. Each item must contain ``data_id``.
+                ``type`` may be ``"experience"`` or ``"ref"``.
+                ``type="experience"`` uses ``content`` for experience
+                text/config. ``type="ref"`` uses ``ref`` for an existing skill
+                registry ref. Each selected data ID may appear at most once.
+            data_ids: Selected data IDs. Skill bindings must target these IDs.
+
+        Returns:
+            Tuple of ``(experiences_by_data_id, skill_refs_by_data_id)``.
+            Experience items create skill/harness versions; ref items create
+            task-level harness overrides.
+        """
+
+        selected = {str(data_id) for data_id in data_ids}
+        experiences_by_data_id: dict[str, dict[str, Any]] = {}
         refs_by_data_id: dict[str, list[EnvArenaVersionRef]] = {}
-        data_ids_by_experience_id = self._data_ids_by_experience_id(relationships)
         for skill in skills:
-            ref = self._resolve_stream_skill_ref(skill)
-            bound_data_ids = self._skill_bound_data_ids(skill, data_ids_by_experience_id)
-            if not bound_data_ids:
-                global_refs = self._dedupe_refs([*global_refs, ref])
+            if not isinstance(skill, Mapping):
+                raise EnvArenaConfigurationError(
+                    "skills items must be mappings with data_id, type, and content for experience or ref for ref."
+                )
+            data_id = str(skill.get("data_id") or "").strip()
+            if not data_id:
+                raise EnvArenaConfigurationError("skills items require non-empty data_id.")
+            if data_id not in selected:
+                raise EnvArenaConfigurationError(f"skill binding for data_id {data_id!r} is not selected.")
+            if data_id in experiences_by_data_id or data_id in refs_by_data_id:
+                raise EnvArenaConfigurationError(f"data_id {data_id!r} has multiple skill bindings.")
+            kind = self._stream_skill_item_type(skill)
+            if kind == "experience":
+                experiences_by_data_id[data_id] = self._stream_skill_experience_config(skill)
                 continue
-            for data_id in bound_data_ids:
-                refs_by_data_id[data_id] = self._dedupe_refs([*refs_by_data_id.get(data_id, []), ref])
-        return global_refs, refs_by_data_id
+            refs_by_data_id[data_id] = [
+                self._resolve_registry_ref("skills", self._stream_skill_ref_payload(skill), "skill")
+            ]
 
-    def _resolve_stream_skill_refs(
-        self,
-        skills: Sequence[Mapping[str, Any] | str],
-    ) -> list[EnvArenaVersionRef]:
-        return self._resolve_stream_skill_bindings(skills)[0]
+        if skills:
+            covered = set(experiences_by_data_id) | set(refs_by_data_id)
+            missing = [data_id for data_id in data_ids if data_id not in covered]
+            if missing:
+                raise EnvArenaConfigurationError(
+                    "skills are missing bindings for selected data_ids: " + ", ".join(missing)
+                )
+        return experiences_by_data_id, refs_by_data_id
 
-    def _resolve_stream_skill_ref(self, skill: Mapping[str, Any] | str) -> EnvArenaVersionRef:
-        if isinstance(skill, str):
-            return self._as_version_ref(skill)
-        if isinstance(skill, Mapping) and skill.get("type") in {"new", "ref"}:
-            resolved = self._resolve_optional_registry_asset("skills", skill)
-            if resolved is None:
-                raise EnvArenaConfigurationError("skill config did not resolve to a registry ref.")
-            return resolved
-        return self._resolve_registry_ref("skills", skill, "skill")
+    def _stream_skill_item_type(self, skill: Mapping[str, Any]) -> str:
+        """Resolve one skill binding item type.
 
-    def _resolve_relationship_skill_refs(
-        self,
-        relationships: Sequence[Mapping[str, Any]],
-    ) -> list[EnvArenaVersionRef]:
-        refs: list[EnvArenaVersionRef] = []
-        for relationship in relationships:
-            for field_name in ("skill_ref", "skill_refs", "skill", "skills"):
-                if relationship.get(field_name) is None:
-                    continue
-                values = self._as_sequence(relationship[field_name])
-                for value in values:
-                    refs = self._dedupe_refs([*refs, self._resolve_stream_skill_ref(value)])
-        return refs
+        Parameters:
+            skill: Mapping with optional ``type`` plus ``content`` or ``ref``.
+
+        Returns:
+            ``"experience"`` or ``"ref"``.
+        """
+
+        raw_type = str(skill.get("type") or "").strip().lower()
+        if raw_type in {"experience", "ref"}:
+            return raw_type
+        if raw_type:
+            raise EnvArenaConfigurationError("skills item type must be 'experience' or 'ref'.")
+        if skill.get("ref") is not None:
+            return "ref"
+        return "experience"
 
     @staticmethod
-    def _data_ids_by_experience_id(relationships: Sequence[Mapping[str, Any]]) -> dict[str, list[str]]:
-        data_ids_by_experience_id: dict[str, list[str]] = {}
-        for relationship in relationships:
-            experience_id = str(relationship.get("experience_id", "")).strip()
-            data_id = str(relationship.get("data_id", "")).strip()
-            if experience_id and data_id:
-                data_ids_by_experience_id.setdefault(experience_id, []).append(data_id)
-        return data_ids_by_experience_id
+    def _stream_skill_experience_config(skill: Mapping[str, Any]) -> dict[str, Any]:
+        """Return normalized experience config from one skill binding item.
+
+        Parameters:
+            skill: Mapping with ``content`` as text/config and optional extra
+                fields such as version overrides or metadata.
+
+        Returns:
+            Experience config mapping suitable for skill/harness generation.
+        """
+
+        if "content" not in skill:
+            raise EnvArenaConfigurationError("experience skill bindings require content.")
+        excluded = {"data_id", "type", "content", "ref"}
+        extras = {key: value for key, value in skill.items() if key not in excluded}
+        content = skill["content"]
+        if isinstance(content, Mapping):
+            return {**dict(content), **extras}
+        experience = EnvArenaClient._stream_experience_config(content)
+        experience.update(extras)
+        return experience
 
     @staticmethod
-    def _skill_bound_data_ids(
-        skill: Mapping[str, Any] | str,
-        data_ids_by_experience_id: Mapping[str, Sequence[str]],
-    ) -> list[str]:
-        if not isinstance(skill, Mapping):
-            return []
-        data_ids: list[str] = []
-        for field_name in ("experience_id", "experience_ids"):
-            if skill.get(field_name) is None:
-                continue
-            for experience_id in EnvArenaClient._as_sequence(skill[field_name]):
-                data_ids.extend(str(data_id) for data_id in data_ids_by_experience_id.get(str(experience_id), []))
-        if skill.get("data_ids") is not None:
-            data_ids.extend(str(data_id) for data_id in EnvArenaClient._as_sequence(skill["data_ids"]))
-        if skill.get("data_id") is not None:
-            data_ids.append(str(skill["data_id"]))
-        return [data_id for data_id in dict.fromkeys(data_ids) if data_id.strip()]
+    def _stream_skill_ref_payload(skill: Mapping[str, Any]) -> Any:
+        """Return the skill ref payload from one ref binding item.
+
+        Parameters:
+            skill: Mapping with ``ref``.
+
+        Returns:
+            Raw ref payload accepted by the skill registry ref parser.
+        """
+
+        if skill.get("ref") is not None:
+            return skill["ref"]
+        raise EnvArenaConfigurationError("ref skill bindings require ref.")
 
     @staticmethod
     def _as_sequence(value: Any) -> list[Any]:
+        """Normalize a scalar or sequence-like value into a list.
+
+        Parameters:
+            value: Any value. Strings are treated as scalar values instead of
+                character sequences.
+
+        Returns:
+            ``list(value)`` for non-string sequences; otherwise ``[value]``.
+        """
+
         if isinstance(value, str) or not isinstance(value, Sequence):
             return [value]
         return list(value)
 
     @staticmethod
     def _dedupe_refs(refs: Sequence[EnvArenaVersionRef]) -> list[EnvArenaVersionRef]:
+        """Deduplicate registry refs while preserving encounter order.
+
+        Parameters:
+            refs: Sequence of registry version refs.
+
+        Returns:
+            List with duplicate ``(key, version)`` pairs removed.
+        """
+
         deduped: list[EnvArenaVersionRef] = []
         seen: set[tuple[str, str]] = set()
         for ref in refs:
@@ -2349,11 +3848,28 @@ class EnvArenaClient(EnvClient):
         reward_ref: EnvArenaVersionRef,
         harness_ref: EnvArenaVersionRef,
         skill_refs: Sequence[EnvArenaVersionRef],
-        relationships_by_data_id: Mapping[str, Sequence[Mapping[str, Any]]],
         fork_stream_id: str | None,
         job_config: Mapping[str, Any],
         request_metadata: Mapping[str, Any],
     ) -> EnvArenaVersionRef:
+        """Create a benchmark version from selected stream data items.
+
+        Parameters:
+            stream_id: Source stream ID used in benchmark metadata.
+            data_items: Selected dataset items. Each item should contain
+                ``data_id`` and optionally ``env_ref``.
+            reward_ref: Default reward ref for the benchmark.
+            harness_ref: Default harness ref for the benchmark.
+            skill_refs: Skill refs associated with generated harness behavior.
+            fork_stream_id: Optional legacy fork stream ID copied into metadata.
+            job_config: Merged job config controlling key/version, tags,
+                aggregation, and descriptions.
+            request_metadata: Submit metadata copied into benchmark metadata.
+
+        Returns:
+            Created and published benchmark version ref.
+        """
+
         key = str(job_config.get("benchmark_key") or self._derived_asset_key(f"{stream_id}-benchmark"))
         version = str(job_config.get("benchmark_version") or "1.0.0")
         env_refs: list[dict[str, Any]] = []
@@ -2369,8 +3885,6 @@ class EnvArenaClient(EnvClient):
                 params["fork_stream_id"] = fork_stream_id
             if skill_refs:
                 params["skill_refs"] = [ref.to_dict() for ref in skill_refs]
-            if relationships_by_data_id.get(data_id):
-                params["relationships"] = [dict(item) for item in relationships_by_data_id[data_id]]
             env_refs.append({"env_ref": env_ref.to_dict(), "params": params})
         metadata = {
             **dict(request_metadata),
@@ -2401,6 +3915,17 @@ class EnvArenaClient(EnvClient):
         return EnvArenaVersionRef(key=key, version=version)
 
     def _env_ref_for_stream_item(self, item: Mapping[str, Any]) -> EnvArenaVersionRef:
+        """Resolve the environment ref represented by a stream dataset item.
+
+        Parameters:
+            item: Stream dataset item. Preferred field is ``env_ref``. When it
+                is absent, ``data_id`` is used after stripping an ``env:``
+                prefix.
+
+        Returns:
+            Environment registry version ref.
+        """
+
         env_ref = item.get("env_ref")
         if env_ref is not None:
             return self._as_version_ref(env_ref)
@@ -2419,6 +3944,30 @@ class EnvArenaClient(EnvClient):
         key_seed: str | None = None,
         extra_metadata: Mapping[str, Any] | None = None,
     ) -> EnvArenaVersionRef:
+        """Create a derived harness version with additional skill refs.
+
+        This helper keeps its historical name, but the current stream submit
+        flow uses it to create task-level or batch-level harness overrides
+        without creating a fork stream.
+
+        Parameters:
+            base_harness_ref: Existing harness version used as the spec
+                template.
+            skill_refs: Skill refs to merge into the base harness spec.
+            source_stream_id: Source stream ID recorded in generated metadata.
+            job_config: Merged job config. Supported fields include
+                ``replace_skill_refs``, ``harness_key``, ``harness_version``,
+                ``harness_name``, ``harness_description``, and
+                ``harness_entity_tags``.
+            key_seed: Optional seed for derived harness key generation. When
+                absent, ``job_config.harness_key`` may be used.
+            extra_metadata: Optional metadata merged into the derived harness
+                spec metadata, for example the task ``data_id``.
+
+        Returns:
+            Created and published harness version ref.
+        """
+
         version_payload = self.get_harness_version(base_harness_ref.key, base_harness_ref.version)
         base_spec = dict(version_payload.get("spec", {}))
         if not base_spec:
@@ -2469,9 +4018,24 @@ class EnvArenaClient(EnvClient):
         reward_ref: EnvArenaVersionRef,
         data_items: Sequence[Mapping[str, Any]],
         skill_refs: Sequence[EnvArenaVersionRef],
-        relationships: Sequence[Mapping[str, Any]],
         metadata: Mapping[str, Any],
     ) -> dict[str, Any]:
+        """Create a legacy fork stream metadata record.
+
+        Parameters:
+            fork_stream_id: New fork stream ID.
+            source_stream: Source stream object.
+            benchmark_ref: Optional benchmark ref copied into metadata.
+            harness_ref: Default harness ref for the fork stream.
+            reward_ref: Default reward ref for the fork stream.
+            data_items: Selected source data items.
+            skill_refs: Skill refs associated with generated behavior.
+            metadata: Additional metadata and optional fork name/description.
+
+        Returns:
+            Created stream payload.
+        """
+
         source_stream_id = str(source_stream.get("stream_id", ""))
         return self.create_stream(
             stream_id=fork_stream_id,
@@ -2486,7 +4050,6 @@ class EnvArenaClient(EnvClient):
                 "source_stream_id": source_stream_id,
                 "data_ids": json.dumps([str(item.get("data_id", "")) for item in data_items], ensure_ascii=True),
                 "skill_refs": json.dumps([ref.to_dict() for ref in skill_refs], ensure_ascii=True),
-                "relationships": json.dumps([dict(item) for item in relationships], ensure_ascii=True),
                 "generated_by": "areal-rsi",
                 **({"benchmark_ref": f"{benchmark_ref.key}@{benchmark_ref.version}"} if benchmark_ref else {}),
             },
@@ -2494,6 +4057,16 @@ class EnvArenaClient(EnvClient):
 
     @staticmethod
     def _derived_asset_key(seed: str) -> str:
+        """Create an AReaL-RSI registry key from a free-form seed.
+
+        Parameters:
+            seed: Free-form text used to derive the stable prefix.
+
+        Returns:
+            Lowercase registry key with unsafe characters replaced and an
+            eight-character random suffix.
+        """
+
         normalized = re.sub(r"[^A-Za-z0-9_.-]", "-", seed.strip()).strip("-").lower()
         normalized = normalized[:80] or "stream-eval"
         return f"areal-rsi-{normalized}-{uuid4().hex[:8]}"

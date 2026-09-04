@@ -1,0 +1,334 @@
+"""Invariants for the small public API."""
+
+from __future__ import annotations
+
+import unittest
+from dataclasses import MISSING, fields
+from inspect import signature
+
+from areal_rsi.api import base as base_api
+from areal_rsi.api import modules as modules_api
+from areal_rsi.api import workflow as workflow_api
+from areal_rsi.api.base import (
+    TRAJECTORY_BUNDLE_MEDIA_TYPE,
+    AgentSpec,
+    ArtifactChange,
+    ArtifactVersion,
+    BenchmarkSplit,
+    ContentRef,
+    EvaluationReport,
+    EvolutionTarget,
+    ExperimentPlan,
+    ExperimentRun,
+    HarnessChange,
+    HarnessVersion,
+    ModelVersion,
+    ResearchAgentState,
+    ResearchIteration,
+    RunState,
+    SolutionVersion,
+    Task,
+    TaskResult,
+    Trajectory,
+    TrajectoryRef,
+)
+from areal_rsi.api.modules import (
+    AgentRuntime,
+    AgentSession,
+    ArtifactBuilder,
+    Benchmark,
+    HarnessRuntime,
+    TrainingBackend,
+    TrajectoryStore,
+    Verifier,
+)
+from areal_rsi.api.workflow import ResearchAgent, RsiAgent, WorkflowContext
+
+
+class InterfaceDesignTest(unittest.TestCase):
+    def test_only_train_and_validate_splits_exist(self) -> None:
+        self.assertEqual(
+            list(BenchmarkSplit),
+            [BenchmarkSplit.TRAIN, BenchmarkSplit.VALIDATE],
+        )
+
+    def test_artifact_is_a_first_class_evolution_target(self) -> None:
+        self.assertIn(EvolutionTarget.ARTIFACT, list(EvolutionTarget))
+
+        artifact = ArtifactVersion(
+            version_id="game_0",
+            name="game",
+            content=ContentRef(uri="content://game", digest="sha256:game"),
+            created_at="2026-09-04T00:00:00Z",
+        )
+        solution = SolutionVersion(
+            solution_id="solution_0",
+            model=self._model(),
+            harness=self._harness(),
+            artifacts=(artifact,),
+            created_at="2026-09-04T00:00:00Z",
+        )
+        change = ArtifactChange(
+            artifact_name="game",
+            patch=ContentRef(uri="content://game-patch", digest="sha256:patch"),
+            reason="improve gameplay",
+        )
+
+        self.assertEqual(solution.artifacts[0].name, change.artifact_name)
+        self.assertIsInstance(artifact.content, ContentRef)
+        self.assertFalse(hasattr(base_api, "ArtifactRef"))
+        self.assertFalse(hasattr(modules_api, "ArtifactStore"))
+
+    def test_task_never_contains_hidden_expected_data(self) -> None:
+        self.assertNotIn("expected", {item.name for item in fields(Task)})
+        self.assertIn("list_tasks", Benchmark.__dict__)
+        self.assertNotIn("list_cases", Benchmark.__dict__)
+
+    def test_removed_internal_harness_models_stay_out_of_public_api(self) -> None:
+        self.assertFalse(hasattr(base_api, "VersionOrigin"))
+        self.assertFalse(hasattr(base_api, "HarnessResource"))
+        self.assertFalse(hasattr(base_api, "HarnessManifest"))
+        self.assertFalse(hasattr(base_api, "HarnessEdit"))
+        self.assertFalse(hasattr(base_api, "BenchmarkCase"))
+
+    def test_harness_version_represents_the_complete_snapshot(self) -> None:
+        field_names = {item.name for item in fields(HarnessVersion)}
+
+        self.assertEqual(
+            field_names,
+            {"version_id", "name", "content", "created_at", "parent_version_id"},
+        )
+
+    def test_harness_change_is_one_patch(self) -> None:
+        field_names = {item.name for item in fields(HarnessChange)}
+
+        self.assertEqual(field_names, {"patch", "reason"})
+
+    def test_each_research_agent_owns_its_iterations(self) -> None:
+        plan = self._plan(research_agent_count=2)
+        run = ExperimentRun(
+            run_id="run_001",
+            plan=plan,
+            state=RunState.RUNNING,
+            best_solution_id="solution_0",
+            research_agents=(self._researcher(1), self._researcher(2)),
+        )
+
+        self.assertEqual([item.agent_id for item in run.research_agents], ["agent_1", "agent_2"])
+        self.assertEqual(
+            [[step.iteration for step in item.iterations] for item in run.research_agents],
+            [[1, 2], [1, 2]],
+        )
+        agent_state_fields = {item.name for item in fields(ResearchAgentState)}
+        self.assertNotIn("current_solution_id", agent_state_fields)
+        self.assertNotIn("best_solution_id", agent_state_fields)
+
+    def test_research_agent_uses_direct_inputs_and_history_selection(self) -> None:
+        self.assertFalse(hasattr(base_api, "ResearchInput"))
+        self.assertFalse(hasattr(base_api, "SelectionInput"))
+        self.assertFalse(hasattr(base_api, "Selection"))
+        self.assertFalse(hasattr(base_api, "ResearchAction"))
+        self.assertIn("propose", ResearchAgent.__dict__)
+        self.assertIn("select", ResearchAgent.__dict__)
+        self.assertEqual(
+            list(signature(ResearchAgent.propose).parameters),
+            ["self", "goal", "target", "current", "report", "trajectories"],
+        )
+        self.assertEqual(
+            list(signature(ResearchAgent.select).parameters),
+            ["self", "current_solution_id", "candidates"],
+        )
+
+    def test_evaluation_report_contains_aggregates_only(self) -> None:
+        field_names = {item.name for item in fields(EvaluationReport)}
+
+        self.assertNotIn("summary", field_names)
+        self.assertNotIn("regressions", field_names)
+        self.assertNotIn("trajectories", field_names)
+        self.assertNotIn("evaluation_id", field_names)
+
+    def test_trajectory_only_indexes_the_complete_trace(self) -> None:
+        field_names = {item.name for item in fields(Trajectory)}
+
+        self.assertNotIn("state", field_names)
+        self.assertNotIn("output", field_names)
+        self.assertNotIn("attachments", field_names)
+        self.assertIn("content", field_names)
+
+    def test_research_iteration_names_train_and_validation_explicitly(self) -> None:
+        field_names = {item.name for item in fields(ResearchIteration)}
+
+        self.assertIn("train_report", field_names)
+        self.assertIn("trajectories", field_names)
+        self.assertIn("change", field_names)
+        self.assertIn("validation_report", field_names)
+        self.assertIn("next_solution_id", field_names)
+        self.assertNotIn("evaluation", field_names)
+        self.assertNotIn("selection", field_names)
+        for field in fields(ResearchIteration):
+            self.assertIs(field.default, MISSING)
+            self.assertIs(field.default_factory, MISSING)
+
+    def test_public_dataclasses_are_not_frozen(self) -> None:
+        version = self._harness()
+
+        self.assertNotIn("metadata", {item.name for item in fields(HarnessVersion)})
+        version.name = "changed"
+        self.assertEqual(version.name, "changed")
+        for module in (base_api, workflow_api):
+            for value in vars(module).values():
+                if isinstance(value, type) and "__dataclass_params__" in vars(value):
+                    self.assertFalse(vars(value)["__dataclass_params__"].frozen)
+
+    def test_trajectory_bundle_has_a_standard_contract(self) -> None:
+        self.assertEqual(
+            TRAJECTORY_BUNDLE_MEDIA_TYPE,
+            "application/vnd.areal-rsi.trajectories+json",
+        )
+        self.assertIn("bundle", TrajectoryStore.__dict__)
+
+    def test_agent_runtime_uses_a_multi_turn_session(self) -> None:
+        spec_fields = {item.name for item in fields(AgentSpec)}
+
+        self.assertEqual(
+            spec_fields,
+            {
+                "agent_id",
+                "runtime",
+                "model",
+                "prompt_templates",
+                "skills",
+                "tools",
+                "mcp_servers",
+            },
+        )
+        self.assertNotIn("config", spec_fields)
+        self.assertFalse(hasattr(base_api, "AgentInput"))
+        self.assertFalse(hasattr(base_api, "AgentOutput"))
+        self.assertIn("open", AgentRuntime.__dict__)
+        self.assertNotIn("run", AgentRuntime.__dict__)
+        self.assertIn("send", AgentSession.__dict__)
+        self.assertIn("finish", AgentSession.__dict__)
+
+    def test_task_runtime_and_builders_are_abstract(self) -> None:
+        self.assertEqual({"run"} & HarnessRuntime.__dict__.keys(), {"run"})
+        self.assertIn("train", TrainingBackend.__dict__)
+        self.assertIn("build", ArtifactBuilder.__dict__)
+        self.assertIn("prune", RsiAgent.__dict__)
+
+    def test_task_result_gives_verifier_the_output_and_solution(self) -> None:
+        result = TaskResult(
+            output=ContentRef(uri="content://task-output", digest="sha256:output"),
+            trajectory=TrajectoryRef("trajectory_1"),
+        )
+
+        self.assertEqual(result.output.uri, "content://task-output")
+        self.assertEqual(
+            list(signature(Verifier.verify).parameters),
+            ["self", "task", "solution", "result"],
+        )
+
+    def test_rsi_chat_and_workflow_have_no_wrapper_results(self) -> None:
+        self.assertFalse(hasattr(base_api, "ConversationInput"))
+        self.assertFalse(hasattr(base_api, "ConversationOutput"))
+        self.assertFalse(hasattr(workflow_api, "WorkflowResult"))
+        self.assertEqual(list(signature(RsiAgent.chat).parameters), ["self", "message"])
+
+    def test_only_the_selected_evolution_backend_is_required(self) -> None:
+        context_fields = {item.name: item for item in fields(WorkflowContext)}
+
+        self.assertIsNone(context_fields["harness_builder"].default)
+        self.assertIsNone(context_fields["training_backend"].default)
+        self.assertIsNone(context_fields["artifact_builder"].default)
+
+    @staticmethod
+    def _plan(*, research_agent_count: int) -> ExperimentPlan:
+        return ExperimentPlan(
+            goal="improve harness",
+            workflow="harness-evolution",
+            benchmark="kernelbench",
+            baseline_solution_id="solution_0",
+            target=EvolutionTarget.HARNESS,
+            max_iterations=2,
+            research_agent_count=research_agent_count,
+        )
+
+    @staticmethod
+    def _model() -> ModelVersion:
+        return ModelVersion(
+            version_id="model_0",
+            name="model",
+            content=ContentRef(uri="content://model", digest="sha256:model"),
+            created_at="2026-09-04T00:00:00Z",
+        )
+
+    @staticmethod
+    def _harness() -> HarnessVersion:
+        return HarnessVersion(
+            version_id="harness_0",
+            name="harness",
+            content=ContentRef(uri="content://harness", digest="sha256:harness"),
+            created_at="2026-09-04T00:00:00Z",
+        )
+
+    @classmethod
+    def _solution(cls) -> SolutionVersion:
+        return SolutionVersion(
+            solution_id="solution_0",
+            model=cls._model(),
+            harness=cls._harness(),
+            created_at="2026-09-04T00:00:00Z",
+        )
+
+    @staticmethod
+    def _report(solution_id: str, split: BenchmarkSplit) -> EvaluationReport:
+        return EvaluationReport(
+            solution_id=solution_id,
+            split=split,
+            passed=False,
+            score=0.0,
+            metrics={},
+            created_at="2026-09-04T00:00:00Z",
+        )
+
+    @classmethod
+    def _researcher(cls, index: int) -> ResearchAgentState:
+        iterations = tuple(
+            ResearchIteration(
+                iteration=iteration,
+                input_solution_id=f"solution_{index}_{iteration - 1}",
+                train_report=cls._report(
+                    f"solution_{index}_{iteration - 1}",
+                    BenchmarkSplit.TRAIN,
+                ),
+                trajectories=ContentRef(
+                    uri=f"content://agent-{index}/iteration-{iteration}/trajectories",
+                    digest=f"sha256:agent-{index}-iteration-{iteration}",
+                ),
+                change=HarnessChange(
+                    patch=ContentRef(
+                        uri=f"content://agent-{index}/iteration-{iteration}/patch",
+                        digest=f"sha256:patch-{index}-{iteration}",
+                    ),
+                    reason="test change",
+                ),
+                candidate_solution_id=f"solution_{index}_{iteration}",
+                validation_report=cls._report(
+                    f"solution_{index}_{iteration}",
+                    BenchmarkSplit.VALIDATE,
+                ),
+                next_solution_id=f"solution_{index}_{iteration}",
+                started_at="2026-09-04T00:00:00Z",
+                finished_at="2026-09-04T00:01:00Z",
+            )
+            for iteration in range(1, 3)
+        )
+        return ResearchAgentState(
+            agent_id=f"agent_{index}",
+            state=RunState.RUNNING,
+            iterations=iterations,
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

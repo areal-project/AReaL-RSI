@@ -10,7 +10,6 @@ from pathlib import Path
 from areal_rsi.agents.research import DefaultResearchAgent
 from areal_rsi.agents.rsi import DefaultRsiAgent
 from areal_rsi.api.base import SolutionVersion
-from areal_rsi.api.modules import Benchmark, Verifier
 from areal_rsi.api.workflow import WorkflowContext
 from areal_rsi.base.storage import (
     FileContentStore,
@@ -21,10 +20,9 @@ from areal_rsi.base.storage import (
     new_id,
     write_json,
 )
+from areal_rsi.benchmarks import create_builtin_registry
 from areal_rsi.config import ModelConfig
-from areal_rsi.modules.benchmark import AccuracyEvaluation, ArithmeticBenchmark, ArithmeticVerifier
 from areal_rsi.modules.gateway import GatewayProxy
-from areal_rsi.modules.gsm8k import Gsm8kBenchmark, Gsm8kVerifier
 from areal_rsi.modules.harness import LocalHarnessBuilder, LocalHarnessRuntime
 from areal_rsi.modules.runtime import DshAgentRuntime
 from areal_rsi.workflows.service import LocalExperimentService, WorkflowFactory
@@ -62,23 +60,14 @@ class LocalApp:
         self.versions = FileVersionManager(self.root / "versions")
         self.trajectories = FileTrajectoryStore(self.root / "trajectories", self.content)
         self.memory = FileMemory(self.root / "memory")
-        benchmark: Benchmark
-        verifier: Verifier
         benchmark_kind = os.environ.get("RSI_BENCHMARK", "arithmetic-v1")
-        if benchmark_kind == "gsm8k":
-            benchmark = Gsm8kBenchmark(
-                Path(os.environ.get("RSI_GSM8K_DATA", ".rsi/datasets/gsm8k")),
-                train_limit=int(os.environ.get("RSI_TRAIN_LIMIT", "16")),
-                validate_limit=int(os.environ.get("RSI_VALIDATE_LIMIT", "16")),
-            )
-            verifier = Gsm8kVerifier(self.content, benchmark)
-            description = "GSM8K 官方 train 的固定训练/留出验证分区，不是官方 test 成绩。"
-        elif benchmark_kind == "arithmetic-v1":
-            benchmark = ArithmeticBenchmark()
-            verifier = ArithmeticVerifier(self.content)
-            description = "原创固定小型算术题，用于验收闭环，不是 GSM8K 正式结果。"
-        else:
-            raise ValueError(f"未知 Benchmark：{benchmark_kind}")
+        bundle = create_builtin_registry(self.content).create(
+            benchmark_kind, environment=os.environ
+        )
+        benchmark = bundle.benchmark
+        verifier = bundle.verifier
+        evaluation = bundle.evaluation
+        description = bundle.descriptor.description
         model_name = model_config.model
         base_url = model_config.base_url
         baseline_file = self.root / "baseline.json"
@@ -151,7 +140,6 @@ class LocalApp:
             task_runtime, self.content, self.root / "task-workspaces"
         )
         builder = LocalHarnessBuilder(self.content, self.root / "builds")
-        evaluation = AccuracyEvaluation()
         context = WorkflowContext(
             self.content,
             self.memory,

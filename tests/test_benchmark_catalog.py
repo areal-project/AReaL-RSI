@@ -1,0 +1,84 @@
+from __future__ import annotations
+
+import tempfile
+import unittest
+from pathlib import Path
+
+from areal_rsi.api.base import BenchmarkSplit, TaskResult, TrajectoryRef
+from areal_rsi.base.storage import FileContentStore, FileVersionManager, json_bytes
+from areal_rsi.benchmarks import BenchmarkCatalog, create_builtin_registry
+from areal_rsi.modules.gsm8k import Gsm8kBenchmark, Gsm8kVerifier, prepare_dataset
+
+
+class BenchmarkCatalogTest(unittest.IsolatedAsyncioTestCase):
+    def test_builtin_catalog_exposes_public_metadata_only(self) -> None:
+        catalog = BenchmarkCatalog.load()
+
+        self.assertEqual([item.benchmark_id for item in catalog.list()], ["arithmetic-v1", "gsm8k"])
+        gsm8k = catalog.get("gsm8k")
+        assert gsm8k is not None
+        self.assertEqual(gsm8k.adapter, "gsm8k-v1")
+        self.assertEqual(gsm8k.verifier, "gsm8k-v1")
+        self.assertFalse(hasattr(gsm8k, "target"))
+        self.assertNotIn("answer", repr(gsm8k).lower())
+
+    async def test_gsm8k_adapter_matches_direct_implementation(self) -> None:
+        raw = b"\n".join(
+            json_bytes(
+                {"question": f"Synthetic fixture {index}", "answer": f"reasoning\n#### {index}"}
+            )
+            for index in range(30)
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dataset = root / "dataset"
+            prepare_dataset(raw, dataset, source="synthetic-adapter-test")
+            content = FileContentStore(root / "content")
+
+            direct = Gsm8kBenchmark(dataset, train_limit=4, validate_limit=3)
+            direct_verifier = Gsm8kVerifier(content, direct)
+            bundle = create_builtin_registry(content).create(
+                "gsm8k",
+                {"data_path": str(dataset), "train_limit": 4, "validate_limit": 3},
+            )
+
+            self.assertEqual(bundle.instance_id, direct.name)
+            for split in BenchmarkSplit:
+                self.assertEqual(
+                    await bundle.benchmark.list_tasks(split), await direct.list_tasks(split)
+                )
+
+            versions = FileVersionManager(root / "versions")
+            ref = await content.put_text("fixture")
+            solution = await versions.create_solution(
+                await versions.create_model("m", ref), await versions.create_harness("h", ref)
+            )
+            task = (await direct.list_tasks(BenchmarkSplit.TRAIN))[0]
+            expected = task.task_id.rsplit("_", 1)[1]
+            output = await content.put_json(
+                {
+                    "task_id": task.task_id,
+                    "solution_id": solution.solution_id,
+                    "response": f"#### {expected}",
+                }
+            )
+            result = TaskResult(output, TrajectoryRef("trace"))
+            direct_result = await direct_verifier.verify(task, solution, result)
+            adapter_result = await bundle.verifier.verify(task, solution, result)
+            self.assertEqual(adapter_result, direct_result)
+
+    def test_environment_configuration_is_typed_and_validated(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            content = FileContentStore(Path(temporary) / "content")
+            registry = create_builtin_registry(content)
+            with self.assertRaisesRegex(ValueError, "train_limit 必须为整数"):
+                registry.create(
+                    "gsm8k",
+                    environment={
+                        "RSI_GSM8K_DATA": "/tmp/not-used",
+                        "RSI_TRAIN_LIMIT": "not-an-integer",
+                        "RSI_VALIDATE_LIMIT": "1",
+                    },
+                )
+            with self.assertRaisesRegex(ValueError, "未知 Benchmark 配置"):
+                registry.create("arithmetic-v1", {"target": "harness"})

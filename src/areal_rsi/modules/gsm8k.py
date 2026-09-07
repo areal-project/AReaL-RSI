@@ -15,9 +15,8 @@ from typing import Any
 
 from areal_rsi.api.base import (
     BenchmarkSplit,
-    SolutionVersion,
     Task,
-    TaskResult,
+    VerificationRequest,
     VerificationResult,
 )
 from areal_rsi.base.storage import FileContentStore, decode, json_bytes, write_json
@@ -139,9 +138,8 @@ class Gsm8kVerifier:
             for task in tasks
         }
 
-    async def verify(
-        self, task: Task, solution: SolutionVersion, result: TaskResult
-    ) -> VerificationResult:
+    async def verify(self, request: VerificationRequest) -> VerificationResult:
+        task, solution, result = request.task, request.solution, request.result
         if self.inputs.get(task.task_id) != json_bytes(task.input):
             raise ValueError("未知或已被修改的 GSM8K 题面")
         output = json.loads(await self.content.read_text(result.output))

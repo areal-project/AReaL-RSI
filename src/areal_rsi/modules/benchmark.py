@@ -14,8 +14,9 @@ from areal_rsi.api.base import (
     EvaluationReport,
     SolutionVersion,
     Task,
-    TaskResult,
+    VerificationRequest,
     VerificationResult,
+    VerificationStatus,
 )
 from areal_rsi.base.storage import FileContentStore, now
 
@@ -65,9 +66,8 @@ class ArithmeticVerifier:
             for i, (_, answer) in enumerate(rows)
         }
 
-    async def verify(
-        self, task: Task, solution: SolutionVersion, result: TaskResult
-    ) -> VerificationResult:
+    async def verify(self, request: VerificationRequest) -> VerificationResult:
+        task, solution, result = request.task, request.solution, request.result
         output = json.loads(await self.content.read_text(result.output))
         if (
             output.get("solution_id") != solution.solution_id
@@ -103,14 +103,24 @@ class AccuracyEvaluation:
     ) -> EvaluationReport:
         if not results or len({r.task_id for r in results}) != len(results):
             raise ValueError("评测必须包含完整且不重复的任务结果")
-        if any(not math.isfinite(r.score) for r in results):
-            raise ValueError("非有限评测值")
-        score = sum(r.passed for r in results) / len(results)
+        if any(r.status is not VerificationStatus.SUCCEEDED for r in results):
+            raise ValueError("Verifier 未成功完成，不能聚合为任务分数")
+        scores = [r.score for r in results]
+        passed = [r.passed for r in results]
+        if any(value is None or not math.isfinite(value) for value in scores):
+            raise ValueError("缺失或非有限评测值")
+        if any(value is None for value in passed):
+            raise ValueError("缺失任务验证结论")
+        valid_passed = [value for value in passed if value is not None]
+        score = sum(valid_passed) / len(valid_passed)
         return EvaluationReport(
             solution.solution_id,
             split,
-            all(r.passed for r in results),
+            all(valid_passed),
             score,
-            {"accuracy": score, "task_count": float(len(results))},
+            {
+                "accuracy": score,
+                "task_count": float(len(results)),
+            },
             now(),
         )

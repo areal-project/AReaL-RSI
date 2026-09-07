@@ -25,8 +25,15 @@ from areal_rsi.api.base import (
     Task,
     TaskResult,
     Trajectory,
+    TrajectoryFetchRequest,
+    TrajectoryPage,
+    TrajectoryQuery,
     TrajectoryRef,
+    TrajectorySourceSpec,
+    TrajectoryStoreSpec,
+    VerificationRequest,
     VerificationResult,
+    VerifierSpec,
 )
 
 
@@ -66,15 +73,47 @@ class Memory(Protocol):
 
 
 class TrajectoryStore(Protocol):
-    """Runtime saves each completed trajectory exactly once."""
+    """Store canonical, completed trajectories behind a provider-neutral API.
+
+    Implementations are configured through :class:`TrajectoryStoreSpec`. A
+    local implementation persists the trajectory index under its local root;
+    ContentStore remains responsible for the referenced trace content. A
+    remote implementation may retain a remote ContentRef when using reference
+    materialization, or copy immutable content into its configured ContentStore
+    when using snapshot materialization.
+
+    ``save`` is idempotent by trajectory ID: saving the same record again must
+    return the same reference; saving different content under an existing ID
+    must fail instead of overwriting history.
+    """
 
     async def save(self, trajectory: Trajectory) -> TrajectoryRef: ...
 
     async def get(self, trajectory_id: str) -> Trajectory | None: ...
 
+    async def query(self, query: TrajectoryQuery) -> TrajectoryPage: ...
+
     async def bundle(self, trajectories: Sequence[TrajectoryRef]) -> ContentRef:
         """Create a standard trajectory manifest ContentRef."""
         ...
+
+
+class TrajectoryStoreFactory(Protocol):
+    """Create one TrajectoryStore for a configured provider."""
+
+    def create(self, spec: TrajectoryStoreSpec) -> TrajectoryStore: ...
+
+
+class TrajectorySource(Protocol):
+    """Fetch provider-native trajectory payloads from a Runtime or service."""
+
+    async def fetch(self, request: TrajectoryFetchRequest) -> Sequence[JsonObject]: ...
+
+
+class TrajectoryNormalizer(Protocol):
+    """Convert one provider-native payload into the canonical Trajectory."""
+
+    def normalize(self, raw: JsonObject, source: TrajectorySourceSpec) -> Trajectory: ...
 
 
 class VersionManager(Protocol):
@@ -181,14 +220,20 @@ class Benchmark(Protocol):
 
 
 class Verifier(Protocol):
-    """Load hidden expected data internally and verify one Task result."""
+    """User-provided logic that verifies exactly one completed Task result.
 
-    async def verify(
-        self,
-        task: Task,
-        solution: SolutionVersion,
-        result: TaskResult,
-    ) -> VerificationResult: ...
+    Hidden expected data remains inside the implementation. The framework
+    supplies public Task data, the evaluated Solution, its TaskResult, and the
+    selected VerifierSpec through VerificationRequest.
+    """
+
+    async def verify(self, request: VerificationRequest) -> VerificationResult: ...
+
+
+class VerifierFactory(Protocol):
+    """Create a Verifier from a provider-specific specification."""
+
+    def create(self, spec: VerifierSpec) -> Verifier: ...
 
 
 class Evaluation(Protocol):

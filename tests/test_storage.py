@@ -2,10 +2,34 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from areal_rsi.base.storage import FileContentStore, FileMemory, FileVersionManager
+from areal_rsi.api.base import Trajectory, TrajectoryQuery
+from areal_rsi.base.storage import (
+    FileContentStore,
+    FileMemory,
+    FileTrajectoryStore,
+    FileVersionManager,
+)
 
 
 class StorageTest(unittest.IsolatedAsyncioTestCase):
+    async def test_trajectory_store_query_filters_completed_records(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            content = FileContentStore(root / "content")
+            trajectories = FileTrajectoryStore(root / "trajectories", content)
+            trace = await content.put_text("trace")
+            first = await trajectories.save(
+                Trajectory("trace_1", "agent", trace, {}, "now", task_id="task_1")
+            )
+            await trajectories.save(
+                Trajectory("trace_2", "agent", trace, {}, "now", task_id="task_2")
+            )
+
+            page = await trajectories.query(TrajectoryQuery(task_id="task_1"))
+
+            self.assertEqual(page.trajectories, (first,))
+            self.assertIsNone(page.next_cursor)
+
     async def test_component_types_and_artifact_registration(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

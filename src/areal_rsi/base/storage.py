@@ -27,6 +27,8 @@ from areal_rsi.api.base import (
     ModelVersion,
     SolutionVersion,
     Trajectory,
+    TrajectoryPage,
+    TrajectoryQuery,
     TrajectoryRef,
 )
 
@@ -313,6 +315,27 @@ class FileTrajectoryStore:
 
     async def get(self, trajectory_id: str) -> Trajectory | None:
         return self.records.get(trajectory_id, Trajectory)
+
+    async def query(self, query: TrajectoryQuery) -> TrajectoryPage:
+        try:
+            offset = int(query.cursor) if query.cursor is not None else 0
+        except ValueError as exc:
+            raise ValueError("TrajectoryQuery.cursor 必须是非负整数") from exc
+        if offset < 0:
+            raise ValueError("TrajectoryQuery.cursor 必须是非负整数")
+        matches = [
+            trajectory
+            for trajectory in self.records.list(Trajectory)
+            if (query.task_id is None or trajectory.task_id == query.task_id)
+            and (query.solution_id is None or trajectory.solution_id == query.solution_id)
+            and (query.agent_id is None or trajectory.agent_id == query.agent_id)
+        ]
+        selected = matches[offset : offset + query.limit]
+        next_offset = offset + len(selected)
+        return TrajectoryPage(
+            tuple(TrajectoryRef(item.trajectory_id) for item in selected),
+            str(next_offset) if next_offset < len(matches) else None,
+        )
 
     async def bundle(self, trajectories: Sequence[TrajectoryRef]) -> ContentRef:
         entries = []

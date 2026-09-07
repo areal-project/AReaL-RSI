@@ -9,6 +9,10 @@ src/areal_rsi/api/
 ├── base.py      基础数据对象
 ├── modules.py   基础模块接口
 └── workflow.py  Agent、Workflow 和用户入口
+
+src/areal_rsi/framework/
+├── trajectory.py  TrajectoryStore loader 与本地实现
+└── verifier.py    用户 Verifier loader 与统一执行器
 ```
 
 ## 2. 核心数据对象
@@ -22,7 +26,7 @@ class Task:
     metadata: JsonObject
 ```
 
-Task 是 Benchmark 提供给被评测 Harness 的公开输入。它不包含 expected；Verifier 根据 task_id 在内部加载隐藏答案，Workflow、Harness 和 ResearchAgent 都拿不到 expected。
+Task 是 Benchmark 提供给被评测 Harness 的公开输入。它不包含 expected；用户 Verifier 可以用 task_id 关联自己持有的隐藏答案，Workflow、Harness 和 ResearchAgent 都拿不到 expected。
 
 KernelBench 是 Benchmark 的一种实现，不是公共接口。
 
@@ -139,9 +143,73 @@ class Trajectory:
     created_at: str
     task_id: str | None
     solution_id: str | None
+    source: JsonObject
 ```
 
 执行状态由 Runtime 的正常返回或异常表达；最终输出和附属文件保存在完整轨迹内容中，不在 Trajectory 顶层重复保存。任务是否正确由 VerificationResult 表达。
+
+Verifier 是用户提供的单 Task 验证逻辑。Framework 使用 VerifierSpec 加载实现，并把一次调用需要的公开信息放入 VerificationRequest：
+
+```python
+class VerifierSpec:
+    verifier_id: str
+    provider: str
+    entrypoint: str | None
+    digest: str | None
+    config: JsonObject
+    timeout_seconds: float | None
+
+class VerificationRequest:
+    task: Task
+    solution: SolutionVersion
+    result: TaskResult
+    verifier: VerifierSpec
+    metadata: JsonObject
+```
+
+VerificationResult 将 Verifier 执行状态与任务验证结论分开。只有 `status=succeeded` 时，`passed` 和 `score` 才有业务含义；timeout、输入错误和基础设施错误不能自动视为任务零分：
+
+```python
+class VerificationResult:
+    task_id: str
+    trajectory_id: str
+    passed: bool | None
+    score: float | None
+    metrics: dict[str, float]
+    feedback: str
+    attachments: tuple[ContentRef, ...]
+    status: VerificationStatus
+    verifier_id: str | None
+    verifier_digest: str | None
+    error: VerificationError | None
+```
+
+使用者只实现 `verify(request)`；Framework 负责加载、超时和错误边界，不提供任何具体任务的判分逻辑：
+
+```python
+class ProjectVerifier:
+    async def verify(self, request: VerificationRequest) -> VerificationResult:
+        passed, score, metrics = await verify_project_output(request.result.output)
+        return VerificationResult(
+            task_id=request.task.task_id,
+            trajectory_id=request.result.trajectory.trajectory_id,
+            passed=passed,
+            score=score,
+            metrics=metrics,
+            feedback="",
+        )
+
+spec = VerifierSpec(
+    verifier_id="project-verifier",
+    provider="python",
+    entrypoint="project.verifier:ProjectVerifier",
+    timeout_seconds=30,
+)
+verifier = VerifierLoader().create(spec)
+verification = await VerifierExecutor().verify(verifier, request)
+```
+
+`VerifierExecutor` 会补齐 `verifier_id` 和 `verifier_digest`。用户结论使用 `status=succeeded`；执行超时和框架异常分别返回 `timeout` 和 `infra_error`，此时 `passed`、`score` 必须为 `None`。调用方取消协程时取消信号继续向上传播，不伪装成验证结论。
 
 EvaluationReport 只包含：
 
@@ -238,10 +306,53 @@ Memory 保存跨 iteration 或跨 run 仍有价值的结论。原始日志留在
 ```python
 save(trajectory)
 get(trajectory_id)
+query(query) -> TrajectoryPage
 bundle(trajectory_refs) -> ContentRef
 ```
 
-AgentSession.finish 或 HarnessRuntime.run 完成后，Runtime 自动保存 Trajectory。Workflow 不需要向 TrajectoryStore 追加 event。bundle 将多条轨迹组成标准 manifest，返回 ContentRef，并固定使用 media type：
+AgentSession.finish 或 HarnessRuntime.run 完成后，Runtime 自动保存 Trajectory。Workflow 不需要向 TrajectoryStore 追加 event。TrajectoryStore 只保存已经完成的标准 Trajectory，不负责执行 Agent，也不解释 provider 原始响应。
+
+`save` 按 trajectory_id 幂等：相同内容重复保存返回同一个 TrajectoryRef；同一 ID 对应不同内容时必须失败，不能覆盖历史轨迹。`TrajectoryRef.store_id=None` 表示使用调用方已经注入的默认 Store；显式 store_id 用于跨 Store 传递引用。
+
+local 与 remote 是配置出的实现，不是两套公共 API：
+
+```python
+local = TrajectoryStoreSpec(
+    store_id="local",
+    provider="filesystem",
+    storage_type=TrajectoryStorageType.LOCAL,
+    uri="./runs/trajectories",
+)
+
+remote = TrajectoryStoreSpec(
+    store_id="team-store",
+    provider="custom-remote",
+    storage_type=TrajectoryStorageType.REMOTE,
+    uri="trajectory://team/project",
+    materialization=TrajectoryMaterialization.REFERENCE,
+    config={"token_env": "TRAJECTORY_STORE_TOKEN"},
+)
+```
+
+配置不得包含凭证，只能包含保存凭证的环境变量名。`provider` 通过 TrajectoryStoreLoader 的 factory registry 解析。Framework 内置 filesystem provider；远程系统实现自己的 TrajectoryStoreFactory 并注册。
+
+```python
+loader = TrajectoryStoreLoader({"custom-remote": ProjectTrajectoryStoreFactory()})
+local_store = loader.create(local)
+remote_store = loader.create(remote)
+```
+
+远端 Runtime 原始响应通过两个独立接口进入 Store：
+
+```text
+TrajectorySource.fetch -> provider JsonObject
+TrajectoryNormalizer.normalize -> Trajectory
+TrajectoryStore.save -> TrajectoryRef
+```
+
+`materialization=reference` 保留远端 ContentRef；`materialization=snapshot` 要求对应 provider 将内容复制到目标 Store 或 ContentStore 后再保存 Trajectory。无论哪种模式，调用方读取的都是同一个 TrajectoryStore API。
+
+bundle 将多条轨迹组成标准 manifest，返回 ContentRef，并固定使用 media type：
 
 ```text
 application/vnd.areal-rsi.trajectories+json
@@ -254,6 +365,7 @@ manifest 最小格式：
   "trajectories": [
     {
       "trajectory_id": "trajectory_1",
+      "store_id": "team-store",
       "content": {
         "uri": "content://0000000000000000000000000000000000000000000000000000000000000000",
         "digest": "sha256:..."
@@ -327,12 +439,16 @@ ArtifactBuilder.build(base_artifact, artifact_change) -> ContentRef
 
 ```python
 Benchmark.list_tasks(split) -> Task[]
-Verifier.verify(task, solution, result) -> VerificationResult
+VerifierLoader.create(spec) -> Verifier
+Verifier.verify(request) -> VerificationResult
 Evaluation.evaluate(solution, split, results, baseline=None) -> EvaluationReport
 ```
 
 - Benchmark 只提供公开输入；
-- Verifier 内部持有 expected，并通过 SolutionVersion 和 TaskResult.output 获取需要验证的用户产物或单次任务输出；
+- Verifier 是使用者实现的 Protocol，可以内部持有隐藏 expected，但不能自行查询 TrajectoryStore；
+- VerificationRequest 显式提供 Task、SolutionVersion、TaskResult 和 VerifierSpec；
+- VerifierExecutor 负责 timeout、异常转换、返回类型和 ID 一致性检查；
+- Python Verifier 使用 `module:attribute` entrypoint 加载，其他 provider 通过 VerifierFactory 注册；
 - Evaluation 聚合一批 VerificationResult，不执行任务、不选择版本。
 
 ## 4. Workflow

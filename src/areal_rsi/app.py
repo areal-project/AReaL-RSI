@@ -9,7 +9,7 @@ from pathlib import Path
 
 from areal_rsi.agents.research import DefaultResearchAgent
 from areal_rsi.agents.rsi import DefaultRsiAgent
-from areal_rsi.api.base import SolutionVersion
+from areal_rsi.api.base import SolutionVersion, VerifierSpec
 from areal_rsi.api.modules import Benchmark, Verifier
 from areal_rsi.api.workflow import WorkflowContext
 from areal_rsi.base.storage import (
@@ -162,6 +162,10 @@ class LocalApp:
             researchers,
             benchmark,
             verifier,
+            VerifierSpec(
+                verifier_id=f"{benchmark.name}-verifier",
+                provider="injected",
+            ),
             evaluation,
             builder,
         )

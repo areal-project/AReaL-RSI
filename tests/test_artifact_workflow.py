@@ -32,7 +32,9 @@ from areal_rsi.api.base import (
     TaskResult,
     Trajectory,
     TrajectoryRef,
+    VerificationRequest,
     VerificationResult,
+    VerifierSpec,
 )
 from areal_rsi.api.workflow import WorkflowContext
 from areal_rsi.base.storage import (
@@ -104,9 +106,8 @@ class ArtifactVerifierFixture:
     def __init__(self, content: FileContentStore):
         self.content = content
 
-    async def verify(
-        self, task: Task, solution: SolutionVersion, result: TaskResult
-    ) -> VerificationResult:
+    async def verify(self, request: VerificationRequest) -> VerificationResult:
+        task, solution, result = request.task, request.solution, request.result
         output = json.loads(await self.content.read_text(result.output))
         assert output == {
             "task_id": task.task_id,
@@ -128,11 +129,15 @@ class ArtifactEvaluationFixture:
         *,
         baseline: EvaluationReport | None = None,
     ) -> EvaluationReport:
+        passed = [result.passed for result in results]
+        scores = [result.score for result in results]
+        assert all(value is not None for value in passed)
+        assert all(value is not None for value in scores)
         return EvaluationReport(
             solution.solution_id,
             split,
-            all(result.passed for result in results),
-            sum(result.score for result in results) / len(results),
+            all(value for value in passed if value is not None),
+            sum(value for value in scores if value is not None) / len(results),
             {"fixture_tasks": float(len(results))},
             now(),
         )
@@ -236,6 +241,7 @@ class ArtifactWorkflowTest(unittest.IsolatedAsyncioTestCase):
             self.researchers,
             ArtifactBenchmarkFixture(),
             ArtifactVerifierFixture(self.content),
+            VerifierSpec("artifact-verifier", "injected"),
             ArtifactEvaluationFixture(),
             artifact_builder=LocalArtifactBuilder(self.content, self.root / "builds"),
         )
@@ -414,8 +420,12 @@ class ArtifactWorkflowTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(run.research_agents[0].iterations), 0)
             self.assertEqual(self.runtime.calls, 6)
             checkpoint = (
-                self.root / "runs" / run.run_id / "artifact-research"
-                / "iteration-1" / "candidate.json"
+                self.root
+                / "runs"
+                / run.run_id
+                / "artifact-research"
+                / "iteration-1"
+                / "candidate.json"
             )
             original = checkpoint.read_bytes()
             self.context.research_agents = (researcher(),)
@@ -493,8 +503,13 @@ class ArtifactWorkflowTest(unittest.IsolatedAsyncioTestCase):
         run = await self.execute()
         self.assertEqual(run.state, RunState.FAILED)
         checkpoint = (
-            self.root / "runs" / run.run_id / "research-agent-1" / "iteration-1"
-            / "train" / "task-1.json"
+            self.root
+            / "runs"
+            / run.run_id
+            / "research-agent-1"
+            / "iteration-1"
+            / "train"
+            / "task-1.json"
         )
         original, calls = checkpoint.read_bytes(), self.runtime.calls
         self.service = self.make_service()

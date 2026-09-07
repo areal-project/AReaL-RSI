@@ -25,6 +25,7 @@ from areal_rsi.api.base import (
     Task,
     TaskResult,
     Trajectory,
+    VerifierSpec,
 )
 from areal_rsi.api.workflow import WorkflowContext
 from areal_rsi.base.storage import (
@@ -173,6 +174,7 @@ class WorkflowTest(unittest.IsolatedAsyncioTestCase):
             self.researchers,
             ArithmeticBenchmark(),
             ArithmeticVerifier(self.content),
+            VerifierSpec("arithmetic-verifier", "injected"),
             AccuracyEvaluation(),
             LocalHarnessBuilder(self.content, self.root / "builds"),
         )

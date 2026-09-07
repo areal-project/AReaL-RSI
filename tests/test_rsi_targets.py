@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
-from areal_rsi.agents.default import DefaultRsiAgent
+from areal_rsi.agents.rsi import DefaultRsiAgent
 from areal_rsi.api.base import EvolutionTarget, ExperimentPlan, ModelVersion, TrajectoryRef
 from areal_rsi.base.storage import FileContentStore, now
 from areal_rsi.modules.runtime import DshAgentRuntime, DshSession

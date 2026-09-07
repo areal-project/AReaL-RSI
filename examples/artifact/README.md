@@ -47,7 +47,7 @@ async def run_artifact_experiment(
 
 传入 `workflows` 会替换服务注册表；示例同时注册两种工作流。只运行产物实验时可以仅注册 `artifact-evolution`。注册不会自动切换上下文，运行不同目标时仍需装配对应的 ResearchAgent 和 Builder。ResearchAgent 的 `propose` 必须处理 `EvolutionTarget.ARTIFACT` 并返回 `ArtifactChange(artifact_name, patch, reason)`，`select` 只能选择该研究线已验证的候选或公共基线，返回 `None` 则结束该线。
 
-配套的可选实现是 `areal_rsi.agents.artifact.ArtifactResearchAgent`，构造时显式传入 `artifact_name`；它读取目标产物和 TRAIN 证据，提出文本文件编辑。用户也可以直接注入符合 `ResearchAgent` 协议的自定义实现。
+配套的可选实现是 `areal_rsi.agents.research.artifact.ArtifactResearchAgent`，构造时显式传入 `artifact_name`；它读取目标产物和 TRAIN 证据，提出文本文件编辑。用户也可以直接注入符合 `ResearchAgent` 协议的自定义实现。
 
 若还需要自然语言计划入口，可以显式构造 `DefaultRsiAgent(..., workflow_name="artifact-evolution", evolution_target=EvolutionTarget.ARTIFACT)`。它与上面的 Artifact 上下文配套使用；现有 `LocalApp`/TUI 的默认配置仍为 Harness，不会仅凭注册名称自动换用 Artifact 评测组件。
 

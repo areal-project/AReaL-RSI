@@ -10,7 +10,14 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
 authors = [{ name = "AReaL Team" }]
-dependencies = []
+dependencies = [
+  "deepseek-harness-sdk==0.1.2rc1",
+  "prompt-toolkit>=3.0.52,<4",
+  "pyyaml>=6,<7",
+]
+
+[project.scripts]
+rsi = "areal_rsi.ui.cli:main"
 
 [dependency-groups]
 dev = [
@@ -37,3 +44,4 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["RUF001", "RUF002", "RUF003"] # 中文注释和 TUI 文本使用全角标点。

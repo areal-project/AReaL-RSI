@@ -142,7 +142,7 @@ class AgentRuntime(Protocol):
 
 
 class HarnessRuntime(Protocol):
-    """Run one public Task with a local or remote user Harness."""
+    """Run one public Task with the user's Harness."""
 
     async def run(
         self,

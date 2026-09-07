@@ -11,6 +11,7 @@ dist/
 *.egg-info/
 .env
 .env.*
+!.env.example
 .rsi/
 runs/
 node_modules/

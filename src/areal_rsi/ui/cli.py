@@ -16,6 +16,7 @@ from prompt_toolkit.patch_stdout import patch_stdout
 from areal_rsi.api.base import ExperimentPlan, ExperimentRun, RunState
 from areal_rsi.app import LocalApp
 from areal_rsi.base.storage import FileRecords, decode, encode, new_id, now, write_json
+from areal_rsi.config import ModelConfigurationError
 
 
 def data_root() -> Path:
@@ -187,10 +188,18 @@ def main() -> None:
             )
         )
         return
-    if args.command == "run":
-        code = asyncio.run(run_experiment(args.plan, None))
-    elif args.command == "resume":
-        code = asyncio.run(run_experiment(None, args.run_id))
-    else:
-        code = asyncio.run(tui())
+    try:
+        if args.command == "run":
+            code = asyncio.run(run_experiment(args.plan, None))
+        elif args.command == "resume":
+            code = asyncio.run(run_experiment(None, args.run_id))
+        else:
+            code = asyncio.run(tui())
+    except ModelConfigurationError as exc:
+        parser.exit(
+            2,
+            f"配置错误：{exc}\n"
+            "可填写本地 .env（参考 .env.example），然后运行：\n"
+            "  uv run --env-file .env --locked rsi tui\n",
+        )
     raise SystemExit(code)

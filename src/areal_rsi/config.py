@@ -7,6 +7,10 @@ from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
 
+class ModelConfigurationError(ValueError):
+    """模型连接缺失或无效，可以直接向用户展示的配置错误。"""
+
+
 @dataclass(frozen=True)
 class ModelConfig:
     model: str
@@ -18,7 +22,9 @@ class ModelConfig:
         model = os.environ.get("RSI_MODEL", "").strip()
         base_url = os.environ.get("RSI_BASE_URL", "").strip().rstrip("/")
         if not model or not base_url:
-            raise ValueError("请在本机环境配置 RSI_MODEL 和 RSI_BASE_URL 后启动实验入口")
+            raise ModelConfigurationError(
+                "请在本机环境配置 RSI_MODEL 和 RSI_BASE_URL 后启动实验入口"
+            )
         try:
             parsed = urlsplit(base_url)
             valid = (
@@ -30,7 +36,9 @@ class ModelConfig:
         except ValueError:
             valid = False
         if not valid:
-            raise ValueError("RSI_BASE_URL 必须为 HTTP(S) 服务地址，不能包含凭证或查询参数")
+            raise ModelConfigurationError(
+                "RSI_BASE_URL 必须为 HTTP(S) 服务地址，不能包含凭证或查询参数"
+            )
         if not base_url.endswith("/v1"):
             base_url += "/v1"
         return cls(model, base_url, os.environ.get("RSI_API_KEY", ""))

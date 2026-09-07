@@ -8,17 +8,31 @@ AReaL-RSI 是基于 DeepSeek Harness 的本地研究与自迭代工具。用户�
 
 需要 macOS、Python 3.11+ 和 uv；本地执行使用 macOS 的 `sandbox-exec` 隔离工作目录。DSH 二进制随 Python SDK 安装。
 
-先在本机配置可用的模型服务。下面的地址和模型名是占位示例，需要替换为自己的配置；模型服务需提供 chat completions 接口。
+先准备本机配置文件：
 
 ```bash
 uv sync --locked
-export RSI_BASE_URL='http://127.0.0.1:8000/v1'
-export RSI_MODEL='your-model'
-export RSI_DATA_ROOT='.rsi/local'
-uv run --locked rsi tui
+cp -n .env.example .env
 ```
 
-服务需要认证时，通过本机环境注入 `RSI_API_KEY`。仓库不提供凭证默认值，也不把认证信息写入模型版本或实验配置。
+编辑 `.env`，填写模型服务提供的模型名和服务地址。服务需支持 Chat Completions；`RSI_BASE_URL` 使用 API 根地址（通常以 `/v1` 结尾），不用附加 `/chat/completions`。需要认证时填写本机密钥。
+
+| 配置项 | 用途 |
+| --- | --- |
+| `RSI_MODEL` | 服务提供的模型名 |
+| `RSI_BASE_URL` | 模型 API 根地址 |
+| `RSI_API_KEY` | 认证信息；无需认证时留空 |
+| `RSI_DATA_ROOT` | 实验数据目录；更换模型时使用新目录 |
+
+然后显式加载配置并启动：
+
+```bash
+uv run --env-file .env --locked rsi tui
+```
+
+`uv sync` 只安装依赖；`.env` 由 `uv run --env-file` 读取。也可以在同一终端 export 这些变量后直接运行 `uv run --locked rsi tui`。Codex 的 TOML 配置不能直接作为 RSI 配置读取；模型名、服务地址和认证信息需映射到上述字段。
+
+`.env` 被 Git 忽略，`.env.example` 仅包含空模板。认证信息不写入模型版本或实验配置；模型请求显式设置 `store=false`。
 
 在 `你>` 提示符后输入：
 
@@ -35,20 +49,19 @@ uv run --locked rsi tui
 | `/resume RUN_ID` | 恢复指定实验，复用已完成的工作 |
 | `/exit` | 退出对话；运行中的实验需要先停止 |
 
-也可以在终端使用 `uv run --locked rsi status` 查询实验。访问已有实验时，保持相同的 `RSI_DATA_ROOT` 和模型配置。
+也可以在终端使用 `uv run --env-file .env --locked rsi status` 查询实验。访问已有实验时，保持相同的 `RSI_DATA_ROOT` 和模型配置。
 
 ## Web UI
 
-另开一个终端，在项目目录使用与 TUI 相同的数据目录：
+另开一个终端，在项目目录加载同一份配置，使用与 TUI 相同的数据目录：
 
 ```bash
-export RSI_DATA_ROOT='.rsi/local'
-uv run --locked rsi web --port 8765
+uv run --env-file .env --locked rsi web --port 8765
 ```
 
 浏览器打开 [http://127.0.0.1:8765](http://127.0.0.1:8765)，查看研究方向、执行阶段、TRAIN/VALIDATE 得分、版本关系及选版依据。页面自动刷新，只读并绑定本机；无需模型连接配置。
 
-指定单个实验：`uv run --locked rsi web --port 8765 --run RUN_ID`。
+指定单个实验：`uv run --env-file .env --locked rsi web --port 8765 --run RUN_ID`。
 
 ## 多研究线与示例
 
@@ -56,7 +69,7 @@ uv run --locked rsi web --port 8765
 
 ```bash
 export RSI_RESEARCH_DIRECTIONS='["错误归因与通用提示", "工具使用和验证流程"]'
-uv run --locked rsi tui
+uv run --env-file .env --locked rsi tui
 ```
 
 每条线每轮提出一个修改，轮数上限对每条线分别生效；失败和剪枝可能导致实际完成数小于上限。各线只读取 TRAIN 证据，VALIDATE 仅以聚合结果参与选版和剪枝。

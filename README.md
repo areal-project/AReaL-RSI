@@ -89,6 +89,7 @@ src/areal_rsi/
 │   ├── research/         ResearchAgent：Harness / Artifact 提案与选版
 │   └── common.py         共用 JSON 解析与格式重试
 ├── workflows/            Python 迭代、选版、停止和恢复
+├── framework/            TrajectoryStore 与 Verifier 扩展框架
 ├── config.py             本机模型连接配置
 ├── app.py                本地组件装配
 ├── ui/                   TUI、CLI 和只读 Web UI
@@ -96,6 +97,8 @@ src/areal_rsi/
 ```
 
 [架构说明](docs/architecture.md) 描述运行与隔离边界；[接口说明](docs/interfaces/README.md) 描述数据对象和扩展协议。
+
+公共 API 定义了 TrajectoryStore 与用户 Verifier 的接入协议。Framework 提供 append-only FileTrajectoryStore、provider factory registry、Python Verifier loader 和统一执行器；具体 Benchmark Verifier、远程 Store 和 Runtime Adapter 由使用者实现并注册。
 
 ## 开发检查与数据
 

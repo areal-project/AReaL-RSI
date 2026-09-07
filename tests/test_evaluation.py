@@ -2,7 +2,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from areal_rsi.api.base import BenchmarkSplit, TaskResult, TrajectoryRef
+from areal_rsi.api.base import (
+    BenchmarkSplit,
+    TaskResult,
+    TrajectoryRef,
+    VerificationRequest,
+    VerifierSpec,
+)
 from areal_rsi.base.storage import FileContentStore, FileVersionManager
 from areal_rsi.modules.benchmark import ArithmeticBenchmark, ArithmeticVerifier
 
@@ -26,7 +32,14 @@ class EvaluationTest(unittest.IsolatedAsyncioTestCase):
                 }
             )
             verifier = ArithmeticVerifier(content)
-            result = await verifier.verify(task, solution, TaskResult(output, TrajectoryRef("t")))
+            spec = VerifierSpec("arithmetic-verifier", "injected")
+            request = VerificationRequest(
+                task,
+                solution,
+                TaskResult(output, TrajectoryRef("t")),
+                spec,
+            )
+            result = await verifier.verify(request)
             self.assertFalse(result.passed)
             self.assertEqual(result.score, 0)
             self.assertNotIn("21", result.feedback)
@@ -34,4 +47,11 @@ class EvaluationTest(unittest.IsolatedAsyncioTestCase):
                 {"task_id": task.task_id, "solution_id": "unrelated", "response": "#### 21"}
             )
             with self.assertRaises(ValueError):
-                await verifier.verify(task, solution, TaskResult(bad, TrajectoryRef("t")))
+                await verifier.verify(
+                    VerificationRequest(
+                        task,
+                        solution,
+                        TaskResult(bad, TrajectoryRef("t")),
+                        spec,
+                    )
+                )

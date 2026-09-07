@@ -61,7 +61,8 @@ ModelVersion + HarnessVersion + ArtifactVersion[] = SolutionVersion
 TRAIN Tasks
     ↓ HarnessRuntime
 TaskResult（output + trajectory）
-    ↓ Verifier
+    ↓ 组装 VerificationRequest
+用户 Verifier
 VerificationResult
     ↓ Evaluation
 EvaluationReport
@@ -83,12 +84,30 @@ HarnessChange 和 ArtifactChange 都是一个 patch；ModelChange 是一次训�
 ## 5. 评测隔离
 
 - Benchmark 只向 Workflow 返回公开 Task，不返回 expected；
-- Verifier 根据 task_id 在实现内部加载隐藏 expected；
-- TRAIN 轨迹通过 ContentRef 传递；本地内容由 FileContentStore 校验并由 Runtime 复制到隔离工作区；
+- Verifier 是用户提供的 Protocol 实现，可以在实现内部加载隐藏 expected；
+- Framework 通过 VerifierSpec 加载实现，并只传入显式的 VerificationRequest；
+- Verifier 不直接依赖 TrajectoryStore，TaskResult 中的 TrajectoryRef 由 Workflow 和 Runtime 管理；
+- TRAIN 轨迹通过 ContentRef 传递；本地内容由 FileContentStore 校验并复制到隔离工作区，远程内容由对应 Runtime Adapter 解析；
 - VALIDATE 只向 ResearchAgent 暴露 score 和 metrics；
 - AgentRuntime.open 必须把 `workspace_root` 作为文件系统隔离边界，不能让 Agent 向上读取其他目录。
 
-## 6. 当前范围
+## 6. 轨迹来源与存储
+
+```text
+Local Runtime / Remote Runtime
+            ↓
+     TrajectorySource
+            ↓ provider payload
+   TrajectoryNormalizer
+            ↓ canonical Trajectory
+      TrajectoryStore
+            ↓
+       TrajectoryRef
+```
+
+TrajectoryStore 的 local/remote 实现共享同一个 Protocol，由 TrajectoryStoreSpec 和 provider factory 选择。远程轨迹可以保留不可变引用，也可以在保存前物化为 snapshot。TrajectoryStore 管理标准轨迹索引，ContentStore 管理轨迹正文和附件，二者不重复承担职责。
+
+## 7. 当前范围
 
 第一阶段固定 Model 执行 Harness evolution，TrainingBackend 暂不实施。Workflow 使用普通 Python 类，不设计 DSL。多 ResearchAgent 从同一基线出发，同一轮并发运行，在轮次边界调用 RSI Agent 剪枝。某条线失败不抹掉其他线的完成记录；恢复只重试未完成部分，剪枝决定持久保存。相同 Run 的跨进程执行由 OS 文件锁互斥。
 

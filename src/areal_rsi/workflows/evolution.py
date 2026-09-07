@@ -23,10 +23,12 @@ from areal_rsi.api.base import (
     SolutionVersion,
     TaskResult,
     TrajectoryRef,
+    VerificationRequest,
     VerificationResult,
 )
 from areal_rsi.api.workflow import ResearchAgent, WorkflowContext
 from areal_rsi.base.storage import FileRecords, decode, encode, now, safe_name, write_json
+from areal_rsi.framework.verifier import VerifierExecutor
 
 PRUNED = "RSI Agent 已停止此研究线"
 
@@ -145,7 +147,15 @@ class HarnessEvolutionWorkflow:
                         ),
                     },
                 )
-                verification = await ctx.verifier.verify(task, solution, task_result)
+                verification = await VerifierExecutor().verify(
+                    ctx.verifier,
+                    VerificationRequest(
+                        task=task,
+                        solution=solution,
+                        result=task_result,
+                        verifier=ctx.verifier_spec,
+                    ),
+                )
                 write_json(
                     checkpoint,
                     {"task": task, "result": task_result, "verification": verification},

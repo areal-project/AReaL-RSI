@@ -1,6 +1,9 @@
 import json
 import threading
 import urllib.request
+from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -8,42 +11,14 @@ import pytest
 from areal_rsi.modules.gateway import GatewayProxy, normalize_tool_deltas
 
 
-@pytest.mark.parametrize("api_key", ["", "test-only-sentinel"])
-def test_authentication_stays_between_proxy_and_configured_service(api_key: str) -> None:
-    received: list[str | None] = []
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_POST(self) -> None:
-            self.rfile.read(int(self.headers["Content-Length"]))
-            received.append(self.headers.get("Authorization"))
-            body = b'{"choices": []}'
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        def log_message(self, format: str, *args: object) -> None:
-            pass
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+@contextmanager
+def local_upstream(handler: type[BaseHTTPRequestHandler]) -> Iterator[str]:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    proxy = GatewayProxy(f"http://127.0.0.1:{server.server_port}/v1", api_key)
     try:
-        request = urllib.request.Request(
-            proxy.url + "/chat/completions",
-            data=json.dumps({"model": "test-model", "messages": []}).encode(),
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(request, timeout=3) as response:
-            assert response.status == 200
-        assert received == [f"Bearer {api_key}" if api_key else None]
-        assert "test-only-sentinel" not in json.dumps(proxy.requests)
-        assert "Authorization" not in json.dumps(proxy.requests)
-        assert proxy.requests[0]["request"]["store"] is False
+        yield f"http://127.0.0.1:{server.server_port}"
     finally:
-        proxy.close()
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
@@ -91,3 +66,220 @@ def test_null_deltas_do_not_erase_tool_name_or_change_arguments() -> None:
     assert "name" not in second["function"] and "id" not in second
     assert second["function"]["arguments"] == '{"command":"pwd"}'
     assert "[DONE]" in result
+
+
+def test_sse_first_event_arrives_before_upstream_finishes_with_split_utf8() -> None:
+    # 只有测试收到完整首事件后，上游才允许继续；整包缓存实现会在此超时失败。
+    release = threading.Event()
+    first_received = threading.Event()
+    upstream_finished = threading.Event()
+    events = [
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "content": "开始",
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "function": {"name": "Bash", "arguments": '{"文本":'},
+                            }
+                        ],
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "content": "完成",
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": None,
+                                "function": {"name": None, "arguments": '"你好"}'},
+                            }
+                        ],
+                    }
+                }
+            ]
+        },
+        {"choices": [], "usage": {"prompt_tokens": 2, "completion_tokens": 3}},
+    ]
+    first = ("data: " + json.dumps(events[0], ensure_ascii=False) + "\r\n\r\n").encode()
+    rest = (
+        "".join("data: " + json.dumps(event, ensure_ascii=False) + "\n\n" for event in events[1:])
+        + "data: [DONE]\n\n"
+    ).encode()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.end_headers()
+            # 单字节分片刻意拆开 UTF-8 中文及 CRLF，代理必须等事件完整再解码。
+            for byte in first:
+                self.wfile.write(bytes([byte]))
+                self.wfile.flush()
+            release.wait(timeout=3)
+            for index in range(0, len(rest), 5):
+                self.wfile.write(rest[index : index + 5])
+                self.wfile.flush()
+            upstream_finished.set()
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    with local_upstream(Handler) as upstream:
+        proxy = GatewayProxy(upstream, "offline-fixture")
+        try:
+
+            def consume() -> bytes:
+                request = urllib.request.Request(
+                    proxy.url,
+                    data=b'{"model":"offline","messages":[],"stream":true}',
+                    headers={"Content-Type": "application/json"},
+                )
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    assert response.headers.get("Content-Length") is None
+                    raw = bytearray()
+                    seen_data = False
+                    while line := response.readline():
+                        raw.extend(line)
+                        seen_data = seen_data or line.startswith(b"data: {")
+                        if seen_data and line == b"\n":
+                            first_received.set()
+                    return bytes(raw)
+
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                received = pool.submit(consume)
+                try:
+                    assert first_received.wait(timeout=2), "首事件被缓存到上游结束"
+                    assert not upstream_finished.is_set()
+                finally:
+                    release.set()
+                body = received.result(timeout=5)
+            chunks = [
+                json.loads(line[6:])
+                for line in body.decode().splitlines()
+                if line.startswith("data: {")
+            ]
+            first_call = chunks[0]["choices"][0]["delta"]["tool_calls"][0]
+            later_call = chunks[1]["choices"][0]["delta"]["tool_calls"][0]
+            assert first_call["id"] == "call_1" and first_call["function"]["name"] == "Bash"
+            assert "id" not in later_call and "name" not in later_call["function"]
+            assert first_call["function"]["arguments"] + later_call["function"]["arguments"] == (
+                '{"文本":"你好"}'
+            )
+            assert [chunk["choices"][0]["delta"]["content"] for chunk in chunks[:2]] == [
+                "开始",
+                "完成",
+            ]
+            assert chunks[2] == events[2] and b"data: [DONE]" in body
+            assert proxy.requests[0]["response"] == (first + rest).decode()
+            assert proxy.requests[0]["status"] == 200
+            assert "error" not in proxy.requests[0]
+        finally:
+            release.set()
+            proxy.close()
+
+
+def test_ordinary_json_is_preserved_and_request_disables_storage() -> None:
+    response_body = '{"choices":[],"reply":"你好","usage":{"total_tokens":5}}'.encode()
+    original = {
+        "model": "offline",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 7,
+        "thinking": True,
+        "reasoning_effort": "high",
+        "dsh_plugin_packages": ["fixture"],
+        "dsh_session_log": "fixture",
+    }
+    expected = {key: original[key] for key in ("model", "messages", "max_tokens")}
+    expected["store"] = False
+    forwarded: list[object] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            forwarded.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(response_body)))
+            self.end_headers()
+            self.wfile.write(response_body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    with local_upstream(Handler) as upstream:
+        proxy = GatewayProxy(upstream, "offline-fixture")
+        try:
+            request = urllib.request.Request(
+                proxy.url,
+                data=json.dumps(original).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(request, timeout=3) as response:
+                assert int(response.headers["Content-Length"]) == len(response_body)
+                assert response.read() == response_body
+            assert forwarded == [expected]
+            assert proxy.requests == [
+                {
+                    "request": expected,
+                    "removed_fields": [
+                        "thinking",
+                        "reasoning_effort",
+                        "dsh_plugin_packages",
+                        "dsh_session_log",
+                    ],
+                    "content_type": "application/json",
+                    "status": 200,
+                    "response": response_body.decode(),
+                }
+            ]
+        finally:
+            proxy.close()
+
+
+@pytest.mark.parametrize("api_key", ["", "test-only-sentinel"])
+def test_authentication_stays_between_proxy_and_configured_service(api_key: str) -> None:
+    received: list[str | None] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers["Content-Length"]))
+            received.append(self.headers.get("Authorization"))
+            body = b'{"choices": []}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    proxy = GatewayProxy(f"http://127.0.0.1:{server.server_port}/v1", api_key)
+    try:
+        request = urllib.request.Request(
+            proxy.url + "/chat/completions",
+            data=json.dumps({"model": "test-model", "messages": []}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=3) as response:
+            assert response.status == 200
+        assert received == [f"Bearer {api_key}" if api_key else None]
+        assert "test-only-sentinel" not in json.dumps(proxy.requests)
+        assert "Authorization" not in json.dumps(proxy.requests)
+        assert proxy.requests[0]["request"]["store"] is False
+    finally:
+        proxy.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)

@@ -41,6 +41,7 @@ def test_authentication_stays_between_proxy_and_configured_service(api_key: str)
         assert received == [f"Bearer {api_key}" if api_key else None]
         assert "test-only-sentinel" not in json.dumps(proxy.requests)
         assert "Authorization" not in json.dumps(proxy.requests)
+        assert proxy.requests[0]["request"]["store"] is False
     finally:
         proxy.close()
         server.shutdown()

@@ -41,6 +41,7 @@ class GatewayProxy:
                 # 不改变 model/messages/tools、token 上限或模型返回内容。
                 removed = ("thinking", "reasoning_effort", "dsh_plugin_packages", "dsh_session_log")
                 forwarded = {k: v for k, v in original.items() if k not in removed}
+                forwarded["store"] = False
                 payload = json.dumps(forwarded).encode()
                 headers = {"Content-Type": "application/json"}
                 if api_key:

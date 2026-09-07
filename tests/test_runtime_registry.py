@@ -24,6 +24,7 @@ class RuntimeRegistryTest(unittest.IsolatedAsyncioTestCase):
                 trajectories,
                 base_url="http://127.0.0.1:1",
                 api_key="fixture",
+                credential_env_names=("MODEL_CREDENTIAL",),
                 tool_registry={"custom@v1": [{"id": "custom", "name": "test-package"}]},
             )
             with self.assertRaisesRegex(ValueError, "未注册工具"):
@@ -31,7 +32,13 @@ class RuntimeRegistryTest(unittest.IsolatedAsyncioTestCase):
                     AgentSpec("agent", "deepseek-harness@v1", model, tools=("memory@v1",))
                 )
             with (
-                patch.dict(os.environ, {"RSI_API_KEY": "host-only-sentinel"}),
+                patch.dict(
+                    os.environ,
+                    {
+                        "RSI_API_KEY": "host-only-sentinel",
+                        "MODEL_CREDENTIAL": "reference-only-sentinel",
+                    },
+                ),
                 patch("areal_rsi.modules.runtime.DeepSeekHarness") as sdk,
                 patch(
                     "areal_rsi.modules.runtime.ensure_cli", return_value=root / "shared-dsh"
@@ -46,6 +53,7 @@ class RuntimeRegistryTest(unittest.IsolatedAsyncioTestCase):
                 )
                 spec = yaml.safe_load(Path(sdk.call_args.kwargs["patches"][0]).read_text())
                 self.assertEqual(sdk.call_args.kwargs["env"]["RSI_API_KEY"], "")
+                self.assertEqual(sdk.call_args.kwargs["env"]["MODEL_CREDENTIAL"], "")
                 self.assertEqual(os.environ["RSI_API_KEY"], "host-only-sentinel")
                 self.assertIn({"insert": [{"id": "custom", "name": "test-package"}]}, spec)
                 ensure.assert_called_once_with(root)

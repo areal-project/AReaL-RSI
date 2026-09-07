@@ -140,7 +140,7 @@ def test_sse_first_event_arrives_before_upstream_finishes_with_split_utf8() -> N
             def consume() -> bytes:
                 request = urllib.request.Request(
                     proxy.url,
-                    data=b'{"model":"offline","messages":[],"stream":true}',
+                    data=b'{"model":"gateway-fixture-model","messages":[],"stream":true}',
                     headers={"Content-Type": "application/json"},
                 )
                 with urllib.request.urlopen(request, timeout=5) as response:
@@ -190,7 +190,7 @@ def test_sse_first_event_arrives_before_upstream_finishes_with_split_utf8() -> N
 def test_ordinary_json_is_preserved_and_request_disables_storage() -> None:
     response_body = '{"choices":[],"reply":"你好","usage":{"total_tokens":5}}'.encode()
     original = {
-        "model": "offline",
+        "model": "gateway-fixture-model",
         "messages": [{"role": "user", "content": "hi"}],
         "max_tokens": 7,
         "thinking": True,
@@ -269,7 +269,7 @@ def test_authentication_stays_between_proxy_and_configured_service(api_key: str)
     try:
         request = urllib.request.Request(
             proxy.url + "/chat/completions",
-            data=json.dumps({"model": "test-model", "messages": []}).encode(),
+            data=json.dumps({"model": "gateway-fixture-model", "messages": []}).encode(),
             headers={"Content-Type": "application/json"},
         )
         with urllib.request.urlopen(request, timeout=3) as response:

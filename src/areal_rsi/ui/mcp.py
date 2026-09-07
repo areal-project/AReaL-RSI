@@ -20,6 +20,19 @@ Iterations = Annotated[int, Field(strict=True, ge=1, le=20)]
 Identifier = Annotated[str, Field(strict=True, pattern=r"^[A-Za-z0-9_-]{1,128}$")]
 
 
+def _agent_models(value: Any) -> dict[str, dict[str, str]]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        agent_id: {"model": entry["model"][:500]}
+        for agent_id, entry in list(value.items())[:12]
+        if isinstance(agent_id, str)
+        and len(agent_id) <= 128
+        and isinstance(entry, dict)
+        and isinstance(entry.get("model"), str)
+    }
+
+
 def _summary(value: dict[str, Any]) -> dict[str, Any]:
     """只输出公开计划和聚合状态，新增控制器字段不会自动泄漏到对话。"""
     fields = {
@@ -31,6 +44,9 @@ def _summary(value: dict[str, Any]) -> dict[str, Any]:
         "workflow",
         "target",
         "benchmark",
+        "teacher_model_name",
+        "target_model_name",
+        "frontend_model_name",
         "best_solution_id",
         "completed_iterations",
         "max_iterations",
@@ -45,6 +61,8 @@ def _summary(value: dict[str, Any]) -> dict[str, Any]:
         for key, item in value.items()
         if key in fields and not isinstance(item, (dict, list))
     }
+    if "agent_models" in value:
+        result["agent_models"] = _agent_models(value["agent_models"])
     if isinstance(value.get("plan"), dict):
         plan = value["plan"]
         result["plan"] = {
@@ -61,16 +79,17 @@ def _summary(value: dict[str, Any]) -> dict[str, Any]:
             )
             if key in plan
         }
-        directions = plan.get("config", {}).get("research_directions")
-        if isinstance(directions, list):
-            result["plan"]["config"] = {
-                "research_directions": [
-                    direction[:500] for direction in directions[:20] if isinstance(direction, str)
-                ]
-            }
-        model = plan.get("config", {}).get("model_name")
-        if isinstance(model, str):
-            result["plan"].setdefault("config", {})["model_name"] = model[:500]
+        config = plan.get("config", {})
+        for key in ("teacher_model_name", "target_model_name", "frontend_model_name"):
+            model = config.get(key)
+            if key == "target_model_name" and model is None:
+                model = config.get("model_name")  # 兼容历史单模型计划。
+            if isinstance(model, str):
+                result["plan"].setdefault("config", {})[key] = model[:500]
+        if "agent_models" in config:
+            result["plan"].setdefault("config", {})["agent_models"] = _agent_models(
+                config["agent_models"]
+            )
     if isinstance(value.get("worker"), dict):
         result["worker"] = {
             key: item
@@ -119,8 +138,11 @@ def create_server(controller: ExperimentController) -> FastMCP:
         annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False),
     )
     async def rsi_plan(goal: Goal, max_iterations: Iterations) -> str:
-        """生成待确认计划，不启动实验。只接受目标和轮数；模型、评测集和研究线数量
-        来自启动配置，不能通过 goal 改变。请展示返回的实际配置；不符合用户要求时
+        """生成待确认计划，不启动实验。只接受目标和轮数；各 Agent 的有效模型、评测集和研究线数量
+        来自启动配置，不能通过 goal 改变。teacher/target 只是默认值。
+        RSI_AGENT_MODELS 可按前台、RSI Agent 和 ResearchAgent 组覆盖；Task Agent 直接使用
+        Target Model，不单独配置。所有 ResearchAgent 共用一个模型。请展示返回的完整模型映射；
+        不符合用户要求时
         需修改本机配置并重启 TUI。此工具没有实验模板名参数。
         """
         return await _invoke(lambda: controller.plan(goal, max_iterations))

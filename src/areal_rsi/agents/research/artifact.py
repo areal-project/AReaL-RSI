@@ -45,13 +45,10 @@ class ArtifactResearchAgent(DefaultResearchAgent):
         root: Path,
         *,
         artifact_name: str,
-        direction: str = "改进用户指定产物",
     ):
         if not isinstance(artifact_name, str) or not artifact_name.strip():
             raise ValueError("必须显式指定非空 artifact_name")
-        super().__init__(
-            agent_id, runtime, model, content, memory, versions, root, direction=direction
-        )
+        super().__init__(agent_id, runtime, model, content, memory, versions, root)
         self.artifact_name = artifact_name
 
     async def propose(
@@ -138,7 +135,6 @@ class ArtifactResearchAgent(DefaultResearchAgent):
                 json.dumps(
                     {
                         "goal": goal,
-                        "research_direction": self.direction,
                         "artifact_name": self.artifact_name,
                         "artifact": "artifact/",
                         "creating": base is None,

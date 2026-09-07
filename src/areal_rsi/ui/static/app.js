@@ -29,7 +29,7 @@ function agentCard(agent,index,baseline){
   const latest=agent.history.at(-1),delta=latest&&typeof baseline==="number"?latest.validation_score-baseline:null;
   const task=agent.phase.startsWith("evaluate_")&&agent.task_count?` · 任务 ${agent.task}/${agent.task_count}`:"";
   return `<article class="agent"><div class="agenthead"><h3>${esc(agent.agent_id)}</h3>${badge(agent.state)}</div>
-    <p class="direction">${esc(agent.direction)}</p><div class="phase">${esc(phases[agent.phase]||agent.phase)}${esc(task)}</div>
+    <p class="meta">模型 ${esc(agent.model||"未记录")} · 使用统一实验目标</p><div class="phase">${esc(phases[agent.phase]||agent.phase)}${esc(task)}</div>
     <progress value="${Number(agent.completed_iterations)}" max="${Number(agent.max_iterations)}" aria-label="${esc(agent.agent_id)} 轮次进度"></progress>
     <div class="phase">已完成 ${agent.completed_iterations} / ${agent.max_iterations} 轮</div>
     <div class="scoreline"><strong>${percent(latest?.validation_score)}</strong><span class="${delta>0?"positive":delta<0?"negative":"muted"}">${delta===null?"尚无候选验证结果":`${delta>=0?"+":""}${(delta*100).toFixed(1)} 个百分点`}</span></div>
@@ -44,7 +44,7 @@ function render(run){
   document.title=`RSI · ${run.run_id}`;
   document.getElementById("main").innerHTML=`<div class="runhead"><div><h1>${esc(run.goal)}</h1><div class="meta"><code>${esc(run.run_id)}</code></div></div>${badge(run.state)}</div>
     <details class="goal" data-key="goal"><summary>查看完整目标</summary><p>${esc(run.goal)}</p></details>
-    <p class="meta">${esc(run.workflow)} · ${esc(run.benchmark)} · 模型 ${esc(run.model||"未记录")}</p>
+    <p class="meta">${esc(run.workflow)} · ${esc(run.benchmark)} · 前台 ${esc(run.frontend_model||"未记录")} · RSI Agent ${esc(run.rsi_model||run.teacher_model||"未记录")} · 目标模型 ${esc(run.target_model||run.model||"未记录")}</p>
     ${run.state==="running"&&!run.worker_alive?'<div class="notice">记录显示运行中，但未发现持有此 Run 执行锁的进程。请通过 CLI 核对或恢复；页面不会重新启动实验。</div>':""}
     ${run.error?`<div class="notice">${esc(run.error)}</div>`:""}
     <section class="stats" aria-label="实验概览"><div class="stat"><div class="label">基线验证得分</div><div class="value">${percent(run.baseline_score)}</div><div class="meta">${run.baseline_score===null?(run.state==="running"&&run.worker_alive&&run.baseline_progress?.task_count?`正在评测 ${run.baseline_progress.task}/${run.baseline_progress.task_count} 题`:"尚无有效基线结果"):"固定数据分区"}</div></div>
@@ -52,7 +52,7 @@ function render(run){
     <div class="stat"><div class="label">已完成研究轮次</div><div class="value">${completed} <span class="meta">/ ${run.max_iterations*run.research_agent_count}</span></div><div class="meta">${run.research_agent_count} 条独立研究线</div></div>
     <div class="stat"><div class="label">开始时间</div><div class="value meta">${esc(stamp(run.started_at))}</div><div class="meta">${run.finished_at?`结束 ${esc(stamp(run.finished_at))}`:"尚未结束"}</div></div></section>
     <section class="panel"><h2>验证得分 · 按研究线比较</h2>${chart(run)}<div class="legend">${run.agents.map((a,i)=>`<span class="line-${i}">${esc(a.agent_id)}</span>`).join("")}</div></section>
-    <h2>研究方向与迭代记录</h2><section class="agents">${run.agents.length?run.agents.map((a,i)=>agentCard(a,i,run.baseline_score)).join(""):'<p class="muted">研究线尚未初始化。</p>'}</section>
+    <h2>独立研究线与迭代记录</h2><section class="agents">${run.agents.length?run.agents.map((a,i)=>agentCard(a,i,run.baseline_score)).join(""):'<p class="muted">研究线尚未初始化。</p>'}</section>
     <footer>最佳版本 <code>${esc(run.best_solution_id)}</code> · 本地只读视图，每 3 秒刷新；评测错误不会作为成功样本隐藏。</footer>`;
 }
 async function get(path){const response=await fetch(path,{cache:"no-store"});const data=await response.json();if(!response.ok)throw Error(data.error||`HTTP ${response.status}`);return data;}

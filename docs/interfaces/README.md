@@ -60,7 +60,7 @@ class ArtifactVersion:
     parent_version_id: str | None
 ```
 
-SolutionVersion 记录一次运行实际采用的 Model、Harness 和用户 Artifact 组合：
+SolutionVersion 记录一次评测实际采用的 target Model、Harness 和用户 Artifact 组合。RSI/Research Agent 的模型可各自配置，其有效模型映射保存在 ExperimentPlan.config，不进入被评测 Solution：
 
 ```python
 class SolutionVersion:
@@ -507,6 +507,8 @@ prune(run) -> ResearchAgent ID[]
 ```
 
 默认终端入口使用 DSH 原生 TUI，由 DSH 持有对话 Session 和 Agent loop。普通对话直接回复；DSH 经本地 MCP 调用 `rsi_plan(goal, max_iterations)` 生成并展示固定配置的实验计划，此步骤不另外调用聊天模型。
+
+计划的 `config.agent_models` 按 RSI Agent 和 ResearchAgent ID 保存 `{model, version_id}`，所有 `research-agent-N` 必须指向同一个由 `research-agent` 配置解析出的模型。`frontend_model_name` 记录生成计划时的前台模型，`target_model_name` 是 Task Agent 直接执行的 target。恢复时逐个核验研究侧模型，并通过基线 Solution 核验 target；前台和未被使用的 teacher 默认配置不参与绑定。旧计划中重复保存的 `task-agent` 项继续兼容读取。数据目录允许多组模型共存，每个 Run 引用自己的目标基线。
 
 用户确认后，`rsi_start(plan_id, confirmed=true)` 提交独立 worker。worker 核对计划与当前装配，再调用既有实验服务推进 Workflow。退出 TUI 不停止已提交实验；返回 Run ID 只表示提交，结果以真实状态为准。
 

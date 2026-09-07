@@ -24,10 +24,15 @@ async def run_experiment(plan_file: str | None, resume: str | None) -> int:
     app = await LocalApp.create(root, lambda text: print(text, flush=True))
     try:
         if resume:
+            previous = await app.service.status(resume)
+            if previous is None:
+                raise KeyError(resume)
+            await app.bind_plan(previous.plan)
             run = await app.service.resume(resume)
         else:
             assert plan_file is not None
             plan = decode(ExperimentPlan, json.loads(Path(plan_file).read_text()))
+            await app.bind_plan(plan)
             run = await app.service.start(plan)
         print(f"实验已启动 run={run.run_id}", flush=True)
         if run.run_id in app.service.tasks:

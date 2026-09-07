@@ -8,6 +8,7 @@ import os
 import shlex
 import shutil
 import sys
+from collections.abc import Collection
 from pathlib import Path
 from typing import Any
 
@@ -163,9 +164,11 @@ class DshAgentRuntime:
         mcp_registry: dict[str, dict[str, Any]] | None = None,
         tool_registry: dict[str, list[dict[str, Any]]] | None = None,
         dsh_root: Path | None = None,
+        credential_env_names: Collection[str] = (),
     ):
         self.root = root.resolve()
         self.dsh_root = (dsh_root or self.root.parent).resolve()
+        self.credential_env_names = frozenset(credential_env_names)
         self.content = content
         self.trajectories = trajectories
         self.base_url = base_url.rstrip("/")
@@ -276,7 +279,8 @@ class DshAgentRuntime:
                 **{
                     key: ""
                     for key in os.environ
-                    if any(
+                    if key in self.credential_env_names
+                    or any(
                         part in key.upper()
                         for part in ("TOKEN", "SECRET", "PASSWORD", "API_KEY", "AUTH", "COOKIE")
                     )

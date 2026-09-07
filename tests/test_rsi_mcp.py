@@ -48,8 +48,16 @@ class FixtureController(ExperimentController):
                 "baseline_solution_id": "solution_fixture",
                 "research_agent_count": 2,
                 "config": {
-                    "research_directions": ["General improvement"],
-                    "model_name": "fixture-model",
+                    "teacher_model_name": "teacher-default-fixture-model",
+                    "target_model_name": "task-agent-fixture-model",
+                    "frontend_model_name": "frontend-fixture-model",
+                    "agent_models": {
+                        "rsi-agent": {"model": "rsi-agent-fixture-model", "api_key": "SECRET"},
+                        "research-agent-1": {
+                            "model": "research-agent-fixture-model",
+                            "base_url": "SECRET",
+                        },
+                    },
                     "api_key": "SECRET",
                 },
             },
@@ -172,7 +180,23 @@ class RsiMcpTest(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(plan["plan"]["benchmark"], "fixed-benchmark")
             self.assertEqual(plan["plan"]["target"], "harness")
-            self.assertEqual(plan["plan"]["config"]["model_name"], "fixture-model")
+            self.assertEqual(
+                plan["plan"]["config"]["teacher_model_name"],
+                "teacher-default-fixture-model",
+            )
+            self.assertEqual(
+                plan["plan"]["config"]["target_model_name"], "task-agent-fixture-model"
+            )
+            self.assertEqual(
+                plan["plan"]["config"]["frontend_model_name"], "frontend-fixture-model"
+            )
+            self.assertEqual(
+                plan["plan"]["config"]["agent_models"],
+                {
+                    "rsi-agent": {"model": "rsi-agent-fixture-model"},
+                    "research-agent-1": {"model": "research-agent-fixture-model"},
+                },
+            )
             self.assertTrue(plan["confirmation_required"])
             started = self.body(
                 await session.call_tool(

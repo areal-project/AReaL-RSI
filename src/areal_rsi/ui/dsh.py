@@ -12,7 +12,7 @@ from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]
 
-from areal_rsi.config import ModelConfig
+from areal_rsi.config import AgentModelSettings
 from areal_rsi.modules.dsh import DSH_VERSION, ensure_cli
 from areal_rsi.modules.gateway import GatewayProxy
 
@@ -22,8 +22,11 @@ TUI_VERSION = "0.10.0-beta.5"
 PROFILE = "rsi-chimney"
 PERSONA = """你是 RSI Agent，是用户日常研发和自迭代实验的入口。使用中文自然对话。
 普通对话直接回复，不要强制输出 JSON，不要再启动一个聊天模型转述用户问题。
-用户要求实验时，使用 RSI MCP 工具：先 rsi_plan，展示工具返回的实际模型、目标、评测集、研究线和轮数。
-模型、评测集和研究线数量由启动配置固定，写进 goal 不会改变它们。
+前台、RSI Agent 和 ResearchAgent 组可分别配置模型，默认继承 teacher。
+所有 ResearchAgent 共用 research-agent 配置。
+Task Agent 直接执行 target，不存在另一份 Task Agent 模型配置。
+用户要求实验时，先 rsi_plan，展示各研究 Agent 模型、目标模型、评测集、研究线和轮数。
+实际模型映射、评测集和研究线数量由启动配置决定，所有研究线只使用统一实验目标。
 实际配置不符时应说明并让用户重启正确配置。
 配置错误应根据工具的具体提示解决，不要推测缺少实验模板，也不要向用户索要不存在的模板名。
 仅当用户明确确认该计划后，才调用 rsi_start 并设置 confirmed=true；不能自行代替用户确认。
@@ -45,12 +48,19 @@ yaml.SafeDumper.add_representer(
 )
 
 MCP_ENVIRONMENT = (
+    "RSI_AGENT_MODELS",
+    "RSI_TEACHER_MODEL",
+    "RSI_TEACHER_BASE_URL",
+    "RSI_TEACHER_API_KEY",
+    "RSI_TARGET_MODEL",
+    "RSI_TARGET_BASE_URL",
+    "RSI_TARGET_API_KEY",
     "RSI_MODEL",
     "RSI_BASE_URL",
     "RSI_API_KEY",
     "RSI_DATA_ROOT",
     "RSI_BENCHMARK",
-    "RSI_RESEARCH_DIRECTIONS",
+    "RSI_RESEARCH_AGENT_COUNT",
     "RSI_GSM8K_DATA",
     "RSI_TRAIN_LIMIT",
     "RSI_VALIDATE_LIMIT",
@@ -124,6 +134,10 @@ def ensure_rsi_preset(root: Path, home: Path) -> Path:
 def write_profile_patch(root: Path, workspace: Path, model: str) -> Path:
     patch = root.resolve() / "dsh-entry.patch.yml"
     patch.parent.mkdir(parents=True, exist_ok=True)
+    environment_names = [
+        *MCP_ENVIRONMENT,
+        *sorted(AgentModelSettings.from_environment().credential_env_names),
+    ]
     tree = [
         {
             "id": "dsh-tui",
@@ -174,7 +188,7 @@ def write_profile_patch(root: Path, workspace: Path, model: str) -> Path:
                         # DSH 默认清理子进程凭证；仅向 RSI MCP 显式传递所需配置。
                         "env": _EnvironmentExpression(
                             "Object.fromEntries("
-                            + json.dumps(MCP_ENVIRONMENT)
+                            + json.dumps(environment_names)
                             + ".flatMap(key => process.env[key] === undefined "
                             "? [] : [[key, process.env[key]]]))"
                         ),
@@ -189,7 +203,7 @@ def write_profile_patch(root: Path, workspace: Path, model: str) -> Path:
 
 
 def launch_tui(root: Path, *, resume: str | None = None, setup_only: bool = False) -> int:
-    model_config = ModelConfig.from_environment()
+    model_config = AgentModelSettings.from_environment().resolve("frontend")
     binary, home = ensure_profile(root)
     patch = write_profile_patch(root, Path.cwd(), model_config.model)
     if setup_only:

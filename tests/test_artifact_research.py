@@ -39,7 +39,7 @@ class ArtifactResearchTest(unittest.IsolatedAsyncioTestCase):
         self.memory = FileMemory(self.root / "memory")
         self.builder = LocalArtifactBuilder(self.content, self.root / "builds")
         self.model = await self.versions.create_model(
-            "fixed-model", await self.content.put_text("PRIVATE_MODEL_CONTENT")
+            "research-agent-fixture-model", await self.content.put_text("PRIVATE_MODEL_CONTENT")
         )
         harness_dir = self.root / "harness-source"
         harness_dir.mkdir()

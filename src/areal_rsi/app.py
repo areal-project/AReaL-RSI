@@ -2,26 +2,37 @@
 
 from __future__ import annotations
 
-import json
+import asyncio
 import os
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from areal_rsi.agents.research import DefaultResearchAgent
 from areal_rsi.agents.rsi import DefaultRsiAgent
-from areal_rsi.api.base import SolutionVersion, VerifierSpec
+from areal_rsi.api.base import (
+    ExperimentPlan,
+    JsonObject,
+    ModelVersion,
+    SolutionVersion,
+    VerifierSpec,
+)
 from areal_rsi.api.modules import Benchmark, Verifier
 from areal_rsi.api.workflow import WorkflowContext
+from areal_rsi.base.catalog import LocalModelCatalog
 from areal_rsi.base.storage import (
     FileContentStore,
     FileMemory,
     FileTrajectoryStore,
     FileVersionManager,
-    decode,
     new_id,
     write_json,
 )
-from areal_rsi.config import ModelConfig, ModelConfigurationError
+from areal_rsi.config import (
+    AgentModelSettings,
+    ModelConfig,
+    ModelConfigurationError,
+    research_agent_count_from_environment,
+)
 from areal_rsi.modules.benchmark import AccuracyEvaluation, ArithmeticBenchmark, ArithmeticVerifier
 from areal_rsi.modules.gateway import GatewayProxy
 from areal_rsi.modules.gsm8k import Gsm8kBenchmark, Gsm8kVerifier
@@ -37,8 +48,11 @@ class LocalApp:
     trajectories: FileTrajectoryStore
     memory: FileMemory
     baseline: SolutionVersion
-    proxy: GatewayProxy
-    runtime: DshAgentRuntime
+    target_model: ModelVersion
+    agent_models: dict[str, ModelVersion]
+    agent_proxies: dict[str, GatewayProxy]
+    agent_runtimes: dict[str, DshAgentRuntime]
+    frontend_model_name: str | None
     rsi: DefaultRsiAgent
     service: LocalExperimentService
 
@@ -55,25 +69,27 @@ class LocalApp:
             workflows if workflows is not None else {"harness-evolution": None}
         ):
             raise ValueError("选中的 Python Workflow 尚未注册")
-        model_config = ModelConfig.from_environment()
-        try:
-            configured_directions = json.loads(
-                os.environ.get("RSI_RESEARCH_DIRECTIONS", '["通用 Harness 改进"]')
-            )
-        except json.JSONDecodeError:
-            raise ModelConfigurationError(
-                "RSI_RESEARCH_DIRECTIONS 必须为合法 JSON 字符串数组，请修改配置后重启 TUI。"
-            ) from None
-        if not isinstance(configured_directions, list):
-            raise ModelConfigurationError("RSI_RESEARCH_DIRECTIONS 必须为 JSON 字符串数组")
-        directions = tuple(configured_directions)
-        if not 1 <= len(directions) <= 8 or any(
-            not isinstance(d, str) or not d.strip() for d in directions
-        ):
-            raise ModelConfigurationError(
-                "RSI_RESEARCH_DIRECTIONS 必须为 1 到 8 个非空方向的 JSON 数组"
-            )
+        model_settings = AgentModelSettings.from_environment()
+        research_agent_count = research_agent_count_from_environment()
+        agent_ids = [
+            "rsi-agent",
+            *(f"research-agent-{index}" for index in range(1, research_agent_count + 1)),
+            "task-agent",
+        ]
+        model_settings.validate_agents()
+        research_connection = model_settings.resolve("research-agent")
+        connections = {
+            "rsi-agent": model_settings.resolve("rsi-agent"),
+            **{
+                agent_id: research_connection
+                for agent_id in agent_ids
+                if agent_id.startswith("research-agent-")
+            },
+        }
+        target_connection = ModelConfig.from_environment("target")
+        runtime_connections = {**connections, "task-agent": target_connection}
         self = cls()
+        self.frontend_model_name = model_settings.frontend_name()
         self.root = root.resolve()
         self.content = FileContentStore(self.root / "content")
         self.versions = FileVersionManager(self.root / "versions")
@@ -96,71 +112,69 @@ class LocalApp:
             description = "原创固定小型算术题，用于验收闭环，不是 GSM8K 正式结果。"
         else:
             raise ValueError(f"未知 Benchmark：{benchmark_kind}")
-        model_name = model_config.model
-        base_url = model_config.base_url
-        baseline_file = self.root / "baseline.json"
-        if baseline_file.exists():
-            self.baseline = decode(SolutionVersion, json.loads(baseline_file.read_text()))
-            if self.baseline.model.name != model_name:
-                raise ModelConfigurationError(
-                    "该数据目录已绑定其他模型。请使用新的 RSI_DATA_ROOT，"
-                    "或恢复该目录原来的 RSI_MODEL，然后重启 TUI。"
+        catalog = LocalModelCatalog(self.root, self.versions)
+        self.agent_models = {
+            agent_id: await catalog.model(
+                connection.model, await self.content.put_json(connection.public_identity())
+            )
+            for agent_id, connection in connections.items()
+        }
+        self.target_model = await catalog.model(
+            target_connection.model,
+            await self.content.put_json(target_connection.public_identity()),
+        )
+        self.baseline = await catalog.baseline(
+            self.target_model,
+            await self.content.snapshot(Path(__file__).parent / "default_harness"),
+        )
+        self.agent_proxies, self.agent_runtimes = {}, {}
+        proxies: dict[ModelConfig, GatewayProxy] = {}
+        runtimes: dict[tuple[ModelConfig, int], DshAgentRuntime] = {}
+        for agent_id, connection in runtime_connections.items():
+            if connection not in proxies:
+                proxies[connection] = GatewayProxy(connection.base_url, connection.api_key)
+            proxy = proxies[connection]
+            budget = 4096 if agent_id == "task-agent" else 12288
+            key = (connection, budget)
+            if key not in runtimes:
+                runtimes[key] = DshAgentRuntime(
+                    self.root / "sessions",
+                    self.content,
+                    self.trajectories,
+                    base_url=proxy.url,
+                    api_key="local-proxy",
+                    timeout=float(os.environ.get("RSI_TURN_TIMEOUT", "240")),
+                    max_tokens=budget,
+                    dsh_root=self.root,
+                    credential_env_names=model_settings.credential_env_names,
                 )
-        else:
-            model = await self.versions.create_model(
-                model_name, await self.content.put_json({"model": model_name, "base_url": base_url})
-            )
-            harness = await self.versions.create_harness(
-                "dsh-arithmetic",
-                await self.content.snapshot(Path(__file__).parent / "default_harness"),
-            )
-            self.baseline = await self.versions.create_solution(model, harness)
-            write_json(baseline_file, self.baseline, immutable=True)
-        self.proxy = GatewayProxy(base_url, model_config.api_key)
-        self.runtime = DshAgentRuntime(
-            self.root / "sessions",
-            self.content,
-            self.trajectories,
-            base_url=self.proxy.url,
-            api_key="local-proxy",
-            timeout=float(os.environ.get("RSI_TURN_TIMEOUT", "240")),
-            max_tokens=12288,
-            dsh_root=self.root,
-        )
-        task_runtime = DshAgentRuntime(
-            self.root / "sessions",
-            self.content,
-            self.trajectories,
-            base_url=self.proxy.url,
-            api_key="local-proxy",
-            timeout=float(os.environ.get("RSI_TURN_TIMEOUT", "240")),
-            max_tokens=4096,
-            dsh_root=self.root,
-        )
+            self.agent_proxies[agent_id] = proxy
+            self.agent_runtimes[agent_id] = runtimes[key]
         self.rsi = DefaultRsiAgent(
-            self.runtime,
-            self.baseline.model,
+            self.agent_runtimes["rsi-agent"],
+            self.agent_models["rsi-agent"],
             self.baseline.solution_id,
             benchmark.name,
             benchmark_description=description,
-            research_directions=directions,
+            research_agent_count=research_agent_count,
             workflow_name=workflow_name,
+            target_model_name=self.baseline.model.name,
+            model_plan_config=self.model_plan_config(),
         )
         researchers = tuple(
             DefaultResearchAgent(
                 f"research-agent-{index}",
-                self.runtime,
-                self.baseline.model,
+                self.agent_runtimes[f"research-agent-{index}"],
+                self.agent_models[f"research-agent-{index}"],
                 self.content,
                 self.memory,
                 self.versions,
                 self.root / "research-workspaces",
-                direction=direction,
             )
-            for index, direction in enumerate(directions, 1)
+            for index in range(1, research_agent_count + 1)
         )
         harness_runtime = LocalHarnessRuntime(
-            task_runtime, self.content, self.root / "task-workspaces"
+            self.agent_runtimes["task-agent"], self.content, self.root / "task-workspaces"
         )
         builder = LocalHarnessBuilder(self.content, self.root / "builds")
         evaluation = AccuracyEvaluation()
@@ -184,11 +198,103 @@ class LocalApp:
         self.service = LocalExperimentService(self.root, context, emit, workflows=workflows)
         return self
 
+    def model_plan_config(self) -> JsonObject:
+        models: JsonObject = {
+            agent_id: {"model": model.name, "version_id": model.version_id}
+            for agent_id, model in self.agent_models.items()
+        }
+        return {
+            "agent_models": models,
+            "frontend_model_name": self.frontend_model_name,
+            "target_model_name": self.target_model.name,
+            "target_model_version_id": self.target_model.version_id,
+        }
+
+    async def bind_plan(self, plan: ExperimentPlan) -> None:
+        """按 Run 校验配置并恢复它的基线；目录本身不绑定模型。"""
+        baseline = await self.versions.get_solution(plan.baseline_solution_id)
+        if baseline is None:
+            raise ModelConfigurationError("计划引用的目标基线不存在，请检查实验数据目录。")
+        if (
+            baseline.model.name != self.baseline.model.name
+            or baseline.model.content != self.baseline.model.content
+        ):
+            raise ModelConfigurationError(
+                "当前 Target Model 与此 Run 的目标模型不一致；请核对 RSI_TARGET 配置。"
+            )
+        recorded = plan.config.get("agent_models")
+        if isinstance(recorded, dict):
+            # 兼容旧计划：当时把同一个 Target Model 重复记录为 task-agent 模型。
+            recorded_agents = dict(recorded)
+            legacy_target = recorded_agents.pop("task-agent", None)
+            if set(recorded_agents) != set(self.agent_models):
+                raise ModelConfigurationError(
+                    "计划的 Agent 集合与当前装配不一致，请核对研究线配置。"
+                )
+            for agent_id, model in self.agent_models.items():
+                entry = recorded_agents[agent_id]
+                if not isinstance(entry, dict):
+                    raise ModelConfigurationError("计划缺少有效的 Agent 模型版本记录。")
+                version_id = entry.get("version_id")
+                if not isinstance(version_id, str):
+                    raise ModelConfigurationError("计划缺少有效的 Agent 模型版本记录。")
+                expected = await self.versions.get_model(version_id)
+                if (
+                    expected is None
+                    or expected.name != model.name
+                    or expected.content != model.content
+                    or entry.get("model") != model.name
+                ):
+                    raise ModelConfigurationError(
+                        f"{agent_id} 的模型配置与此 Run 不一致，请恢复对应配置或创建新计划。"
+                    )
+            if isinstance(legacy_target, dict) and (
+                legacy_target.get("model") != baseline.model.name
+                or legacy_target.get("version_id") != baseline.model.version_id
+            ):
+                raise ModelConfigurationError("旧计划记录的 Target Model 与基线不一致。")
+            target_version_id = plan.config.get("target_model_version_id")
+            if (
+                isinstance(target_version_id, str)
+                and target_version_id != baseline.model.version_id
+            ):
+                raise ModelConfigurationError("计划记录的 Target Model 与基线不一致。")
+        else:
+            # 旧计划记录的是所有研究 Agent 共用的 teacher，只按当时已记录的信息核验。
+            teacher_id = plan.config.get("teacher_model_version_id")
+            teacher_name = plan.config.get("teacher_model_name")
+            teacher = (
+                await self.versions.get_model(teacher_id) if isinstance(teacher_id, str) else None
+            )
+            for agent_id, model in self.agent_models.items():
+                if (
+                    isinstance(teacher_id, str)
+                    and (
+                        teacher is None
+                        or teacher.name != model.name
+                        or teacher.content != model.content
+                    )
+                ) or (isinstance(teacher_name, str) and teacher_name != model.name):
+                    raise ModelConfigurationError(
+                        f"{agent_id} 与旧计划的 teacher 配置不一致，请恢复对应配置或创建新计划。"
+                    )
+        self.service.validate(plan)
+        self.baseline = baseline
+        self.rsi.baseline = baseline.solution_id
+
     async def close(self) -> None:
-        await self.rsi.close()
-        for run_id, task in self.service.tasks.items():
-            if not task.done():
-                await self.service.stop(run_id)
-        # 请求记录用于审计实际模型、token usage 和返回值，模型工作区不能读此目录。
-        write_json(self.root / "gateway" / f"{new_id('process')}.json", self.proxy.requests)
-        self.proxy.close()
+        try:
+            await self.rsi.close()
+            for run_id, task in self.service.tasks.items():
+                if not task.done():
+                    await self.service.stop(run_id)
+        finally:
+            unique = list(dict.fromkeys(self.agent_proxies.values()))
+            try:
+                for index, proxy in enumerate(unique):
+                    write_json(
+                        self.root / "gateway" / f"{new_id('process')}-connection-{index}.json",
+                        proxy.requests,
+                    )
+            finally:
+                await asyncio.gather(*(asyncio.to_thread(proxy.close) for proxy in unique))

@@ -103,10 +103,24 @@ def test_launch_uses_native_process_patches_and_absolute_mcp_root_without_saving
     monkeypatch.setattr(dsh, "ensure_cli", lambda _: binary)
     installer = Mock(side_effect=AssertionError("plugin was already installed"))
     monkeypatch.setattr("areal_rsi.ui.dsh.subprocess.run", installer)
-    monkeypatch.setenv("RSI_BASE_URL", "https://gateway.example/api/")
-    monkeypatch.setenv("RSI_API_KEY", "fixture-private-rsi-key")
+    monkeypatch.setenv("RSI_TEACHER_BASE_URL", "https://gateway.example/api/")
+    monkeypatch.setenv("RSI_TEACHER_API_KEY", "fixture-private-rsi-key")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "fixture-private-deepseek-key")
-    monkeypatch.setenv("RSI_MODEL", "fixture-model")
+    monkeypatch.setenv("RSI_TEACHER_MODEL", "teacher-default-fixture-model")
+    monkeypatch.setenv("RSI_TARGET_MODEL", "target-default-fixture-model")
+    monkeypatch.setenv("FRONTEND_MODEL_KEY", "fixture-frontend-key")
+    monkeypatch.setenv(
+        "RSI_AGENT_MODELS",
+        json.dumps(
+            {
+                "frontend": {
+                    "model": "frontend-fixture-model",
+                    "base_url": "https://frontend.example/v1",
+                    "api_key_env": "FRONTEND_MODEL_KEY",
+                }
+            }
+        ),
+    )
     proxy = Mock(url="http://127.0.0.1:12345/v1")
     gateway = Mock(return_value=proxy)
     monkeypatch.setattr(dsh, "GatewayProxy", gateway)
@@ -123,7 +137,7 @@ def test_launch_uses_native_process_patches_and_absolute_mcp_root_without_saving
 
     assert dsh.launch_tui(Path("../state"), resume=resume) == 17
 
-    gateway.assert_called_once_with("https://gateway.example/api/v1", "fixture-private-rsi-key")
+    gateway.assert_called_once_with("https://frontend.example/v1", "fixture-frontend-key")
     command = [
         str(binary),
         "--profile",
@@ -143,12 +157,12 @@ def test_launch_uses_native_process_patches_and_absolute_mcp_root_without_saving
     assert environment["DSH_TELEMETRY_DISABLED"] == "1"
     patch = yaml.safe_load((root / "dsh-entry.patch.yml").read_text().replace("!!js", "!!str"))
     agent = next(row["config"] for row in patch if row.get("id") == "dsh-tui")
-    assert agent["model"] == "fixture-model"
+    assert agent["model"] == "frontend-fixture-model"
     assert agent["preset"] == "rsi"
     assert agent["cwd"] == str(workspace)
     assert not any(row.get("id") == "agent-loop" for row in patch)
     adapter = next(row["config"] for row in patch if row.get("id") == "llm-deepseek")
-    assert adapter["models"] == [{"id": "fixture-model"}]
+    assert adapter["models"] == [{"id": "frontend-fixture-model"}]
     assert adapter["maxTokens"] == 8192
     assert adapter["thinking"] == "disabled"
     activity = next(row["config"] for row in patch if row.get("id") == "working-activity")
@@ -172,13 +186,14 @@ def test_launch_uses_native_process_patches_and_absolute_mcp_root_without_saving
     # 不执行表达式；检查文件仅引用宿主变量，没有固化凭证值。
     assert "process.env[key]" in mcp["config"]["env"]
     assert "RSI_API_KEY" in mcp["config"]["env"]
-    assert "RSI_RESEARCH_DIRECTIONS" in mcp["config"]["env"]
+    assert "RSI_RESEARCH_AGENT_COUNT" in mcp["config"]["env"]
     assert "DEEPSEEK_API_KEY" not in mcp["config"]["env"]
     assert mcp["config"]["failOnStartupError"] is True
     for path in root.rglob("*"):
         if path.is_file():
             assert "fixture-private-rsi-key" not in path.read_text()
             assert "fixture-private-deepseek-key" not in path.read_text()
+            assert "fixture-frontend-key" not in path.read_text()
     child.wait.assert_called_once_with()
     child.terminate.assert_not_called()
     proxy.close.assert_called_once_with()
@@ -199,8 +214,8 @@ def test_rsi_preset_keeps_standard_tools_and_preserves_user_edits(tmp_path: Path
 def test_setup_only_prepares_files_without_starting_gateway_or_tui(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("RSI_MODEL", "fixture-model")
-    monkeypatch.setenv("RSI_BASE_URL", "http://127.0.0.1:1/v1")
+    monkeypatch.setenv("RSI_TEACHER_MODEL", "teacher-default-fixture-model")
+    monkeypatch.setenv("RSI_TEACHER_BASE_URL", "http://127.0.0.1:1/v1")
     home, _, _ = installed_profile(tmp_path)
     monkeypatch.setattr(dsh, "ensure_cli", lambda _: tmp_path / "fake-dsh")
     gateway = Mock(side_effect=AssertionError("setup must not start a gateway"))
@@ -218,19 +233,27 @@ def test_setup_only_prepares_files_without_starting_gateway_or_tui(
     installer.assert_not_called()
 
 
-def test_mcp_environment_is_forwarded_at_runtime_without_persisting_values(tmp_path: Path) -> None:
+def test_mcp_environment_is_forwarded_at_runtime_without_persisting_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("DSH environment expressions require Node.js")
-    path = dsh.write_profile_patch(tmp_path, tmp_path, "fixture-model")
+    overrides = json.dumps({"research-agent": {"api_key_env": "MODEL_OVERRIDE_KEY"}})
+    monkeypatch.setenv("RSI_AGENT_MODELS", overrides)
+    path = dsh.write_profile_patch(tmp_path, tmp_path, "frontend-fixture-model")
     patch = yaml.safe_load(path.read_text().replace("!!js", "!!str"))
     mcp = next(
         item for row in patch for item in row.get("insert", []) if item.get("id") == "rsi-mcp"
     )
     supplied = {
-        "RSI_MODEL": "fixture-model",
-        "RSI_API_KEY": "fixture-credential",
-        "RSI_RESEARCH_DIRECTIONS": '["first", "second", "third"]',
+        "RSI_AGENT_MODELS": overrides,
+        "MODEL_OVERRIDE_KEY": "override-fixture-key",
+        "RSI_TEACHER_MODEL": "teacher-default-fixture-model",
+        "RSI_TEACHER_API_KEY": "teacher-fixture-credential",
+        "RSI_TARGET_MODEL": "target-default-fixture-model",
+        "RSI_TARGET_API_KEY": "target-fixture-credential",
+        "RSI_RESEARCH_AGENT_COUNT": "3",
         "UNRELATED_API_KEY": "unrelated-credential",
     }
     result = subprocess.run(
@@ -242,7 +265,10 @@ def test_mcp_environment_is_forwarded_at_runtime_without_persisting_values(tmp_p
         timeout=5,
     )
     assert json.loads(result.stdout) == {
-        key: value for key, value in supplied.items() if key.startswith("RSI_")
+        key: value
+        for key, value in supplied.items()
+        if key.startswith("RSI_") or key == "MODEL_OVERRIDE_KEY"
     }
     assert "fixture-credential" not in path.read_text()
     assert "unrelated-credential" not in path.read_text()
+    assert "override-fixture-key" not in path.read_text()

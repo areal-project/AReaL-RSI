@@ -15,8 +15,8 @@ from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any, Protocol, TypeAlias
 
-from areal_rsi.agents.default import DefaultRsiAgent
-from areal_rsi.api.base import ExperimentPlan, ExperimentRun, RunState, SolutionVersion
+from areal_rsi.agents.rsi import DefaultRsiAgent
+from areal_rsi.api.base import ExperimentPlan, ExperimentRun, JsonObject, RunState, SolutionVersion
 from areal_rsi.base.storage import FileRecords, decode, encode, new_id, now, safe_name, write_json
 from areal_rsi.workflows.service import LocalExperimentService
 
@@ -25,6 +25,10 @@ class ExperimentApp(Protocol):
     baseline: SolutionVersion
     rsi: DefaultRsiAgent
     service: LocalExperimentService
+
+    def model_plan_config(self) -> JsonObject: ...
+
+    async def bind_plan(self, plan: ExperimentPlan) -> None: ...
 
     async def close(self) -> None: ...
 
@@ -165,6 +169,12 @@ class ExperimentController:
             "workflow": run.plan.workflow,
             "target": run.plan.target.value,
             "benchmark": run.plan.benchmark,
+            "teacher_model_name": run.plan.config.get("teacher_model_name"),
+            "agent_models": run.plan.config.get("agent_models"),
+            "frontend_model_name": run.plan.config.get("frontend_model_name"),
+            "target_model_name": run.plan.config.get(
+                "target_model_name", run.plan.config.get("model_name")
+            ),
             "best_solution_id": run.best_solution_id,
             "completed_iterations": sum(len(agent.iterations) for agent in run.research_agents),
             "max_iterations": run.plan.max_iterations,
@@ -193,8 +203,7 @@ class ExperimentController:
                 research_agent_count=len(app.service.context.research_agents),
                 stop_when_goal_reached=False,
                 config={
-                    "research_directions": list(app.rsi.research_directions),
-                    "model_name": app.baseline.model.name,
+                    **app.model_plan_config(),
                 },
             )
             app.service.validate(plan)
@@ -375,14 +384,11 @@ async def run_worker(
         # 让启动前已经收到的停止请求优先执行，避免继续装配或提交评测。
         await asyncio.sleep(0)
         app = await app_factory(controller.root, lambda text: print(text, flush=True))
+        await app.bind_plan(run.plan)
         if (
             run.plan.baseline_solution_id != app.baseline.solution_id
             or run.plan.workflow != app.rsi.workflow_name
             or run.plan.target != app.rsi.evolution_target
-            or (
-                "research_directions" in run.plan.config
-                and run.plan.config["research_directions"] != list(app.rsi.research_directions)
-            )
         ):
             raise ValueError("实验装配与已确认计划不一致，请创建新计划")
         run = await app.service.resume(run_id)

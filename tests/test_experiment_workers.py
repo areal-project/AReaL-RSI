@@ -14,14 +14,16 @@ from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
-from areal_rsi.agents.default import DefaultRsiAgent
+from areal_rsi.agents.rsi import DefaultRsiAgent
 from areal_rsi.api.base import (
     BenchmarkSplit,
     ExperimentPlan,
     ExperimentRun,
+    JsonObject,
     RunState,
     SolutionVersion,
     Task,
+    VerifierSpec,
 )
 from areal_rsi.api.workflow import WorkflowContext
 from areal_rsi.base.storage import (
@@ -73,6 +75,22 @@ class WorkerAppFixture:
     rsi: DefaultRsiAgent
     service: LocalExperimentService
 
+    def model_plan_config(self) -> JsonObject:
+        ids = [
+            "rsi-agent",
+            *(agent.agent_id for agent in self.service.context.research_agents),
+        ]
+        models: JsonObject = {
+            agent_id: {"model": self.rsi.model.name, "version_id": self.rsi.model.version_id}
+            for agent_id in ids
+        }
+        return {"agent_models": models, "target_model_name": self.baseline.model.name}
+
+    async def bind_plan(self, plan: ExperimentPlan) -> None:
+        self.service.validate(plan)
+        if plan.baseline_solution_id != self.baseline.solution_id:
+            raise ValueError("fixture baseline mismatch")
+
     async def close(self) -> None:
         for run_id, task in self.service.tasks.items():
             if not task.done():
@@ -91,21 +109,25 @@ async def fixture_app(root: Path, emit: Callable[[str], None]) -> WorkerAppFixtu
     baseline = fixture_records.get("baseline", SolutionVersion)
     if baseline is None:
         baseline = await versions.create_solution(
-            await versions.create_model("offline-model", await content.put_text("model")),
+            await versions.create_model(
+                "shared-agent-fixture-model", await content.put_text("model")
+            ),
             await versions.create_harness("offline-harness", await content.put_text("harness")),
         )
         fixture_records.save("baseline", baseline)
     app.baseline = baseline
+    research_agent_count = 2 if (root / "fixture-change-count.json").exists() else 1
     app.rsi = DefaultRsiAgent(
         Mock(),
         baseline.model,
         baseline.solution_id,
         WorkerBenchmarkFixture.name,
         workflow_name="worker-fixture",
-        research_directions=("offline direction",),
+        research_agent_count=research_agent_count,
     )
-    if (root / "fixture-change-direction.json").exists():
-        app.rsi.research_directions = ("changed direction",)
+    researchers = tuple(
+        Mock(agent_id=f"offline-research-{index}") for index in range(1, research_agent_count + 1)
+    )
     context = WorkflowContext(
         content,
         FileMemory(root / "memory"),
@@ -113,9 +135,10 @@ async def fixture_app(root: Path, emit: Callable[[str], None]) -> WorkerAppFixtu
         versions,
         Mock(),
         app.rsi,
-        (Mock(agent_id="offline-research"),),
+        researchers,
         WorkerBenchmarkFixture(),
         Mock(),
+        VerifierSpec("worker-fixture-verifier", "injected"),
         Mock(),
     )
     app.service = LocalExperimentService(
@@ -169,8 +192,14 @@ class ExperimentWorkersTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["plan"]["workflow"], "worker-fixture")
         self.assertEqual(result["plan"]["benchmark"], WorkerBenchmarkFixture.name)
         self.assertEqual(result["plan"]["research_agent_count"], 1)
-        self.assertEqual(result["plan"]["config"]["model_name"], "offline-model")
-        self.assertEqual(result["plan"]["config"]["research_directions"], ["offline direction"])
+        self.assertEqual(
+            result["plan"]["config"]["agent_models"]["rsi-agent"]["model"],
+            "shared-agent-fixture-model",
+        )
+        self.assertEqual(
+            result["plan"]["config"]["target_model_name"], "shared-agent-fixture-model"
+        )
+        self.assertNotIn("research_directions", result["plan"]["config"])
         self.assertEqual(await self.controller.status(), {"runs": []})
         self.assertEqual(self.controller._children, {})
         path = self.root / "experiment-plans" / f"{result['plan_id']}.json"
@@ -319,12 +348,12 @@ class ExperimentWorkersTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_worker_rejects_configuration_changed_after_confirmation(self) -> None:
         plan = await self.controller.plan("fixed configuration fixture", 1)
-        write_json(self.root / "fixture-change-direction.json", {})
+        write_json(self.root / "fixture-change-count.json", {})
         started = await self.controller.start(plan["plan_id"], confirmed=True)
         run_id = started["run_id"]
         await self.wait_state(run_id, "failed")
         self.assertFalse((self.root / f"{run_id}-entered.json").exists())
-        self.assertIn("已确认计划", self.controller._run(run_id).error or "")
+        self.assertIn("ResearchAgent 数量与装配不匹配", self.controller._run(run_id).error or "")
 
 
 if __name__ == "__main__":

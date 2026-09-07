@@ -21,7 +21,7 @@ from areal_rsi.base.storage import (
     new_id,
     write_json,
 )
-from areal_rsi.config import ModelConfig
+from areal_rsi.config import ModelConfig, ModelConfigurationError
 from areal_rsi.modules.benchmark import AccuracyEvaluation, ArithmeticBenchmark, ArithmeticVerifier
 from areal_rsi.modules.gateway import GatewayProxy
 from areal_rsi.modules.gsm8k import Gsm8kBenchmark, Gsm8kVerifier
@@ -56,6 +56,23 @@ class LocalApp:
         ):
             raise ValueError("选中的 Python Workflow 尚未注册")
         model_config = ModelConfig.from_environment()
+        try:
+            configured_directions = json.loads(
+                os.environ.get("RSI_RESEARCH_DIRECTIONS", '["通用 Harness 改进"]')
+            )
+        except json.JSONDecodeError:
+            raise ModelConfigurationError(
+                "RSI_RESEARCH_DIRECTIONS 必须为合法 JSON 字符串数组，请修改配置后重启 TUI。"
+            ) from None
+        if not isinstance(configured_directions, list):
+            raise ModelConfigurationError("RSI_RESEARCH_DIRECTIONS 必须为 JSON 字符串数组")
+        directions = tuple(configured_directions)
+        if not 1 <= len(directions) <= 8 or any(
+            not isinstance(d, str) or not d.strip() for d in directions
+        ):
+            raise ModelConfigurationError(
+                "RSI_RESEARCH_DIRECTIONS 必须为 1 到 8 个非空方向的 JSON 数组"
+            )
         self = cls()
         self.root = root.resolve()
         self.content = FileContentStore(self.root / "content")
@@ -85,7 +102,10 @@ class LocalApp:
         if baseline_file.exists():
             self.baseline = decode(SolutionVersion, json.loads(baseline_file.read_text()))
             if self.baseline.model.name != model_name:
-                raise ValueError("该数据目录已绑定其他模型，请使用新的 RSI_DATA_ROOT")
+                raise ModelConfigurationError(
+                    "该数据目录已绑定其他模型。请使用新的 RSI_DATA_ROOT，"
+                    "或恢复该目录原来的 RSI_MODEL，然后重启 TUI。"
+                )
         else:
             model = await self.versions.create_model(
                 model_name, await self.content.put_json({"model": model_name, "base_url": base_url})
@@ -105,6 +125,7 @@ class LocalApp:
             api_key="local-proxy",
             timeout=float(os.environ.get("RSI_TURN_TIMEOUT", "240")),
             max_tokens=12288,
+            dsh_root=self.root,
         )
         task_runtime = DshAgentRuntime(
             self.root / "sessions",
@@ -114,17 +135,8 @@ class LocalApp:
             api_key="local-proxy",
             timeout=float(os.environ.get("RSI_TURN_TIMEOUT", "240")),
             max_tokens=4096,
+            dsh_root=self.root,
         )
-        configured_directions = json.loads(
-            os.environ.get("RSI_RESEARCH_DIRECTIONS", '["通用 Harness 改进"]')
-        )
-        if not isinstance(configured_directions, list):
-            raise ValueError("RSI_RESEARCH_DIRECTIONS 必须为 JSON 数组")
-        directions = tuple(configured_directions)
-        if not 1 <= len(directions) <= 8 or any(
-            not isinstance(d, str) or not d.strip() for d in directions
-        ):
-            raise ValueError("RSI_RESEARCH_DIRECTIONS 必须为 1 到 8 个非空方向的 JSON 数组")
         self.rsi = DefaultRsiAgent(
             self.runtime,
             self.baseline.model,

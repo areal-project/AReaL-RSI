@@ -409,7 +409,7 @@ AgentRuntime.open(agent, workspace_root=None) -> AgentSession
 
 AgentSpec 显式描述 Agent 的依赖：runtime 使用 `name@version` 形式选择 Runtime Framework，例如 `deepseek-harness@v1`；model 是实际使用的 ModelVersion；Prompt Template 和 Skill 使用带 digest 的 ContentRef；Tool 和 MCP Server 也使用注册表中的 `name@version` 标识，例如 `memory@v1`、`trajectory-store@v1`、`browser@v1`。不再提供一个可隐藏任意字段的通用 config。
 
-这些是注册表键的示例，不意味着所有 Runtime 自动实现它们。当前 DSH Adapter 内置 `bash@v1`、`editor@v1`；其他工具通过构造参数 `tool_registry` 显式绑定到 DSH 插件，MCP 使用 `mcp_registry`。未注册的键会报错，不会静默忽略。ResearchAgent 当前通过工作区内的有界检索脚本读取 Memory，而不是假装存在未装配的 Memory 插件。
+这些是注册表键的示例，不意味着所有 Runtime 自动实现它们。当前 DSH Adapter 通过 Python SDK 调用与前台共用的固定版本 CLI，后台使用 `sdk-minimal` profile 和独立工作区。内置 `bash@v1`、`editor@v1`；其他工具通过构造参数 `tool_registry` 显式绑定到 DSH 插件，MCP 使用 `mcp_registry`。未注册的键会报错，不会静默忽略。ResearchAgent 当前通过工作区内的有界检索脚本读取 Memory，而不是假装存在未装配的 Memory 插件。
 
 AgentRuntime 使用 Session 表达多轮 Agent。每次 `send()` 只返回当前轮回复；`finish()` 结束 Session，Runtime 自动保存完整多轮轨迹并返回 TrajectoryRef。Runtime 必须将 `workspace_root` 作为隔离根目录，不能让文件/Shell 工具向上读取 VALIDATE、expected 或其他 Agent 的目录。
 
@@ -499,22 +499,28 @@ trajectories ContentRef
 
 ## 6. 用户入口
 
-RsiAgent 同时是 TUI 的自然语言入口和多 ResearchAgent 的外层控制者：
+公共 RsiAgent 角色保留以下接口，支持自定义对话入口与多研究线的外层控制：
 
 ```python
 chat(message) -> str | ExperimentPlan
 prune(run) -> ResearchAgent ID[]
 ```
 
-RsiAgent 实例内部持有多轮 AgentSession，因此每次 chat 不需要重复传 session_id。普通对话直接返回字符串；识别到 RSI 意图时返回 ExperimentPlan。Run 状态由 ExperimentService 单独管理，不混进聊天输入。用户确认后调用：
+默认终端入口使用 DSH 原生 TUI，由 DSH 持有对话 Session 和 Agent loop。普通对话直接回复；DSH 经本地 MCP 调用 `rsi_plan(goal, max_iterations)` 生成并展示固定配置的实验计划，此步骤不另外调用聊天模型。
 
-```python
-ExperimentService.start(plan)
-```
+用户确认后，`rsi_start(plan_id, confirmed=true)` 提交独立 worker。worker 核对计划与当前装配，再调用既有实验服务推进 Workflow。退出 TUI 不停止已提交实验；返回 Run ID 只表示提交，结果以真实状态为准。
 
-TUI 为一段多轮对话持有同一个 AgentSession，每次用户消息调用一次 `send()`；对话结束时调用 `finish()` 保存整段轨迹。
+| MCP 工具 | 行为 |
+| --- | --- |
+| `rsi_plan` | 生成待确认计划 |
+| `rsi_start` | 确认后提交计划，同一计划避免重复启动 |
+| `rsi_status` | 返回指定实验或最近实验的有界聚合状态 |
+| `rsi_stop` | 请求停止指定后台 worker |
+| `rsi_resume` | 确认后恢复指定实验 |
 
-随后通过 `status/stop/resume/list` 管理 Run。
+MCP 不提供完整轨迹、隐藏评测明细或凭证。启动和恢复的 `confirmed` 必须是布尔值 `true`；对话 Agent 必须先获得用户对该操作的明确确认。
+
+`rsi tui --resume DSH_SESSION_ID` 恢复对话；`rsi resume RUN_ID` 在当前终端恢复实验。两种标识不能互换。MCP、DSH profile 和 worker 管理属于 `ui/` 的实现，不增加公共角色协议。
 
 ## 7. 当前范围
 

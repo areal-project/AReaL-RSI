@@ -6,29 +6,36 @@ import asyncio
 import json
 import os
 import shlex
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 from deepseek_harness import DeepSeekHarness  # type: ignore[import-untyped]
-from deepseek_harness_runtime import bundled_runtime_path  # type: ignore[import-untyped]
 
 from areal_rsi.api.base import AgentSpec, Trajectory, TrajectoryRef
 from areal_rsi.base.storage import FileContentStore, FileTrajectoryStore, new_id, now
+from areal_rsi.modules.dsh import ensure_cli
 
 
-def sandbox_wrapper(directory: Path, workspace: Path) -> Path:
+def sandbox_wrapper(directory: Path, workspace: Path, cli: Path) -> Path:
     """MVP 的 macOS sandbox-exec 继承到所有 Bash/编辑器子进程。"""
     if sys.platform != "darwin":
         raise RuntimeError("当前本地隔离实现需要 macOS sandbox-exec；其他平台需接入隔离实现")
-    runtime = bundled_runtime_path().resolve()
-    # 禁止读用户目录、临时目录；只暴露本次 session 和 SDK 安装内容。
+    runtime = cli.resolve()
+    node = shutil.which("node")
+    if node is None:
+        raise RuntimeError("共享 DSH CLI 需要 Node.js，请先安装 Node.js 后重试")
+    installation = cli.absolute().parent.parent.parent.resolve()
+    # 共享安装只读；不开放其父目录中的实验数据和隐藏答案。
     roots = {
         str(directory.resolve()),
         str(workspace.resolve()),
         str(Path(sys.prefix).resolve()),
         str(Path(sys.base_prefix).resolve()),
+        str(installation),
+        str(Path(node).resolve().parent),
     }
     profile = [
         "(version 1)",
@@ -39,6 +46,10 @@ def sandbox_wrapper(directory: Path, workspace: Path) -> Path:
     ]
     for root in sorted(roots):
         profile.append(f"(allow file-read* (subpath {json.dumps(root)}))")
+    # Node realpath 会逐级 lstat 安装路径；只允许这些祖先目录的元数据。
+    ancestors = {str(parent) for root in roots for parent in Path(root).parents}
+    for ancestor in sorted(ancestors):
+        profile.append(f"(allow file-read-metadata (literal {json.dumps(ancestor)}))")
     for writable in (directory.resolve(), workspace.resolve()):
         profile.append(f"(allow file-write* (subpath {json.dumps(str(writable))}))")
     profile.append(
@@ -151,8 +162,10 @@ class DshAgentRuntime:
         max_tokens: int = 4096,
         mcp_registry: dict[str, dict[str, Any]] | None = None,
         tool_registry: dict[str, list[dict[str, Any]]] | None = None,
+        dsh_root: Path | None = None,
     ):
         self.root = root.resolve()
+        self.dsh_root = (dsh_root or self.root.parent).resolve()
         self.content = content
         self.trajectories = trajectories
         self.base_url = base_url.rstrip("/")
@@ -241,7 +254,8 @@ class DshAgentRuntime:
             )
         patch_file = directory / "agent.patch.yml"
         patch_file.write_text(yaml.safe_dump(patch, allow_unicode=True))
-        wrapper = sandbox_wrapper(directory, workspace)
+        cli = await asyncio.to_thread(ensure_cli, self.dsh_root)
+        wrapper = sandbox_wrapper(directory, workspace, cli)
         sdk = DeepSeekHarness(
             provider="deepseek-official",
             model=agent.model.name,

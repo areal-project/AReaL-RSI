@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from areal_rsi.app import LocalApp
-from areal_rsi.config import ModelConfig
+from areal_rsi.config import ModelConfig, ModelConfigurationError
 from areal_rsi.modules.benchmark import ArithmeticBenchmark
 from areal_rsi.modules.harness import LocalHarnessRuntime
 
@@ -29,8 +29,11 @@ class ModelConfigTest(unittest.TestCase):
             "https://model.example/v1#sentinel",
             "http://localhost:invalid/v1",
         ):
-            with self.subTest(url=url), patch.dict(
-                "os.environ", {"RSI_MODEL": "test-model", "RSI_BASE_URL": url}, clear=True
+            with (
+                self.subTest(url=url),
+                patch.dict(
+                    "os.environ", {"RSI_MODEL": "test-model", "RSI_BASE_URL": url}, clear=True
+                ),
             ):
                 with self.assertRaises(ValueError) as error:
                     ModelConfig.from_environment()
@@ -49,21 +52,68 @@ class ModelConfigTest(unittest.TestCase):
 
 
 class LocalAppTest(unittest.IsolatedAsyncioTestCase):
+    async def test_changed_model_reports_binding_conflict_without_replacing_baseline(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            patch.dict(
+                "os.environ",
+                {"RSI_MODEL": "original-model", "RSI_BASE_URL": "http://127.0.0.1:1/v1"},
+                clear=True,
+            ),
+        ):
+            root = Path(temporary)
+            app = await LocalApp.create(root, lambda _: None)
+            await app.close()
+            baseline = (root / "baseline.json").read_bytes()
+            with (
+                patch.dict("os.environ", {"RSI_MODEL": "replacement-model"}),
+                self.assertRaisesRegex(ModelConfigurationError, "RSI_DATA_ROOT"),
+            ):
+                await LocalApp.create(root, lambda _: None)
+            self.assertEqual((root / "baseline.json").read_bytes(), baseline)
+
+    async def test_invalid_directions_fail_before_creating_services(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "new-run"
+            for directions in ("invalid-json", "3", "[]", '["valid", 3]'):
+                with (
+                    self.subTest(directions=directions),
+                    patch.dict(
+                        "os.environ",
+                        {
+                            "RSI_MODEL": "test-model",
+                            "RSI_BASE_URL": "http://127.0.0.1:1/v1",
+                            "RSI_RESEARCH_DIRECTIONS": directions,
+                        },
+                        clear=True,
+                    ),
+                ):
+                    with self.assertRaisesRegex(ModelConfigurationError, "RSI_RESEARCH_DIRECTIONS"):
+                        await LocalApp.create(root, lambda _: None)
+                    self.assertFalse(root.exists())
+
     async def test_local_startup_and_reopen_do_not_persist_credentials(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary, patch.dict(
-            "os.environ",
-            {
-                "RSI_MODEL": "test-model",
-                "RSI_BASE_URL": "http://127.0.0.1:1/v1",
-                "RSI_API_KEY": "test-only-sentinel",
-            },
-            clear=True,
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            patch.dict(
+                "os.environ",
+                {
+                    "RSI_MODEL": "test-model",
+                    "RSI_BASE_URL": "http://127.0.0.1:1/v1",
+                    "RSI_API_KEY": "test-only-sentinel",
+                },
+                clear=True,
+            ),
         ):
             root = Path(temporary)
             app = await LocalApp.create(root, lambda _: None)
             try:
                 self.assertIsInstance(app.service.context.benchmark, ArithmeticBenchmark)
                 self.assertIsInstance(app.service.context.harness_runtime, LocalHarnessRuntime)
+                harness_runtime = app.service.context.harness_runtime
+                assert isinstance(harness_runtime, LocalHarnessRuntime)
+                self.assertEqual(app.runtime.dsh_root, root.resolve())
+                self.assertEqual(harness_runtime.runtime.dsh_root, app.runtime.dsh_root)
                 baseline = app.baseline.solution_id
                 self.assertEqual(app.proxy.requests, [])
             finally:

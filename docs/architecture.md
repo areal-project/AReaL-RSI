@@ -4,7 +4,8 @@
 
 ```text
 ┌──────────────────── User Interface ────────────────────┐
-│ TUI / CLI ⇄ RSI Agent ⇄ ExperimentService             │
+│ DSH TUI ⇄ RSI MCP ⇄ ExperimentController              │
+│ CLI / 只读 Web：实验操作与状态展示                    │
 └──────────────────────────┬─────────────────────────────┘
                            ▼
 ┌──────────────────────── Evolver ───────────────────────┐
@@ -25,6 +26,12 @@
 DeepSeek Harness 是 AgentRuntime 的当前实现；已有原创算术与 GSM8K Benchmark，KernelBench 暂缓。核心 API 不出现具体框架或 Benchmark 名称。
 
 三层边界与设计文档一致：User Interface 负责对话和实验控制；Evolver 由 RSI Agent、ResearchAgent、Task 执行和固定 Workflow 组成；Base Module 提供运行、存储、版本、训练、构建与评测能力。AgentSpec 显式列出 Runtime、Model、Prompt Template、Skill、Tool 和 MCP 依赖，避免把组合关系隐藏在不透明配置文件中。
+
+默认对话入口由 DSH 原生 TUI 持有 Session 和 Agent loop，通过本地 MCP 生成计划、查询状态并控制实验。`ExperimentController` 根据用户目标、轮数和本地固定配置生成计划；用户确认后启动独立 worker，worker 装配既有 `ExperimentService` 和 Python Workflow。退出对话不会终止已提交的实验。
+
+前台与后台通过同一个安装模块使用 `RSI_DATA_ROOT` 中的固定版本 DSH CLI。前台加载 TUI profile，后台由 Python SDK 经沙箱包装器加载 `sdk-minimal`；包装器显式指向共享 CLI，共享安装只读，各 Session 的可写工作区独立。
+
+DSH Session ID 标识对话，RSI Run ID 标识实验。后台进程使用文件锁和内核进程启动身份避免重复启动或误停；状态经 MCP 返回有界聚合摘要，详细进度由只读 Web 面板展示。
 
 ## 2. 独立研究线
 

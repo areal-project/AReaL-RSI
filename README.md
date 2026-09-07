@@ -84,7 +84,10 @@ src/areal_rsi/
 ├── api/                  公共数据对象与协议
 ├── base/                 本地内容、Memory、轨迹与版本存储
 ├── modules/              DSH 运行时、构建、Benchmark 与评测
-├── agents/               RSI Agent 与 ResearchAgent
+├── agents/
+│   ├── rsi/              RSI Agent：对话、计划与研究线剪枝
+│   ├── research/         ResearchAgent：Harness / Artifact 提案与选版
+│   └── common.py         共用 JSON 解析与格式重试
 ├── workflows/            Python 迭代、选版、停止和恢复
 ├── config.py             本机模型连接配置
 ├── app.py                本地组件装配

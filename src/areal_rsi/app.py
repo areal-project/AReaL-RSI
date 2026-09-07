@@ -7,7 +7,8 @@ import os
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
-from areal_rsi.agents.default import DefaultResearchAgent, DefaultRsiAgent
+from areal_rsi.agents.research import DefaultResearchAgent
+from areal_rsi.agents.rsi import DefaultRsiAgent
 from areal_rsi.api.base import SolutionVersion
 from areal_rsi.api.modules import Benchmark, Verifier
 from areal_rsi.api.workflow import WorkflowContext

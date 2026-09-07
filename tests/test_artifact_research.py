@@ -7,7 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
-from areal_rsi.agents.artifact import ArtifactResearchAgent
+from areal_rsi.agents.research.artifact import ArtifactResearchAgent
 from areal_rsi.api.base import (
     ArtifactChange,
     ArtifactVersion,

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import cast
 from unittest.mock import AsyncMock, Mock, patch
 
-from areal_rsi.agents.artifact import ArtifactResearchAgent
+from areal_rsi.agents.research.artifact import ArtifactResearchAgent
 from areal_rsi.api.base import (
     AgentSpec,
     ArtifactChange,

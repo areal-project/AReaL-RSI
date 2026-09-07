@@ -6,7 +6,8 @@ import difflib
 import json
 from pathlib import Path
 
-from areal_rsi.agents.default import DefaultResearchAgent, ask_json
+from areal_rsi.agents.common import ask_json
+from areal_rsi.agents.research.default import DefaultResearchAgent
 from areal_rsi.api.base import (
     ArtifactChange,
     BenchmarkSplit,

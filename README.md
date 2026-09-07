@@ -1,33 +1,91 @@
 # AReaL-RSI
 
-AReaL-RSI 是一个面向日常研发的通用 RSI Infra。该分支使用 Python 从零设计，现阶段只包含最小接口与领域对象，尚未实现运行逻辑。
+AReaL-RSI 是基于 DeepSeek Harness 的本地研究与自迭代工具。用户通过中文对话生成实验计划，确认后由独立 ResearchAgent 研究线持续改进 Harness，并保存评测、版本和恢复检查点。
 
-通用 API 支持三类自进化对象：Model、Harness 和用户 Artifact（例如游戏、应用或其他研发产物）。第一阶段仍以 KernelBench 的 Harness evolution 为牵引。
+当前支持本地 Harness 执行、内置算术示例、GSM8K 评测和可选的 Artifact 工作流。默认固定模型，迭代提示词、技能、工具和 MCP 配置。
 
-第一阶段目标：
+## 启动
 
-- 使用 DeepSeek Harness Python SDK 构建 RSI Agent、Task Agent 和 ResearchAgent；
-- 使用本地文件保存 Artifact、Memory、Trajectory、版本和运行状态；
-- 固定模型，只优化 Harness 的 Prompt、Skill、Tool 和 MCP；
-- 使用固定 Python Workflow 编排三轮实验，不引入 Workflow DSL；
-- 为多 ResearchAgent 并发搜索保留接口，但第一版只实现单 ResearchAgent；
-- 使用 train、validate 两种标准数据分区，禁止验证标签进入 Harness 和 ResearchAgent。
+需要 macOS、Python 3.11+ 和 uv；本地执行使用 macOS 的 `sandbox-exec` 隔离工作目录。DSH 二进制随 Python SDK 安装。
 
-## 接口结构
+先在本机配置可用的模型服务。下面的地址和模型名是占位示例，需要替换为自己的配置；模型服务需提供 chat completions 接口。
+
+```bash
+uv sync --locked
+export RSI_BASE_URL='http://127.0.0.1:8000/v1'
+export RSI_MODEL='your-model'
+export RSI_DATA_ROOT='.rsi/local'
+uv run --locked rsi tui
+```
+
+服务需要认证时，通过本机环境注入 `RSI_API_KEY`。仓库不提供凭证默认值，也不把认证信息写入模型版本或实验配置。
+
+在 `你>` 提示符后输入：
+
+```text
+请启动一个 1 轮的 Harness 自迭代实验，固定当前模型，优化通用提示词和解题检查流程。
+```
+
+看到实验计划后输入 `确认`。默认评测集是原创小型算术题，包含 3 个 TRAIN 和 3 个 VALIDATE 任务。它用于检查完整流程；候选允许退化，最佳版本可能仍为基线。
+
+| 输入 | 行为 |
+| --- | --- |
+| `/status` | 查看实验状态和完成轮数 |
+| `/stop` | 停止当前实验，保留检查点 |
+| `/resume RUN_ID` | 恢复指定实验，复用已完成的工作 |
+| `/exit` | 退出对话；运行中的实验需要先停止 |
+
+也可以在终端使用 `uv run --locked rsi status` 查询实验。访问已有实验时，保持相同的 `RSI_DATA_ROOT` 和模型配置。
+
+## Web UI
+
+另开一个终端，在项目目录使用与 TUI 相同的数据目录：
+
+```bash
+export RSI_DATA_ROOT='.rsi/local'
+uv run --locked rsi web --port 8765
+```
+
+浏览器打开 [http://127.0.0.1:8765](http://127.0.0.1:8765)，查看研究方向、执行阶段、TRAIN/VALIDATE 得分、版本关系及选版依据。页面自动刷新，只读并绑定本机；无需模型连接配置。
+
+指定单个实验：`uv run --locked rsi web --port 8765 --run RUN_ID`。
+
+## 多研究线与示例
+
+在启动 TUI 前指定研究方向，数量即 ResearchAgent 数量（默认一条）：
+
+```bash
+export RSI_RESEARCH_DIRECTIONS='["错误归因与通用提示", "工具使用和验证流程"]'
+uv run --locked rsi tui
+```
+
+每条线每轮提出一个修改，轮数上限对每条线分别生效；失败和剪枝可能导致实际完成数小于上限。各线只读取 TRAIN 证据，VALIDATE 仅以聚合结果参与选版和剪枝。
+
+- [GSM8K 示例](examples/gsm8k/README.md)：下载固定数据版本并准备训练/留出验证分区。
+- [Artifact 示例](examples/artifact/README.md)：显式装配产物研究 Agent、构建器和评测工作流。
+
+## 代码结构
 
 ```text
 src/areal_rsi/
-└── api/
-    ├── base.py      核心数据对象
-    ├── modules.py   基础模块 Protocol
-    └── workflow.py  Agent 角色与固定 Workflow Protocol
+├── api/                  公共数据对象与协议
+├── base/                 本地内容、Memory、轨迹与版本存储
+├── modules/              DSH 运行时、构建、Benchmark 与评测
+├── agents/               RSI Agent 与 ResearchAgent
+├── workflows/            Python 迭代、选版、停止和恢复
+├── config.py             本机模型连接配置
+├── app.py                本地组件装配
+├── ui/                   TUI、CLI 和只读 Web UI
+└── default_harness/      初始提示词、技能、工具与 MCP 配置
 ```
 
-## 当前状态
+[架构说明](docs/architecture.md) 描述运行与隔离边界；[接口说明](docs/interfaces/README.md) 描述数据对象和扩展协议。
 
-接口设计完成后必须经过用户确认，确认之前不实现 File Store、DeepSeek Harness Adapter、Workflow、Benchmark、Verifier 或 TUI。
+## 开发检查与数据
 
-详细设计见：
+```bash
+make test   # 离线单元测试，不调用模型或下载数据
+make check  # 单元测试、Ruff、Mypy
+```
 
-- [架构边界](docs/architecture.md)
-- [Python 接口详细说明](docs/interfaces/README.md)
+运行记录位于 `RSI_DATA_ROOT`：`content/` 保存按摘要寻址的内容，`versions/` 保存版本，`run-states/` 保存状态，`runs/` 保存逐轮结果，`trajectories/` 保存轨迹索引，`tui/` 保存对话，`gateway/` 保存模型请求和响应审计。这些运行数据由 Git 忽略；Web UI 只返回聚合状态。

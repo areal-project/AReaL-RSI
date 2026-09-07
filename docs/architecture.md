@@ -22,7 +22,7 @@
 └────────────────────────────────────────────────────────┘
 ```
 
-DeepSeek Harness 是 AgentRuntime 的第一种实现；KernelBench 是 Benchmark 的第一种实现。核心 API 不出现具体框架或 Benchmark 名称。
+DeepSeek Harness 是 AgentRuntime 的当前实现；已有原创算术与 GSM8K Benchmark，KernelBench 暂缓。核心 API 不出现具体框架或 Benchmark 名称。
 
 三层边界与设计文档一致：User Interface 负责对话和实验控制；Evolver 由 RSI Agent、ResearchAgent、Task 执行和固定 Workflow 组成；Base Module 提供运行、存储、版本、训练、构建与评测能力。AgentSpec 显式列出 Runtime、Model、Prompt Template、Skill、Tool 和 MCP 依赖，避免把组合关系隐藏在不透明配置文件中。
 
@@ -84,10 +84,14 @@ HarnessChange 和 ArtifactChange 都是一个 patch；ModelChange 是一次训�
 
 - Benchmark 只向 Workflow 返回公开 Task，不返回 expected；
 - Verifier 根据 task_id 在实现内部加载隐藏 expected；
-- TRAIN 轨迹通过 ContentRef 传递；本地或远程数据由 ContentStore/Runtime Adapter 解析；
+- TRAIN 轨迹通过 ContentRef 传递；本地内容由 FileContentStore 校验并由 Runtime 复制到隔离工作区；
 - VALIDATE 只向 ResearchAgent 暴露 score 和 metrics；
 - AgentRuntime.open 必须把 `workspace_root` 作为文件系统隔离边界，不能让 Agent 向上读取其他目录。
 
 ## 6. 当前范围
 
-第一阶段执行 Harness evolution。TrainingBackend 和 ArtifactBuilder 先定义最小抽象；Model evolution 与 Artifact evolution 的具体实现后续接入。Workflow 使用普通 Python 类，不设计 DSL。
+第一阶段固定 Model 执行 Harness evolution，TrainingBackend 暂不实施。Workflow 使用普通 Python 类，不设计 DSL。多 ResearchAgent 从同一基线出发，同一轮并发运行，在轮次边界调用 RSI Agent 剪枝。某条线失败不抹掉其他线的完成记录；恢复只重试未完成部分，剪枝决定持久保存。相同 Run 的跨进程执行由 OS 文件锁互斥。
+
+研究线名称、方向通过装配配置指定，提案仍由模型生成，不给每条线预埋改进答案。选版候选限定为该研究线自己的历史和共同 baseline。运行状态与详细阶段进度分别保存在 `run-states/` 和 `runs/<run_id>/progress.json`，TUI 与 Web 读取同一份记录。
+
+任务调用携带稳定的 execution_key（运行/评测目录/任务），工作流按检查点复用已完成的任务。已完成任务、提案、候选、选版、轮次均保存检查点；恢复时核对 Benchmark、题面与 Solution，不能拿旧评测缓存测新题。

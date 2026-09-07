@@ -178,7 +178,7 @@ propose(
 ) -> ResearchChange
 ```
 
-run_id、research_agent_id 和 iteration 属于 Workflow 运行状态，不需要发送给模型。Memory 由 ResearchAgent 通过工具按需搜索，不预先塞入上下文。`report` 必须是 TRAIN split 的 EvaluationReport；`trajectories` 是指向本地目录、远程目录或轨迹 manifest 的 ContentRef，不暴露本机路径。ContentStore 或 Runtime Adapter 负责下载、缓存或远程访问。
+run_id、research_agent_id 和 iteration 属于 Workflow 运行状态，不需要发送给模型。Memory 由 ResearchAgent 通过工具按需搜索，不预先塞入上下文。`report` 必须是 TRAIN split 的 EvaluationReport；`trajectories` 是指向本地轨迹 manifest 的 ContentRef，不暴露本机路径。FileContentStore 校验摘要，Runtime 将内容复制到隔离工作区。
 
 选版也直接从当前研究线的历史候选中进行：
 
@@ -255,7 +255,7 @@ manifest 最小格式：
     {
       "trajectory_id": "trajectory_1",
       "content": {
-        "uri": "oss://bucket/trajectory_1.jsonl",
+        "uri": "content://0000000000000000000000000000000000000000000000000000000000000000",
         "digest": "sha256:..."
       }
     }
@@ -297,6 +297,8 @@ AgentRuntime.open(agent, workspace_root=None) -> AgentSession
 
 AgentSpec 显式描述 Agent 的依赖：runtime 使用 `name@version` 形式选择 Runtime Framework，例如 `deepseek-harness@v1`；model 是实际使用的 ModelVersion；Prompt Template 和 Skill 使用带 digest 的 ContentRef；Tool 和 MCP Server 也使用注册表中的 `name@version` 标识，例如 `memory@v1`、`trajectory-store@v1`、`browser@v1`。不再提供一个可隐藏任意字段的通用 config。
 
+这些是注册表键的示例，不意味着所有 Runtime 自动实现它们。当前 DSH Adapter 内置 `bash@v1`、`editor@v1`；其他工具通过构造参数 `tool_registry` 显式绑定到 DSH 插件，MCP 使用 `mcp_registry`。未注册的键会报错，不会静默忽略。ResearchAgent 当前通过工作区内的有界检索脚本读取 Memory，而不是假装存在未装配的 Memory 插件。
+
 AgentRuntime 使用 Session 表达多轮 Agent。每次 `send()` 只返回当前轮回复；`finish()` 结束 Session，Runtime 自动保存完整多轮轨迹并返回 TrajectoryRef。Runtime 必须将 `workspace_root` 作为隔离根目录，不能让文件/Shell 工具向上读取 VALIDATE、expected 或其他 Agent 的目录。
 
 RSI Agent Adapter 和 ResearchAgent Adapter 负责把字符串回复解析成 ExperimentPlan、HarnessChange 等业务对象；通用 Runtime 不返回重复的 text/data 字段。
@@ -307,7 +309,7 @@ RSI Agent Adapter 和 ResearchAgent Adapter 负责把字符串回复解析成 Ex
 run(solution, task, config=None) -> TaskResult
 ```
 
-用于运行用户正在被进化的 Harness。LocalHarnessRuntime 和 RemoteHarnessRuntime 实现同一个接口；远程提交、轮询和轨迹下载封装在实现内部。
+用于运行用户正在被进化的 Harness。当前 LocalHarnessRuntime 将输入和版本快照复制到隔离工作区，通过 DSH 执行任务并保存产物与轨迹。
 
 ### HarnessBuilder、TrainingBackend 与 ArtifactBuilder
 
@@ -365,7 +367,7 @@ RsiWorkflow.run 直接返回 ExperimentRun，不再用 WorkflowResult 再包装�
 
 ## 5. 轨迹目录与上下文
 
-ResearchAgent 的初始上下文只包含紧凑 report、当前 Solution 和 trajectories ContentRef。完整细节可以位于本地或远程：
+ResearchAgent 的初始上下文只包含紧凑 report、当前 Solution 和 trajectories ContentRef。完整细节保存在本地内容仓库中：
 
 ```text
 trajectories ContentRef
@@ -377,7 +379,7 @@ trajectories ContentRef
         └── task_002.json
 ```
 
-本地 Runtime 将 ContentRef 解析到隔离 workspace；远程 Runtime 可以直接挂载 URI 或通过工具读取。Agent 使用 `rg`、`head`、`sed`、`jq` 等工具按需分析。工具输出必须截断；每个 iteration 推荐使用新的有界 Session，关键结论写入 Memory，不能持续累积全部历史对话。
+本地 Runtime 校验 ContentRef 并将内容复制到隔离 workspace。Agent 使用 `rg`、`head`、`sed`、`jq` 等工具按需分析。工具输出必须截断；每个 iteration 推荐使用新的有界 Session，关键结论写入 Memory，不能持续累积全部历史对话。
 
 ## 6. 用户入口
 
@@ -402,5 +404,5 @@ TUI 为一段多轮对话持有同一个 AgentSession，每次用户消息调用
 
 - 第一阶段实现 Harness evolution；
 - TrainingBackend 和 ArtifactBuilder 先保留最小接口，不实现具体训练或产物生成后端；
-- 不实现 Workflow DSL、复杂权限、搜索策略和远程 Job 公共协议；
+- 不实现 Workflow DSL、复杂权限和搜索策略；
 - Artifact evolution 的首个具体实现以游戏或应用目录为产物。

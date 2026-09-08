@@ -28,6 +28,7 @@ from areal_rsi.api.base import (
     VerifierSpec,
 )
 from areal_rsi.api.workflow import WorkflowContext
+from areal_rsi.base.evidence import FileEvidenceStore
 from areal_rsi.base.storage import (
     FileContentStore,
     FileMemory,
@@ -100,6 +101,27 @@ class ResearchFixture:
     ) -> HarnessChange:
         assert target == EvolutionTarget.HARNESS and report.split == BenchmarkSplit.TRAIN
         assert report.solution_id == current.solution_id
+        bundle = await FileEvidenceStore(self.content).get(trajectories)
+        assert bundle.metadata == {"solution_id": current.solution_id, "split": "train"}
+        files = {entry.path: entry for entry in bundle.files}
+        assert (
+            json.loads(await self.content.read_text(files["report.json"].content))["split"]
+            == "train"
+        )
+        for entry in bundle.files:
+            if entry.kind != "verification":
+                continue
+            verification = await self.content.read_json(entry.content)
+            assert isinstance(verification, dict)
+            assert verification["task_id"] == entry.metadata["task_id"]
+            assert verification["trajectory_id"] == entry.metadata["trajectory_id"]
+            prefix = entry.path.rsplit("/", 1)[0]
+            output = await self.content.read_json(files[f"{prefix}/output"].content)
+            assert isinstance(output, dict)
+            assert output["task_id"] == verification["task_id"]
+            assert await self.content.read_json(files[f"{prefix}/trajectory.json"].content) == {
+                "turns": []
+            }
         self.goals.append(goal)
         self.proposals += 1
         self.started.set()

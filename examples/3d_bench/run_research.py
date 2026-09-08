@@ -13,13 +13,23 @@ from run_baseline import DATASET, EXAMPLE, GENERATION_ENVIRONMENT
 from run_baseline import main as run_task
 
 from areal_rsi.agents.research.default import DefaultResearchAgent
-from areal_rsi.api.base import BenchmarkSplit, ContentRef, EvaluationReport, EvolutionTarget
+from areal_rsi.api.base import (
+    BenchmarkSplit,
+    ContentRef,
+    EvaluationReport,
+    EvidenceBundle,
+    EvidenceFile,
+    EvolutionTarget,
+    VerificationResult,
+)
+from areal_rsi.base.evidence import FileEvidenceStore
 from areal_rsi.base.storage import (
     FileContentStore,
     FileMemory,
     FileTrajectoryStore,
     FileVersionManager,
     decode,
+    encode,
     new_id,
     now,
     write_json,
@@ -79,24 +89,6 @@ async def main(baseline: Path):
     trace = await old_traces.get(output["trajectory"]["trajectory_id"])
     if trace is None:
         raise ValueError("Baseline trajectory is missing")
-    evidence = json.loads(await old_content.read_text(trace.content))
-    evidence["host_evidence"] = {
-        "task": inputs["task"],
-        "model_source": source.decode(),
-        "validator": validation,
-        "validator_stderr": (baseline / "validator.stderr").read_text(),
-        "note": "Host-added evidence; not an additional model conversation turn.",
-    }
-    bundle = await content.put_json(
-        {
-            "trajectories": [
-                {
-                    "trajectory_id": trace.trajectory_id,
-                    "content": await content.put_json(evidence),
-                }
-            ]
-        }
-    )
     score = float(validation["contract_passed"])
     report = EvaluationReport(
         solution.solution_id,
@@ -105,6 +97,41 @@ async def main(baseline: Path):
         score,
         {"contract_v2": score},
         now(),
+    )
+    verification = VerificationResult(
+        inputs["task"]["task_id"],
+        trace.trajectory_id,
+        bool(score),
+        score,
+        {"contract_v2": score},
+        (baseline / "validator.stdout").read_text() + (baseline / "validator.stderr").read_text(),
+    )
+    bundle = await FileEvidenceStore(content).put(
+        EvidenceBundle(
+            (
+                EvidenceFile("report.json", await content.put_json(encode(report)), "report"),
+                EvidenceFile("task.json", await content.put_json(inputs["task"]), "task"),
+                EvidenceFile(
+                    "model.js",
+                    await content.put_bytes(source, media_type="text/javascript"),
+                    "output",
+                ),
+                EvidenceFile(
+                    "verification.json",
+                    await content.put_json(encode(verification)),
+                    "verification",
+                ),
+                EvidenceFile(
+                    "trajectory.json",
+                    await content.put_bytes(
+                        await old_content.read_bytes(trace.content),
+                        media_type=trace.content.media_type,
+                    ),
+                    "trajectory",
+                ),
+            ),
+            {"solution_id": solution.solution_id, "split": "train"},
+        )
     )
     model = await versions.create_model(
         research_connection.model, await content.put_json(research_connection.public_identity())
@@ -132,8 +159,9 @@ async def main(baseline: Path):
             versions,
             root / "research-workspaces",
             editable_path=lambda name: name == "prompt.md",
-            harness_description="Only prompt.md is editable. Read host_evidence.validator_stderr "
-            "in train/trajectory_0.json. It contains the previous failure. Preserve file output "
+            harness_description="Only prompt.md is editable. Read train/verification.json first, "
+            "then relevant excerpts from train/model.js, not the entire model. "
+            "Preserve file output "
             "and Contract V2 precedence. No validator access is available to the Task Agent.",
         )
         change = await agent.propose(

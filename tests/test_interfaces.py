@@ -142,7 +142,7 @@ class InterfaceDesignTest(unittest.TestCase):
         self.assertIn("select", ResearchAgent.__dict__)
         self.assertEqual(
             list(signature(ResearchAgent.propose).parameters),
-            ["self", "goal", "target", "current", "report", "trajectories"],
+            ["self", "goal", "target", "current", "report", "evidence"],
         )
         self.assertEqual(
             list(signature(ResearchAgent.select).parameters),
@@ -169,7 +169,7 @@ class InterfaceDesignTest(unittest.TestCase):
         field_names = {item.name for item in fields(ResearchIteration)}
 
         self.assertIn("train_report", field_names)
-        self.assertIn("trajectories", field_names)
+        self.assertIn("evidence", field_names)
         self.assertIn("change", field_names)
         self.assertIn("validation_report", field_names)
         self.assertIn("next_solution_id", field_names)
@@ -346,7 +346,7 @@ class InterfaceDesignTest(unittest.TestCase):
                     f"solution_{index}_{iteration - 1}",
                     BenchmarkSplit.TRAIN,
                 ),
-                trajectories=ContentRef(
+                evidence=ContentRef(
                     uri=f"content://agent-{index}/iteration-{iteration}/trajectories",
                     digest=f"sha256:agent-{index}-iteration-{iteration}",
                 ),

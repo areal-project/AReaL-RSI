@@ -13,11 +13,14 @@ from areal_rsi.api.base import (
     ArtifactVersion,
     BenchmarkSplit,
     EvaluationReport,
+    EvidenceBundle,
+    EvidenceFile,
     EvolutionTarget,
     SolutionVersion,
     Trajectory,
     TrajectoryRef,
 )
+from areal_rsi.base.evidence import FileEvidenceStore
 from areal_rsi.base.storage import (
     FileContentStore,
     FileMemory,
@@ -72,7 +75,14 @@ class ArtifactResearchTest(unittest.IsolatedAsyncioTestCase):
                 now(),
             )
         )
-        self.bundle = await self.traces.bundle([train])
+        record = await self.traces.get(train.trajectory_id)
+        assert record is not None
+        self.bundle = await FileEvidenceStore(self.content).put(
+            EvidenceBundle(
+                (EvidenceFile("trajectory.json", record.content, "trajectory"),),
+                {"solution_id": self.current.solution_id, "split": "train"},
+            )
+        )
         self.session = Mock(spec=DshSession)
         self.session.send = AsyncMock()
         self.session.finish = AsyncMock(return_value=TrajectoryRef("proposal-trace"))
@@ -98,12 +108,15 @@ class ArtifactResearchTest(unittest.IsolatedAsyncioTestCase):
 
     async def propose(self, current: SolutionVersion | None = None) -> ArtifactChange:
         current = current or self.current
+        store = FileEvidenceStore(self.content)
+        bundle = await store.get(self.bundle)
+        bundle.metadata["solution_id"] = current.solution_id
         return await self.agent.propose(
             "Build a playable game",
             EvolutionTarget.ARTIFACT,
             current,
             replace(self.report, solution_id=current.solution_id),
-            self.bundle,
+            await store.put(bundle),
         )
 
     def workspace(self) -> Path:

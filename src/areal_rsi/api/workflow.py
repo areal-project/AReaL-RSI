@@ -21,6 +21,7 @@ from areal_rsi.api.modules import (
     Benchmark,
     ContentStore,
     Evaluation,
+    EvidenceStore,
     HarnessBuilder,
     HarnessRuntime,
     Memory,
@@ -32,7 +33,11 @@ from areal_rsi.api.modules import (
 
 
 class ResearchAgent(Protocol):
-    """One persistent researcher with Memory and trajectory tools."""
+    """One researcher; propose receives an EvidenceBundle content reference.
+
+    Implementations choose the exported file grant and tool-reading policy.
+    The report argument is host-side context, not a required model-message payload.
+    """
 
     @property
     def agent_id(self) -> str: ...
@@ -43,7 +48,7 @@ class ResearchAgent(Protocol):
         target: EvolutionTarget,
         current: SolutionVersion,
         report: EvaluationReport,
-        trajectories: ContentRef,
+        evidence: ContentRef,
     ) -> ResearchChange: ...
 
     async def select(
@@ -79,6 +84,7 @@ class WorkflowContext:
     harness_builder: HarnessBuilder | None = None
     training_backend: TrainingBackend | None = None
     artifact_builder: ArtifactBuilder | None = None
+    evidence_store: EvidenceStore | None = None
 
 
 class RsiWorkflow(Protocol):

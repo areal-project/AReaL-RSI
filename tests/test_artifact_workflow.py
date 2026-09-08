@@ -364,13 +364,15 @@ class ArtifactWorkflowTest(unittest.IsolatedAsyncioTestCase):
                 if index in (0, 3):
                     self.assertEqual(data["artifact_name"], "product")
                     self.assertEqual(data["creating"], index == 0)
-                    self.assertEqual(data["report"]["split"], "train")
-                    traces = list((workspace / "train").glob("trajectory_*.json"))
+                    self.assertNotIn("report", data)
+                    report = json.loads((workspace / "train/report.json").read_text())
+                    self.assertEqual(report["split"], "train")
+                    traces = list((workspace / "train").glob("tasks/*/trajectory.json"))
                     self.assertEqual(len(traces), 2)
                     for path in traces:
                         trace = json.loads(path.read_text())
                         self.assertTrue(trace["task_id"].startswith("train_"))
-                        self.assertEqual(trace["solution_id"], data["report"]["solution_id"])
+                        self.assertEqual(trace["solution_id"], report["solution_id"])
                     if index == 0:
                         self.assertEqual(list((workspace / "artifact").iterdir()), [])
                     else:

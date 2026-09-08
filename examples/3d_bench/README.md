@@ -1,4 +1,72 @@
-# 3D Benchmark: stage 1
+# 3D Benchmark reproduction
+
+## Full RSI workflow: one diagnostic round
+
+```bash
+uv run --env-file .env --locked python examples/3d_bench/run_full.py \
+  --tasks /Users/jjsong/Downloads/model_tasks_100
+```
+
+This starts real paid calls using the existing `.env`: RSI Agent plans one round;
+the standard `LocalExperimentService` / `HarnessEvolutionWorkflow` evaluates
+the baseline, generates TRAIN evidence, asks Research Agent for one prompt-only
+change, evaluates the candidate, and asks Research Agent to select a version.
+There are three Task Agent generations, one research proposal and one selection.
+RSI Agent does planning, not direct tool dispatch to the other agents. One research
+line needs no RSI pruning call. No TUI confirmation is used: invoking this script
+authorizes exactly one round, enforced independently of the model's plan.
+
+MODEL-001 is deliberately reused in TRAIN and VALIDATE for this wiring diagnostic.
+There is no held-out score, visual judge, or claim of generalization. Only the
+Contract V2 validator is used. All generations use the same target connection,
+public task snapshot, template, explicit ESM package, tools and request budget.
+Each call gets a fresh model file. Research edits instructions, not model.js.
+
+Everything is saved under `outputs/model001_full_*/`: `rsi-request.txt`,
+`rsi-plan.json`, `events.log`, `result.json`, baseline/candidate Harnesses,
+`tasks/*/workspace/src/model.js`, isolated `verification/`, actual `trajectories/`,
+and the standard `experiment/runs/*/` checkpoints. The canonical model traces
+are not rewritten. The standard workflow now saves an EvidenceBundle containing
+separate task, output, trajectory, full verification and report files. Research
+receives a selected file view under `research-workspaces/research_*/train/`:
+`index.json`, `report.json`, and `tasks/1/{task.json,output,verification.json,trajectory.json}`.
+Here `output` is exactly the generated model.js bytes. Validator receipts are
+separate `tasks/1/attachments/*` files. The proposal's initial user message contains
+paths and reading rules, not inline diagnostics or source code.
+
+The example selects accessible file kinds and prescribes reading verification
+first, then small relevant output/trajectory excerpts. Evidence originals are
+never truncated; bash responses still have a display limit, so oversized reads
+must continue in smaller portions. Actual tool calls/results remain in the
+Research trajectory. A sibling `research_*.evidence.json` records the source and
+exact granted manifest. Runtime sandboxing prevents access to backing content,
+other workspaces and unauthorized files, including via symlinks.
+
+This replaces the temporary direct-feedback and `host_evidence` bridge. Neither
+entrypoint injects bounded verifier feedback into the first model message anymore.
+Both use the generic EvidenceStore API; no 3D logic is added to `src`.
+The full driver is assembled through public workflow interfaces, not the TUI.
+New full runs record `research_feedback_delivery: evidence-files-v1` in `inputs.json`;
+old direct-feedback runs are preserved and cannot be resumed under the new mode.
+File delivery does not guarantee that the model reads correctly or improves scores.
+The final run's `succeeded` means the workflow completed, not that the model
+passed. The program computes `best_solution_id` from observed validation scores,
+preferring the baseline on ties; the research selection is recorded separately.
+Completed workflow checkpoints can be resumed without replanning or re-proposing:
+
+```bash
+uv run --env-file .env --locked python examples/3d_bench/run_full.py \
+  --resume .rsi/datasets/3d-model-v2/outputs/model001_full_RUN_ID \
+  --retry-incomplete-task
+```
+
+The saved task, template, model connections, limits and feedback mode must match.
+Without `--retry-incomplete-task`, an existing incomplete generation is not retried.
+With it, the incomplete files are moved to `tasks/failed-attempts/`, the failed run
+state is retained in `resume-history/`, and only the unfinished generation is
+restarted from its original public inputs and Harness. Original session traces
+remain intact. Completed scored results are reused, never retried to improve a
+score. The iteration count stays unchanged. There is no automatic retry loop.
 
 ## One research iteration
 
@@ -73,9 +141,9 @@ as evaluation. For an explicit syntax-only check independent of package lookup,
 use `node --input-type=module --check < src/model.js`. Neither check proves
 Contract V2 compliance or visual quality. Existing failed models remain unchanged.
 
-This example prepares and checks the upstream Contract V2 evaluation runtime.
-It does not call an LLM, GameAgent, RSI, or Qwen-VL. No optimization experiment
-is started. Only the scripts and this README are tracked here.
+The `run.sh` commands below prepare and check the upstream Contract V2 runtime;
+unlike the Python agent runners above, these commands do not call an LLM or
+start an optimization experiment. Runtime data stays outside this example.
 
 ## Layout and provenance
 
@@ -156,7 +224,9 @@ not the 1024x1024 three-quarter views described by Downloads/verify.
    prefix and uses its own actions/collision interface. A public, fixed task
    adaptation policy is needed before comparing Harnesses; do not silently
    treat the contracts as interchangeable.
-3. This local runner is **not a security sandbox**. The upstream validator
+3. The plain `run.sh` runner and fixture adapter are **not security sandboxes**.
+   The real Python agent runners use macOS process isolation and deny verifier
+   network access. The upstream validator
    imports candidate JavaScript before some source checks. Use trusted fixtures
    only at this stage; isolate generated code, credentials, network and resource
    limits before unattended evaluation. Hash checks are drift detection, not

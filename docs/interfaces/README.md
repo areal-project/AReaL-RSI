@@ -222,7 +222,7 @@ metrics
 created_at
 ```
 
-它没有 summary、regressions、case 详情或 expected。TRAIN 细节由 ResearchAgent 从轨迹目录读取；VALIDATE 只传聚合数值，避免评测泄漏。
+它没有 summary、regressions、case 详情或 expected。TRAIN 细节由 ResearchAgent 从授权的证据文件读取；VALIDATE 只传聚合数值，避免评测泄漏。
 
 ### 2.5 ResearchAgent 与 iteration
 
@@ -242,11 +242,11 @@ propose(
     target,
     current,
     report,
-    trajectories,
+    evidence,
 ) -> ResearchChange
 ```
 
-run_id、research_agent_id 和 iteration 属于 Workflow 运行状态，不需要发送给模型。Memory 由 ResearchAgent 通过工具按需搜索，不预先塞入上下文。`report` 必须是 TRAIN split 的 EvaluationReport；`trajectories` 是指向本地轨迹 manifest 的 ContentRef，不暴露本机路径。FileContentStore 校验摘要，Runtime 将内容复制到隔离工作区。
+run_id、research_agent_id 和 iteration 属于 Workflow 运行状态，不需要发送给模型。Memory 由 ResearchAgent 通过工具按需搜索，不预先塞入上下文。`report` 是供宿主检查的 TRAIN EvaluationReport，并不要求发送进模型消息；`evidence` 指向 EvidenceBundle。Agent 实现选择可访问文件并将它们导出到隔离工作目录，再给模型路径和读取规则。
 
 选版也直接从当前研究线的历史候选中进行：
 
@@ -268,7 +268,7 @@ class ResearchIteration:
     iteration: int
     input_solution_id: str
     train_report: EvaluationReport
-    trajectories: ContentRef
+    evidence: ContentRef
     change: HarnessChange | ModelChange | ArtifactChange
     candidate_solution_id: str
     validation_report: EvaluationReport
@@ -461,10 +461,10 @@ current = baseline
 for iteration in max_iterations:
     在 TRAIN Tasks 上运行 current
     HarnessRuntime 返回 TaskResult
-    保存 Trajectory 和 VerificationResult，生成 trajectories ContentRef
+    分别保存 Task、输出、Trajectory、VerificationResult 和报告，生成 evidence ContentRef
     生成紧凑 train_report
 
-    change = ResearchAgent.propose(goal, target, current, report, trajectories)
+    change = ResearchAgent.propose(goal, target, current, report, evidence)
     根据 target 调用 HarnessBuilder、TrainingBackend 或 ArtifactBuilder
     创建 candidate SolutionVersion
     在 VALIDATE Tasks 上评测 candidate
@@ -481,21 +481,40 @@ Workflow 在研究轮次之间把最新 ExperimentRun 交给 `RsiAgent.prune(run
 
 RsiWorkflow.run 直接返回 ExperimentRun，不再用 WorkflowResult 再包装一层。WorkflowContext 中三种候选生成后端都是可选项；Workflow 根据 `ExperimentPlan.target` 检查并使用对应实现：HARNESS 需要 HarnessBuilder，MODEL 需要 TrainingBackend，ARTIFACT 需要 ArtifactBuilder。
 
-## 5. 轨迹目录与上下文
+## 5. 证据文件与访问权限
 
-ResearchAgent 的初始上下文只包含紧凑 report、当前 Solution 和 trajectories ContentRef。完整细节保存在本地内容仓库中：
+`EvidenceFile(path, content, kind, metadata)` 描述一个文件；`EvidenceBundle(files, metadata)` 保存文件清单。路径、用途和元数据由生产者决定，不包含 Benchmark 特定含义。`EvidenceStore` 提供 `put`、`get`、`materialize`，本地实现为 `FileEvidenceStore`，复用 ContentStore 而不是另建内容仓库。
 
-```text
-trajectories ContentRef
-└── materialized workspace/
-    ├── report.json
-    ├── results.jsonl
-    └── trajectories/
-        ├── task_001.json
-        └── task_002.json
+```python
+bundle_ref = await evidence_store.put(EvidenceBundle(files, metadata))
+grant_ref = await evidence_store.materialize(
+    bundle_ref, workspace / "evidence", paths=explicit_allowed_paths,
+)
 ```
 
-本地 Runtime 校验 ContentRef 并将内容复制到隔离 workspace。Agent 使用 `rg`、`head`、`sed`、`jq` 等工具按需分析。工具输出必须截断；每个 iteration 推荐使用新的有界 Session，关键结论写入 Memory，不能持续累积全部历史对话。
+导出必须显式列出授权路径。未知路径、重复路径、目录冲突、路径穿越和软链接目标会被拒绝；内容按摘要校验。返回值记录实际授权文件，导出的 `index.json` 只列出这些文件的路径、大小、用途和摘要，不包含未授权条目或底层存储地址。修改工作副本不会修改原始内容。
+
+当前标准 Workflow 收集评测文件，DefaultResearchAgent 的 `evidence_access` 决定导出哪些文件，`evidence_instructions` 决定模型怎么读；自定义 Agent 和 Workflow 可直接使用同一接口。`WorkflowContext.evidence_store` 可替换存储实现。TRAIN 与 VALIDATE 的使用限制是研究方法的策略，不是 EvidenceStore 固定的规则。
+
+标准工作流交给 Research Agent 的目录如下，`output` 保留 TaskResult.output 原始字节，不嵌入轨迹：
+
+```text
+workspace/train/
+├── index.json
+├── report.json
+└── tasks/1/
+    ├── task.json
+    ├── output
+    ├── verification.json
+    ├── trajectory.json
+    └── attachments/1
+```
+
+初始提案消息只给目标、可编辑目录、证据目录及读取规则，不自动注入报告、错误或代码。Agent 用工具分段读取；原始文件不截断，工具显示仍有长度上限，超过时必须继续小段读取。实际读取行为保存于模型工具调用轨迹，授权清单保存在工作区外的宿主审计文件。
+
+文件导出本身不是沙箱。AgentRuntime 还必须禁止访问底层 ContentStore、其他 Agent 工作区和宿主隐藏数据。当前 DSH Runtime 在 macOS 上用 sandbox-exec 执行这个边界；导出副本可写，原始证据不可变。其他 Runtime 需实现等效隔离，不能把提示词当作访问控制。
+
+这是开发期 API 变更：`ResearchAgent.propose` 的第五个参数、`ResearchIteration` 和评测检查点现在使用 `evidence`，不再使用旧的轨迹 bundle。历史证据保留，不静默改写；旧格式实验需新建运行。TrajectoryStore.bundle 仍用于单独的轨迹归档。
 
 ## 6. 用户入口
 

@@ -12,6 +12,8 @@ from areal_rsi.api.base import (
     BenchmarkSplit,
     ContentRef,
     EvaluationReport,
+    EvidenceBundle,
+    EvidenceFile,
     EvolutionTarget,
     ExperimentPlan,
     ExperimentRun,
@@ -22,11 +24,11 @@ from areal_rsi.api.base import (
     RunState,
     SolutionVersion,
     TaskResult,
-    TrajectoryRef,
     VerificationRequest,
     VerificationResult,
 )
 from areal_rsi.api.workflow import ResearchAgent, WorkflowContext
+from areal_rsi.base.evidence import FileEvidenceStore
 from areal_rsi.base.storage import FileRecords, decode, encode, now, safe_name, write_json
 from areal_rsi.framework.verifier import VerifierExecutor
 
@@ -110,9 +112,11 @@ class HarnessEvolutionWorkflow:
             report = decode(EvaluationReport, cached["report"])
             if report.solution_id != solution.solution_id or report.split != split:
                 raise ValueError("缓存评测与版本不一致")
-            return report, decode(ContentRef, cached["trajectories"])
+            if "evidence" not in cached:
+                raise ValueError("Legacy trajectory-only evaluation; start a new experiment")
+            return report, decode(ContentRef, cached["evidence"])
         results: list[VerificationResult] = []
-        refs: list[TrajectoryRef] = []
+        files: list[EvidenceFile] = []
         for index, task in enumerate(tasks, 1):
             self.update_progress(
                 agent_id,
@@ -162,10 +166,44 @@ class HarnessEvolutionWorkflow:
                     immutable=True,
                 )
             results.append(verification)
-            refs.append(task_result.trajectory)
+            trace = await ctx.trajectories.get(task_result.trajectory.trajectory_id)
+            if trace is None:
+                raise ValueError("Missing task trajectory for evaluation evidence")
+            metadata = {"task_id": task.task_id, "trajectory_id": trace.trajectory_id}
+            prefix = f"tasks/{index}"
+            # 输出、验证结果和原始轨迹独立保存；用同一任务/轨迹标识关联，不拼接正文。
+            for name, kind, ref in (
+                ("task.json", "task", await ctx.content_store.put_json(encode(task))),
+                ("output", "output", task_result.output),
+                ("trajectory.json", "trajectory", trace.content),
+                (
+                    "verification.json",
+                    "verification",
+                    await ctx.content_store.put_json(encode(verification)),
+                ),
+            ):
+                files.append(EvidenceFile(f"{prefix}/{name}", ref, kind, dict(metadata)))
+            if isinstance(task.input, ContentRef):
+                files.append(EvidenceFile(f"{prefix}/input", task.input, "input", dict(metadata)))
+            for number, attachment in enumerate(verification.attachments, 1):
+                files.append(
+                    EvidenceFile(
+                        f"{prefix}/attachments/{number}", attachment, "attachment", dict(metadata)
+                    )
+                )
         report = await ctx.evaluation.evaluate(solution, split, results)
-        bundle = await ctx.trajectories.bundle(refs)
-        write_json(completed, {"report": report, "trajectories": bundle}, immutable=True)
+        files.insert(
+            0,
+            EvidenceFile("report.json", await ctx.content_store.put_json(encode(report)), "report"),
+        )
+        evidence_store = ctx.evidence_store or FileEvidenceStore(ctx.content_store)
+        # 收集策略属于当前工作流；存储接口不认识 TRAIN、VALIDATE 或具体 Benchmark。
+        bundle = await evidence_store.put(
+            EvidenceBundle(
+                tuple(files), {"solution_id": solution.solution_id, "split": split.value}
+            )
+        )
+        write_json(completed, {"report": report, "evidence": bundle}, immutable=True)
         return report, bundle
 
     async def step(

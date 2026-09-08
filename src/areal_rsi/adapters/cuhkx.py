@@ -194,6 +194,7 @@ def prepare_dataset(
     destination: Path,
     *,
     validate_subjects: Sequence[int],
+    final_subjects: Sequence[int] = (),
     modality: str = "Depth_Color",
     manifest: Path | None = None,
     max_frames: int = 16,
@@ -211,17 +212,26 @@ def prepare_dataset(
         raise ValueError("max_frames must be positive and dataset_kind competition or synthetic")
     clips = read_clip_csv(manifest, data_root) if manifest else scan_clips(data_root, modality)
     holdout = set(validate_subjects)
+    final_holdout = set(final_subjects)
     subjects = {c.subject for c in clips}
-    if not holdout or not holdout < subjects:
+    if (
+        not holdout
+        or not holdout <= subjects
+        or not final_holdout <= subjects
+        or holdout & final_holdout
+        or not subjects - holdout - final_holdout
+    ):
         raise ValueError(
-            "Validation subjects must be a nonempty proper subset of observed subjects"
+            "Validation/final subjects must be observed, disjoint and leave training subjects"
         )
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=destination.parent) as temporary:
         staged = Path(temporary) / "prepared"
         staged.mkdir()
         public: dict[str, list[dict[str, Any]]] = {"train": [], "validate": []}
-        labels: dict[str, int] = {}
+        if final_holdout:
+            public["final"] = []
+        labels: dict[str, dict[str, int]] = {split: {} for split in public if split != "train"}
         provenance = []
         image_hashes: dict[str, str] = {}
         # Random IDs AND shuffled ordering: neither the source path nor its
@@ -229,7 +239,13 @@ def prepare_dataset(
         ordered = list(clips)
         secrets.SystemRandom().shuffle(ordered)
         for clip in ordered:
-            split = "validate" if clip.subject in holdout else "train"
+            split = (
+                "validate"
+                if clip.subject in holdout
+                else "final"
+                if clip.subject in final_holdout
+                else "train"
+            )
             clip_id = "clip_" + secrets.token_hex(12)
             paths = []
             selected = _sample_frames(clip.frames, max_frames)
@@ -246,7 +262,7 @@ def prepare_dataset(
             if split == "train":
                 row["label"] = clip.label
             else:
-                labels[clip_id] = clip.label
+                labels[split][clip_id] = clip.label
             public[split].append(row)
             provenance.append(
                 {
@@ -266,27 +282,32 @@ def prepare_dataset(
             "source_code": UPSTREAM_URL,
             "source_layout": "explicit-csv" if manifest else "modality/action/user/trial/frame",
             "max_frames": max_frames,
-            "train_subjects": sorted(subjects - holdout),
+            "train_subjects": sorted(subjects - holdout - final_holdout),
             "validate_subjects": sorted(holdout),
+            "final_subjects": sorted(final_holdout),
             "counts": {split: len(rows) for split, rows in public.items()},
             "image_sha256": image_hashes,
             "train_manifest_sha256": _sha(staged / "train/manifest.json"),
             "validate_manifest_sha256": _sha(staged / "validate/manifest.json"),
         }
+        if final_holdout:
+            protocol["final_manifest_sha256"] = _sha(staged / "final/manifest.json")
         protocol_id = hashlib.sha256(json.dumps(protocol, sort_keys=True).encode()).hexdigest()
         protocol["protocol_id"] = protocol_id
         _json(staged / "protocol.json", protocol)
         _json(staged / "private/provenance.json", provenance)
-        _json(
-            staged / "private/validate_labels.json",
-            {
-                "schema": SCHEMA,
-                "protocol_id": protocol_id,
-                "dataset_kind": dataset_kind,
-                "labels": labels,
-                "validate_manifest_sha256": protocol["validate_manifest_sha256"],
-            },
-        )
+        for split, values in labels.items():
+            _json(
+                staged / "private" / f"{split}_labels.json",
+                {
+                    "schema": SCHEMA,
+                    "protocol_id": protocol_id,
+                    "dataset_kind": dataset_kind,
+                    "split": split,
+                    "labels": values,
+                    f"{split}_manifest_sha256": protocol[f"{split}_manifest_sha256"],
+                },
+            )
         staged.rename(destination)
     return protocol
 
@@ -433,6 +454,7 @@ def main() -> None:
     prepare.add_argument("--data", type=Path, required=True)
     prepare.add_argument("--output", type=Path, required=True)
     prepare.add_argument("--validate-subjects", type=int, nargs="+", required=True)
+    prepare.add_argument("--final-subjects", type=int, nargs="+", default=[])
     prepare.add_argument("--modality", choices=sorted(IMAGE_MODALITIES), default="Depth_Color")
     prepare.add_argument("--manifest", type=Path)
     prepare.add_argument("--max-frames", type=int, default=16)
@@ -460,6 +482,7 @@ def main() -> None:
             args.data,
             args.output,
             validate_subjects=args.validate_subjects,
+            final_subjects=args.final_subjects,
             modality=args.modality,
             manifest=args.manifest,
             max_frames=args.max_frames,

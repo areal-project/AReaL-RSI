@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import json
 import shutil
 from collections.abc import Callable
@@ -58,6 +59,21 @@ class ResearchApp:
         self.runtime_factory = runtime_factory or (lambda cfg: ResponsesRuntime(cfg.runtime()))
         self.allow_simulation = allow_simulation
         self.active: dict[str, ActiveResearch] = {}
+
+    def worker_elsewhere(self, c: Coordinator) -> bool:
+        local = self.active.get(c.store.run_id)
+        if local is not None and not local.task.done():
+            return False
+        path = c.store.paths.execution_lock
+        if not path.exists():
+            return False
+        with path.open("a+") as handle:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            fcntl.flock(handle, fcntl.LOCK_UN)
+        return False
 
     def coordinator(self, run_id: str) -> Coordinator:
         if run_id in self.active:
@@ -299,6 +315,11 @@ class ResearchApp:
                 jobs.append(
                     {
                         "job_id": job_id,
+                        "title": (
+                            "验证 · " + info["phase"]
+                            if info["verification"]
+                            else "执行作业 · " + info["agent_id"]
+                        ),
                         "agent_id": info["agent_id"],
                         "status": record["state"],
                         "gpu_ids": record["assigned_gpu_ids"],
@@ -327,12 +348,14 @@ class ResearchApp:
             "final": c.store.public_record(run.final_result_ref) if run.final_result_ref else None,
             "events": encode(events),
             "event_cursor": events[-1].sequence if events else after,
-            "worker_alive": run_id in self.active and not self.active[run_id].task.done(),
+            "worker_alive": (run_id in self.active and not self.active[run_id].task.done())
+            or self.worker_elsewhere(c),
             "active_agents": list(self.active[run_id].engine.active_agents)
             if run_id in self.active
             else [],
             "pending_agents": c.pending(),
             "started_at": c.state.get("started_at"),
+            "finished_at": run.finished_at,
         }
 
     async def call(self, action: str, params: dict[str, Any]) -> Any:
@@ -361,6 +384,11 @@ class ResearchApp:
         c = self.coordinator(params["run_id"])
         if action == "detail":
             return await self.detail(c.store.run_id, int(params.get("after", 0)))
+        if action != "export" and self.worker_elsewhere(c):
+            raise ValueError(
+                "This run is controlled by another live process. Close that worker "
+                "with Ctrl+C, then resume it here; viewing and export remain available."
+            )
         if action == "chat":
             text = str(params["text"]).strip()
             if not text or len(text) > 12000:

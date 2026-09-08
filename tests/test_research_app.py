@@ -61,6 +61,11 @@ def test_no_baseline_waiting_and_restart_keep_session(tmp_path: Path) -> None:
         assert transport.calls == 1
         await asyncio.sleep(0.1)
         assert transport.calls == 1
+        observer = ResearchApp(tmp_path, config=config, runtime_factory=runtime)
+        assert (await observer.detail(run_id))["worker_alive"]
+        with pytest.raises(ValueError, match="another live process"):
+            await observer.call("pause", {"run_id": run_id})
+        assert app.coordinator(run_id).state["status"] == "running"
         session = app.coordinator(run_id).actor("rsi").session_id
         await app.close()
         resumed = ResearchApp(tmp_path, config=config, runtime_factory=runtime)
@@ -75,6 +80,52 @@ def test_no_baseline_waiting_and_restart_keep_session(tmp_path: Path) -> None:
             assert (await resumed.detail(run_id))["status"] == "stopped"
         finally:
             await resumed.close()
+
+    asyncio.run(scenario())
+
+
+def test_interaction_reply_is_archived_and_visible_without_polling_model(tmp_path: Path) -> None:
+    class ReplyTransport(WaitingTransport):
+        async def request(self, config: Any, payload: Any, sink: Any) -> dict[str, Any]:
+            packet = await super().request(config, payload, sink)
+            packet["output"] = [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "已记录：只修改 skills。"}],
+                }
+            ]
+            return packet
+
+    async def scenario() -> None:
+        transport = ReplyTransport()
+        config = ResearchConfig(TaskBrief("Improve", "Discuss the allowed scope"))
+        app = ResearchApp(
+            tmp_path,
+            config=config,
+            runtime_factory=lambda _: ResponsesRuntime(
+                ResponsesConfig(base_url="https://example.test", api_key="test"), transport
+            ),
+        )
+        run_id = (await app.create({"simulated": False}))["run_id"]
+        try:
+            await app.call("chat", {"run_id": run_id, "text": "只修改 skills", "message_id": "one"})
+            for _ in range(100):
+                detail = await app.detail(run_id)
+                if len(detail["messages"]) == 2:
+                    break
+                await asyncio.sleep(0.01)
+            assert [m["text"] for m in detail["messages"]] == [
+                "只修改 skills",
+                "已记录：只修改 skills。",
+            ]
+            assert detail["status"] == "planned"
+            for _ in range(3):
+                await app.detail(run_id)
+            assert transport.calls == 1
+        finally:
+            await app.close()
 
     asyncio.run(scenario())
 

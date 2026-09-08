@@ -298,6 +298,18 @@ class ResearchEngine:
                 event_sink=event_sink,
                 recovery_state=state,
             )
+            if (
+                agent_id == "interaction"
+                and result.stop_reason == "completed"
+                and result.text.strip()
+            ):
+                c.enqueue(
+                    "interaction",
+                    "user",
+                    result.text.strip(),
+                    key="interaction-response:" + message.message_id,
+                    reply_to=message.message_id,
+                )
             if result.stop_reason == "budget_exhausted":
                 c.end_turn(
                     agent_id, error="Per-turn model-call budget exhausted; explicit review required"

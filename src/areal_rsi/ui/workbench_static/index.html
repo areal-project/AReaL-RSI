@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>RSI · 研究工作台</title>
+    <meta
+      name="description"
+      content="讨论研究目标，跟踪研究方向、实验和可验证的结果。"
+    />
+    <link rel="stylesheet" href="/style.css" />
+    <script defer src="/app.js"></script>
+  </head>
+  <body>
+    <aside class="sidebar">
+      <a class="brand" href="/"
+        ><span class="brand-mark">R</span
+        ><span>RSI<span class="brand-caption">研究工作台</span></span></a
+      >
+      <button class="primary new-run" id="new-run">＋ 新建研究</button>
+      <div class="sidebar-label">研究记录</div>
+      <nav id="run-list" aria-label="研究记录">
+        <p class="muted">正在读取…</p>
+      </nav>
+      <div class="sidebar-footer">
+        <span class="local-dot"></span>本地工作台<span id="connection"
+          >正在连接</span
+        >
+      </div>
+    </aside>
+    <main>
+      <header class="topbar">
+        <div class="mobile-brand">
+          RSI
+          <select id="mobile-runs" aria-label="选择研究"></select
+          ><button id="mobile-new" class="quiet">＋ 新建</button>
+        </div>
+        <div class="breadcrumb">
+          研究空间 <span>/</span> <span id="run-short">准备开始</span>
+        </div>
+        <div class="topbar-right">
+          <span class="badge simulation" id="simulated" hidden
+            >模拟运行 · 非真实性能</span
+          ><span class="connection-dot" id="connection-dot"></span
+          ><span class="muted" id="last-updated">等待数据</span>
+        </div>
+      </header>
+      <div id="notice" class="notice" role="status" hidden></div>
+      <section id="welcome" class="welcome" hidden>
+        <div class="eyebrow">从一个值得研究的问题开始</div>
+        <h1>设定目标，观察研究如何推进。</h1>
+        <p>
+          RSI 负责规划和协调，Research Agents
+          沿不同方向深入探索。每一次尝试、证据和决策都保留在这次研究中。
+        </p>
+        <button class="primary" id="welcome-new">
+          创建第一项研究 <span>↗</span>
+        </button>
+        <div class="welcome-examples">
+          <span>KernelBench harness 优化</span><span>CUHK-X 模型训练</span
+          ><span>开放式研究</span>
+        </div>
+      </section>
+      <div id="workspace" hidden>
+        <section class="run-heading">
+          <div>
+            <div class="eyebrow">
+              当前研究 <span class="status" id="run-status"></span>
+            </div>
+            <h1 id="objective"></h1>
+          </div>
+          <div class="controls" id="controls">
+            <button class="primary" data-action="start" id="start">
+              开始研究
+            </button>
+            <button class="secondary" data-action="pause" id="pause">
+              暂停
+            </button>
+            <button class="primary" data-action="resume" id="resume">
+              继续
+            </button>
+            <button class="quiet danger" data-action="stop" id="stop">
+              停止
+            </button>
+            <button class="secondary" data-action="export" id="export">
+              导出最佳产物 ↓
+            </button>
+          </div>
+        </section>
+        <section class="metrics" aria-label="研究概览">
+          <div class="metric">
+            <span>最佳验证结果</span><strong id="best-score">—</strong
+            ><small id="best-caption">尚无验证结果</small>
+          </div>
+          <div class="metric">
+            <span>起点 / 最终确认</span
+            ><strong id="baseline-score">— <i>/</i> —</strong
+            ><small id="baseline-caption">起点可以为空</small>
+          </div>
+          <div class="metric">
+            <span>研究节点</span><strong id="node-count">0</strong
+            ><small id="node-caption">尚未开始探索</small>
+          </div>
+          <div class="metric">
+            <span>模型调用 / Token</span><strong id="model-count">0</strong
+            ><small id="token-count">尚未调用模型</small>
+          </div>
+        </section>
+        <div class="workspace-grid">
+          <div class="research-column">
+            <section class="card graph-card">
+              <div class="card-heading">
+                <div>
+                  <h2>研究图</h2>
+                  <p>横向深入，同一方向的尝试保持连续。</p>
+                </div>
+                <button id="graph-reset" class="quiet" title="返回研究图起点">
+                  回到起点 ↖
+                </button>
+              </div>
+              <div class="graph-legend">
+                <span><i class="legend-line"></i>继续探索</span
+                ><span><i class="legend-line shared"></i>引用 / 合并经验</span
+                ><span class="muted">点击节点查看任务和结果</span>
+              </div>
+              <div
+                id="graph-viewport"
+                class="graph-viewport"
+                tabindex="0"
+                aria-label="研究图，可横向滚动"
+              >
+                <div id="graph-empty" class="graph-empty">
+                  <span class="empty-symbol">◎</span>
+                  <h3>研究方向将在这里展开</h3>
+                  <p>先在右侧确认目标和约束，开始后由 RSI 决定如何探索。</p>
+                </div>
+                <div id="graph-canvas" class="graph-canvas" hidden></div>
+              </div>
+            </section>
+            <section class="card plan-card">
+              <div class="card-heading">
+                <h2>RSI 当前计划</h2>
+                <span class="eyebrow">随证据更新</span>
+              </div>
+              <p id="plan" class="preserve muted">
+                研究开始后，RSI 会在这里说明当前方向和下一步。
+              </p>
+              <div id="directions" class="directions"></div>
+            </section>
+            <section class="card activity-card">
+              <div class="card-heading">
+                <div class="tabs compact" role="tablist" aria-label="运行记录">
+                  <button
+                    class="selected"
+                    id="jobs-tab"
+                    role="tab"
+                    aria-selected="true"
+                  >
+                    作业 <span id="job-count">0</span></button
+                  ><button id="activity-tab" role="tab" aria-selected="false">
+                    最新动态
+                  </button>
+                </div>
+                <span class="muted">等待期间不调用模型</span>
+              </div>
+              <div id="jobs" class="jobs">
+                <p class="muted">当前没有运行中的作业。</p>
+              </div>
+              <div id="activity" class="activity" hidden></div>
+            </section>
+          </div>
+          <aside class="card inspector">
+            <div
+              class="tabs inspector-tabs"
+              role="tablist"
+              aria-label="研究详情"
+            >
+              <button
+                class="selected"
+                id="chat-tab"
+                role="tab"
+                aria-selected="true"
+              >
+                需求与对话</button
+              ><button id="node-tab" role="tab" aria-selected="false">
+                节点详情</button
+              ><button id="brief-tab" role="tab" aria-selected="false">
+                研究约束
+              </button>
+            </div>
+            <section id="chat-panel" class="chat-panel">
+              <div
+                id="pending-questions"
+                class="pending-questions"
+                hidden
+              ></div>
+              <div id="messages" class="messages" aria-live="polite">
+                <div class="chat-intro">
+                  <span class="agent-avatar">I</span>
+                  <h3>把目标说清楚</h3>
+                  <p>
+                    你可以说明优化范围、资源限制和偏好的方向。Interaction Agent
+                    会整理成研究要求，并把你的建议交给 RSI。
+                  </p>
+                </div>
+              </div>
+              <form id="chat-form" class="composer">
+                <label class="sr-only" for="chat-input"
+                  >向 Interaction Agent 发送消息</label
+                ><textarea
+                  id="chat-input"
+                  rows="3"
+                  placeholder="例如：只优化 skills，先探索一个方向…"
+                  maxlength="30000"
+                ></textarea>
+                <div class="composer-bottom">
+                  <span id="chat-status">Enter 发送 · Shift+Enter 换行</span
+                  ><button class="primary" id="send-message" type="submit">
+                    发送 ↑
+                  </button>
+                </div>
+              </form>
+            </section>
+            <section id="node-panel" class="detail-panel" hidden>
+              <div class="empty-detail">
+                <span class="empty-symbol">↖</span>
+                <h3>选择一个研究节点</h3>
+                <p>查看具体任务、尝试、问题、结果和共享证据。</p>
+              </div>
+            </section>
+            <section id="brief-panel" class="detail-panel" hidden></section>
+          </aside>
+        </div>
+      </div>
+    </main>
+    <dialog id="create-dialog" aria-labelledby="create-title">
+      <form id="create-form">
+        <div class="dialog-heading">
+          <div>
+            <div class="eyebrow">新的研究空间</div>
+            <h2 id="create-title">你希望研究什么？</h2>
+          </div>
+          <button
+            type="button"
+            id="close-dialog"
+            class="quiet"
+            aria-label="关闭"
+          >
+            ×
+          </button>
+        </div>
+        <label for="template">起步场景</label
+        ><select id="template">
+          <option value="kernelbench">KernelBench · harness 优化</option>
+          <option value="cuhkx">CUHK-X · 模型训练与设计</option>
+          <option value="research">开放式研究</option>
+        </select>
+        <label for="new-objective">研究目标</label
+        ><textarea
+          id="new-objective"
+          rows="3"
+          required
+          maxlength="5000"
+          placeholder="描述希望改善的结果…"
+        ></textarea>
+        <label for="new-instructions"
+          >范围、资源和偏好 <span class="muted">可选</span></label
+        ><textarea
+          id="new-instructions"
+          rows="3"
+          maxlength="20000"
+          placeholder="哪些部分可以修改？有哪些限制或值得探索的方向？"
+        ></textarea>
+        <div class="form-row">
+          <div>
+            <label for="max-agents">最多 Research Agents</label
+            ><input
+              id="max-agents"
+              type="number"
+              min="1"
+              max="32"
+              value="1"
+              required
+            />
+          </div>
+          <label class="checkbox"
+            ><input id="create-simulated" type="checkbox" disabled /><span
+              >先使用模拟作业<small id="simulation-help"
+                >正在读取执行环境…</small
+              ></span
+            ></label
+          >
+        </div>
+        <p class="muted" id="create-environment" role="status"></p>
+        <p class="form-error" id="create-error" role="alert" hidden></p>
+        <div class="dialog-footer">
+          <span class="muted">创建后先确认需求，再开始研究。</span
+          ><button class="primary" id="create-submit" type="submit">
+            创建研究 →
+          </button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>

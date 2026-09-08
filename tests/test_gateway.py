@@ -206,7 +206,7 @@ def test_stream_retries_overload_before_meaningful_output(monkeypatch: pytest.Mo
             nonlocal attempts
             attempts += 1
             self.rfile.read(int(self.headers["Content-Length"]))
-            body = role + overloaded if attempts < 3 else completed
+            body = role + overloaded if attempts < 6 else completed
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.end_headers()
@@ -227,7 +227,7 @@ def test_stream_retries_overload_before_meaningful_output(monkeypatch: pytest.Mo
             )
             with urllib.request.urlopen(request, timeout=5) as response:
                 body = response.read()
-            assert attempts == 3
+            assert attempts == 6
             events = body.decode().splitlines()
             chunks = [json.loads(line[6:]) for line in events if line.startswith("data: {")]
             assert (
@@ -241,7 +241,7 @@ def test_stream_retries_overload_before_meaningful_output(monkeypatch: pytest.Mo
             assert chunks[1]["choices"][0]["delta"]["content"] == "ok"
             assert "data: [DONE]" in events
             assert not any("error" in chunk for chunk in chunks)
-            assert proxy.requests[0]["stream_retries"] == 2
+            assert proxy.requests[0]["stream_retries"] == 5
             assert overloaded.decode() in proxy.requests[0]["response"]
         finally:
             proxy.close()

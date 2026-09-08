@@ -11,7 +11,8 @@ from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-_MAX_STREAM_ATTEMPTS = 3
+_MAX_STREAM_ATTEMPTS = 6
+_MAX_RETRY_DELAY_SECONDS = 8.0
 
 
 def _event_payload(event: bytes) -> dict[str, Any] | None:
@@ -177,7 +178,10 @@ class GatewayProxy:
                                 for attempt in range(1, _MAX_STREAM_ATTEMPTS):
                                     if not retryable:
                                         break
-                                    time.sleep(0.5 * attempt)
+                                    # 号池过载通常会持续数秒；仅在尚未输出正文/工具调用时
+                                    # 使用封顶指数退避，避免重放已经可见或可能有副作用的内容。
+                                    delay = min(2 ** (attempt - 1), _MAX_RETRY_DELAY_SECONDS)
+                                    time.sleep(delay)
                                     with urllib.request.urlopen(request, timeout=210) as retried:
                                         attempt_raw, _, retryable = _relay_stream(
                                             retried, send_event

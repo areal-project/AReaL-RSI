@@ -214,6 +214,10 @@ src/areal_rsi/
 
 [架构说明](docs/architecture.md) 描述运行与隔离边界；[接口说明](docs/interfaces/README.md) 描述数据对象和扩展协议。
 
+[RSI Agent 与 ResearchAgent 协作设计](docs/rsi-research-design.md) 描述目标流程，涵盖研究调度、报告、上下文恢复、评测隔离和 run 数据管理。当前已落地 run 数据归属与通用节点定义，协作运行时按后续 PR 推进。
+
+[内部实现参考](docs/rsi-research-implementation.md) 保留完整设计、运行时接点、结构化进度与分阶段 PR 计划。
+
 公共 API 定义了 TrajectoryStore 与用户 Verifier 的接入协议。Framework 提供 append-only FileTrajectoryStore、provider factory registry、Python Verifier loader 和统一执行器；具体 Benchmark Verifier、远程 Store 和 Runtime Adapter 由使用者实现并注册。
 
 ## 开发检查与数据
@@ -223,4 +227,24 @@ make test   # 离线单元测试，不调用模型或下载数据
 make check  # 单元测试、Ruff、Mypy
 ```
 
-运行记录位于 `RSI_DATA_ROOT`：`content/` 保存按摘要寻址的内容，`versions/` 保存版本，`model-index/` 复用模型描述，`baselines/` 按目标模型与初始 Harness 快照保存基线，`run-states/` 保存状态，`runs/` 保存逐轮结果，`trajectories/` 保存轨迹索引，`dsh-home/` 保存 DSH 对话，`experiment-plans/` 保存待确认计划，`workers/` 保存后台进程状态和日志，`gateway/` 保存实验模型请求和响应审计。旧 `tui/` 对话记录继续保留。这些运行数据由 Git 忽略；Web UI 只返回聚合状态。
+新实验的研究数据集中在 `RSI_DATA_ROOT/runs/<run_id>/`：
+
+```text
+run.json                         计划、可空起点、运行状态、最佳版本引用、研究 Agent ID
+agents/<agent_id>/agent.json      ResearchAgent 状态、当前节点、迭代 ID 列表
+agents/<agent_id>/sessions/       本 run 的 Agent 会话文件
+agents/<agent_id>/workspace/      ResearchAgent 工作区
+iterations/<iteration_id>.json   通用研究节点：任务、状态、报告、材料引用
+memory/                          仅本 run 共享的经验
+trajectories/                    本 run 的轨迹索引
+workflow/                        当前工作流的基线评测、逐轮结果和恢复检查点
+runtime/                         worker 状态、锁、日志、请求审计、构建与执行临时目录
+```
+
+`FileRunStore` / `RunPaths` 统一管理读写位置；状态、Agent、节点分别保存，父记录通过 ID 关联。ResearchIteration 不要求产生版本或评测结果，失败和取消的尝试也会保存。起点与最佳版本在数据模型中可以为空；当前 Harness / Artifact 工作流仍要求起点，首次有效评测后才设置最佳版本。
+
+**EvolutionResult 是当前工作流使用的一种可选结果格式，不是通用节点的必需项。** 它位于 workflow 层，用来承接现有 Harness / Artifact 流程的修改、候选和评测字段，通过节点的 `report_ref` 引用。当前这两个工作流用它保存完成结果和恢复检查点；其他工作流可以完全不用它，节点可以引用自己的报告和材料，不必填充空的 EvolutionResult。`SolutionVersion` 表示可执行版本，EvolutionResult 只通过 ID 引用输入、候选和下一版本，两者不是同一类对象。具体关系见[接口说明](docs/interfaces/README.md#researchiteration-与工作流结果)。
+
+根目录保留共享设施：`content/` 和 `versions/` 存不可变正文与版本，`model-index/`、`baselines/` 是模型和初始 Harness 版本的去重索引，`dsh-cli/`、`dsh-home/` 保存共享安装与前台会话，`experiment-plans/` 保存启动前计划，`workers/` 保留跨 run 控制锁与计划到 run 的索引。程序化调用产生的运行前对话放在 `conversations/`。各 run 独立保存自己的起点引用与基线评测，Memory 不跨 run 自动共享。
+
+旧 `run-states/` 记录仍可查看和恢复；后续保存时写入新状态结构，保留旧源记录、执行锁和检查点位置。根目录历史 Memory 不自动导入，也不删除。内容和版本使用共享引用，因此完整归档还需收集引用的正文；这里只调整归属，未实现归档导出工具。这些运行数据由 Git 忽略，Web UI 只返回聚合状态。

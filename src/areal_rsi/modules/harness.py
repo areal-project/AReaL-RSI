@@ -67,9 +67,9 @@ class LocalHarnessBuilder:
     def __init__(self, content: FileContentStore, root: Path):
         self.content = content
         self.root = root
-        root.mkdir(parents=True, exist_ok=True)
 
     async def build(self, base: HarnessVersion, change: HarnessChange) -> ContentRef:
+        self.root.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=self.root) as temporary:
             directory = Path(temporary) / "harness"
             await self.content.materialize(base.content, directory)

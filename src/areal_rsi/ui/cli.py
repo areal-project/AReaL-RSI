@@ -11,7 +11,8 @@ from pathlib import Path
 
 from areal_rsi.api.base import ExperimentPlan, ExperimentRun, RunState
 from areal_rsi.app import create_app
-from areal_rsi.base.storage import FileRecords, decode, encode
+from areal_rsi.base.runs import FileRunStore
+from areal_rsi.base.storage import decode, encode
 from areal_rsi.config import ModelConfigurationError
 from areal_rsi.experiment_config import environment_scope, experiment_roots, plan_environment
 
@@ -113,7 +114,7 @@ def main() -> None:
                     [
                         run
                         for root in experiment_roots(data_root())
-                        for run in FileRecords(root / "run-states").list(ExperimentRun)
+                        for run in FileRunStore(root).list(ExperimentRun)
                     ]
                 ),
                 ensure_ascii=False,

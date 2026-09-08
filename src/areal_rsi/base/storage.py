@@ -195,7 +195,6 @@ class FileContentStore:
 class FileRecords:
     def __init__(self, root: Path):
         self.root = root
-        root.mkdir(parents=True, exist_ok=True)
 
     def save(self, key: str, value: Any, *, immutable: bool = True) -> None:
         write_json(self.root / f"{safe_name(key)}.json", value, immutable=immutable)
@@ -305,16 +304,22 @@ class FileVersionManager:
 
 
 class FileTrajectoryStore:
-    def __init__(self, root: Path, content: FileContentStore):
+    def __init__(self, root: Path, content: FileContentStore, *, legacy_root: Path | None = None):
         self.records = FileRecords(root)
         self.content = content
+        self.legacy = FileRecords(legacy_root) if legacy_root is not None else None
 
     async def save(self, trajectory: Trajectory) -> TrajectoryRef:
         self.records.save(trajectory.trajectory_id, trajectory)
         return TrajectoryRef(trajectory.trajectory_id)
 
     async def get(self, trajectory_id: str) -> Trajectory | None:
-        return self.records.get(trajectory_id, Trajectory)
+        record = self.records.get(trajectory_id, Trajectory)
+        # Legacy checkpoints already contain explicit trajectory IDs. Searches
+        # remain scoped to the Run; no global records are enumerated or imported.
+        if record is None and self.legacy is not None:
+            return self.legacy.get(trajectory_id, Trajectory)
+        return record
 
     async def query(self, query: TrajectoryQuery) -> TrajectoryPage:
         try:

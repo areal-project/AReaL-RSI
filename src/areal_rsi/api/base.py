@@ -34,6 +34,24 @@ class RunState(StrEnum):
     CANCELLED = "cancelled"
 
 
+class AgentState(StrEnum):
+    CREATED = "created"
+    RUNNING = "running"
+    WAITING = "waiting"
+    PAUSED = "paused"
+    STOPPING = "stopping"
+    STOPPED = "stopped"
+    FAILED = "failed"
+
+
+class IterationState(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
 class TrajectoryStorageType(StrEnum):
     """Where a TrajectoryStore keeps its canonical trajectory records."""
 
@@ -393,28 +411,39 @@ class AgentSpec:
 
 
 @dataclass(slots=True)
-class ResearchIteration:
-    """Persisted state of one step in an independent research line."""
+class RecordRef:
+    """Reference to a record or content; no research-task taxonomy is implied."""
 
-    iteration: int
-    input_solution_id: str
-    train_report: EvaluationReport
-    evidence: ContentRef
-    change: ResearchChange
-    candidate_solution_id: str
-    validation_report: EvaluationReport
-    # None means this completed iteration ended the research line.
-    next_solution_id: str | None
-    started_at: str
-    finished_at: str
+    uri: str
+
+
+@dataclass(slots=True)
+class ResearchIteration:
+    """One research node, independent of task, output and evaluation types."""
+
+    iteration_id: str
+    run_id: str
+    agent_id: str
+    assignment_ref: RecordRef
+    state: IterationState = IterationState.PENDING
+    parent_iteration_id: str | None = None
+    report_ref: RecordRef | None = None
+    references: tuple[RecordRef, ...] = ()
+    created_at: str | None = None
+    updated_at: str | None = None
 
 
 @dataclass(slots=True)
 class ResearchAgentState:
     agent_id: str
-    state: RunState
+    state: AgentState = AgentState.CREATED
     iterations: tuple[ResearchIteration, ...] = ()
     error: str | None = None
+    direction: str | None = None
+    current_iteration_id: str | None = None
+    wait_reason: str | None = None
+    session_id: str | None = None
+    checkpoint_ref: RecordRef | None = None
 
 
 @dataclass(slots=True)
@@ -422,7 +451,7 @@ class ExperimentPlan:
     goal: str
     workflow: str
     benchmark: str
-    baseline_solution_id: str
+    baseline_solution_id: str | None
     target: EvolutionTarget
     max_iterations: int
     research_agent_count: int = 1
@@ -435,7 +464,7 @@ class ExperimentRun:
     run_id: str
     plan: ExperimentPlan
     state: RunState
-    best_solution_id: str
+    best_solution_id: str | None = None
     research_agents: tuple[ResearchAgentState, ...] = ()
     started_at: str | None = None
     finished_at: str | None = None

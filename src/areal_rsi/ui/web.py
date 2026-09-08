@@ -10,31 +10,33 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
-from areal_rsi.api.base import ExperimentRun, SolutionVersion
+from areal_rsi.api.base import AgentState, ExperimentRun, IterationState, SolutionVersion
+from areal_rsi.base.runs import FileRunStore
 from areal_rsi.base.storage import decode, encode, now, safe_name
 from areal_rsi.experiment_config import experiment_roots
 from areal_rsi.modules.remote.registry import read_remote_jobs
+from areal_rsi.workflows.records import evolution_result
 
 
 class RunReader:
     def __init__(self, root: Path, run_id: str | None = None):
         self.root = root.resolve()
         self.run_id = safe_name(run_id) if run_id else None
+        self.records = FileRunStore(self.root)
 
     def _load(self, run_id: str) -> ExperimentRun:
         if self.run_id and run_id != self.run_id:
             raise FileNotFoundError(run_id)
-        path = self.root / "run-states" / f"{safe_name(run_id)}.json"
-        run: ExperimentRun = decode(ExperimentRun, json.loads(path.read_text()))
-        if run.run_id != run_id:
-            raise ValueError("实验记录身份与文件名不一致")
+        run = self.records.get(run_id, ExperimentRun)
+        if run is None:
+            raise FileNotFoundError(run_id)
         return run
 
     def worker_alive(self, run_id: str) -> bool:
         for root in experiment_roots(self.root)[1:]:
-            if (root / "run-states" / f"{safe_name(run_id)}.json").is_file():
+            if FileRunStore(root).state_path(run_id).is_file():
                 return RunReader(root, self.run_id).worker_alive(run_id)
-        path = self.root / "locks" / f"{safe_name(run_id)}.lock"
+        path = self.records.paths(run_id).execution_lock
         if not path.exists():
             return False
         with path.open("r") as lock:
@@ -46,18 +48,14 @@ class RunReader:
         return False
 
     def list(self) -> list[dict[str, Any]]:
-        paths = (
-            [self.root / "run-states" / f"{self.run_id}.json"]
-            if self.run_id
-            else list((self.root / "run-states").glob("*.json"))
-        )
+        identifiers = [self.run_id] if self.run_id else self.records.ids()
         runs = []
         for root in experiment_roots(self.root)[1:]:
             runs.extend(RunReader(root, self.run_id).list())
-        for path in paths:
-            if not path.exists():
+        for identifier in identifiers:
+            if not self.records.state_path(identifier).exists():
                 continue
-            run = self._load(path.stem)
+            run = self._load(identifier)
             runs.append(
                 {
                     "run_id": run.run_id,
@@ -72,10 +70,10 @@ class RunReader:
 
     def detail(self, run_id: str) -> dict[str, Any]:
         for root in experiment_roots(self.root)[1:]:
-            if (root / "run-states" / f"{safe_name(run_id)}.json").is_file():
+            if FileRunStore(root).state_path(run_id).is_file():
                 return RunReader(root, self.run_id).detail(run_id)
         run = self._load(run_id)
-        folder = self.root / "runs" / run.run_id
+        folder = self.records.paths(run_id).workflow
         progress_path = folder / "progress.json"
         progress = json.loads(progress_path.read_text()) if progress_path.exists() else {}
         baseline_path = folder / "baseline" / "validate" / "evaluation.json"
@@ -84,11 +82,12 @@ class RunReader:
             if baseline_path.exists()
             else None
         )
-        model_path = self.root / "versions" / f"{safe_name(run.plan.baseline_solution_id)}.json"
         model_name = None
-        if model_path.exists():
-            solution = decode(SolutionVersion, json.loads(model_path.read_text()))
-            model_name = solution.model.name
+        if run.plan.baseline_solution_id is not None:
+            model_path = self.root / "versions" / f"{safe_name(run.plan.baseline_solution_id)}.json"
+            if model_path.exists():
+                solution = decode(SolutionVersion, json.loads(model_path.read_text()))
+                model_name = solution.model.name
         configured_models = run.plan.config.get("agent_models", {})
         model_names = (
             {
@@ -108,22 +107,45 @@ class RunReader:
         for agent in run.research_agents:
             state = progress.get(agent.agent_id, {})
             phase = state.get("phase", "waiting")
-            if agent.state.value == "succeeded":
-                phase = "completed"
+            if agent.state == AgentState.STOPPED:
+                phase = "pruned" if phase == "pruned" else "completed"
             elif agent.state.value == "failed":
                 phase = "failed"
-            elif agent.state.value == "cancelled":
-                phase = "pruned" if phase == "pruned" else "cancelled"
+            elif agent.state == AgentState.PAUSED:
+                phase = "paused"
             elif agent.state.value == "running" and phase in {"failed", "cancelled"}:
                 # 兼容早期运行记录：恢复后、进入首个节点前可能仍留着旧阶段。
                 phase = "waiting"
             history = []
-            for step in agent.iterations:
+            for index, node in enumerate(agent.iterations, 1):
+                if (
+                    run.plan.workflow not in {"harness-evolution", "artifact-evolution"}
+                    or node.state != IterationState.COMPLETED
+                ):
+                    history.append(
+                        {
+                            "iteration": index,
+                            "iteration_id": node.iteration_id,
+                            "state": node.state.value,
+                            "reason": None,
+                            "train_score": None,
+                            "validation_score": None,
+                            "input_solution_id": None,
+                            "candidate_solution_id": None,
+                            "next_solution_id": None,
+                            "started_at": node.created_at,
+                            "finished_at": node.updated_at,
+                        }
+                    )
+                    continue
+                step = evolution_result(self.records, node)
                 if step.candidate_solution_id == run.best_solution_id:
                     best_score = step.validation_report.score
                 history.append(
                     {
                         "iteration": step.iteration,
+                        "iteration_id": node.iteration_id,
+                        "state": node.state.value,
                         "reason": step.change.reason,
                         "input_solution_id": step.input_solution_id,
                         "candidate_solution_id": step.candidate_solution_id,
@@ -139,7 +161,11 @@ class RunReader:
                     "agent_id": agent.agent_id,
                     "model": model_names.get(agent.agent_id, legacy_teacher),
                     "state": agent.state.value,
-                    "completed_iterations": len(history),
+                    "completed_iterations": sum(
+                        node.state == IterationState.COMPLETED for node in agent.iterations
+                    ),
+                    "current_iteration_id": agent.current_iteration_id,
+                    "wait_reason": agent.wait_reason,
                     "max_iterations": run.plan.max_iterations,
                     "phase": phase,
                     "iteration": state.get("iteration"),

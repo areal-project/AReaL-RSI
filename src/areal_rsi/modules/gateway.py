@@ -29,7 +29,7 @@ def normalize_tool_deltas(body: bytes) -> bytes:
 
 
 class GatewayProxy:
-    def __init__(self, base_url: str, api_key: str):
+    def __init__(self, base_url: str, api_key: str, *, access_token: str | None = None):
         self.requests: list[dict[str, Any]] = []
         owner = self
         upstream = base_url.rstrip("/") + "/chat/completions"
@@ -38,6 +38,11 @@ class GatewayProxy:
             protocol_version = "HTTP/1.1"
 
             def do_POST(self) -> None:
+                if access_token is not None and self.headers.get("Authorization") != (
+                    "Bearer " + access_token
+                ):
+                    self.send_error(401, "Internal gateway authentication required")
+                    return
                 original = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 # 兼容标准 chat 服务，移除 DSH 专有字段。
                 # 不改变 model/messages/tools、token 上限或模型返回内容。

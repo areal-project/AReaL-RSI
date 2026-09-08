@@ -1,3 +1,5 @@
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -20,7 +22,41 @@ class IsolationTest(unittest.TestCase):
             workspace.mkdir()
             public = workspace / "task.txt"
             public.write_text("public question")
-            sandbox_wrapper(session, workspace)
+            installation = root / "dsh-cli"
+            cli = installation / "node_modules/.bin/dsh"
+            cli.parent.mkdir(parents=True)
+            node = shutil.which("node")
+            if node is None:
+                self.skipTest("shared CLI requires Node.js")
+            entry = installation / "entry.js"
+            entry.write_text(
+                'process.stdout.write(require("node:fs").readFileSync(process.argv[2]));'
+            )
+            cli.write_text(
+                "#!/bin/sh\nexec " + shlex.quote(node) + " " + shlex.quote(str(entry)) + ' "$@"\n'
+            )
+            cli.chmod(0o700)
+            installed_file = installation / "runtime.txt"
+            installed_file.write_text("shared runtime")
+            wrapper = sandbox_wrapper(session, workspace, cli)
+            self.assertIn(str(cli), wrapper.read_text())
+            runtime = subprocess.run([str(wrapper), str(installed_file)], capture_output=True)
+            self.assertEqual(runtime.stdout, b"shared runtime", runtime.stderr.decode())
+            write = subprocess.run(
+                [
+                    "/usr/bin/sandbox-exec",
+                    "-f",
+                    str(session / "sandbox.sb"),
+                    "/bin/sh",
+                    "-c",
+                    'printf changed > "$1"',
+                    "sh",
+                    str(installed_file),
+                ],
+                capture_output=True,
+            )
+            self.assertNotEqual(write.returncode, 0)
+            self.assertEqual(installed_file.read_text(), "shared runtime")
             command = ["/usr/bin/sandbox-exec", "-f", str(session / "sandbox.sb"), "/bin/cat"]
             allowed = subprocess.run([*command, str(public)], capture_output=True)
             denied = subprocess.run([*command, str(private)], capture_output=True)

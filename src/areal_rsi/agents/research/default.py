@@ -45,7 +45,6 @@ class DefaultResearchAgent:
         versions: FileVersionManager,
         root: Path,
         *,
-        direction: str = "通用 Harness 改进",
         editable_path: Callable[[str], bool] = editable,
         harness_description: str = "DeepSeek Harness；保持原始输出格式及工具契约",
     ):
@@ -56,7 +55,6 @@ class DefaultResearchAgent:
         self.memory = memory
         self.versions = versions
         self.root = root
-        self.direction = direction
         self.editable_path = editable_path
         self.harness_description = harness_description
         self.last_trajectory: str | None = None
@@ -148,7 +146,6 @@ class DefaultResearchAgent:
                 json.dumps(
                     {
                         "goal": goal,
-                        "research_direction": self.direction,
                         "harness_description": self.harness_description,
                         "report": encode(report),
                         "harness": "harness/",

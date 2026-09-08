@@ -220,7 +220,9 @@ class ArtifactWorkflowTest(unittest.IsolatedAsyncioTestCase):
             "reference", await self.content.put_text("unchanged")
         )
         self.baseline = await self.versions.create_solution(
-            await self.versions.create_model("fixed-model", await self.content.put_text("model")),
+            await self.versions.create_model(
+                "task-agent-fixture-model", await self.content.put_text("model")
+            ),
             await self.versions.create_harness(
                 "fixed-harness", await self.content.put_text("code")
             ),
@@ -388,7 +390,7 @@ class ArtifactWorkflowTest(unittest.IsolatedAsyncioTestCase):
             async def finish() -> TrajectoryRef:
                 return await self.trajectories.save(
                     Trajectory(
-                        f"offline-model-session-{index}",
+                        f"artifact-agent-session-{index}",
                         specification.agent_id,
                         await self.content.put_json({"fixture": True, "turns": []}),
                         {},
@@ -565,7 +567,7 @@ class ArtifactWorkflowTest(unittest.IsolatedAsyncioTestCase):
         candidate = decode(SolutionVersion, json.loads(path.read_text()))
         changed = candidate.artifacts[0]
         malformed = (
-            replace(candidate, model=replace(candidate.model, name="changed")),
+            replace(candidate, model=replace(candidate.model, name="task-agent-other-model")),
             replace(candidate, harness=replace(candidate.harness, name="changed")),
             replace(candidate, parent_solution_id=None),
             replace(candidate, artifacts=(replace(changed, parent_version_id=None), self.other)),

@@ -85,6 +85,7 @@ class ResearchFixture:
     def __init__(self, agent_id: str, content: FileContentStore):
         self.agent_id, self.content = agent_id, content
         self.proposals = self.selections = 0
+        self.goals: list[str] = []
         self.fail_selection = False
         self.started = asyncio.Event()
         self.block: asyncio.Event | None = None
@@ -99,13 +100,14 @@ class ResearchFixture:
     ) -> HarnessChange:
         assert target == EvolutionTarget.HARNESS and report.split == BenchmarkSplit.TRAIN
         assert report.solution_id == current.solution_id
+        self.goals.append(goal)
         self.proposals += 1
         self.started.set()
         if self.block is not None:
             await self.block.wait()
         manifest = json.loads(await self.content.read_text(current.harness.content))
         old = await self.content.read_text(decode(ContentRef, manifest["files"]["prompt.md"]))
-        new = old + f"\nResearch direction: {self.agent_id}; proposal {self.proposals}.\n"
+        new = old + f"\nIndependent research line: {self.agent_id}; proposal {self.proposals}.\n"
         patch = "".join(
             difflib.unified_diff(
                 old.splitlines(True),
@@ -156,7 +158,9 @@ class WorkflowTest(unittest.IsolatedAsyncioTestCase):
         (harness_dir / "prompt.md").write_text("Return a numeric answer.\n")
         (harness_dir / "mcp.json").write_text('{"servers": []}')
         self.baseline = await self.versions.create_solution(
-            await self.versions.create_model("fixed-model", await self.content.put_text("fixed")),
+            await self.versions.create_model(
+                "task-agent-fixture-model", await self.content.put_text("fixed")
+            ),
             await self.versions.create_harness("fixture", await self.content.snapshot(harness_dir)),
         )
         self.runtime = TaskFixture(self.content, self.trajectories)
@@ -199,6 +203,9 @@ class WorkflowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(run.state.value, "succeeded", run.error)
         self.assertGreaterEqual(self.runtime.peak, 2)
         self.assertEqual([len(a.iterations) for a in run.research_agents], [3, 3])
+        self.assertTrue(
+            all(research.goals == [self.plan.goal] * 3 for research in self.researchers)
+        )
         self.assertEqual(run.best_solution_id, self.baseline.solution_id)
         self.assertEqual(self.runtime.calls, 3 + 2 * 3 * 6)
         for agent in run.research_agents:

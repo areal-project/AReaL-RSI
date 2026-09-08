@@ -338,6 +338,185 @@ class ResponsesRuntimeTest(unittest.IsolatedAsyncioTestCase):
             transport.payloads[-1]["input"][-1]["content"], "Must retain this instruction"
         )
 
+    async def test_long_turn_compacts_after_complete_tool_batch_without_losing_pairs(self) -> None:
+        transport = ScriptedTransport(
+            response(call("read", "a"), call("read", "b")),
+            response(answer("Evidence a and b support the original task; next submit results.")),
+            response(answer("Completed the original task")),
+        )
+        effects: list[str] = []
+
+        async def handler(item: ToolCall) -> ToolResult:
+            effects.append(item.call_id)
+            return ToolResult(item.call_id + ": " + "Recorded observation. " * 150)
+
+        result = await ResponsesRuntime(
+            replace(self.config, compact_after_chars=1000), transport
+        ).turn(
+            self.root,
+            system_prompt="Research",
+            user_message="Original assignment",
+            tools=[tool("read")],
+            handler=handler,
+            message_id="assignment",
+        )
+        self.assertEqual(result.text, "Completed the original task")
+        self.assertEqual(effects, ["a", "b"])
+        compact_input = transport.payloads[1]["input"]
+        functions = [
+            item["call_id"] for item in compact_input if item.get("type") == "function_call"
+        ]
+        outputs = [
+            item["call_id"] for item in compact_input if item.get("type") == "function_call_output"
+        ]
+        self.assertEqual(functions, ["a", "b"])
+        self.assertEqual(outputs, functions)
+        self.assertNotIn("tools", transport.payloads[1])
+        self.assertNotIn("Recorded observation.", json.dumps(transport.payloads[2]["input"]))
+        saved = self.saved()
+        self.assertEqual(len(saved["turns"]), 1)
+        self.assertEqual(len(saved["turns"][0]["requests"]), 3)
+        self.assertEqual(saved["turns"][0]["message_id"], "assignment")
+        self.assertEqual(saved["usage"]["total_tokens"], 75)
+        self.assertTrue(saved["compactions"][0]["within_turn"])
+        self.assertIn("Recorded observation.", json.dumps(saved["history"]))
+        self.assertTrue(all(record["status"] == "completed" for record in saved["calls"].values()))
+
+    async def test_in_turn_compact_recovery_reuses_response_and_committed_checkpoint(self) -> None:
+        for interrupt_at in ("response_usage", "session_compacted"):
+            with self.subTest(interrupt_at=interrupt_at):
+                session = self.root / interrupt_at
+                transport = ScriptedTransport(
+                    response(call("read", "a")),
+                    response(answer("Saved evidence; submit report.")),
+                    response(answer("done")),
+                )
+
+                async def handler(_: ToolCall) -> ToolResult:
+                    return ToolResult("Long observation " * 150)
+
+                async def interrupt(
+                    event: Json, *, directory: Path = session, expected_event: str = interrupt_at
+                ) -> None:
+                    saved = json.loads((directory / "session.json").read_text())
+                    latest = saved["turns"][-1]["requests"][-1]
+                    if event["type"] == expected_event and latest["kind"] == "compact":
+                        raise asyncio.CancelledError
+
+                # The checkpoint itself exceeds this tiny test threshold, so
+                # recovery must recognize the committed boundary, not recompact it.
+                config = replace(self.config, compact_after_chars=200)
+                kwargs: Json = {
+                    "system_prompt": "Research",
+                    "tools": [tool("read")],
+                    "handler": handler,
+                }
+                with self.assertRaises(asyncio.CancelledError):
+                    await ResponsesRuntime(config, transport).turn(
+                        session, user_message="Go", event_sink=interrupt, **kwargs
+                    )
+                self.assertEqual(len(transport.payloads), 2)
+                result = await ResponsesRuntime(config, transport).turn(
+                    session, user_message=None, **kwargs
+                )
+                self.assertEqual(result.text, "done")
+                self.assertEqual(len(transport.payloads), 3)
+                saved = json.loads((session / "session.json").read_text())
+                self.assertEqual(len(saved["compactions"]), 1)
+                self.assertEqual(len(saved["turns"]), 1)
+                self.assertEqual(saved["usage"]["total_tokens"], 75)
+
+    async def test_in_turn_compact_does_not_split_interrupted_tool_batch(self) -> None:
+        transport = ScriptedTransport(
+            response(call("read", "a"), call("read", "b")),
+            response(answer("Both tool results are saved")),
+            response(answer("done")),
+        )
+        effects: list[str] = []
+
+        async def handler(item: ToolCall) -> ToolResult:
+            if item.call_id == "b" and not item.recovered:
+                raise asyncio.CancelledError
+            effects.append(item.call_id)
+            return ToolResult("Observation " * 150)
+
+        config = replace(self.config, compact_after_chars=1000)
+        kwargs: Json = {"system_prompt": "Research", "tools": [tool("read")], "handler": handler}
+        with self.assertRaises(asyncio.CancelledError):
+            await ResponsesRuntime(config, transport).turn(self.root, user_message="Go", **kwargs)
+        self.assertEqual(len(transport.payloads), 1)
+        await ResponsesRuntime(config, transport).turn(self.root, user_message=None, **kwargs)
+        self.assertEqual(effects, ["a", "b"])
+        compact_input = transport.payloads[1]["input"]
+        self.assertEqual(
+            [
+                item["call_id"]
+                for item in compact_input
+                if item.get("type") == "function_call_output"
+            ],
+            ["a", "b"],
+        )
+
+    async def test_in_turn_compact_needs_budget_for_checkpoint_and_continuation(self) -> None:
+        transport = ScriptedTransport(
+            response(call("read", "a")),
+            response(answer("Saved evidence")),
+            response(answer("done")),
+        )
+
+        async def handler(_: ToolCall) -> ToolResult:
+            return ToolResult("Observation " * 150)
+
+        config = replace(self.config, compact_after_chars=1000, max_model_calls_per_turn=2)
+        kwargs: Json = {"system_prompt": "Research", "tools": [tool("read")], "handler": handler}
+        result = await ResponsesRuntime(config, transport).turn(
+            self.root, user_message="Go", **kwargs
+        )
+        self.assertEqual(result.stop_reason, "budget_exhausted")
+        self.assertEqual(len(transport.payloads), 1)
+        await ResponsesRuntime(config, transport).turn(self.root, user_message=None, **kwargs)
+        self.assertEqual(len(transport.payloads), 1)
+        result = await ResponsesRuntime(config, transport).turn(
+            self.root, user_message=None, retry_id="explicit_review", **kwargs
+        )
+        self.assertEqual(result.text, "done")
+        self.assertEqual(len(transport.payloads), 3)
+        self.assertEqual(self.saved()["turns"][0]["request_limit"], 3)
+
+    async def test_checkpoint_deep_copies_nested_live_recovery_state(self) -> None:
+        recovery: Json = {
+            "plan": "Initial plan",
+            "directions": [{"direction": "Layout", "state": "waiting"}],
+            "budget": {"model_calls": 2},
+        }
+        original = copy.deepcopy(recovery)
+        transport = ScriptedTransport(
+            response(call("read", "a")),
+            response(answer("Saved evidence")),
+            response(answer("done")),
+        )
+
+        async def handler(_: ToolCall) -> ToolResult:
+            return ToolResult("Long observation " * 150)
+
+        async def update_after_checkpoint(event: Json) -> None:
+            if event["type"] == "session_compacted":
+                recovery["plan"] = "Updated plan"
+                recovery["directions"][0]["state"] = "stopped"
+                recovery["budget"]["model_calls"] = 3
+
+        await ResponsesRuntime(replace(self.config, compact_after_chars=1000), transport).turn(
+            self.root,
+            system_prompt="Research",
+            user_message="Go",
+            tools=[tool("read")],
+            handler=handler,
+            recovery_state=recovery,
+            event_sink=update_after_checkpoint,
+        )
+        self.assertEqual(self.saved()["compactions"][0]["authoritative_state"], original)
+        self.assertEqual(recovery["directions"][0]["state"], "stopped")
+
     async def test_call_budget_survives_resume_without_unbounded_retries(self) -> None:
         transport = ScriptedTransport(response(call("read", "a")), response(answer("done")))
 
@@ -352,10 +531,98 @@ class ResponsesRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.stop_reason, "budget_exhausted")
         await ResponsesRuntime(config, transport).turn(self.root, user_message=None, **kwargs)
         self.assertEqual(len(transport.payloads), 1)
-        resumed = await ResponsesRuntime(self.config, transport).turn(
-            self.root, user_message=None, **kwargs
+        # A new runtime configuration must not silently enlarge this saved turn.
+        await ResponsesRuntime(self.config, transport).turn(self.root, user_message=None, **kwargs)
+        self.assertEqual(len(transport.payloads), 1)
+        resumed = await ResponsesRuntime(config, transport).turn(
+            self.root, user_message=None, retry_id="review_1", **kwargs
         )
         self.assertEqual(resumed.text, "done")
+
+    async def test_explicit_retry_grant_is_finite_and_idempotent_without_tool_replay(self) -> None:
+        transport = ScriptedTransport(
+            response(call("write", "a")),
+            response(call("write", "b")),
+            response(answer("done")),
+        )
+        effects: list[str] = []
+
+        async def handler(item: ToolCall) -> ToolResult:
+            effects.append(item.call_id)
+            return ToolResult("Saved")
+
+        config = replace(self.config, max_model_calls_per_turn=1)
+        kwargs: Json = {"system_prompt": "Research", "tools": [tool("write")], "handler": handler}
+        await ResponsesRuntime(config, transport).turn(self.root, user_message="Go", **kwargs)
+        result = await ResponsesRuntime(config, transport).turn(
+            self.root, user_message=None, retry_id="review_1", **kwargs
+        )
+        self.assertEqual(result.stop_reason, "budget_exhausted")
+        self.assertEqual(self.saved()["turns"][0]["request_limit"], 2)
+        # A process restart replays the persisted retry ID, never creates a grant.
+        await ResponsesRuntime(config, transport).turn(
+            self.root, user_message=None, retry_id="review_1", **kwargs
+        )
+        self.assertEqual(len(transport.payloads), 2)
+        result = await ResponsesRuntime(config, transport).turn(
+            self.root, user_message=None, retry_id="review_2", **kwargs
+        )
+        self.assertEqual(result.text, "done")
+        self.assertEqual(effects, ["a", "b"])
+        self.assertEqual(len(self.saved()["turns"]), 1)
+        self.assertEqual(self.saved()["usage"]["total_tokens"], 75)
+
+    async def test_retry_grant_survives_cancellation_before_the_next_model_request(self) -> None:
+        transport = ScriptedTransport(response(call("read", "a")), response(call("read", "b")))
+        config = replace(self.config, max_model_calls_per_turn=1)
+
+        async def handler(_: ToolCall) -> ToolResult:
+            return ToolResult("Read")
+
+        async def cancel_after_grant(event: Json) -> None:
+            if event["type"] == "turn_retry_granted":
+                raise asyncio.CancelledError
+
+        kwargs: Json = {"system_prompt": "Research", "tools": [tool("read")], "handler": handler}
+        await ResponsesRuntime(config, transport).turn(self.root, user_message="Go", **kwargs)
+        with self.assertRaises(asyncio.CancelledError):
+            await ResponsesRuntime(config, transport).turn(
+                self.root,
+                user_message=None,
+                retry_id="review",
+                event_sink=cancel_after_grant,
+                **kwargs,
+            )
+        self.assertEqual(len(transport.payloads), 1)
+        result = await ResponsesRuntime(config, transport).turn(
+            self.root, user_message=None, retry_id="review", **kwargs
+        )
+        self.assertEqual(result.stop_reason, "budget_exhausted")
+        self.assertEqual(self.saved()["turns"][0]["request_limit"], 2)
+        self.assertEqual(len(transport.payloads), 2)
+
+    async def test_request_prompt_counts_down_and_reserves_a_clean_handoff(self) -> None:
+        transport = ScriptedTransport(*(response(call("read", str(i))) for i in range(5)))
+
+        async def handler(_: ToolCall) -> ToolResult:
+            return ToolResult("Read")
+
+        result = await ResponsesRuntime(
+            replace(self.config, max_model_calls_per_turn=5), transport
+        ).turn(
+            self.root,
+            system_prompt="Research",
+            user_message="Go",
+            tools=[tool("read")],
+            handler=handler,
+        )
+        self.assertEqual(result.stop_reason, "budget_exhausted")
+        for index, payload in enumerate(transport.payloads):
+            self.assertIn(f"{5 - index} model call(s) remaining", payload["instructions"])
+            self.assertEqual(payload["model"], "gpt-6-astra")
+            self.assertEqual(payload["reasoning"], {"effort": "xhigh"})
+        self.assertNotIn("nearly exhausted", transport.payloads[0]["instructions"])
+        self.assertIn("role's report, explicit wait", transport.payloads[-1]["instructions"])
 
     async def test_incomplete_response_never_executes_partial_tools(self) -> None:
         transport = ScriptedTransport(response(call("write", "a"), status="incomplete"))

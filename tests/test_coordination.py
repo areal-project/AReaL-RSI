@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 
 from areal_rsi.api.base import AgentState, IterationState
-from areal_rsi.api.research import ResearchLimits, ResearchReport, TaskBrief
+from areal_rsi.api.research import ResearchLimits, ResearchMessage, ResearchReport, TaskBrief
 from areal_rsi.coordination.coordinator import Coordinator
 from areal_rsi.coordination.store import ResearchStore
 
@@ -138,3 +138,68 @@ def test_parallel_branches_and_rsi_can_continue_work(tmp_path: Path) -> None:
     assert not c.pending()
     with pytest.raises(ValueError, match="paused"):
         c.resume()
+
+
+def test_retry_intent_survives_restart_and_is_bound_to_active_delivery(tmp_path: Path) -> None:
+    c = create(tmp_path)
+    message, _ = c.begin_turn("rsi")
+    with pytest.raises(ValueError, match="failed"):
+        c.retry_agent("rsi")
+    c.end_turn("rsi", error="Per-turn call budget exhausted")
+    c.retry_agent("rsi")
+    reopened = Coordinator(c.store)
+    retry = reopened.state["turn_retries"]["rsi"]
+    assert retry["message_id"] == message.message_id
+    assert retry["retry_id"]
+    assert reopened.actor("rsi").state == AgentState.WAITING
+    assert reopened.begin_turn("rsi")[1] is True
+    reopened.end_turn("rsi")
+    assert "rsi" not in Coordinator(c.store).state["turn_retries"]
+
+
+def test_summary_reports_reservations_and_freezes_elapsed_after_stop(tmp_path: Path) -> None:
+    c = Coordinator.create(tmp_path, TaskBrief("Inspect", "No initial version"))
+    assert c.summary()["budget"]["elapsed_seconds"] == 0
+    c.start()
+    c.state["model_requests"] = {
+        "settled": {"reserved_tokens": 0},
+        "active": {"reserved_tokens": 18000},
+        "cancelled_unknown_usage": {"reserved_tokens": 12000},
+    }
+    c.save()
+    assert c.summary()["budget"]["reserved_tokens"] == 30000
+    c.stop("End test")
+    elapsed = c.summary()["budget"]["elapsed_seconds"]
+    assert elapsed >= 0
+    assert Coordinator(c.store).summary()["budget"]["elapsed_seconds"] == elapsed
+
+
+def test_report_correction_retry_recovers_enqueue_gap_with_same_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    c = create(tmp_path)
+    branch = c.spawn(key="a", direction="A", instruction="Inspect", completion_criteria="Report")
+    agent_id = branch["agent_id"]
+    original, _ = c.begin_turn(agent_id)
+    c.end_turn(agent_id, error="Missing report", missing_report=True)
+
+    def interrupted_enqueue(*args: Any, **kwargs: Any) -> str:
+        raise RuntimeError("Process interrupted before corrective message")
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(c, "enqueue", interrupted_enqueue)
+        with pytest.raises(RuntimeError, match="interrupted"):
+            c.retry_agent(agent_id)
+    recovered = Coordinator(c.store)
+    retry_id = recovered.state["turn_retries"][agent_id]["retry_id"]
+    assert original.message_id in recovered.state["delivered"]
+    assert agent_id not in recovered.state["active"]
+    recovered.retry_agent(agent_id)
+    assert recovered.state["turn_retries"][agent_id]["retry_id"] == retry_id
+    assert len(recovered.state["inboxes"][agent_id]) == 1
+    corrective = recovered.store.get(
+        "messages", recovered.state["inboxes"][agent_id][0], ResearchMessage
+    )
+    assert corrective.reply_to == original.message_id
+    assert "does not authorize a new assignment" in corrective.text
+    assert len(recovered.actor(agent_id).iterations) == 1

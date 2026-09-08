@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -79,6 +80,7 @@ class Coordinator:
                 "delivered": [],
                 "plan": "",
                 "seed_candidate_id": None,
+                "baseline_candidate_id": None,
                 "model_calls": 0,
                 "total_tokens": 0,
                 "verify_calls": 0,
@@ -196,15 +198,31 @@ class Coordinator:
         self.store.event("agent_running", agent_id=agent_id, resumed=resumed)
         return self.store.get("messages", identifier, ResearchMessage), resumed
 
-    def end_turn(self, agent_id: str, *, error: str | None = None) -> None:
+    def end_turn(
+        self, agent_id: str, *, error: str | None = None, missing_report: bool = False
+    ) -> None:
         if error is not None:
             actor = self.actor(agent_id)
+            failures = self.state.setdefault("turn_failures", {})
+            if missing_report:
+                if agent_id in {"rsi", "interaction"} or agent_id not in self.state["active"]:
+                    raise ValueError("Missing-report recovery requires an active research delivery")
+                failures[agent_id] = {
+                    "kind": "missing_report",
+                    "message_id": self.state["active"][agent_id],
+                    "iteration_id": actor.current_iteration_id,
+                }
+            else:
+                failures.pop(agent_id, None)
+            self.save()
             actor.state, actor.error = AgentState.FAILED, error
             self.save_actor(actor)
             self.store.event("agent_failed", agent_id=agent_id, error=error)
             # Preserve the active delivery for explicit recovery of the same turn.
             return
         identifier = self.state["active"].pop(agent_id, None)
+        self.state.get("turn_retries", {}).pop(agent_id, None)
+        self.state.get("turn_failures", {}).pop(agent_id, None)
         if identifier:
             if identifier not in self.state["delivered"]:
                 self.state["delivered"].append(identifier)
@@ -220,9 +238,72 @@ class Coordinator:
         actor = self.actor(agent_id)
         if actor.state != AgentState.FAILED:
             raise ValueError("Only a failed agent can be retried")
+        active = self.state["active"].get(agent_id)
+        failure = self.state.get("turn_failures", {}).get(agent_id, {})
+        if failure.get("kind") == "missing_report":
+            retry_id = self._retry_missing_report(actor, failure)
+        elif active is not None:
+            retry_id = new_id("retry")
+            self.state.setdefault("turn_retries", {})[agent_id] = {
+                "message_id": active,
+                "retry_id": retry_id,
+            }
+            self.save()
+        else:
+            retry_id = new_id("retry")
         actor.state, actor.error = AgentState.WAITING, None
         self.save_actor(actor)
-        self.store.event("agent_retry_requested", agent_id=agent_id)
+        self.store.event("agent_retry_requested", agent_id=agent_id, retry_id=retry_id)
+
+    def _retry_missing_report(self, actor: ResearchAgentState, failure: dict[str, Any]) -> str:
+        """Correct a completed model reply without creating another research node."""
+        agent_id = actor.agent_id
+        original = failure["message_id"]
+        node = next(
+            (item for item in actor.iterations if item.iteration_id == actor.current_iteration_id),
+            None,
+        )
+        if (
+            node is None
+            or node.iteration_id != failure["iteration_id"]
+            or node.report_ref is not None
+            or self.state["active"].get(agent_id) not in {None, original}
+        ):
+            raise ValueError("Missing-report recovery no longer matches the active research node")
+        retries = self.state.setdefault("turn_retries", {})
+        intent = retries.get(agent_id, {})
+        if intent.get("mode") != "report" or intent.get("message_id") != original:
+            intent = {
+                "mode": "report",
+                "message_id": original,
+                "retry_id": new_id("retry"),
+            }
+            retries[agent_id] = intent
+            self.save()
+        # Persist intent first, then acknowledge the completed delivery. If the
+        # process dies before enqueue, a second explicit retry uses the same ID.
+        self.state["active"].pop(agent_id, None)
+        if original not in self.state["delivered"]:
+            self.state["delivered"].append(original)
+        inbox = self.state["inboxes"].get(agent_id, [])
+        self.state["inboxes"][agent_id] = [key for key in inbox if key != original]
+        self.save()
+        self.enqueue(
+            "rsi",
+            agent_id,
+            "User-requested protocol recovery for the existing research node "
+            + node.iteration_id
+            + ": your previous final response ended without submitting the required report. "
+            "Continue the original assignment in this same node and session. Use the existing "
+            "workspace, prior tool results and evidence; do not repeat completed tool effects. "
+            "Submit the report tool with concrete completed work, problems, actual results, "
+            "uncertainties and remaining steps. If an external dependency blocks completion, "
+            "use an explicit waiting tool. This correction does not authorize a new assignment, "
+            "research node or direction; after reporting, wait for an explicit RSI reply.",
+            key="report-retry:" + intent["retry_id"],
+            reply_to=original,
+        )
+        return str(intent["retry_id"])
 
     def spawn(
         self,
@@ -436,6 +517,18 @@ class Coordinator:
 
     def summary(self) -> dict[str, Any]:
         run = self.store.run()
+        started = self.state.get("started_at")
+        elapsed = (
+            max(
+                0.0,
+                (
+                    datetime.fromisoformat(run.finished_at or now())
+                    - datetime.fromisoformat(started)
+                ).total_seconds(),
+            )
+            if started
+            else 0.0
+        )
         return {
             "run_id": run.run_id,
             "status": self.state["status"],
@@ -448,7 +541,16 @@ class Coordinator:
             if run.baseline_result_ref
             else None,
             "budget": {
-                name: self.state[name] for name in ("model_calls", "total_tokens", "verify_calls")
+                **{
+                    name: self.state[name]
+                    for name in ("model_calls", "total_tokens", "verify_calls")
+                },
+                "reserved_tokens": sum(
+                    record.get("reserved_tokens", 0)
+                    for record in self.state.get("model_requests", {}).values()
+                ),
+                "elapsed_seconds": elapsed,
             },
             "waiting_for_user": self.state["waiting_for_user"],
+            "budget_stop_reason": self.state.get("budget_stop_reason"),
         }

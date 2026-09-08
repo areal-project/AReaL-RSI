@@ -225,6 +225,7 @@ class ResearchEngine:
         return {
             "run_id": c.store.run_id,
             "status": c.state["status"],
+            "simulated": c.state["simulated"],
             "brief": encode(c.store.brief()),
             "plan": c.state["plan"],
             "agent_id": agent_id,
@@ -261,6 +262,10 @@ class ResearchEngine:
             )
             prompt = (
                 role_prompt
+                + "\n\nThe following state is a snapshot from the start of this model turn. "
+                "Later tool results and newer continuation checkpoints take precedence "
+                "when facts have changed. Do not overwrite newer plans, directions or "
+                "budget records with values from this initial snapshot."
                 + "\n\nCurrent authoritative run state:\n"
                 + json.dumps(state, ensure_ascii=False)
             )
@@ -285,7 +290,14 @@ class ResearchEngine:
 
             async def event_sink(event: Json) -> None:
                 await self._event(agent_id, session, event)
+                if event["type"] in {"tool_completed", "response_usage"}:
+                    # Keep the object passed to runtime current throughout a long
+                    # turn; checkpoint creation takes its own immutable copy.
+                    latest = self._recovery_state(agent_id)
+                    state.clear()
+                    state.update(latest)
 
+            retry = c.state.get("turn_retries", {}).get(agent_id, {})
             result = await self.runtime.turn(
                 session,
                 system_prompt=prompt,
@@ -297,6 +309,9 @@ class ResearchEngine:
                 handler=toolset.call,
                 event_sink=event_sink,
                 recovery_state=state,
+                retry_id=retry.get("retry_id")
+                if retry.get("mode") != "report" and retry.get("message_id") == message.message_id
+                else None,
             )
             if (
                 agent_id == "interaction"
@@ -320,7 +335,9 @@ class ResearchEngine:
                 )
                 if node.report_ref is None:
                     c.end_turn(
-                        agent_id, error="Research Agent ended without a report or explicit wait"
+                        agent_id,
+                        error="Research Agent ended without a report or explicit wait",
+                        missing_report=True,
                     )
                 else:
                     c.end_turn(agent_id)
@@ -357,11 +374,11 @@ class ResearchEngine:
         """Poll jobs, apply controls and dispatch ready actors without awaiting their turns."""
         async with self._tick_lock:
             self._acquire()
-            if self.tick_hook is not None:
-                self._jobs_pending = bool(await self.tick_hook())
             reason = self._wall_reason()
             if reason is not None:
                 self._pause_for_budget(reason)
+            if self.tick_hook is not None:
+                self._jobs_pending = bool(await self.tick_hook())
             status = self.coordinator.state["status"]
             cancelled = []
             for agent_id, task in self._tasks.items():

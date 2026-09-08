@@ -7,6 +7,7 @@ import json
 import tempfile
 import unittest
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -351,6 +352,114 @@ class EngineTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(transport.payloads), 1)
         self.assertEqual(c.state["model_calls"], 1)
 
+    async def test_mid_turn_compact_consumes_global_budget_without_resetting_turn(self) -> None:
+        c = self.coordinator(ResearchLimits(max_model_calls=2))
+
+        async def respond(agent_id: str, index: int, payload: Json) -> Json:
+            if index == 0:
+                return packet(call("read", "read_large"))
+            self.assertNotIn("tools", payload)
+            return packet(
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "Current evidence and next action"}
+                    ],
+                }
+            )
+
+        async def handler(_: ToolCall) -> ToolResult:
+            return ToolResult("Long observed source text " * 1000)
+
+        transport = RoutedTransport(respond)
+        engine = ResearchEngine(
+            c,
+            ResponsesRuntime(replace(self.config, compact_after_chars=1000), transport),
+            lambda _: ToolSet(definitions("read"), handler),
+        )
+        await engine.run_until_idle(timeout=3)
+        self.assertEqual(c.state["status"], "paused")
+        self.assertEqual(c.state["model_calls"], 2)
+        self.assertEqual(c.state["total_tokens"], 60)
+        self.assertEqual(len(transport.payloads), 2)
+        session = c.store.paths.agent("rsi") / "sessions" / (c.actor("rsi").session_id or "rsi")
+        saved = json.loads((session / "session.json").read_text())
+        self.assertEqual(len(saved["compactions"]), 1)
+        self.assertEqual(len(saved["turns"]), 1)
+        self.assertEqual(saved["turns"][0]["requests"][1]["kind"], "compact")
+        await engine.close()
+
+    async def test_long_turn_checkpoint_uses_updated_plan_directions_and_budget(self) -> None:
+        c = self.coordinator()
+        branches: list[str] = []
+
+        async def respond(agent_id: str, index: int, payload: Json) -> Json:
+            self.assertEqual(agent_id, "rsi")
+            self.assertIn("snapshot from the start of this model turn", payload["instructions"])
+            if index == 0:
+                return packet(call("plan", "make_plan"))
+            if index == 1:
+                self.assertNotIn("tools", payload)
+                raw = payload["instructions"].split(
+                    "Latest authoritative checkpoint state (supersedes the turn-start snapshot):\n",
+                    1,
+                )[1]
+                latest = json.JSONDecoder().raw_decode(raw)[0]
+                self.assertEqual(latest["plan"], "Compare the memory layout direction")
+                self.assertEqual(latest["directions"][0]["direction"], "Memory layout")
+                self.assertEqual(latest["budget"]["model_calls"], 1)
+                self.assertEqual(latest["budget"]["total_tokens"], 30)
+                return packet(
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [
+                            {"type": "output_text", "text": "The new layout direction is ready"}
+                        ],
+                    }
+                )
+            self.assertEqual(index, 2)
+            return packet(call("advance", "after_checkpoint"))
+
+        async def handle(item: ToolCall) -> ToolResult:
+            if item.name == "plan":
+                c.state["plan"] = "Compare the memory layout direction"
+                c.save()
+                branches.append(
+                    c.spawn(
+                        key="memory",
+                        direction="Memory layout",
+                        instruction="Inspect strides",
+                        completion_criteria="Report concrete evidence",
+                    )["agent_id"]
+                )
+                return ToolResult("Evidence from the plan update " * 150)
+            c.state["plan"] = "A newer plan after the checkpoint"
+            c.stop_agent(branches[0], "No further work is needed in this test")
+            c.wait("rsi", "Await the next message")
+            return ToolResult("waiting", stop=True)
+
+        transport = RoutedTransport(respond)
+        engine = ResearchEngine(
+            c,
+            ResponsesRuntime(replace(self.config, compact_after_chars=1000), transport),
+            lambda _: ToolSet(definitions("plan", "advance"), handle),
+            max_concurrent_turns=1,
+        )
+        await engine.run_until_idle(timeout=3)
+        session = c.store.paths.agent("rsi") / "sessions" / (c.actor("rsi").session_id or "rsi")
+        checkpoint = json.loads((session / "session.json").read_text())["compactions"][0]
+        latest = checkpoint["authoritative_state"]
+        self.assertEqual(latest["plan"], "Compare the memory layout direction")
+        self.assertEqual(latest["directions"][0]["state"], "waiting")
+        self.assertEqual(latest["budget"]["model_calls"], 2)
+        self.assertEqual(latest["budget"]["total_tokens"], 60)
+        self.assertEqual(c.state["plan"], "A newer plan after the checkpoint")
+        self.assertEqual(c.state["model_calls"], 3)
+        self.assertEqual(c.actor(branches[0]).state, AgentState.STOPPED)
+        await engine.close()
+
     async def test_token_budget_reserves_input_and_output_before_call(self) -> None:
         c = self.coordinator(ResearchLimits(max_total_tokens=100))
 
@@ -452,12 +561,14 @@ class EngineTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(c.store.records("reports", ResearchReport)), 1)
 
     async def test_per_turn_budget_requires_explicit_recovery_not_automatic_retry(self) -> None:
-        c = self.coordinator()
+        c = self.coordinator(ResearchLimits(max_model_calls=2))
+        effects: list[str] = []
 
         async def respond(agent_id: str, index: int, payload: Json) -> Json:
             return packet(call("read", f"read_{index}"))
 
-        async def read(_: ToolCall) -> ToolResult:
+        async def read(item: ToolCall) -> ToolResult:
+            effects.append(item.call_id)
             return ToolResult("Read one record")
 
         config = ResponsesConfig(
@@ -472,6 +583,201 @@ class EngineTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("rsi", c.state["active"])
         await engine.run_until_idle(timeout=2)
         self.assertEqual(len(transport.payloads), 1)
+        original_message = c.state["active"]["rsi"]
+        c.retry_agent("rsi")
+        retry_id = c.state["turn_retries"]["rsi"]["retry_id"]
+        await engine.run_until_idle(timeout=3)
+        self.assertEqual(len(transport.payloads), 2)
+        self.assertEqual(c.actor("rsi").state, AgentState.FAILED)
+        self.assertEqual(c.state["active"]["rsi"], original_message)
+        self.assertEqual(c.state["model_calls"], 2)
+        self.assertEqual(effects, ["read_0", "read_1"])
+        # Explicit retry provides a local allowance, never more global budget.
+        c.retry_agent("rsi")
+        self.assertNotEqual(c.state["turn_retries"]["rsi"]["retry_id"], retry_id)
+        await engine.run_until_idle(timeout=3)
+        self.assertEqual(c.state["status"], "paused")
+        self.assertEqual(len(transport.payloads), 2)
+        self.assertEqual(c.state["model_calls"], 2)
+
+    async def test_explicit_retry_continues_same_session_then_delivers_wait(self) -> None:
+        c = self.coordinator()
+
+        async def respond(agent_id: str, index: int, payload: Json) -> Json:
+            return packet(call("read" if index == 0 else "wait", f"call_{index}"))
+
+        effects: list[str] = []
+
+        async def handle(item: ToolCall) -> ToolResult:
+            effects.append(item.name)
+            if item.name == "wait":
+                c.wait("rsi", "Wait for the next input")
+                return ToolResult("waiting", stop=True)
+            return ToolResult("Read one record")
+
+        config = ResponsesConfig(
+            base_url="https://example.test", api_key="", max_model_calls_per_turn=1
+        )
+        transport = RoutedTransport(respond)
+
+        def tools(_: str) -> ToolSet:
+            return ToolSet(definitions("read", "wait"), handle)
+
+        engine = ResearchEngine(c, ResponsesRuntime(config, transport), tools)
+        await engine.run_until_idle(timeout=3)
+        message_id = c.state["active"]["rsi"]
+        c.retry_agent("rsi")
+        await engine.close()
+        # Both state machine and runtime are re-created after durable user retry.
+        recovered = Coordinator(c.store)
+        c = recovered
+        second = ResearchEngine(recovered, ResponsesRuntime(config, transport), tools)
+        await second.run_until_idle(timeout=3)
+        self.assertEqual(recovered.actor("rsi").state, AgentState.WAITING)
+        self.assertEqual(effects, ["read", "wait"])
+        self.assertIn(message_id, recovered.state["delivered"])
+        self.assertNotIn("rsi", recovered.state["turn_retries"])
+        self.assertEqual(recovered.state["model_calls"], 2)
+        actor_session = recovered.actor("rsi").session_id or "rsi"
+        session = recovered.store.paths.agent("rsi") / "sessions" / actor_session / "session.json"
+        saved = json.loads(session.read_text())
+        self.assertEqual(len(saved["turns"]), 1)
+        self.assertEqual(len(saved["turns"][0]["requests"]), 2)
+        await second.close()
+
+    async def test_missing_report_retry_adds_correction_in_same_session_and_node(self) -> None:
+        c = self.coordinator()
+        branch = c.spawn(
+            key="inspect",
+            direction="Inspect inputs",
+            instruction="Inspect the input contract",
+            completion_criteria="Report the evidence and limitations",
+        )
+        researcher = branch["agent_id"]
+        effects: list[str] = []
+
+        async def respond(agent_id: str, index: int, payload: Json) -> Json:
+            if agent_id == "rsi":
+                return packet(call("wait", f"rsi_wait_{index}"))
+            if index == 0:
+                return packet(call("read", "read_once"))
+            if index == 1:
+                return packet(
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "phase": "final_answer",
+                        "content": [{"type": "output_text", "text": "The input contract matches."}],
+                    }
+                )
+            self.assertEqual(index, 2)
+            context = json.dumps(payload["input"])
+            self.assertIn("The input contract matches.", context)
+            self.assertIn("Saved input contract evidence", context)
+            self.assertIn("Continue the original assignment in this same node and session", context)
+            self.assertIn("does not authorize a new assignment", context)
+            return packet(call("report", "corrected_report"))
+
+        def tools(agent_id: str) -> ToolSet:
+            async def handle(item: ToolCall) -> ToolResult:
+                if item.name == "read":
+                    effects.append(item.call_id)
+                    return ToolResult("Saved input contract evidence")
+                if item.name == "report":
+                    return ToolResult(
+                        c.report(agent_id, key=item.call_id, fields=fields()), stop=True
+                    )
+                c.wait(agent_id, "Await a relevant message")
+                return ToolResult("waiting", stop=True)
+
+            return ToolSet(definitions("read", "report", "wait"), handle)
+
+        transport = RoutedTransport(respond)
+        engine = ResearchEngine(c, ResponsesRuntime(self.config, transport), tools)
+        await engine.run_until_idle(timeout=3)
+        self.assertEqual(c.actor(researcher).state, AgentState.FAILED)
+        self.assertEqual(c.state["turn_failures"][researcher]["kind"], "missing_report")
+        original = c.state["active"][researcher]
+        session_id = c.actor(researcher).session_id
+        count = len(transport.payloads)
+        await engine.run_until_idle(timeout=2)
+        self.assertEqual(len(transport.payloads), count)
+        c.retry_agent(researcher)
+        self.assertIn(original, c.state["delivered"])
+        self.assertNotIn(researcher, c.state["active"])
+        self.assertEqual(len(c.actor(researcher).iterations), 1)
+        await engine.run_until_idle(timeout=3)
+        self.assertEqual(c.actor(researcher).session_id, session_id)
+        self.assertEqual(c.actor(researcher).wait_reason, "rsi_reply")
+        self.assertEqual(len(c.actor(researcher).iterations), 1)
+        self.assertEqual(len(c.store.records("reports", ResearchReport)), 1)
+        self.assertEqual(effects, ["read_once"])
+        session = c.store.paths.agent(researcher) / "sessions" / (session_id or researcher)
+        saved = json.loads((session / "session.json").read_text())
+        self.assertEqual(len(saved["turns"]), 2)
+        self.assertEqual(saved["turns"][0]["message_id"], original)
+        self.assertNotEqual(saved["turns"][1]["message_id"], original)
+        self.assertNotIn(researcher, c.state["turn_failures"])
+        await engine.close()
+
+    async def test_transport_failure_retry_resumes_original_turn_without_corrective_message(
+        self,
+    ) -> None:
+        c = self.coordinator()
+        c.begin_turn("rsi")
+        c.wait("rsi", "Await the research report")
+        c.end_turn("rsi")
+        researcher = c.spawn(
+            key="a", direction="A", instruction="Inspect", completion_criteria="Report"
+        )["agent_id"]
+        effects: list[str] = []
+
+        async def respond(agent_id: str, index: int, payload: Json) -> Json:
+            if agent_id == "rsi":
+                return packet(call("wait", "rsi_wait"))
+            if index == 0:
+                return packet(call("read", "read_once"))
+            if index == 1:
+                raise ResponsesError("Temporary provider failure")
+            self.assertEqual(index, 2)
+            users = [item for item in payload["input"] if item.get("role") == "user"]
+            self.assertEqual(len(users), 1)
+            return packet(call("report", "report_after_retry"))
+
+        def tools(agent_id: str) -> ToolSet:
+            async def handle(item: ToolCall) -> ToolResult:
+                if item.name == "read":
+                    effects.append(item.call_id)
+                    return ToolResult("Existing evidence")
+                if item.name == "report":
+                    return ToolResult(
+                        c.report(agent_id, key=item.call_id, fields=fields()), stop=True
+                    )
+                c.wait(agent_id, "Await a relevant message")
+                return ToolResult("waiting", stop=True)
+
+            return ToolSet(definitions("read", "report", "wait"), handle)
+
+        transport = RoutedTransport(respond)
+        engine = ResearchEngine(c, ResponsesRuntime(self.config, transport), tools)
+        await engine.run_until_idle(timeout=3)
+        self.assertEqual(c.actor(researcher).state, AgentState.FAILED)
+        self.assertNotIn(researcher, c.state["turn_failures"])
+        original = c.state["active"][researcher]
+        c.retry_agent(researcher)
+        self.assertEqual(c.state["active"][researcher], original)
+        await engine.run_until_idle(timeout=3)
+        session = (
+            c.store.paths.agent(researcher)
+            / "sessions"
+            / (c.actor(researcher).session_id or researcher)
+        )
+        saved = json.loads((session / "session.json").read_text())
+        self.assertEqual(len(saved["turns"]), 1)
+        self.assertEqual(saved["turns"][0]["message_id"], original)
+        self.assertEqual(effects, ["read_once"])
+        self.assertEqual(len(c.actor(researcher).iterations), 1)
+        await engine.close()
 
     async def test_parallel_requests_cannot_all_reserve_the_same_remaining_budget(self) -> None:
         c = self.coordinator(ResearchLimits(max_agents=2, max_total_tokens=30000))

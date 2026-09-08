@@ -359,7 +359,7 @@ class LocalAppTest(unittest.IsolatedAsyncioTestCase):
             run = ExperimentRun("run_fixture", plan, RunState.PLANNED, plan.baseline_solution_id)
             first.service.records.save(run.run_id, run)
             await first.close()
-            before = (root / "run-states/run_fixture.json").read_bytes()
+            before = (root / "runs/run_fixture/run.json").read_bytes()
             with (
                 patch.dict(
                     "os.environ",
@@ -371,7 +371,7 @@ class LocalAppTest(unittest.IsolatedAsyncioTestCase):
                 self.assertRaisesRegex(ModelConfigurationError, "RSI_TARGET"),
             ):
                 await run_experiment(None, run.run_id)
-            self.assertEqual((root / "run-states/run_fixture.json").read_bytes(), before)
+            self.assertEqual((root / "runs/run_fixture/run.json").read_bytes(), before)
 
     async def test_run_can_keep_its_original_harness_baseline(self) -> None:
         with (

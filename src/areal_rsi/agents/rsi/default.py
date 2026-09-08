@@ -8,14 +8,16 @@ from collections.abc import Sequence
 from areal_rsi.agents.common import ask_json
 from areal_rsi.api.base import (
     AgentSpec,
+    AgentState,
     EvolutionTarget,
     ExperimentPlan,
     ExperimentRun,
     JsonObject,
     ModelVersion,
-    RunState,
 )
+from areal_rsi.base.runs import FileRunStore
 from areal_rsi.modules.runtime import DshAgentRuntime, DshSession
+from areal_rsi.workflows.records import evolution_history
 
 
 class DefaultRsiAgent:
@@ -32,8 +34,10 @@ class DefaultRsiAgent:
         evolution_target: EvolutionTarget = EvolutionTarget.HARNESS,
         target_model_name: str | None = None,
         model_plan_config: JsonObject | None = None,
+        run_store: FileRunStore | None = None,
     ):
         self.runtime = runtime
+        self.run_store = run_store
         self.model = model
         self.target_model_name = target_model_name
         self.model_plan_config = model_plan_config or {
@@ -92,9 +96,11 @@ class DefaultRsiAgent:
         return str(data.get("reply", "请描述你想优化的目标。"))
 
     async def prune(self, run: ExperimentRun) -> Sequence[str]:
-        active = [a for a in run.research_agents if a.state == RunState.RUNNING]
+        active = [a for a in run.research_agents if a.state == AgentState.RUNNING]
         if len(active) < 2:
             return ()
+        if self.run_store is None:
+            raise ValueError("RSI 剪枝需要所属 Run 的记录存储")
         prompt = await self.runtime.content.put_text(
             "你是 RSI Agent 的外层研究控制器。根据多条研究线的聚合进展，决定是否停止"
             "重复、缺乏依据的研究方向。分数持平不等于失败；证据不足时保留探索。"
@@ -102,7 +108,7 @@ class DefaultRsiAgent:
             '只返回 JSON {"stop_agent_ids":[],"reason":"简短理由"}。'
         )
         session = await self.runtime.open(
-            AgentSpec("rsi-controller", "deepseek-harness@v1", self.model, (prompt,))
+            AgentSpec("rsi-agent", "deepseek-harness@v1", self.model, (prompt,))
         )
         try:
             answer = await ask_json(
@@ -119,7 +125,7 @@ class DefaultRsiAgent:
                                         "score": i.validation_report.score,
                                         "reason": i.change.reason,
                                     }
-                                    for i in a.iterations[-3:]
+                                    for i in evolution_history(self.run_store, a)[-3:]
                                 ],
                             }
                             for a in active

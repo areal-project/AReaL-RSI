@@ -4,17 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import TypeAlias
 
-from areal_rsi.api.base import EvolutionTarget, ExperimentPlan, ExperimentRun, RunState
+from areal_rsi.api.base import AgentState, EvolutionTarget, ExperimentPlan, ExperimentRun, RunState
 from areal_rsi.api.workflow import RsiWorkflow, WorkflowContext
-from areal_rsi.base.storage import FileRecords, decode, encode, new_id, now, safe_name
+from areal_rsi.base.runs import FileRunStore
+from areal_rsi.base.storage import decode, encode, new_id, now
 from areal_rsi.workflows.evolution import HarnessEvolutionWorkflow
 
 WorkflowFactory: TypeAlias = Callable[
-    [Path, FileRecords, ExperimentRun, Callable[[str], None]], RsiWorkflow
+    [Path, FileRunStore, ExperimentRun, Callable[[str], None]], RsiWorkflow
 ]
 
 
@@ -26,6 +27,7 @@ class LocalExperimentService:
         emit: Callable[[str], None],
         *,
         workflows: Mapping[str, WorkflowFactory] | None = None,
+        context_factory: Callable[[ExperimentRun], Awaitable[WorkflowContext]] | None = None,
     ):
         self.root, self.context, self.emit = root, context, emit
         self.workflows = (
@@ -33,7 +35,8 @@ class LocalExperimentService:
             if workflows is not None
             else {"harness-evolution": HarnessEvolutionWorkflow}
         )
-        self.records = FileRecords(root / "run-states")
+        self.records = FileRunStore(root)
+        self.context_factory = context_factory
         self.tasks: dict[str, asyncio.Task[ExperimentRun]] = {}
 
     def validate(self, plan: ExperimentPlan) -> None:
@@ -52,10 +55,10 @@ class LocalExperimentService:
             raise ValueError("ResearchAgent ID 重复")
 
     async def _execute(self, run: ExperimentRun) -> ExperimentRun:
-        locks = self.root / "locks"
-        locks.mkdir(parents=True, exist_ok=True)
+        lock_path = self.records.paths(run.run_id).execution_lock
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
         # OS 锁随着进程退出释放；旧文件本身不代表任务仍在运行。
-        with (locks / f"{safe_name(run.run_id)}.lock").open("a") as lock:
+        with lock_path.open("a") as lock:
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
@@ -67,6 +70,8 @@ class LocalExperimentService:
             if run.state == RunState.SUCCEEDED:
                 return run
             try:
+                if self.context_factory is not None:
+                    self.context = await self.context_factory(run)
                 workflow = self.workflows[run.plan.workflow](
                     self.root / "runs", self.records, run, self.emit
                 )
@@ -83,8 +88,13 @@ class LocalExperimentService:
                 )
                 run.error, run.finished_at = f"{type(exc).__name__}: {exc}", now()
                 for agent in run.research_agents:
-                    if agent.state == RunState.RUNNING:
-                        agent.state, agent.error = run.state, run.error
+                    if agent.state == AgentState.RUNNING:
+                        agent.state = (
+                            AgentState.PAUSED
+                            if run.state == RunState.CANCELLED
+                            else AgentState.FAILED
+                        )
+                        agent.error = run.error
                 self.records.save(run.run_id, run, immutable=False)
                 self.emit(f"实验 {run.state.value}：{run.error}")
                 return run
@@ -94,9 +104,7 @@ class LocalExperimentService:
         if any(not task.done() for task in self.tasks.values()):
             raise ValueError("当前服务已有运行中的实验")
         plan = decode(ExperimentPlan, encode(plan))
-        run = ExperimentRun(
-            new_id("run"), plan, RunState.PLANNED, plan.baseline_solution_id, started_at=now()
-        )
+        run = ExperimentRun(new_id("run"), plan, RunState.PLANNED, started_at=now())
         self.records.save(run.run_id, run, immutable=False)
         self.tasks[run.run_id] = asyncio.create_task(self._execute(run))
         return run

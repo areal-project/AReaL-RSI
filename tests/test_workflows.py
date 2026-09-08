@@ -12,6 +12,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from areal_rsi.api.base import (
+    AgentState,
     BenchmarkSplit,
     ContentRef,
     EvaluationReport,
@@ -19,6 +20,7 @@ from areal_rsi.api.base import (
     ExperimentPlan,
     ExperimentRun,
     HarnessChange,
+    IterationState,
     JsonObject,
     RunState,
     SolutionVersion,
@@ -34,12 +36,15 @@ from areal_rsi.base.storage import (
     FileTrajectoryStore,
     FileVersionManager,
     decode,
+    encode,
     new_id,
     now,
+    write_json,
 )
 from areal_rsi.modules.benchmark import AccuracyEvaluation, ArithmeticBenchmark, ArithmeticVerifier
 from areal_rsi.modules.harness import LocalHarnessBuilder
 from areal_rsi.workflows.evolution import PRUNED
+from areal_rsi.workflows.records import evolution_history
 from areal_rsi.workflows.service import LocalExperimentService
 
 
@@ -210,7 +215,7 @@ class WorkflowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.runtime.calls, 3 + 2 * 3 * 6)
         for agent in run.research_agents:
             parent = self.baseline.solution_id
-            for iteration in agent.iterations:
+            for iteration in evolution_history(self.service.records, agent):
                 self.assertEqual(iteration.input_solution_id, parent)
                 self.assertEqual(iteration.validation_report.score, 0)
                 child = await self.versions.get_solution(iteration.candidate_solution_id)
@@ -228,7 +233,7 @@ class WorkflowTest(unittest.IsolatedAsyncioTestCase):
         first, second = run.research_agents
         self.assertEqual((len(first.iterations), len(second.iterations)), (3, 1))
         self.assertEqual(second.error, PRUNED)
-        self.assertEqual(second.state.value, "cancelled")
+        self.assertEqual(second.state, AgentState.STOPPED)
         self.assertEqual((await self.service.resume(run.run_id)).state.value, "succeeded")
         self.assertEqual(self.researchers[1].proposals, 1)
 
@@ -236,7 +241,8 @@ class WorkflowTest(unittest.IsolatedAsyncioTestCase):
         self.researchers[1].fail_selection = True
         run = await self.execute()
         self.assertEqual(run.state.value, "failed")
-        self.assertEqual([len(a.iterations) for a in run.research_agents], [3, 0])
+        self.assertEqual([len(a.iterations) for a in run.research_agents], [3, 1])
+        self.assertEqual(run.research_agents[1].iterations[0].state, IterationState.FAILED)
         calls = self.runtime.calls
         await self.service.resume(run.run_id)
         finished = await self.service.tasks[run.run_id]
@@ -244,6 +250,44 @@ class WorkflowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.runtime.calls, calls + 2 * 6)
         self.assertEqual([r.proposals for r in self.researchers], [3, 3])
         self.assertEqual([len(a.iterations) for a in finished.research_agents], [3, 3])
+
+    async def test_legacy_run_resumes_without_repeating_finished_work(self) -> None:
+        self.researchers[1].fail_selection = True
+        run = await self.execute()
+        self.assertEqual(run.state, RunState.FAILED)
+        calls = self.runtime.calls
+        paths = self.service.records.paths(run.run_id)
+        # Recreate the original inline records and checkpoint layout.
+        legacy = encode(run)
+        legacy["research_agents"] = [
+            {
+                "agent_id": agent.agent_id,
+                "state": "succeeded" if agent.state == AgentState.STOPPED else agent.state.value,
+                "iterations": [
+                    encode(step) for step in evolution_history(self.service.records, agent)
+                ],
+                "error": agent.error,
+            }
+            for agent in run.research_agents
+        ]
+        workflow = paths.workflow
+        for child in workflow.iterdir():
+            child.rename(paths.root / child.name)
+        workflow.rmdir()
+        paths.state.unlink()
+        write_json(paths.legacy_state, legacy)
+        original = paths.legacy_state.read_bytes()
+        # A fresh service must discover legacy state and reuse partial evaluations.
+        service = LocalExperimentService(self.root, self.context, lambda _: None)
+        await service.resume(run.run_id)
+        finished = await service.tasks[run.run_id]
+        self.assertEqual(finished.state, RunState.SUCCEEDED, finished.error)
+        self.assertEqual(self.runtime.calls, calls + 2 * 6)
+        self.assertEqual([r.proposals for r in self.researchers], [3, 3])
+        self.assertEqual([len(a.iterations) for a in finished.research_agents], [3, 3])
+        self.assertEqual(paths.legacy_state.read_bytes(), original)
+        self.assertTrue(paths.state.exists())
+        self.assertEqual((await service.status(run.run_id)), finished)
 
     async def test_cancel_and_resume_keeps_completed_train_tasks(self) -> None:
         self.researchers[1].block = asyncio.Event()
@@ -264,9 +308,9 @@ class WorkflowTest(unittest.IsolatedAsyncioTestCase):
     async def test_stop_before_execution_and_cross_process_lock(self) -> None:
         run = await self.service.start(self.plan)
         self.assertEqual((await self.service.stop(run.run_id)).state.value, "cancelled")
-        locks = self.root / "locks"
-        locks.mkdir(exist_ok=True)
-        with (locks / f"{run.run_id}.lock").open("a") as lock:
+        lock_path = self.service.records.paths(run.run_id).execution_lock
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             await self.service.resume(run.run_id)
             with self.assertRaisesRegex(RuntimeError, "另一个进程"):
@@ -323,10 +367,12 @@ class WorkflowTest(unittest.IsolatedAsyncioTestCase):
             self.root, self.context, lambda _: None, workflows={"custom-python": factory}
         )
         self.plan.workflow = "custom-python"
+        self.plan.baseline_solution_id = None
         run = await service.start(self.plan)
         finished = await service.tasks[run.run_id]
         self.assertEqual(finished.state, RunState.SUCCEEDED)
         self.assertEqual(calls, [self.plan.goal])
+        self.assertIsNone(finished.best_solution_id)
         self.assertEqual((await service.status(run.run_id)), finished)
 
 

@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from areal_rsi.agents.research.artifact import ArtifactResearchAgent
 from areal_rsi.api.base import (
     AgentSpec,
+    AgentState,
     ArtifactChange,
     BenchmarkSplit,
     ContentRef,
@@ -24,6 +25,7 @@ from areal_rsi.api.base import (
     ExperimentPlan,
     ExperimentRun,
     HarnessChange,
+    IterationState,
     JsonObject,
     ResearchChange,
     RunState,
@@ -51,6 +53,7 @@ from areal_rsi.modules.artifact import LocalArtifactBuilder
 from areal_rsi.modules.runtime import DshAgentRuntime, DshSession
 from areal_rsi.workflows.artifact import ArtifactEvolutionWorkflow
 from areal_rsi.workflows.evolution import PRUNED, HarnessEvolutionWorkflow
+from areal_rsi.workflows.records import evolution_history, evolution_result
 from areal_rsi.workflows.service import LocalExperimentService
 
 
@@ -287,7 +290,7 @@ class ArtifactWorkflowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(run.best_solution_id, self.baseline.solution_id)
         for agent in run.research_agents:
             parent = self.baseline
-            for iteration in agent.iterations:
+            for iteration in evolution_history(self.service.records, agent):
                 self.assertIsInstance(iteration.change, ArtifactChange)
                 self.assertEqual(iteration.input_solution_id, parent.solution_id)
                 self.assertEqual(iteration.validation_report.score, 0.25)
@@ -306,7 +309,10 @@ class ArtifactWorkflowTest(unittest.IsolatedAsyncioTestCase):
         saved = await self.service.status(run.run_id)
         self.assertEqual(saved, run)
         assert saved is not None
-        self.assertIsInstance(saved.research_agents[0].iterations[0].change, ArtifactChange)
+        self.assertIsInstance(
+            evolution_result(self.service.records, saved.research_agents[0].iterations[0]).change,
+            ArtifactChange,
+        )
 
     async def test_creates_first_artifact_and_then_updates_it(self) -> None:
         self.single_line(iterations=2)
@@ -315,7 +321,7 @@ class ArtifactWorkflowTest(unittest.IsolatedAsyncioTestCase):
         run = await self.execute()
         self.assertEqual(run.state, RunState.SUCCEEDED, run.error)
         parent_artifact_id = None
-        for iteration in run.research_agents[0].iterations:
+        for iteration in evolution_history(self.service.records, run.research_agents[0]):
             candidate = await self.versions.get_solution(iteration.candidate_solution_id)
             assert candidate is not None
             self.assertEqual(len(candidate.artifacts), 1)
@@ -419,12 +425,11 @@ class ArtifactWorkflowTest(unittest.IsolatedAsyncioTestCase):
             run = await self.execute()
             self.assertEqual(run.state, RunState.FAILED)
             self.assertIn("fixture model selection interruption", run.error or "")
-            self.assertEqual(len(run.research_agents[0].iterations), 0)
+            self.assertEqual(len(run.research_agents[0].iterations), 1)
+            self.assertEqual(run.research_agents[0].iterations[0].state, IterationState.FAILED)
             self.assertEqual(self.runtime.calls, 6)
             checkpoint = (
-                self.root
-                / "runs"
-                / run.run_id
+                self.service.records.paths(run.run_id).workflow
                 / "artifact-research"
                 / "iteration-1"
                 / "candidate.json"
@@ -442,7 +447,7 @@ class ArtifactWorkflowTest(unittest.IsolatedAsyncioTestCase):
         for session in sessions:
             session.send.assert_awaited_once()
             session.finish.assert_awaited_once()
-        iterations = finished.research_agents[0].iterations
+        iterations = evolution_history(self.service.records, finished.research_agents[0])
         self.assertEqual(len(iterations), 2)
         parent = empty
         for index, iteration in enumerate(iterations):
@@ -474,7 +479,9 @@ class ArtifactWorkflowTest(unittest.IsolatedAsyncioTestCase):
         run = await self.execute()
         self.assertEqual(run.state, RunState.SUCCEEDED, run.error)
         candidate = await self.versions.get_solution(
-            run.research_agents[0].iterations[0].candidate_solution_id
+            evolution_result(
+                self.service.records, run.research_agents[0].iterations[0]
+            ).candidate_solution_id
         )
         assert candidate is not None
         self.assertEqual(candidate.artifacts[:2], self.baseline.artifacts)
@@ -485,9 +492,12 @@ class ArtifactWorkflowTest(unittest.IsolatedAsyncioTestCase):
         self.researchers[1].fail_selection = True
         run = await self.execute()
         self.assertEqual(run.state, RunState.FAILED)
-        self.assertEqual([len(a.iterations) for a in run.research_agents], [3, 0])
+        self.assertEqual([len(a.iterations) for a in run.research_agents], [3, 1])
+        self.assertEqual(run.research_agents[1].iterations[0].state, IterationState.FAILED)
         calls = self.runtime.calls
-        folder = self.root / "runs" / run.run_id / "research-agent-2" / "iteration-1"
+        folder = (
+            self.service.records.paths(run.run_id).workflow / "research-agent-2" / "iteration-1"
+        )
         original = {path: path.read_bytes() for path in folder.rglob("*.json")}
         self.service = self.make_service()
         await self.service.resume(run.run_id)
@@ -505,9 +515,7 @@ class ArtifactWorkflowTest(unittest.IsolatedAsyncioTestCase):
         run = await self.execute()
         self.assertEqual(run.state, RunState.FAILED)
         checkpoint = (
-            self.root
-            / "runs"
-            / run.run_id
+            self.service.records.paths(run.run_id).workflow
             / "research-agent-1"
             / "iteration-1"
             / "train"
@@ -528,7 +536,7 @@ class ArtifactWorkflowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(run.state, RunState.SUCCEEDED, run.error)
         self.assertEqual([len(a.iterations) for a in run.research_agents], [3, 1])
         self.assertEqual(run.research_agents[1].error, PRUNED)
-        self.assertEqual(run.research_agents[1].state, RunState.CANCELLED)
+        self.assertEqual(run.research_agents[1].state, AgentState.STOPPED)
 
     async def test_default_service_does_not_enable_artifact_workflow(self) -> None:
         service = LocalExperimentService(self.root, self.context, lambda _: None)
@@ -562,7 +570,10 @@ class ArtifactWorkflowTest(unittest.IsolatedAsyncioTestCase):
         run = await self.execute()
         self.assertEqual(run.state, RunState.FAILED)
         path = (
-            self.root / "runs" / run.run_id / "research-agent-1" / "iteration-1" / "candidate.json"
+            self.service.records.paths(run.run_id).workflow
+            / "research-agent-1"
+            / "iteration-1"
+            / "candidate.json"
         )
         candidate = decode(SolutionVersion, json.loads(path.read_text()))
         changed = candidate.artifacts[0]

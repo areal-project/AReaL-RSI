@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import unittest
-from dataclasses import MISSING, fields
+from dataclasses import fields
 from inspect import signature
 
 from areal_rsi.api import base as base_api
@@ -12,6 +12,7 @@ from areal_rsi.api import workflow as workflow_api
 from areal_rsi.api.base import (
     TRAJECTORY_BUNDLE_MEDIA_TYPE,
     AgentSpec,
+    AgentState,
     ArtifactChange,
     ArtifactVersion,
     BenchmarkSplit,
@@ -22,7 +23,9 @@ from areal_rsi.api.base import (
     ExperimentRun,
     HarnessChange,
     HarnessVersion,
+    IterationState,
     ModelVersion,
+    RecordRef,
     ResearchAgentState,
     ResearchIteration,
     RunState,
@@ -126,8 +129,8 @@ class InterfaceDesignTest(unittest.TestCase):
 
         self.assertEqual([item.agent_id for item in run.research_agents], ["agent_1", "agent_2"])
         self.assertEqual(
-            [[step.iteration for step in item.iterations] for item in run.research_agents],
-            [[1, 2], [1, 2]],
+            [[step.iteration_id for step in item.iterations] for item in run.research_agents],
+            [["agent_1-1", "agent_1-2"], ["agent_2-1", "agent_2-2"]],
         )
         agent_state_fields = {item.name for item in fields(ResearchAgentState)}
         self.assertNotIn("current_solution_id", agent_state_fields)
@@ -165,19 +168,26 @@ class InterfaceDesignTest(unittest.TestCase):
         self.assertNotIn("attachments", field_names)
         self.assertIn("content", field_names)
 
-    def test_research_iteration_names_train_and_validation_explicitly(self) -> None:
-        field_names = {item.name for item in fields(ResearchIteration)}
-
-        self.assertIn("train_report", field_names)
-        self.assertIn("trajectories", field_names)
-        self.assertIn("change", field_names)
-        self.assertIn("validation_report", field_names)
-        self.assertIn("next_solution_id", field_names)
-        self.assertNotIn("evaluation", field_names)
-        self.assertNotIn("selection", field_names)
-        for field in fields(ResearchIteration):
-            self.assertIs(field.default, MISSING)
-            self.assertIs(field.default_factory, MISSING)
+    def test_research_iteration_has_no_task_or_output_taxonomy(self) -> None:
+        node = ResearchIteration("i1", "run1", "agent1", RecordRef("run://run1/assignment.json"))
+        self.assertEqual(node.state, IterationState.PENDING)
+        self.assertEqual(node.references, ())
+        node.state = IterationState.COMPLETED
+        self.assertIsNone(node.report_ref)
+        names = {item.name for item in fields(ResearchIteration)}
+        self.assertTrue(
+            names.isdisjoint(
+                {
+                    "task_type",
+                    "needs_verify",
+                    "train_report",
+                    "validation_report",
+                    "candidate_solution_id",
+                    "next_solution_id",
+                    "change",
+                }
+            )
+        )
 
     def test_public_dataclasses_are_not_frozen(self) -> None:
         version = self._harness()
@@ -340,37 +350,19 @@ class InterfaceDesignTest(unittest.TestCase):
     def _researcher(cls, index: int) -> ResearchAgentState:
         iterations = tuple(
             ResearchIteration(
-                iteration=iteration,
-                input_solution_id=f"solution_{index}_{iteration - 1}",
-                train_report=cls._report(
-                    f"solution_{index}_{iteration - 1}",
-                    BenchmarkSplit.TRAIN,
-                ),
-                trajectories=ContentRef(
-                    uri=f"content://agent-{index}/iteration-{iteration}/trajectories",
-                    digest=f"sha256:agent-{index}-iteration-{iteration}",
-                ),
-                change=HarnessChange(
-                    patch=ContentRef(
-                        uri=f"content://agent-{index}/iteration-{iteration}/patch",
-                        digest=f"sha256:patch-{index}-{iteration}",
-                    ),
-                    reason="test change",
-                ),
-                candidate_solution_id=f"solution_{index}_{iteration}",
-                validation_report=cls._report(
-                    f"solution_{index}_{iteration}",
-                    BenchmarkSplit.VALIDATE,
-                ),
-                next_solution_id=f"solution_{index}_{iteration}",
-                started_at="2026-09-04T00:00:00Z",
-                finished_at="2026-09-04T00:01:00Z",
+                iteration_id=f"agent_{index}-{iteration}",
+                run_id="run_001",
+                agent_id=f"agent_{index}",
+                assignment_ref=RecordRef(f"run://run_001/assignments/{index}-{iteration}.json"),
+                state=IterationState.COMPLETED,
+                created_at="2026-09-04T00:00:00Z",
+                updated_at="2026-09-04T00:01:00Z",
             )
             for iteration in range(1, 3)
         )
         return ResearchAgentState(
             agent_id=f"agent_{index}",
-            state=RunState.RUNNING,
+            state=AgentState.RUNNING,
             iterations=iterations,
         )
 

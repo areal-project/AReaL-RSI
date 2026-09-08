@@ -11,7 +11,8 @@ from pathlib import Path
 
 from areal_rsi.api.base import ExperimentPlan, ExperimentRun, RunState
 from areal_rsi.app import LocalApp
-from areal_rsi.base.storage import FileRecords, decode, encode
+from areal_rsi.base.runs import FileRunStore
+from areal_rsi.base.storage import decode, encode
 from areal_rsi.config import ModelConfigurationError
 
 
@@ -86,7 +87,7 @@ def main() -> None:
     if args.command == "status":
         print(
             json.dumps(
-                encode(FileRecords(data_root() / "run-states").list(ExperimentRun)),
+                encode(FileRunStore(data_root()).list(ExperimentRun)),
                 ensure_ascii=False,
                 indent=2,
             )

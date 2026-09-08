@@ -49,7 +49,7 @@ ExperimentRun
     └── Iteration 2：S2-1 → S2-2
 ```
 
-每个 ResearchAgent 从同一 baseline 出发，独立维护 iteration。每轮只修改一个目标，只产生一个候选。并行性来自多个 ResearchAgent，而不是单个 Agent 一次提出多个修改。
+当前 Harness / Artifact 工作流中，每个 ResearchAgent 从同一 baseline 出发，独立维护 iteration。每轮只修改一个目标，只产生一个候选。并行性来自多个 ResearchAgent，而不是单个 Agent 一次提出多个修改。这是具体工作流的约定；通用 ResearchIteration 只记录任务、状态、报告及材料引用，不要求产出候选或完成评测。
 
 RSI Agent 在外层读取 ExperimentRun，返回需要停止的 ResearchAgent ID，对广度搜索做剪枝；ResearchAgent 在各自研究线内部通过 select 做深度搜索和回溯。
 
@@ -64,7 +64,7 @@ ModelVersion + HarnessVersion + ArtifactVersion[] = SolutionVersion
 - ArtifactVersion：用户产物的一个快照，例如游戏、应用或生成的数据；
 - SolutionVersion：一次实际运行和评测使用的 Model/Harness/Artifact 组合。
 
-版本只记录父版本。版本由哪个 Run、ResearchAgent 和 iteration 产生，可以从 ResearchIteration 的嵌套关系得到，因此不再需要 VersionOrigin。
+版本只记录父版本。版本由哪个 Run、ResearchAgent 和 iteration 产生，可从节点关联的工作流结果追溯。ResearchIteration 不再直接保存候选和评测字段；当前流程使用 EvolutionResult 承载这些字段，通过版本 ID 关联 SolutionVersion。EvolutionResult 是 workflow 层可选择使用的结果格式，通用节点无需生成它；其他工作流可以采用自己的报告与材料记录。后续单独演进 Solution 模型。
 
 ## 4. 一轮研究
 
@@ -122,6 +122,10 @@ TrajectoryStore 的 local/remote 实现共享同一个 Protocol，由 Trajectory
 
 第一阶段固定 Model 执行 Harness evolution，TrainingBackend 暂不实施。Workflow 使用普通 Python 类，不设计 DSL。多 ResearchAgent 从同一基线出发，同一轮并发运行，在轮次边界调用 RSI Agent 剪枝。某条线失败不抹掉其他线的完成记录；恢复只重试未完成部分，剪枝决定持久保存。相同 Run 的跨进程执行由 OS 文件锁互斥。
 
-研究线数量通过装配配置指定；所有 ResearchAgent 接收同一实验目标，不预设不同方向或改进答案。各线拥有独立 Session、workspace、迭代状态和版本分支，选版候选限定为该研究线自己的历史和共同 baseline。运行状态与详细阶段进度分别保存在 `run-states/` 和 `runs/<run_id>/progress.json`，TUI 与 Web 读取同一份记录。
+研究线数量通过装配配置指定；所有 ResearchAgent 接收同一实验目标，不预设不同方向或改进答案。各线拥有独立 Session、workspace、迭代状态和版本分支，选版候选限定为该研究线自己的历史和共同 baseline。新 run 的状态与阶段进度分别保存在 `runs/<run_id>/run.json` 和 `workflow/progress.json`，TUI 与 Web 通过统一 FileRunStore / RunPaths 读取。ResearchIteration 在开始执行时即保存，失败或取消时保留节点与已有检查点引用，恢复复用该节点。
+
+Agent 状态、节点、Memory、轨迹索引、后台会话与 worker 资料集中于各自 run；Memory 不自动读取根目录历史数据。内容和版本可在根目录去重。旧 run 兼容读取，保留其原有检查点及锁位置。详细布局见 [README](../README.md#开发检查与数据)。
+
+数据模型和通用 Service 允许没有起点、没有最佳版本；当前本地装配及 Harness / Artifact 工作流仍需要起点。新 Agent 状态还定义了等待、停止中及会话恢复字段，但每轮报告后等待 RSI 回复、连续会话、Evidence Pool 和动态任务调度属于后续实现。
 
 任务调用携带稳定的 execution_key（运行/评测目录/任务），工作流按检查点复用已完成的任务。已完成任务、提案、候选、选版、轮次均保存检查点；恢复时核对 Benchmark、题面与 Solution，不能拿旧评测缓存测新题。

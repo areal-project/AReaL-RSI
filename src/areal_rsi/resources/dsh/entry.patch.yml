@@ -3,7 +3,7 @@
     provider: deepseek-official
     model: ""
     cwd: ""
-    effort: off
+    effort: "off"
     preset: rsi
     fullscreen: true
 

@@ -2,7 +2,7 @@
 
 AReaL-RSI 是基于 DeepSeek Harness 的本地研究与自迭代工具。用户通过中文对话生成实验计划，确认后由独立 ResearchAgent 研究线持续改进 Harness，并保存评测、版本和恢复检查点。
 
-当前支持本地 Harness 执行、内置算术示例、GSM8K 评测和可选的 Artifact 工作流。前台、RSI Agent 和 ResearchAgent 组可以分别配置模型，默认使用 teacher。所有 ResearchAgent 共用一个模型。Task Agent 直接使用 target，不存在另一份 Task Agent 模型配置。当前阶段固定 target 的模型参数，迭代其提示词、技能、工具和 MCP 配置。
+当前支持本地 Harness 执行、内置算术示例、GSM8K 评测和可选的 Artifact 工作流。Interaction Agent、RSI Agent 和 ResearchAgent 组可以分别配置模型，默认使用 teacher。所有 ResearchAgent 共用一个模型。Task Agent 直接使用 target，不存在另一份 Task Agent 模型配置。当前阶段固定 target 的模型参数，迭代其提示词、技能、工具和 MCP 配置。
 
 ## 启动
 
@@ -19,7 +19,7 @@ cp -n .env.example .env
 
 | 配置项 | 用途 |
 | --- | --- |
-| `RSI_TEACHER_MODEL` / `RSI_TEACHER_BASE_URL` | 前台、RSI Agent 和 ResearchAgent 使用的模型及服务 |
+| `RSI_TEACHER_MODEL` / `RSI_TEACHER_BASE_URL` | Interaction Agent、RSI Agent 和 ResearchAgent 使用的模型及服务 |
 | `RSI_TEACHER_API_KEY` | teacher 服务认证信息；无需认证时留空 |
 | `RSI_TARGET_MODEL` / `RSI_TARGET_BASE_URL` | 待优化的目标模型及服务，供 Task Agent 和评测使用 |
 | `RSI_TARGET_API_KEY` | target 服务认证信息；无需认证时留空，不继承 teacher 密钥 |
@@ -31,7 +31,7 @@ Teacher 与 target 是默认连接，可以来自不同服务。旧的 `RSI_MODE
 
 ```bash
 export RSI_AGENT_MODELS='{
-  "frontend": {"model": "frontend-model"},
+  "interaction-agent": {"model": "interaction-agent-model"},
   "rsi-agent": {"model": "rsi-agent-model"},
   "research-agent": {
     "model": "research-agent-model",
@@ -45,7 +45,7 @@ export RSI_AGENT_MODELS='{
 
 | Agent ID | 默认值与覆盖规则 |
 | --- | --- |
-| `frontend` | 前台对话模型，默认 teacher；不参与后台 Run 的恢复校验 |
+| `interaction-agent` | Interaction Agent 对话模型，默认 teacher；不参与后台 Run 的恢复校验 |
 | `rsi-agent` | RSI Agent 的模型，默认 teacher |
 | `research-agent` | 所有 ResearchAgent 共用的覆盖，优先于 teacher |
 
@@ -77,7 +77,7 @@ unset RSI_DATA_ROOT RSI_BENCHMARK RSI_RESEARCH_AGENT_COUNT
 uv run --env-file .env --locked rsi tui
 ```
 
-各类 Agent 的有效模型、评测集和研究线数量由启动配置决定，写入对话目标不会改变它们。三条研究线设置 `RSI_RESEARCH_AGENT_COUNT=3`；轮数通过 `rsi_plan` 指定。所有 ResearchAgent 接收相同的实验目标并使用同一个模型，但保留独立 Session、workspace、Memory 查询、迭代状态和版本分支。仅改变前台或未被使用的默认值不会影响后台恢复；后台模型覆盖变化会按角色校验。目标基线只由有效 Task 模型及初始 Harness 决定，同一目录可保存多组配置，不覆盖旧实验。
+各类 Agent 的有效模型、评测集和研究线数量由启动配置决定，写入对话目标不会改变它们。三条研究线设置 `RSI_RESEARCH_AGENT_COUNT=3`；轮数通过 `rsi_plan` 指定。所有 ResearchAgent 接收相同的实验目标并使用同一个模型，但保留独立 Session、workspace、Memory 查询、迭代状态和版本分支。仅改变 Interaction Agent 或未被使用的默认值不会影响后台恢复；后台模型覆盖变化会按角色校验。目标基线只由有效 Task 模型及初始 Harness 决定，同一目录可保存多组配置，不覆盖旧实验。
 
 `.env` 被 Git 忽略，`.env.example` 仅包含空模板。认证信息不写入模型版本或实验配置；模型请求显式设置 `store=false`。
 

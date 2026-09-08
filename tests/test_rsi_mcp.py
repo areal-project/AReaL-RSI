@@ -50,7 +50,7 @@ class FixtureController(ExperimentController):
                 "config": {
                     "teacher_model_name": "teacher-default-fixture-model",
                     "target_model_name": "task-agent-fixture-model",
-                    "frontend_model_name": "frontend-fixture-model",
+                    "frontend_model_name": "interaction-agent-fixture-model",
                     "agent_models": {
                         "rsi-agent": {"model": "rsi-agent-fixture-model", "api_key": "SECRET"},
                         "research-agent-1": {
@@ -188,7 +188,7 @@ class RsiMcpTest(unittest.IsolatedAsyncioTestCase):
                 plan["plan"]["config"]["target_model_name"], "task-agent-fixture-model"
             )
             self.assertEqual(
-                plan["plan"]["config"]["frontend_model_name"], "frontend-fixture-model"
+                plan["plan"]["config"]["interaction_model_name"], "interaction-agent-fixture-model"
             )
             self.assertEqual(
                 plan["plan"]["config"]["agent_models"],

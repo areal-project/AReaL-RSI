@@ -44,7 +44,7 @@ function render(run){
   document.title=`RSI · ${run.run_id}`;
   document.getElementById("main").innerHTML=`<div class="runhead"><div><h1>${esc(run.goal)}</h1><div class="meta"><code>${esc(run.run_id)}</code></div></div>${badge(run.state)}</div>
     <details class="goal" data-key="goal"><summary>查看完整目标</summary><p>${esc(run.goal)}</p></details>
-    <p class="meta">${esc(run.workflow)} · ${esc(run.benchmark)} · 前台 ${esc(run.frontend_model||"未记录")} · RSI Agent ${esc(run.rsi_model||run.teacher_model||"未记录")} · 目标模型 ${esc(run.target_model||run.model||"未记录")}</p>
+    <p class="meta">${esc(run.workflow)} · ${esc(run.benchmark)} · Interaction Agent ${esc(run.interaction_model||"未记录")} · RSI Agent ${esc(run.rsi_model||run.teacher_model||"未记录")} · 目标模型 ${esc(run.target_model||run.model||"未记录")}</p>
     ${run.state==="running"&&!run.worker_alive?'<div class="notice">记录显示运行中，但未发现持有此 Run 执行锁的进程。请通过 CLI 核对或恢复；页面不会重新启动实验。</div>':""}
     ${run.error?`<div class="notice">${esc(run.error)}</div>`:""}
     <section class="stats" aria-label="实验概览"><div class="stat"><div class="label">基线验证得分</div><div class="value">${percent(run.baseline_score)}</div><div class="meta">${run.baseline_score===null?(run.state==="running"&&run.worker_alive&&run.baseline_progress?.task_count?`正在评测 ${run.baseline_progress.task}/${run.baseline_progress.task_count} 题`:"尚无有效基线结果"):"固定数据分区"}</div></div>

@@ -21,7 +21,7 @@ def defaults(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.usefixtures("defaults")
 def test_defaults_and_model_only_override(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = AgentModelSettings.from_environment()
-    for name in ("frontend", "rsi-agent", "research-agent-1", "research-agent-2"):
+    for name in ("interaction-agent", "rsi-agent", "research-agent-1", "research-agent-2"):
         assert settings.resolve(name).model == "teacher-default-model"
     with pytest.raises(ModelConfigurationError, match="直接使用 RSI_TARGET"):
         settings.resolve("task-agent")
@@ -31,7 +31,7 @@ def test_defaults_and_model_only_override(monkeypatch: pytest.MonkeyPatch) -> No
     assert rsi_agent.model == "rsi-agent-model"
     assert rsi_agent.base_url == "https://teacher.example/v1"
     assert rsi_agent.api_key == "teacher-fixture-key"
-    assert settings.resolve("frontend").model == "teacher-default-model"
+    assert settings.resolve("interaction-agent").model == "teacher-default-model"
 
 
 @pytest.mark.usefixtures("defaults")
@@ -66,13 +66,13 @@ def test_changing_endpoint_never_leaks_default_credentials(monkeypatch: pytest.M
         "RSI_AGENT_MODELS",
         json.dumps(
             {
-                "frontend": {"base_url": "https://another.example/v1"},
+                "interaction-agent": {"base_url": "https://another.example/v1"},
                 "rsi-agent": {"base_url": "https://teacher.example/"},
             }
         ),
     )
     settings = AgentModelSettings.from_environment()
-    assert settings.resolve("frontend").api_key == ""
+    assert settings.resolve("interaction-agent").api_key == ""
     assert settings.resolve("rsi-agent").api_key == "teacher-fixture-key"
 
 

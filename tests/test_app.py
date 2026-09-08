@@ -118,7 +118,7 @@ class ModelRolesTest(unittest.TestCase):
 class LocalAppTest(unittest.IsolatedAsyncioTestCase):
     async def test_agent_roles_can_differ_while_research_agents_share_one_model(self) -> None:
         overrides = {
-            "frontend": {"model": "frontend-model"},
+            "interaction-agent": {"model": "interaction-agent-model"},
             "rsi-agent": {"model": "rsi-agent-model"},
             "research-agent": {
                 "model": "research-agent-model",
@@ -141,7 +141,7 @@ class LocalAppTest(unittest.IsolatedAsyncioTestCase):
         ):
             app = await LocalApp.create(Path(temporary), lambda _: None)
             try:
-                self.assertEqual(app.frontend_model_name, "frontend-model")
+                self.assertEqual(app.interaction_model_name, "interaction-agent-model")
                 self.assertEqual(app.rsi.model.name, "rsi-agent-model")
                 researchers = app.service.context.research_agents
                 for index in range(2):
@@ -167,7 +167,7 @@ class LocalAppTest(unittest.IsolatedAsyncioTestCase):
             finally:
                 await app.close()
 
-    async def test_frontend_changes_do_not_invalidate_a_backend_run(self) -> None:
+    async def test_interaction_changes_do_not_invalidate_a_backend_run(self) -> None:
         with (
             tempfile.TemporaryDirectory() as temporary,
             patch.dict("os.environ", ROLE_ENV, clear=True),
@@ -178,12 +178,12 @@ class LocalAppTest(unittest.IsolatedAsyncioTestCase):
             await first.close()
             with patch.dict(
                 "os.environ",
-                {"RSI_AGENT_MODELS": '{"frontend":{"model":"frontend-model-b"}}'},
+                {"RSI_AGENT_MODELS": '{"interaction-agent":{"model":"interaction-agent-model-b"}}'},
             ):
                 second = await LocalApp.create(root, lambda _: None)
                 try:
                     await second.bind_plan(plan)
-                    self.assertEqual(second.frontend_model_name, "frontend-model-b")
+                    self.assertEqual(second.interaction_model_name, "interaction-agent-model-b")
                     self.assertEqual(second.baseline.solution_id, plan.baseline_solution_id)
                 finally:
                     await second.close()
@@ -259,7 +259,7 @@ class LocalAppTest(unittest.IsolatedAsyncioTestCase):
             try:
                 self.assertEqual(app.rsi.model.name, "rsi-agent-model")
                 self.assertEqual(app.baseline.model.name, "target-model")
-                self.assertIsNone(app.frontend_model_name)
+                self.assertIsNone(app.interaction_model_name)
             finally:
                 await app.close()
 

@@ -33,9 +33,9 @@ DeepSeek Harness 是 AgentRuntime 的当前实现；已有原创算术与 GSM8K 
 
 DSH Session ID 标识对话，RSI Run ID 标识实验。后台进程使用文件锁和内核进程启动身份避免重复启动或误停；状态经 MCP 返回有界聚合摘要，详细进度由只读 Web 面板展示。
 
-前台、RSI Agent 和 ResearchAgent 组分别解析模型连接，默认使用 teacher；`RSI_AGENT_MODELS` 可覆盖这三个角色。所有 ResearchAgent 共用 `research-agent` 的有效连接，不支持单条研究线覆盖。Task Agent 是 target 的 Harness 执行器，直接使用 `RSI_TARGET_*`，不再定义第二份模型配置。相同的完整连接配置可复用代理；不同模型和认证信息分别路由。`SolutionVersion.model` 表示 target，计划的 `config.agent_models` 只保存 RSI Agent 和各 ResearchAgent 的模型引用，target 随基线 Solution 记录。前台模型单独记录，不约束后台 Run 的恢复。
+Interaction Agent、RSI Agent 和 ResearchAgent 组分别解析模型连接，默认使用 teacher；`RSI_AGENT_MODELS` 可覆盖这三个角色。所有 ResearchAgent 共用 `research-agent` 的有效连接，不支持单条研究线覆盖。Task Agent 是 target 的 Harness 执行器，直接使用 `RSI_TARGET_*`，不再定义第二份模型配置。相同的完整连接配置可复用代理；不同模型和认证信息分别路由。`SolutionVersion.model` 表示 target，计划的 `config.agent_models` 只保存 RSI Agent 和各 ResearchAgent 的模型引用，target 随基线 Solution 记录。Interaction Agent 模型单独记录，不约束后台 Run 的恢复。
 
-数据目录不绑定某个模型。模型描述按内容复用，基线按 target 模型与初始 Harness 快照索引；改变研究 Agent 或前台模型不创建另一份目标基线，同一目录可以保存不同 target 的实验。旧 `baseline.json` 只作兼容读取，不覆盖。每个 Run 继续引用自己的不可变 Solution，恢复时核对对应配置。
+数据目录不绑定某个模型。模型描述按内容复用，基线按 target 模型与初始 Harness 快照索引；改变研究 Agent 或Interaction Agent 模型不创建另一份目标基线，同一目录可以保存不同 target 的实验。旧 `baseline.json` 只作兼容读取，不覆盖。每个 Run 继续引用自己的不可变 Solution，恢复时核对对应配置。
 
 ## 2. 独立研究线
 

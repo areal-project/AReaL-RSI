@@ -49,7 +49,13 @@ def ensure_rsi_preset(root: Path, home: Path) -> Path:
     destination = home / ".agent-presets" / "rsi"
     output = destination / "agent.cordis.yml"
     if output.exists():
-        return output  # 允许用户直接编辑自己的 preset，不在启动时覆盖。
+        # 只迁移由旧入口生成的角色开头，保留用户的工具配置和其他提示词。
+        text = output.read_text()
+        old = "你是 RSI Agent，是用户日常研发和自迭代实验的入口。"
+        if old in text:
+            new = "你是 Interaction Agent，是用户日常研发和自迭代实验的入口。"
+            output.write_text(text.replace(old, new))
+        return output
     sources = list(
         (root.resolve() / "dsh-cli/node_modules/.pnpm").glob(
             f"@deepseek-ai+dsh-agent-presets@{DSH_VERSION}*/node_modules/"
@@ -77,6 +83,6 @@ def ensure_rsi_preset(root: Path, home: Path) -> Path:
     destination.mkdir(parents=True, exist_ok=True)
     output.write_text(yaml.serialize(tree, allow_unicode=True))
     (destination / "preset.yml").write_text(
-        "name: RSI Agent\ndescription: 日常研发与 RSI 实验入口\n"
+        "name: Interaction Agent\ndescription: 日常研发与 RSI 实验入口\n"
     )
     return output

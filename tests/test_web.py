@@ -49,7 +49,7 @@ class WebTest(unittest.TestCase):
             research_agent_count=2,
             config={
                 "teacher_model_name": "teacher-default-fixture-model",
-                "frontend_model_name": "frontend-fixture-model",
+                "frontend_model_name": "interaction-agent-fixture-model",
                 "agent_models": {
                     "rsi-agent": {"model": "rsi-agent-fixture-model"},
                     "research-agent-1": {"model": "research-agent-fixture-model"},
@@ -102,7 +102,7 @@ class WebTest(unittest.TestCase):
         self.assertEqual(headers["Cache-Control"], "no-store")
         data = json.loads(body)
         self.assertEqual(data["teacher_model"], "teacher-default-fixture-model")
-        self.assertEqual(data["frontend_model"], "frontend-fixture-model")
+        self.assertEqual(data["interaction_model"], "interaction-agent-fixture-model")
         self.assertEqual(data["rsi_model"], "rsi-agent-fixture-model")
         self.assertEqual(
             [agent["model"] for agent in data["agents"]],

@@ -113,15 +113,15 @@ def test_launch_uses_native_process_patches_and_absolute_mcp_root_without_saving
     monkeypatch.setenv("DEEPSEEK_API_KEY", "fixture-private-deepseek-key")
     monkeypatch.setenv("RSI_TEACHER_MODEL", "teacher-default-fixture-model")
     monkeypatch.setenv("RSI_TARGET_MODEL", "target-default-fixture-model")
-    monkeypatch.setenv("FRONTEND_MODEL_KEY", "fixture-frontend-key")
+    monkeypatch.setenv("INTERACTION_MODEL_KEY", "fixture-interaction-agent-key")
     monkeypatch.setenv(
         "RSI_AGENT_MODELS",
         json.dumps(
             {
-                "frontend": {
-                    "model": "frontend-fixture-model",
-                    "base_url": "https://frontend.example/v1",
-                    "api_key_env": "FRONTEND_MODEL_KEY",
+                "interaction-agent": {
+                    "model": "interaction-agent-fixture-model",
+                    "base_url": "https://interaction-agent.example/v1",
+                    "api_key_env": "INTERACTION_MODEL_KEY",
                 }
             }
         ),
@@ -142,7 +142,9 @@ def test_launch_uses_native_process_patches_and_absolute_mcp_root_without_saving
 
     assert dsh.launch_tui(Path("../state"), resume=resume) == 17
 
-    gateway.assert_called_once_with("https://frontend.example/v1", "fixture-frontend-key")
+    gateway.assert_called_once_with(
+        "https://interaction-agent.example/v1", "fixture-interaction-agent-key"
+    )
     command = [
         str(binary),
         "--profile",
@@ -162,12 +164,13 @@ def test_launch_uses_native_process_patches_and_absolute_mcp_root_without_saving
     assert environment["DSH_TELEMETRY_DISABLED"] == "1"
     patch = yaml.safe_load((root / "dsh-entry.patch.yml").read_text().replace("!!js", "!!str"))
     agent = next(row["config"] for row in patch if row.get("id") == "dsh-tui")
-    assert agent["model"] == "frontend-fixture-model"
+    assert agent["model"] == "interaction-agent-fixture-model"
     assert agent["preset"] == "rsi"
+    assert agent["effort"] == "off"
     assert agent["cwd"] == str(workspace)
     assert not any(row.get("id") == "agent-loop" for row in patch)
     adapter = next(row["config"] for row in patch if row.get("id") == "llm-deepseek")
-    assert adapter["models"] == [{"id": "frontend-fixture-model"}]
+    assert adapter["models"] == [{"id": "interaction-agent-fixture-model"}]
     assert adapter["maxTokens"] == 8192
     assert adapter["thinking"] == "disabled"
     activity = next(row["config"] for row in patch if row.get("id") == "working-activity")
@@ -198,7 +201,7 @@ def test_launch_uses_native_process_patches_and_absolute_mcp_root_without_saving
         if path.is_file():
             assert "fixture-private-rsi-key" not in path.read_text()
             assert "fixture-private-deepseek-key" not in path.read_text()
-            assert "fixture-frontend-key" not in path.read_text()
+            assert "fixture-interaction-agent-key" not in path.read_text()
     child.wait.assert_called_once_with()
     child.terminate.assert_not_called()
     proxy.close.assert_called_once_with()
@@ -246,7 +249,7 @@ def test_mcp_environment_is_forwarded_at_runtime_without_persisting_values(
         pytest.skip("DSH environment expressions require Node.js")
     overrides = json.dumps({"research-agent": {"api_key_env": "MODEL_OVERRIDE_KEY"}})
     monkeypatch.setenv("RSI_AGENT_MODELS", overrides)
-    path = dsh_config.write_profile_patch(tmp_path, tmp_path, "frontend-fixture-model")
+    path = dsh_config.write_profile_patch(tmp_path, tmp_path, "interaction-agent-fixture-model")
     patch = yaml.safe_load(path.read_text().replace("!!js", "!!str"))
     mcp = next(
         item for row in patch for item in row.get("insert", []) if item.get("id") == "rsi-mcp"

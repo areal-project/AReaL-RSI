@@ -87,7 +87,7 @@ class ModelConfig:
 
 
 class AgentModelSettings:
-    """解析前台、RSI Agent 和 ResearchAgent；Task Agent 直接使用 target。"""
+    """解析 Interaction Agent、RSI Agent 和 ResearchAgent；Task Agent 直接使用 target。"""
 
     def __init__(self, overrides: dict[str, dict[str, str]]):
         self.overrides = overrides
@@ -120,10 +120,10 @@ class AgentModelSettings:
         return cls(raw)
 
     def validate_agents(self) -> None:
-        supported = {"frontend", "rsi-agent", "research-agent"}
+        supported = {"interaction-agent", "rsi-agent", "research-agent"}
         if set(self.overrides) - supported:
             raise ModelConfigurationError(
-                "RSI_AGENT_MODELS 只支持 frontend、rsi-agent 和 research-agent；"
+                "RSI_AGENT_MODELS 只支持 interaction-agent、rsi-agent 和 research-agent；"
                 "Task Agent 直接使用 RSI_TARGET 配置。"
             )
 
@@ -157,9 +157,9 @@ class AgentModelSettings:
             )
         return ModelConfig.validated(model, base_url, api_key, agent_id + " ")
 
-    def frontend_name(self) -> str | None:
+    def interaction_name(self) -> str | None:
         try:
-            return self.resolve("frontend").model
+            return self.resolve("interaction-agent").model
         except ModelConfigurationError:
-            # 前台不是后台 Run 的执行依赖；实际启动 TUI 时仍会严格调用 resolve。
+            # Interaction Agent 不是后台 Run 的执行依赖；实际启动 TUI 时仍会严格调用 resolve。
             return None

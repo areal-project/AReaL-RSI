@@ -46,7 +46,7 @@ def _summary(value: dict[str, Any]) -> dict[str, Any]:
         "benchmark",
         "teacher_model_name",
         "target_model_name",
-        "frontend_model_name",
+        "interaction_model_name",
         "best_solution_id",
         "completed_iterations",
         "max_iterations",
@@ -80,8 +80,10 @@ def _summary(value: dict[str, Any]) -> dict[str, Any]:
             if key in plan
         }
         config = plan.get("config", {})
-        for key in ("teacher_model_name", "target_model_name", "frontend_model_name"):
+        for key in ("teacher_model_name", "target_model_name", "interaction_model_name"):
             model = config.get(key)
+            if key == "interaction_model_name" and model is None:
+                model = config.get("frontend_model_name")
             if key == "target_model_name" and model is None:
                 model = config.get("model_name")  # 兼容历史单模型计划。
             if isinstance(model, str):
@@ -140,7 +142,8 @@ def create_server(controller: ExperimentController) -> FastMCP:
     async def rsi_plan(goal: Goal, max_iterations: Iterations) -> str:
         """生成待确认计划，不启动实验。只接受目标和轮数；各 Agent 的有效模型、评测集和研究线数量
         来自启动配置，不能通过 goal 改变。teacher/target 只是默认值。
-        RSI_AGENT_MODELS 可按前台、RSI Agent 和 ResearchAgent 组覆盖；Task Agent 直接使用
+        RSI_AGENT_MODELS 可按 Interaction Agent、RSI Agent 和 ResearchAgent 组覆盖；
+        Task Agent 直接使用
         Target Model，不单独配置。所有 ResearchAgent 共用一个模型。请展示返回的完整模型映射；
         不符合用户要求时
         需修改本机配置并重启 TUI。此工具没有实验模板名参数。

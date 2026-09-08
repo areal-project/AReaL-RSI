@@ -52,7 +52,7 @@ class LocalApp:
     agent_models: dict[str, ModelVersion]
     agent_proxies: dict[str, GatewayProxy]
     agent_runtimes: dict[str, DshAgentRuntime]
-    frontend_model_name: str | None
+    interaction_model_name: str | None
     rsi: DefaultRsiAgent
     service: LocalExperimentService
 
@@ -89,7 +89,7 @@ class LocalApp:
         target_connection = ModelConfig.from_environment("target")
         runtime_connections = {**connections, "task-agent": target_connection}
         self = cls()
-        self.frontend_model_name = model_settings.frontend_name()
+        self.interaction_model_name = model_settings.interaction_name()
         self.root = root.resolve()
         self.content = FileContentStore(self.root / "content")
         self.versions = FileVersionManager(self.root / "versions")
@@ -205,7 +205,7 @@ class LocalApp:
         }
         return {
             "agent_models": models,
-            "frontend_model_name": self.frontend_model_name,
+            "interaction_model_name": self.interaction_model_name,
             "target_model_name": self.target_model.name,
             "target_model_version_id": self.target_model.version_id,
         }

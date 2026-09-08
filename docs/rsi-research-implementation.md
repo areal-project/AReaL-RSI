@@ -517,13 +517,13 @@ RSI_DATA_ROOT/
   runtime/gpu-allocation.lock      # 短时跨 run GPU 协调锁，无共享研究 memory
   runs/<run_id>/
     run.json
-    briefs/ assignments/ reports/
+    briefs/ assignments/ reports/ iterations/
     candidates/ verifications/ executions/
     evidence/ materials/ messages/ events/
     coordination/                  # 配置、inboxes、active/delivered、预算与作业意图
     actions/                       # 工具动作幂等日志
     agents/<agent_id>/
-      agent.json iterations/ workspace/
+      agent.json workspace/
       sessions/<session_id>/       # prompt、会话、请求/响应、工具与 compact 记录
     jobs/ execution-inputs/ execution-outputs/
     exports/

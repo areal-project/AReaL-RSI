@@ -177,9 +177,9 @@ CUHK-X 的命令模板形状：
 ```text
 run.json
 briefs/ assignments/ reports/ evidence/
-candidates/ verifications/
+candidates/ verifications/ iterations/
 agents/<agent_id>/
-  agent.json  iterations/  workspace/  sessions/
+  agent.json  workspace/  sessions/
 coordination/                 # 配置、消息投递和调度状态
 messages/ events/ jobs/
 execution-inputs/ execution-outputs/

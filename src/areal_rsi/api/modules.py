@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from areal_rsi.api.base import (
     AgentSpec,
@@ -178,6 +178,13 @@ class AgentRuntime(Protocol):
         *,
         workspace_root: str | None = None,
     ) -> AgentSession: ...
+
+
+class ConfiguredAgentRuntime(AgentRuntime, Protocol):
+    @property
+    def content(self) -> ContentStore: ...
+
+    mcp_registry: dict[str, dict[str, Any]]
 
 
 class HarnessRuntime(Protocol):

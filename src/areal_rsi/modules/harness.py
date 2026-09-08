@@ -21,6 +21,7 @@ from areal_rsi.api.base import (
     TaskResult,
     TrajectoryRef,
 )
+from areal_rsi.api.modules import AgentSession, ConfiguredAgentRuntime
 from areal_rsi.base.storage import (
     DIRECTORY_TYPE,
     FileContentStore,
@@ -28,7 +29,6 @@ from areal_rsi.base.storage import (
     safe_name,
     safe_relative,
 )
-from areal_rsi.modules.runtime import DshAgentRuntime, DshSession
 
 
 def editable(name: str) -> bool:
@@ -103,7 +103,9 @@ class LocalHarnessBuilder:
 
 
 class LocalHarnessRuntime:
-    def __init__(self, runtime: DshAgentRuntime, content: FileContentStore, workspaces: Path):
+    def __init__(
+        self, runtime: ConfiguredAgentRuntime, content: FileContentStore, workspaces: Path
+    ):
         self.runtime = runtime
         self.content = content
         self.workspaces = workspaces
@@ -173,7 +175,7 @@ class LocalHarnessRuntime:
         )
         mcp_config = json.loads((workspace / "mcp.json").read_text())
         servers: list[str] = []
-        session: DshSession | None = None
+        session: AgentSession | None = None
         ref: TrajectoryRef | None = None
         try:
             for server in mcp_config["servers"]:
@@ -190,7 +192,7 @@ class LocalHarnessRuntime:
                     servers.append(key)
             spec = AgentSpec(
                 "task-agent",
-                "deepseek-harness@v1",
+                "areal-agent-runtime@v1",
                 solution.model,
                 (prompt,),
                 skills,

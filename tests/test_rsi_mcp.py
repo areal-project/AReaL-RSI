@@ -138,12 +138,12 @@ class RsiMcpTest(unittest.IsolatedAsyncioTestCase):
             async with stdio_client(parameters, errlog=errors) as (read, write):
                 async with ClientSession(read, write) as session:
                     initialized = await session.initialize()
-                    self.assertEqual(initialized.serverInfo.name, "areal-rsi")
+                    self.assertEqual(initialized.server_info.name, "areal-rsi")
                     self.assertIsNotNone(initialized.capabilities.tools)
                     yield session
 
     def body(self, result: CallToolResult) -> dict[str, Any]:
-        self.assertFalse(result.isError)
+        self.assertFalse(result.is_error)
         self.assertEqual(len(result.content), 1)
         item = result.content[0]
         self.assertIsInstance(item, TextContent)
@@ -159,20 +159,20 @@ class RsiMcpTest(unittest.IsolatedAsyncioTestCase):
                 set(tools), {"rsi_plan", "rsi_start", "rsi_status", "rsi_stop", "rsi_resume"}
             )
             for name in ("rsi_start", "rsi_resume"):
-                self.assertIn("confirmed", tools[name].inputSchema["required"])
+                self.assertIn("confirmed", tools[name].input_schema["required"])
                 self.assertEqual(
-                    tools[name].inputSchema["properties"]["confirmed"]["type"], "boolean"
+                    tools[name].input_schema["properties"]["confirmed"]["type"], "boolean"
                 )
-            self.assertIn("plan_id", tools["rsi_start"].inputSchema["required"])
+            self.assertIn("plan_id", tools["rsi_start"].input_schema["required"])
             status_annotations = tools["rsi_status"].annotations
             start_annotations = tools["rsi_start"].annotations
             stop_annotations = tools["rsi_stop"].annotations
             assert status_annotations is not None
             assert start_annotations is not None
             assert stop_annotations is not None
-            self.assertTrue(status_annotations.readOnlyHint)
-            self.assertFalse(start_annotations.readOnlyHint)
-            self.assertTrue(stop_annotations.destructiveHint)
+            self.assertTrue(status_annotations.read_only_hint)
+            self.assertFalse(start_annotations.read_only_hint)
+            self.assertTrue(stop_annotations.destructive_hint)
             plan = self.body(
                 await session.call_tool(
                     "rsi_plan", {"goal": "Improve controls", "max_iterations": 3}
@@ -225,7 +225,7 @@ class RsiMcpTest(unittest.IsolatedAsyncioTestCase):
                         response = await session.call_tool(
                             name, {key: "fixture", "confirmed": confirmed}
                         )
-                        self.assertTrue(response.isError)
+                        self.assertTrue(response.is_error)
             for name, arguments in (
                 ("rsi_start", {"plan_id": "plan_fixture"}),
                 ("rsi_start", {"confirmed": True}),
@@ -236,7 +236,7 @@ class RsiMcpTest(unittest.IsolatedAsyncioTestCase):
                 ("rsi_stop", {"run_id": "../../escape"}),
             ):
                 response = await session.call_tool(name, arguments)
-                self.assertTrue(response.isError)
+                self.assertTrue(response.is_error)
                 self.assertNotIn("SECRET", response.model_dump_json())
         self.assertFalse((self.root / "calls.txt").exists())
 
@@ -248,11 +248,11 @@ class RsiMcpTest(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("trajectories", status["runs"][0])
             for run_id in ("explode", "oversized"):
                 response = await session.call_tool("rsi_status", {"run_id": run_id})
-                self.assertTrue(response.isError)
+                self.assertTrue(response.is_error)
                 self.assertNotIn("SECRET", response.model_dump_json())
                 self.assertLess(len(response.model_dump_json()), 1000)
             configuration = await session.call_tool("rsi_status", {"run_id": "configuration"})
-            self.assertTrue(configuration.isError)
+            self.assertTrue(configuration.is_error)
             self.assertIn("RSI_DATA_ROOT", configuration.model_dump_json())
             self.assertNotIn("SECRET", configuration.model_dump_json())
 

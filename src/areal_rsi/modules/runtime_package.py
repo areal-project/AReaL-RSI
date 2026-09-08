@@ -1,0 +1,408 @@
+"""RSI sessions backed by the public ARealAgentRuntime Python package.
+
+Each conversation owns an embedded composition in a sandboxed Python process.
+The process boundary protects RSI's hidden evaluation data from native tools.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import copy
+import hashlib
+import json
+import os
+import shutil
+import signal
+import sys
+from contextlib import suppress
+from pathlib import Path
+from typing import Any
+
+from areal_rsi.api.base import AgentSpec, Trajectory, TrajectoryRef
+from areal_rsi.base.storage import FileContentStore, FileTrajectoryStore, new_id, now
+
+
+class RuntimeSettings:
+    """Trusted deployment settings, never supplied by a candidate or model."""
+
+    def __init__(self, value: dict[str, Any]):
+        if not isinstance(value, dict):
+            raise ValueError("Runtime config must be an object")
+
+        def check_secrets(item: Any) -> None:
+            if isinstance(item, dict):
+                for key, child in item.items():
+                    normalized = key.lower().replace("_", "").replace("-", "")
+                    if (
+                        normalized
+                        in {
+                            "apikey",
+                            "authtoken",
+                            "authorization",
+                            "xapikey",
+                            "openaiapikey",
+                            "anthropicapikey",
+                        }
+                        and child
+                    ):
+                        raise ValueError(
+                            "Use RSI model credentials or authTokenEnv; "
+                            "literal Runtime secrets are not supported"
+                        )
+                    check_secrets(child)
+            elif isinstance(item, list):
+                for child in item:
+                    check_secrets(child)
+
+        check_secrets(value)
+        if set(value) - {"default", "roles", "readable_paths"}:
+            raise ValueError("Runtime config only accepts default, roles, readable_paths")
+        self.default = value.get("default", {"kind": "dsh", "config": {}})
+        self.roles = value.get("roles", {})
+        if set(self.roles) - {"rsi-agent", "research-agent", "task-agent"}:
+            raise ValueError("Unknown Runtime role")
+        self.readable_paths = tuple(
+            Path(p).expanduser().resolve() for p in value.get("readable_paths", [])
+        )
+        provenance = Path(__file__).parents[1] / "resources/runtime/provenance.json"
+        self.identity = hashlib.sha256(
+            json.dumps(value, sort_keys=True).encode() + provenance.read_bytes()
+        ).hexdigest()
+
+    @classmethod
+    def from_environment(cls) -> RuntimeSettings:
+        path = os.environ.get("RSI_RUNTIME_CONFIG")
+        return cls(json.loads(Path(path).expanduser().read_text()) if path else {})
+
+    def select(self, role: str) -> dict[str, Any]:
+        role = "research-agent" if role.startswith("research-agent-") else role
+        result: dict[str, Any] = copy.deepcopy(self.roles.get(role, self.default))
+        from areal_agent_runtime import RuntimeBootstrapConfig
+
+        result = RuntimeBootstrapConfig.model_validate(result).model_dump(
+            mode="json", by_alias=True, exclude_unset=True
+        )
+        for name in (
+            "codexBin",
+            "cliPath",
+            "python",
+            "hermesRoot",
+            "caFile",
+            "clientCertFile",
+            "clientKeyFile",
+        ):
+            path = result.get("config", {}).get(name)
+            if isinstance(path, str) and path.startswith("~"):
+                result["config"][name] = str(Path(path).expanduser())
+        scanner = result.get("config", {}).get("env", {}).get("TIRITH_BIN")
+        if isinstance(scanner, str) and scanner.startswith("~"):
+            result["config"]["env"]["TIRITH_BIN"] = str(Path(scanner).expanduser())
+        return result
+
+
+def sandbox_command(
+    directory: Path,
+    workspace: Path,
+    readable: tuple[Path, ...],
+    executable_aliases: tuple[Path, ...] = (),
+) -> list[str]:
+    if sys.platform != "darwin":
+        raise RuntimeError("RSI package worker currently requires macOS sandbox-exec")
+    # Installed packages are readable, experiment data is not. No source checkout is granted.
+    roots = {
+        directory.resolve(),
+        workspace.resolve(),
+        Path(sys.prefix).resolve(),
+        Path(sys.base_prefix).resolve(),
+        Path(sys.executable).resolve().parent,
+        *readable,
+    }
+    profile = [
+        "(version 1)",
+        "(allow default)",
+        '(deny file-read* (subpath "/Users") (subpath "/private/tmp") '
+        '(subpath "/private/var/folders"))',
+        "(deny file-write*)",
+    ]
+    for path in sorted(roots):
+        profile.append(f"(allow file-read* (subpath {json.dumps(str(path))}))")
+    # The installed RSI package includes benchmark/verifier code and hidden
+    # fixture answers. The worker uses a minimal materialized namespace instead.
+    profile.append(
+        f"(deny file-read* (subpath {json.dumps(str(Path(__file__).resolve().parents[1]))}))"
+    )
+    for executable in (Path(sys.executable), *executable_aliases):
+        if executable.is_symlink():
+            alias = Path(os.readlink(executable))
+            if not alias.is_absolute():
+                alias = executable.parent / alias
+            profile.append(
+                f"(allow file-read-metadata (subpath {json.dumps(str(alias.parent.parent))}))"
+            )
+    for parent in sorted({p for root in roots for p in root.parents}):
+        profile.append(f"(allow file-read-metadata (literal {json.dumps(str(parent))}))")
+    for path in (directory.resolve(), workspace.resolve()):
+        profile.append(f"(allow file-write* (subpath {json.dumps(str(path))}))")
+    profile.append(
+        '(allow file-read* file-write* (literal "/dev/null") (literal "/dev/tty") '
+        '(literal "/dev/ptmx") (regex #"^/dev/ttys[0-9]+$"))'
+    )
+    target = directory / "sandbox.sb"
+    target.write_text("\n".join(profile))
+    return [
+        "/usr/bin/sandbox-exec",
+        "-f",
+        str(target),
+        sys.executable,
+        "-I",
+        "-c",
+        "import runpy,sys;sys.path.insert(0,sys.argv.pop(1));"
+        "runpy.run_module('areal_rsi.modules.runtime_worker',run_name='__main__')",
+        str(directory / "worker-code"),
+    ]
+
+
+class PackageSession:
+    def __init__(
+        self,
+        runtime: PackageAgentRuntime,
+        spec: AgentSpec,
+        session_id: str,
+        directory: Path,
+        process: asyncio.subprocess.Process,
+    ):
+        self.runtime, self.spec, self.session_id = runtime, spec, session_id
+        self.directory, self.process = directory, process
+        self.turns: list[Any] = []
+        self.events: list[Any] = []
+        self.run_ids: list[str] = []
+        self.ref: TrajectoryRef | None = None
+        self.lock = asyncio.Lock()
+        self.closed = False
+
+    async def send(self, message: str) -> str:
+        async with self.lock:
+            if self.closed:
+                raise RuntimeError("Session 已结束")
+            self.turns.append({"role": "user", "content": message})
+            try:
+                assert self.process.stdin is not None and self.process.stdout is not None
+                self.process.stdin.write((json.dumps({"message": message}) + "\n").encode())
+                await self.process.stdin.drain()
+                async with asyncio.timeout(self.runtime.timeout):
+                    while True:
+                        line = await self.process.stdout.readline()
+                        if not line:
+                            raise RuntimeError(
+                                f"Runtime worker exited; see {self.directory / 'worker.log'}"
+                            )
+                        item = json.loads(line)
+                        if item["type"] == "event":
+                            self.events.append(item["event"])
+                        elif item["type"] == "run":
+                            self.run_ids.append(item["runId"])
+                        elif item["type"] == "result":
+                            if item.get("error"):
+                                raise RuntimeError(item["error"])
+                            text = str(item["text"])
+                            self.turns.append({"role": "assistant", "content": text})
+                            return text
+            except BaseException as exc:
+                self.turns.append({"error": type(exc).__name__, "message": str(exc)})
+                await self._close()
+                await self._save()
+                raise
+
+    async def _close(self) -> None:
+        if self.closed:
+            return
+        self.closed = True
+        if self.process.returncode is None:
+            # SIGTERM lets the worker cancel the active Run and commit its terminal state.
+            with suppress(ProcessLookupError):
+                self.process.terminate()
+            with suppress(TimeoutError):
+                await asyncio.wait_for(self.process.wait(), 10)
+        # Also reap native grandchildren on failed or timed-out cleanup.
+        with suppress(ProcessLookupError):
+            os.killpg(self.process.pid, signal.SIGKILL)
+        await self.process.wait()
+        self.runtime.sessions.discard(self)
+
+    async def _save(self) -> TrajectoryRef:
+        if self.ref is None:
+            # Rebuild the compatibility export from committed facts, including
+            # cancellation events emitted while the parent was stopping the worker.
+            from areal_agent_runtime.adapters.storage import FileSystemStateStore
+
+            bindings = self.directory / "run-bindings.json"
+            if bindings.exists():
+                self.run_ids = json.loads(bindings.read_text())
+            state = FileSystemStateStore(self.directory / "data/state")
+            self.events = [
+                event.model_dump(mode="json", by_alias=True)
+                for run_id in self.run_ids
+                for event in await state.list_events(run_id)
+            ]
+            content = await self.runtime.content.put_json(
+                {
+                    "runtime": "areal-agent-runtime",
+                    "session_id": self.events[0]["sessionId"] if self.events else None,
+                    "rsi_session_id": self.session_id,
+                    "harness": self.runtime.selection["kind"],
+                    "agent_id": self.spec.agent_id,
+                    "turns": self.turns,
+                    "events": self.events,
+                    "run_ids": list(self.run_ids),
+                    "runtime_data_root": str(self.directory / "data"),
+                    "projection": "RSI compatibility export; Runtime StateStore is authoritative",
+                }
+            )
+            usage: dict[str, Any] = {}
+            for event in self.events:
+                if event.get("type") == "usage.updated":
+                    for key, value in event.get("data", {}).get("usage", {}).items():
+                        if isinstance(value, (int, float)):
+                            usage[key] = usage.get(key, 0) + value
+            self.ref = await self.runtime.trajectories.save(
+                Trajectory(self.session_id, self.spec.agent_id, content, usage, now())
+            )
+        return self.ref
+
+    async def finish(self) -> TrajectoryRef:
+        async with self.lock:
+            await self._close()
+            return await self._save()
+
+
+class PackageAgentRuntime:
+    def __init__(
+        self,
+        root: Path,
+        content: FileContentStore,
+        trajectories: FileTrajectoryStore,
+        *,
+        settings: RuntimeSettings,
+        role: str,
+        base_url: str,
+        api_key: str,
+        timeout: float = 240,
+        max_tokens: int = 4096,
+        dsh_root: Path | None = None,
+        credential_env_names: Any = (),
+        **_: Any,
+    ):
+        self.root, self.content, self.trajectories = root.resolve(), content, trajectories
+        self.settings, self.role = settings, role
+        self.selection = settings.select(role)
+        self.base_url, self.api_key, self.timeout = base_url, api_key, timeout
+        self.max_tokens, self.dsh_root = max_tokens, dsh_root
+        self.credential_env_names = credential_env_names
+        self.mcp_registry: dict[str, dict[str, Any]] = {}
+        self.sessions: set[PackageSession] = set()
+
+    async def open(self, agent: AgentSpec, *, workspace_root: str | None = None) -> PackageSession:
+        if agent.runtime not in {"areal-agent-runtime@v1", "deepseek-harness@v1"}:
+            raise ValueError(f"Unknown RSI Runtime binding: {agent.runtime}")
+        unknown = set(agent.tools) - {"bash@v1", "editor@v1"}
+        if unknown:
+            raise ValueError(f"Unmapped RSI tools: {sorted(unknown)}")
+        session_id = new_id("trajectory")
+        directory = self.root / session_id
+        directory.mkdir(parents=True)
+        modules = directory / "worker-code/areal_rsi/modules"
+        modules.mkdir(parents=True)
+        (modules.parent / "__init__.py").write_text("")
+        (modules / "__init__.py").write_text("")
+        for name in ("runtime_worker.py", "runtime_mcp.py", "runtime_mcp.schema.json"):
+            shutil.copyfile(Path(__file__).parent / name, modules / name)
+        workspace = Path(workspace_root).resolve() if workspace_root else directory / "workspace"
+        workspace.mkdir(parents=True, exist_ok=True)
+        selection = copy.deepcopy(self.selection)
+        readable = list(self.settings.readable_paths)
+        if selection["kind"] == "dsh" and not selection.get("config", {}).get("dshBin"):
+            from areal_rsi.modules.dsh import ensure_cli
+
+            cli = await asyncio.to_thread(ensure_cli, self.dsh_root or self.root.parent)
+            selection.setdefault("config", {}).setdefault("dshBin", str(cli))
+            readable.append(cli.absolute().parent.parent.parent.resolve())
+        if selection["kind"] == "dsh":
+            from areal_rsi.modules.runtime_dsh import ensure_profile
+
+            home = await asyncio.to_thread(ensure_profile, self.dsh_root or self.root.parent)
+            readable.append(home)
+            profile = directory / "dsh-home/profiles/agent-runtime"
+            profile.mkdir(parents=True)
+            shared = home / "profiles/agent-runtime"
+            for name in ("package.json", "cordis.yml", "cordis.patch.yml"):
+                shutil.copyfile(shared / name, profile / name)
+            (profile / "node_modules").symlink_to(shared / "node_modules")
+            selection.setdefault("config", {}).update(
+                dshHome=str(directory / "dsh-home"), profile="agent-runtime"
+            )
+        config = {
+            "runtime": selection,
+            "directory": str(directory),
+            "workspace": str(workspace),
+            "agent_id": agent.agent_id,
+            "model": agent.model.name,
+            "model_version_id": agent.model.version_id,
+            "prompts": [await self.content.read_text(ref) for ref in agent.prompt_templates],
+            "skills": [await self.content.read_text(ref) for ref in agent.skills],
+            "tools": list(agent.tools),
+            "mcp": [self.mcp_registry[name] for name in agent.mcp_servers],
+            "base_url": self.base_url,
+            "max_tokens": self.max_tokens,
+        }
+        config_path = directory / "request.json"
+        config_path.write_text(json.dumps(config))
+        config_path.chmod(0o600)
+        # A child must not inherit the desktop agent's session, tools or credentials.
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if key
+            in {"PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR"}
+        }
+        auth_name = selection.get("config", {}).get("authTokenEnv")
+        if auth_name:
+            if auth_name not in os.environ:
+                raise ValueError(f"Missing configured remote credential variable: {auth_name}")
+            env[auth_name] = os.environ[auth_name]
+        for name in ("tmp", "home", "cache"):
+            (directory / name).mkdir()
+        env["PATH"] = (
+            str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "/usr/bin:/bin")
+        )
+        env.update(
+            HOME=str(directory / "home"),
+            TMPDIR=str(directory / "tmp"),
+            XDG_CACHE_HOME=str(directory / "cache"),
+            RSI_RUNTIME_KEY=self.api_key,
+            DSH_TELEMETRY_DISABLED="1",
+        )
+        interpreter = selection.get("config", {}).get("python")
+        command = sandbox_command(
+            directory,
+            workspace,
+            tuple(readable),
+            (Path(interpreter),) if interpreter else (),
+        )
+        with (directory / "worker.log").open("wb") as log:
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                str(config_path),
+                cwd=workspace,
+                env=env,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=log,
+                start_new_session=True,
+                limit=16 * 1024 * 1024,
+            )
+        session = PackageSession(self, agent, session_id, directory, process)
+        self.sessions.add(session)
+        return session
+
+    async def close(self) -> None:
+        await asyncio.gather(*(session.finish() for session in tuple(self.sessions)))

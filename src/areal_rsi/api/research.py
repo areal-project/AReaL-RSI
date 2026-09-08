@@ -37,6 +37,8 @@ class ResearchLimits:
                 raise ValueError(f"{name} must be positive")
             if not math.isfinite(value):
                 raise ValueError(f"{name} must be finite")
+            if name != "max_wall_seconds" and not isinstance(value, int):
+                raise ValueError(f"{name} must be an integer")
         if len(set(self.gpu_ids)) != len(self.gpu_ids):
             raise ValueError("GPU identifiers must be unique")
         if not self.allowed_paths or any(

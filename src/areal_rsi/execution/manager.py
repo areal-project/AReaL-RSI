@@ -57,6 +57,7 @@ class JobManager:
         *,
         on_event: Callable[[JobEvent], None] | None = None,
         auto_monitor: bool = True,
+        scheduling_enabled: bool = True,
         poll_interval: float = 0.1,
     ) -> None:
         if max_jobs < 1:
@@ -65,10 +66,20 @@ class JobManager:
             raise ValueError("poll_interval must be positive and finite")
         if len(set(gpu_ids)) != len(gpu_ids):
             raise ValueError("GPU IDs must be unique")
-        self.root = Path(run_root).resolve() / "jobs"
+        resolved_run = Path(run_root).resolve()
+        self.root = resolved_run / "jobs"
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # Run records remain canonical. The shared file contains no allocation
+        # state; its flock only serializes discovering and persisting claims.
+        self._shared_runs = resolved_run.parent if resolved_run.parent.name == "runs" else None
+        self._gpu_lock_path = (
+            self._shared_runs.parent / "runtime/gpu-allocation.lock"
+            if self._shared_runs is not None
+            else self.root / "gpu-allocation.lock"
+        )
         self.gpu_ids = tuple(gpu_ids)
         self.max_jobs = max_jobs
+        self.scheduling_enabled = scheduling_enabled
         self.on_event = on_event
         self.callback_error: str | None = None
         self.poll_interval = poll_interval
@@ -244,9 +255,69 @@ class JobManager:
             write_json(path, {**value, "delivered": True})
 
     def _schedule(self) -> None:
+        if not self.scheduling_enabled:
+            return
         records = self.records()
+        if not any(record.state == "queued" for record in records):
+            return
+        if not self.gpu_ids:
+            self._schedule_records(records, set())
+            return
+        self._gpu_lock_path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(self._gpu_lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        with os.fdopen(descriptor, "r+") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                # Another run is publishing a claim. Leave this job queued;
+                # the monitor/manual poll can try again without a busy wait.
+                return
+            try:
+                self._schedule_records(records, self._other_run_gpu_claims())
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+
+    def _other_run_gpu_claims(self) -> set[str]:
+        """Read-only reconciliation of claims belonging to other run owners.
+
+        An offline manager does not make its allocation available. Only a
+        persisted resource release or an authenticated supervisor completion can
+        release it. In particular, a missing PID is not evidence of free GPUs:
+        orphan child processes may still exist.
+        """
+        if self._shared_runs is None:
+            return set()
+        occupied: set[str] = set()
+        for path in self._shared_runs.glob("*/jobs/job-*/job.json"):
+            if path.parent.parent == self.root:
+                continue
+            record = read_json(path)
+            if record is None or record.get("resources_released") is True:
+                continue
+            gpu_ids = record.get("assigned_gpu_ids", [])
+            if not isinstance(gpu_ids, list) or any(not isinstance(gpu, str) for gpu in gpu_ids):
+                raise ValueError(f"Invalid GPU resource declaration: {path}")
+            if not gpu_ids:
+                continue
+            result = read_json(path.parent / "result.json")
+            token = record.get("launch_token")
+            if (
+                isinstance(token, str)
+                and token
+                and result is not None
+                and result.get("token") == token
+                and result.get("state") in TERMINAL_STATES
+                and result.get("resources_released", result.get("state") != "lost") is True
+            ):
+                # The owning manager can update its own job/events later. Do
+                # not mutate another run's records merely to reuse a free GPU.
+                continue
+            occupied.update(gpu_ids)
+        return occupied
+
+    def _schedule_records(self, records: tuple[JobRecord, ...], foreign_gpus: set[str]) -> None:
         claimed = [record for record in records if not record.resources_released]
-        used = {gpu for record in claimed for gpu in record.assigned_gpu_ids}
+        used = foreign_gpus | {gpu for record in claimed for gpu in record.assigned_gpu_ids}
         available_slots = self.max_jobs - len(claimed)
         for record in records:
             if record.state != "queued" or available_slots <= 0:
@@ -338,6 +409,8 @@ class JobManager:
             if state not in TERMINAL_STATES:
                 raise ValueError(f"Invalid supervisor result for {record.job_id}")
             if record.state == state and record.finished_at == result["finished_at"]:
+                if record.state == "lost":
+                    self._resolve_lost_claim(record)
                 return
             self._transition(
                 record,
@@ -370,6 +443,7 @@ class JobManager:
                 self._reconcile(record)
                 return
         if record.state == "lost":
+            self._resolve_lost_claim(record)
             return
         released = self._clean_orphan(handle)
         self._transition(
@@ -386,6 +460,23 @@ class JobManager:
                 )
             ),
         )
+
+    def _resolve_lost_claim(self, record: JobRecord) -> None:
+        handle = read_json(self._directory(record.job_id) / "handle.json")
+        if handle is None or handle.get("token") != record.launch_token:
+            return
+        pid, identity = handle.get("pid"), handle.get("process_identity")
+        if isinstance(pid, int) and identity is not None and process_identity(pid) == identity:
+            return
+        if self._clean_orphan(handle):
+            self._transition(
+                record,
+                resources_released=True,
+                error=(
+                    "Lost supervisor; owned child processes are now confirmed stopped. "
+                    "Job was not retried."
+                ),
+            )
 
     def _clean_orphan(self, handle: dict[str, Any] | None) -> bool:
         if handle is None:

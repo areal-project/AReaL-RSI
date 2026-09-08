@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import signal
+import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
 from pathlib import Path
 
@@ -355,3 +358,222 @@ def test_approved_template_binds_data_without_shell_interpretation(tmp_path: Pat
         ApprovedCommand("bad", ("{program}",), parameters=("program",)).bind(
             {"program": "anything"}, cwd=str(tmp_path)
         )
+
+
+def test_gpu_is_exclusive_across_runs_and_free_devices_can_progress(tmp_path: Path) -> None:
+    with (
+        JobManager(tmp_path / "runs/a", gpu_ids=("0",), auto_monitor=False) as first,
+        JobManager(
+            tmp_path / "runs/b", gpu_ids=("0", "1"), max_jobs=2, auto_monitor=False
+        ) as second,
+    ):
+        owner = first.submit(JobSpec(backend="mock", gpu_count=1, mock_duration_seconds=0.5))
+        blocked = second.submit(JobSpec(backend="mock", gpu_ids=("0",)))
+        independent = second.submit(JobSpec(backend="mock", gpu_count=1))
+        assert blocked.state == "queued"
+        assert independent.assigned_gpu_ids == ("1",)
+        assert wait_for(second, independent.job_id).state == "succeeded"
+        completed = wait_for(first, owner.job_id)
+        admitted = wait_for(second, blocked.job_id)
+        assert admitted.state == "succeeded"
+        assert admitted.started_at is not None and completed.finished_at is not None
+        assert admitted.started_at >= completed.finished_at
+        assert (tmp_path / "runtime/gpu-allocation.lock").read_bytes() == b""
+        assert (tmp_path / "runs/a/jobs" / owner.job_id / "job.json").exists()
+
+
+def test_multi_gpu_waiter_does_not_hold_partial_allocation(tmp_path: Path) -> None:
+    with (
+        JobManager(tmp_path / "runs/a", gpu_ids=("0", "1"), auto_monitor=False) as first,
+        JobManager(tmp_path / "runs/b", gpu_ids=("1", "2"), auto_monitor=False) as second,
+        JobManager(tmp_path / "runs/c", gpu_ids=("2",), auto_monitor=False) as third,
+    ):
+        owner = first.submit(JobSpec(backend="mock", gpu_count=2, mock_duration_seconds=0.4))
+        waiting = second.submit(JobSpec(backend="mock", gpu_count=2))
+        small = third.submit(JobSpec(backend="mock", gpu_count=1))
+        assert waiting.state == "queued" and waiting.assigned_gpu_ids == ()
+        assert small.state == "running" and small.assigned_gpu_ids == ("2",)
+        wait_for(third, small.job_id)
+        wait_for(first, owner.job_id)
+        assert wait_for(second, waiting.job_id).assigned_gpu_ids == ("1", "2")
+
+
+def test_offline_owner_keeps_gpu_until_durable_completion_then_other_run_can_use_it(
+    tmp_path: Path,
+) -> None:
+    first = JobManager(tmp_path / "runs/a", gpu_ids=("0",), auto_monitor=False)
+    owner = first.submit(JobSpec(backend="mock", gpu_count=1, mock_duration_seconds=0.4))
+    first.close(preserve_running=True)
+    with JobManager(tmp_path / "runs/b", gpu_ids=("0",), auto_monitor=False) as second:
+        waiting = second.submit(JobSpec(backend="mock", gpu_count=1))
+        assert waiting.state == "queued"
+        wait_for_file(Path(owner.result_path))
+        assert wait_for(second, waiting.job_id).state == "succeeded"
+        # Reading foreign completion must not write the absent owner's job/event records.
+        raw = read_json(tmp_path / "runs/a/jobs" / owner.job_id / "job.json")
+        assert raw is not None and raw["state"] == "running"
+    with JobManager(tmp_path / "runs/a", gpu_ids=("0",), auto_monitor=False) as restarted:
+        assert restarted.get(owner.job_id).state == "succeeded"
+        assert restarted.get(owner.job_id).pid == owner.pid
+
+
+def test_foreign_stale_result_does_not_release_gpu(tmp_path: Path) -> None:
+    with (
+        JobManager(tmp_path / "runs/a", gpu_ids=("0",), auto_monitor=False) as first,
+        JobManager(tmp_path / "runs/b", gpu_ids=("0",), auto_monitor=False) as second,
+    ):
+        owner = first.submit(JobSpec(backend="mock", gpu_count=1, mock_duration_seconds=30))
+        write_json(
+            Path(owner.result_path),
+            {"token": "wrong-launch", "state": "succeeded", "resources_released": True},
+        )
+        waiting = second.submit(JobSpec(backend="mock", gpu_count=1))
+        assert waiting.state == "queued"
+        first.cancel(owner.job_id)
+        assert wait_for(first, owner.job_id).state == "cancelled"
+        assert wait_for(second, waiting.job_id).state == "succeeded"
+
+
+def test_lost_gpu_claim_survives_owner_restart_and_blocks_other_runs(tmp_path: Path) -> None:
+    first = JobManager(tmp_path / "runs/a", gpu_ids=("0",), auto_monitor=False)
+    owner = first.submit(JobSpec(backend="mock", gpu_count=1, mock_duration_seconds=30))
+    directory = tmp_path / "runs/a/jobs" / owner.job_id
+    wait_for_file(directory / "handle.json")
+    assert owner.pid is not None
+    os.kill(owner.pid, signal.SIGKILL)
+    deadline = time.monotonic() + 2
+    while process_identity(owner.pid) is not None and time.monotonic() < deadline:
+        time.sleep(0.02)
+    write_json(directory / "job.json", asdict(replace(first.get(owner.job_id), started_at=0.1)))
+    first.poll()
+    assert first.get(owner.job_id).state == "lost"
+    first.close()
+    with (
+        JobManager(tmp_path / "runs/a", gpu_ids=("0",), auto_monitor=False) as restarted,
+        JobManager(tmp_path / "runs/b", gpu_ids=("0",), auto_monitor=False) as second,
+    ):
+        assert not restarted.get(owner.job_id).resources_released
+        waiting = second.submit(JobSpec(backend="mock", gpu_count=1))
+        assert waiting.state == "queued"
+        second.cancel(waiting.job_id)
+
+
+def test_lost_claim_releases_only_after_child_group_is_confirmed_stopped(tmp_path: Path) -> None:
+    with (
+        JobManager(tmp_path / "runs/a", gpu_ids=("0",), auto_monitor=False) as first,
+        JobManager(tmp_path / "runs/b", gpu_ids=("0",), auto_monitor=False) as second,
+    ):
+        owner = first.submit(python_job(tmp_path, "import time; time.sleep(0.7)", gpu_count=1))
+        directory = tmp_path / "runs/a/jobs" / owner.job_id
+        wait_for_file(directory / "handle.json")
+        handle = read_json(directory / "handle.json")
+        deadline = time.monotonic() + 3
+        while (handle is None or handle.get("child_pid") is None) and time.monotonic() < deadline:
+            time.sleep(0.01)
+            handle = read_json(directory / "handle.json")
+        assert handle is not None and handle["child_pid"] is not None and owner.pid is not None
+        # Simulate a missing birth-identity observation, so the live child may
+        # not be signalled solely by its numeric PID.
+        write_json(directory / "handle.json", {**handle, "child_identity": "unavailable"})
+        os.kill(owner.pid, signal.SIGKILL)
+        deadline = time.monotonic() + 2
+        while process_identity(owner.pid) is not None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        write_json(directory / "job.json", asdict(replace(first.get(owner.job_id), started_at=0.1)))
+        first.poll()
+        assert first.get(owner.job_id).state == "lost"
+        assert not first.get(owner.job_id).resources_released
+        waiting = second.submit(JobSpec(backend="mock", gpu_count=1))
+        assert waiting.state == "queued"
+        deadline = time.monotonic() + 3
+        while process_identity(handle["child_pid"]) is not None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        first.poll()
+        assert first.get(owner.job_id).state == "lost"
+        assert first.get(owner.job_id).resources_released
+        assert wait_for(second, waiting.job_id).state == "succeeded"
+
+
+def test_paused_scheduler_does_not_claim_gpu_from_another_run(tmp_path: Path) -> None:
+    with (
+        JobManager(
+            tmp_path / "runs/a", gpu_ids=("0",), auto_monitor=False, scheduling_enabled=False
+        ) as paused,
+        JobManager(tmp_path / "runs/b", gpu_ids=("0",), auto_monitor=False) as active,
+    ):
+        waiting = paused.submit(JobSpec(backend="mock", gpu_count=1))
+        owner = active.submit(JobSpec(backend="mock", gpu_count=1, mock_duration_seconds=0.3))
+        assert waiting.state == "queued" and owner.state == "running"
+        paused.scheduling_enabled = True
+        paused.poll()
+        assert paused.get(waiting.job_id).state == "queued"
+        wait_for(active, owner.job_id)
+        assert wait_for(paused, waiting.job_id).state == "succeeded"
+
+
+def test_contended_global_lock_leaves_job_queued_without_blocking(tmp_path: Path) -> None:
+    with JobManager(tmp_path / "runs/a", gpu_ids=("0",), auto_monitor=False) as manager:
+        path = tmp_path / "runtime/gpu-allocation.lock"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a+") as held, ThreadPoolExecutor(max_workers=1) as pool:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            pending = pool.submit(manager.submit, JobSpec(backend="mock", gpu_count=1))
+            try:
+                job = pending.result(timeout=1)
+                assert job.state == "queued"
+            finally:
+                fcntl.flock(held, fcntl.LOCK_UN)
+        assert wait_for(manager, job.job_id).state == "succeeded"
+
+
+def test_independent_processes_cannot_allocate_the_same_gpu_concurrently(tmp_path: Path) -> None:
+    script = """import json,sys,time
+from pathlib import Path
+from areal_rsi.execution import JobManager,JobSpec
+root,ready,go=map(Path,sys.argv[1:])
+with JobManager(root,gpu_ids=('0',),auto_monitor=False) as manager:
+ ready.write_text('ready')
+ deadline=time.monotonic()+10
+ while not go.exists():
+  if time.monotonic()>deadline: raise RuntimeError('barrier expired')
+  time.sleep(0.01)
+ job=manager.submit(JobSpec(backend='mock',gpu_count=1,mock_duration_seconds=0.4))
+ while not manager.get(job.job_id).terminal:
+  if time.monotonic()>deadline: raise RuntimeError('job expired')
+  manager.poll();time.sleep(0.02)
+ result=manager.get(job.job_id)
+ print(json.dumps({'state':result.state,'start':result.started_at,'finish':result.finished_at}))
+"""
+    processes = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                script,
+                str(tmp_path / "runs" / name),
+                str(tmp_path / ("ready-" + name)),
+                str(tmp_path / "go"),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for name in ("a", "b")
+    ]
+    try:
+        for name in ("a", "b"):
+            wait_for_file(tmp_path / ("ready-" + name))
+        (tmp_path / "go").write_text("go")
+        results = []
+        for process in processes:
+            output, error = process.communicate(timeout=12)
+            assert process.returncode == 0, error
+            results.append(json.loads(output))
+        results.sort(key=lambda result: result["start"])
+        assert all(result["state"] == "succeeded" for result in results)
+        assert results[1]["start"] >= results[0]["finish"]
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=3)

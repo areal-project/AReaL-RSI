@@ -18,7 +18,9 @@ manager.close()  # Preserve active work for a subsequent manager.
 
 Set `auto_monitor=False` to drive reconciliation explicitly with `poll()`. The
 default monitor dispatches completion notifications and advances the queue on a
-Python thread. `close(preserve_running=False)` cancels queued and running jobs.
+Python thread. `scheduling_enabled=False` leaves new/queued work stopped while
+allowing already running supervisors to finish and results to be reconciled.
+`close(preserve_running=False)` cancels queued and running jobs.
 
 The run owns `jobs/job-*/job.json`, `launch.json`, `handle.json`, `stdout.log`,
 `supervisor.log`, `cancel.json` and `result.json`. Records and launch environments
@@ -33,15 +35,32 @@ remain in that group, then records its exit status. Recovery checks a PID's birt
 identity and a unique launch token, never only a PID. Uncertain work becomes
 `lost` and is never automatically executed again. Uncertain process ownership
 retains the resource claim. A late authenticated supervisor result can resolve
-that state. A new submission with the same idempotency key returns the existing
-job; a different spec under that key is rejected.
+that state. If the owning manager later confirms the orphan child process group
+has stopped, it releases resources while retaining the `lost` outcome; it does
+not invent an execution result. A new submission with the same idempotency key
+returns the existing job; a different spec under that key is rejected.
 
-`gpu_ids` is the allocation granted to this run. The manager prevents overlap
-within that allocation and sets `CUDA_VISIBLE_DEVICES` for each command, including
-an empty value for CPU jobs. It does not arbitrate GPU ownership between separate
-runs or other host applications. The caller must allocate disjoint devices or
-use an external scheduler. `backend="mock"` exercises the same queue and lifecycle
-without executing the command or using GPUs; its result is labelled `mock`.
+`gpu_ids` lists the devices this run may request. Managers under the same
+`data_root/runs/<run_id>/` automatically coordinate exclusive device allocation
+across runs. `data_root/runtime/gpu-allocation.lock` is an empty flock coordination
+file, not a global job database: all claims and results remain in each run's
+`jobs/` directory. A scheduler briefly locks discovery plus publishing its own
+claim. Contention leaves work queued instead of blocking a caller. Multi-GPU jobs
+claim all requested devices together, so a queued job holds no partial allocation.
+
+Closing/crashing a manager does not release its durable GPU claim. Other managers
+may reuse the device once its detached supervisor has recorded authenticated
+completion, even before the owner has restarted. A missing process or an uncertain
+`lost` job is not treated as a free resource. This also covers service restarts
+and independently launched Python processes, not only threads in one application.
+
+`CUDA_VISIBLE_DEVICES` is set for each command, including an empty value for CPU
+jobs. Device IDs must refer to the same execution host/resource namespace across
+these runs. Separate data roots, custom standalone run paths outside `runs/`, and
+other host applications are outside this coordinator; use an external scheduler
+for those deployments. `backend="mock"` exercises the same exclusive allocation
+and lifecycle without executing its command or using physical GPUs; its result
+is labelled `mock`.
 
 **The local POSIX backend is not a security sandbox.** GPU environment variables
 are scheduling conventions, not access controls. Untrusted code can access host

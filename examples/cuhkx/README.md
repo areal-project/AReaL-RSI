@@ -27,12 +27,13 @@ NVIDIA GPU 环境按 [PyTorch 官方安装说明](https://pytorch.org/get-starte
 
 ## 1. 固定数据与验证划分
 
-下面假设 3、24 是本地训练数据中实际存在的 subject。用户在启动 run 时决定正式划分和采样预算。
+下面假设 3、24、4、23 是本地训练数据中实际存在的 subject。用户决定正式划分和采样预算：3、24 用于迭代验证，4、23 留作最终确认，其余 subject 训练。三组必须互斥且非空。
 
 ```bash
 uv run python -m areal_rsi.adapters.cuhkx prepare \
   --data /datasets/HAR/data --output .rsi/cuhkx-prepared \
-  --validate-subjects 3 24 --modality Depth_Color --max-frames 16
+  --validate-subjects 3 24 --final-subjects 4 23 \
+  --modality Depth_Color --max-frames 16
 ```
 
 准备目录不可覆盖，每个 clip 均匀选取至多 16 帧并复制字节。大量图像会占磁盘；`max-frames` 一旦固定就是验证协议的一部分，不能在比较候选时改变。
@@ -43,7 +44,10 @@ cuhkx-prepared/
   train/inputs/             # 仅训练者的数据
   validate/manifest.json    # 匿名 clip ID 和帧路径，不含标签/subject
   validate/inputs/          # 随机 ID、重新命名的帧，不保留标签目录
+  final/manifest.json       # 独立 subject，仅用于最终确认
+  final/inputs/
   private/validate_labels.json
+  private/final_labels.json
   private/provenance.json   # 原始路径与划分归档
   protocol.json            # 划分、输入摘要、数据类型、协议身份
 ```
@@ -56,41 +60,61 @@ writer.writerow(["clip-A", 1, 0, "Depth_Color", '["custom/one.png", "custom/two.
 
 路径穿越、符号链接、重复 clip / 帧、不合法标签和空划分会被拒绝。
 模态名称必须显式指定；读取现成图像为三通道像素不等于引入 RGB 摄像头模态。
+`--final-subjects` 对单独的数据准备是可选项；没有它时，最终确认和下面的完整研究配置生成会明确失败，不会复用 validate。
 
-## 2. 训练候选并保存 checkpoint
+## 2. 配置可信 runner 和研究入口
 
-复制 `seed/` 到当前 Research Agent 的候选工作区，再调用其中的入口。下列本地命令用于开发联调：
-
-```bash
-.rsi/envs/cuhkx/bin/python examples/cuhkx/seed/train.py \
-  --manifest .rsi/cuhkx-prepared/train/manifest.json \
-  --output .rsi/cuhkx-job-001 --device cpu --epochs 10
-```
-
-输出 `checkpoint.pt`、`config.json`、`training.jsonl`。checkpoint 包含所有推理权重、40 类映射、架构与预处理配置，不包含 optimizer。
-正式运行将 `--device` 改为分配的 GPU。每次作业使用新的输出目录；短训练的诊断结果与正式预算的结果分开比较。
-此种子不提供训练中断后续训，终止训练后重新提交一个新作业；已完成的 checkpoint 可以独立加载用于预测。
-
-## 3. 匿名推理与可信评分
+复制 [operator.example.json](operator.example.json) 到候选目录外，填写 `prepared_data` 的绝对路径、已经安装的 Docker 镜像名和 GPU ID。镜像内需要 Python 与 [requirements.txt](requirements.txt) 中的训练依赖；CUDA wheel 和驱动匹配，由操作员准备。主控和 Docker 挂载路径应位于同一主机，当前 CUHK-X wrapper 没有 SSH runner。
 
 ```bash
-.rsi/envs/cuhkx/bin/python examples/cuhkx/seed/predict.py \
-  --manifest .rsi/cuhkx-prepared/validate/manifest.json \
-  --checkpoint .rsi/cuhkx-job-001/checkpoint.pt \
-  --output .rsi/cuhkx-job-001/validate_predictions.csv
-
-uv run python -m areal_rsi.adapters.cuhkx score \
-  --predictions .rsi/cuhkx-job-001/validate_predictions.csv \
-  --labels .rsi/cuhkx-prepared/private/validate_labels.json \
-  --checkpoint .rsi/cuhkx-job-001/checkpoint.pt \
-  --output .rsi/cuhkx-job-001/verify.json
+uv run python examples/cuhkx/run.py describe \
+  --config /absolute/path/to/cuhkx-operator.json --phase search
 ```
 
-每个 clip 只产生一个预测，评分器要求所有 ID 完整且唯一、预测为 0–39 整数。它重新计算 accuracy，记录 checkpoint 和预测文件摘要；不导入候选模块，不反序列化权重，不读取训练 stdout 的分数。
-种子和评分器都检查单一推理 checkpoint 不超过 100,000,000 字节。扩展为多 checkpoint 或额外权重文件时，调度器须检查整个推理产物包的总量，不能仅传一个小文件通过检查。
+`describe` 检查固定数据、manifest 和图像摘要，并将 Docker 镜像解析为不可变的 image ID；不启动候选、不产生分数。它返回 `protocol_id`、`prepared_protocol_id`、`manifest_id`、`split` 和环境记录。此步骤不证明实际 CUDA 训练已经通过，仍需下面的小规模训练/验证验收。
 
-**候选作业的权限必须由 runner 落实**：训练只挂载 `train/`，推理只挂载 `validate/`、候选代码和固定 checkpoint；禁止访问原始数据、`private/`、宿主密钥及评分器写目录，推理不开放网络。
-上述命令直接在宿主运行，仅供人工控制的种子联调，不构成进程隔离。正式评测必须从冻结的代码/权重快照执行，并由宿主固定 manifest 和训练预算；报告里的摘要本身不能证明候选没有越界。
+推荐用统一生成器完成各阶段预检，并生成可直接加载的 ResearchConfig：
+
+```bash
+uv run python scripts/configure_research.py \
+  --example cuhkx --operator /absolute/path/to/cuhkx-operator.json \
+  --output /absolute/path/to/cuhkx-research.json --max-agents 2
+
+uv run --env-file .env rsi workbench \
+  --config /absolute/path/to/cuhkx-research.json --port 8765
+```
+
+打开 `http://127.0.0.1:8765`。`.env` 中设置 `RSI_API_KEY`，可用 `RSI_BASE_URL` 覆盖模型服务地址；生成器默认使用 `https://4ipic.com`、`gpt-6-astra`、`xhigh`，不会把 API key 写入配置。也可以使用 `rsi research --config ...` 启动命令行研究。
+
+默认预算是 2 个 Research Agent、12 个节点、200 次模型调用、200 万 token、6 次正式验证、1 个并发作业、4 小时；使用 `--max-*` 参数调整。GPU 从 operator 的 `runner.gpu_ids` 读取，每个作业预留配置中的全部 GPU。`--target 0.7` 可显式设定目标 accuracy，不填则保留未设定；`--instructions-file /abs/notes.txt` 可加入研究方向、约束说明等自然语言要求。
+
+生成器预检 search、final 和已配置的 diagnostic，将比较身份写入 `metadata.verification_identity`，不会从第一次候选结果反推可信身份。RSI 在用户已确定的目标、资源和协议内自主决定何时进行最终确认；seed 不会被当成已经评测的 baseline。改变数据、镜像、训练/验证配置后应重新生成配置并建立新的 run；生成器不会覆盖已有配置文件。
+
+## 3. 训练、匿名推理与可信评分
+
+`run.py` 是调度器调用的固定入口。手动小规模验收时，先复制 seed 到候选工作区：
+
+```bash
+cp -R examples/cuhkx/seed /absolute/path/to/candidate
+uv run python examples/cuhkx/run.py train \
+  --candidate /absolute/path/to/candidate --output /absolute/path/to/train-job \
+  --config /absolute/path/to/cuhkx-operator.json
+cp -R /absolute/path/to/train-job/trained /absolute/path/to/candidate/trained
+
+uv run python examples/cuhkx/run.py verify \
+  --candidate /absolute/path/to/candidate --output /absolute/path/to/search-job \
+  --config /absolute/path/to/cuhkx-operator.json --phase search
+```
+
+每次使用新的作业输出目录。研究工作流中的 `train` 命令设置 `output_subdir="trained"`，Research Agent 通过 `collect_job_output(job_id, destination="trained")` 收集训练产物，再冻结候选并请求验证；不会把 `private/` 一起复制回候选。候选中必须存在 `trained/checkpoint.pt`。
+
+可选的候选 `training.json` 用于申请 epochs、batch_size、frames、image_size、width、learning_rate、seed、threads；wrapper 检查 operator 的参数上限，并由 Docker 和独立超时机制限制 GPU、CPU、内存、进程数和运行时间。任意可编辑训练代码可能忽略 epoch 参数，因此实际资源限制依赖容器和超时，不能只相信训练日志。此 seed 不支持中断后续训，已完成 checkpoint 可以独立预测。
+
+默认 Docker：训练只挂载 `train/`，推理只挂载匿名的 `validate/` 或 `final/`；候选快照只读，网络关闭，输出目录独立，不挂载原始数据、`private/` 或宿主密钥。宿主评分器读取私有标签，要求每个 clip 恰好一个 0–39 的预测，不导入候选模块、不反序列化权重、不读取 stdout 中的分数。完整推理候选包（代码、checkpoint 和附加文件）总计不得超过 100,000,000 字节。
+
+`search → validate`、`final → final`，可选 `diagnostic → validate`。最终确认使用同一冻结候选和独立 final subjects，不再修改候选。wrapper 写入 `evaluation.json`，包含 `status`、`metric="accuracy"`、`score`、聚合 `metrics`、`simulated=false`、候选/checkpoint 摘要和各项评测身份；失败返回 `status="incomplete"`、`score=null`，不能更新 best。
+
+`runner.kind=local` 只允许显式 `--allow-local` 且准备数据标记为 synthetic 的 CPU 冒烟；该模式不隔离候选，真实比赛数据不能用它绕过 Docker。生成器也支持同名参数，但只用于上述合成验证。
 
 ## 4. 生成提交文件
 
@@ -104,7 +128,7 @@ uv run python -m areal_rsi.adapters.cuhkx prepare-test \
 
 .rsi/envs/cuhkx/bin/python examples/cuhkx/seed/predict.py \
   --manifest .rsi/cuhkx-test/manifest.json \
-  --checkpoint .rsi/cuhkx-job-001/checkpoint.pt \
+  --checkpoint /absolute/path/to/candidate/trained/checkpoint.pt \
   --output .rsi/cuhkx-job-001/test_predictions.csv
 
 uv run python -m areal_rsi.adapters.cuhkx export \
@@ -120,8 +144,19 @@ uv run python -m areal_rsi.adapters.cuhkx export \
 
 ```bash
 .rsi/envs/cuhkx/bin/python examples/cuhkx/smoke.py --output .rsi/cuhkx-cpu-smoke
-uv run pytest tests/test_cuhkx.py
+uv run pytest tests/test_cuhkx.py tests/test_cuhkx_runner.py tests/test_configure_research.py
 ```
 
 冒烟脚本生成明确标记的合成图像，真的训练 CNN、保存并重新加载 checkpoint、运行匿名预测、按 clip 评分、导出提交 CSV，最终保存 `smoke.json`。
 它只证明代码路径可运行，任何数值都不是 CUHK-X 成绩。真实比赛文件和 GPU 运行需要用户资源到位后再做一次小规模验收。
+
+需要进一步验收整个研究应用的桥接时，使用已准备且包含独立 final 的合成数据：
+
+```bash
+uv run python scripts/smoke_cuhkx_bridge.py \
+  --prepared /absolute/path/to/synthetic-prepared \
+  --training-python /absolute/path/to/torch-env/bin/python \
+  --output /absolute/path/to/new-bridge-smoke
+```
+
+此工具真实执行 `ResearchConfig → App.create → train → 收集 trained → 冻结候选 → search/final → 严格身份校验 → best/final → ZIP 导出`，并检查等待唤醒与会话保持；不构造模型 runtime，不调用模型 API。输出包含 `summary.json`、工具记录、完整 run 目录及 `verified-candidate.zip`。它需要额外的 Torch 环境，因此不纳入默认 pytest。

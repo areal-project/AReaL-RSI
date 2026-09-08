@@ -72,6 +72,16 @@ uv pip install --python /work/KernelBench/.venv/bin/python -e /work/KernelBench
 ## 3. 调度器推荐入口
 
 复制 `operator.example.json` 到操作员配置目录，填入绝对路径和 SSH host alias。配置不放到 Research Agent 的可编辑候选里。
+GPU/SSH、固定数据和 target 名称就绪后，可自动生成主系统配置：
+
+```bash
+uv run python scripts/configure_research.py --example kernelbench \
+  --operator /absolute/path/to/operator.json --output /absolute/path/to/research.json \
+  --target-model FIXED_TARGET_MODEL --target 0.65
+```
+
+脚本对 search/final/diagnostic 做环境身份预检，生成固定 target 的 develop/verify 命令，不调用模型或测候选分数。`--target` 是用户目标，省略时保持未设定；`--instructions-file` 可提供研究建议和优化范围等自然语言要求。数据/环境或 final 池不完整时不会生成可运行配置。
+
 `gpu.kind=ssh` 通过已有 SSH key/agent 访问主机，无密码交互；传输的只有固定题面、target 输出和可信 evaluator。
 远端作业目录会保留，位置归档到 `output/private/remote-job.json`。连接通过远端终端传递挂断，evaluator 收到终止/挂断时终止其活动 worker 进程组；实际 GPU 主机仍需做取消和重连验收。
 

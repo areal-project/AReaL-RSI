@@ -46,7 +46,9 @@ def definition(name: str, tool_description: str, **properties: Any) -> dict[str,
 
 COMMON = [
     definition(
-        "get_state", "Read current authoritative run state, budget and accessible evidence."
+        "get_state",
+        "Read current authoritative run state, budget and evidence previews. "
+        "Use read_record with a returned URI when full evidence is needed.",
     ),
     definition("read_record", "Read an accessible research record by its run URI.", uri=STRING),
     definition(
@@ -303,7 +305,7 @@ class ResearchActions:
                 summary["agents"] = [encode(c.actor(agent_id))]
                 summary.pop("waiting_for_user", None)
             summary["evidence"] = [
-                self.evidence_public(item) for item in c.store.evidence(agent_id)
+                self.evidence_public(item, preview=True) for item in c.store.evidence(agent_id)
             ]
             summary["seed_candidate_id"] = c.state["seed_candidate_id"]
             summary["workspace_candidate_id"] = self.workspace_candidate(agent_id)
@@ -519,13 +521,20 @@ class ResearchActions:
             return ToolResult({"completed": True}, stop=True, reason="completed")
         raise ValueError("Unknown tool")
 
-    def evidence_public(self, record: EvidenceRecord) -> dict[str, Any]:
-        return {
+    def evidence_public(self, record: EvidenceRecord, *, preview: bool = False) -> dict[str, Any]:
+        result = {
             **encode(record),
             "uri": self.c.store.paths.reference(
                 self.c.store.root / "evidence" / f"{record.evidence_id}.json"
             ).uri,
         }
+        if preview:
+            result.update(
+                summary=record.summary[:1000],
+                truncated=len(record.summary) > 1000,
+                summary_chars=len(record.summary),
+            )
+        return result
 
     def require_final_confirmation(self) -> bool:
         contract = self.c.store.brief().verification

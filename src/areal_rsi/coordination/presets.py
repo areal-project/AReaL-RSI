@@ -77,6 +77,16 @@ def example_config(name: str, *, repository: Path) -> ResearchConfig:
         seed = repository / "examples" / "cuhkx" / "seed"
     else:
         raise ValueError("Unknown example template")
+    if name == "cuhkx":
+        brief.instructions += (
+            " This is a bounded workflow rehearsal: inspect enough primary-source evidence "
+            "to choose feasible directions, then act on the findings; an exhaustive literature "
+            "survey is unnecessary. Simulation jobs publish simulation.json, not weights. "
+            "The simulated verifier accepts a frozen source-only candidate and does not "
+            "require an actual checkpoint. Exercise candidate refinement and report decisions "
+            "without waiting for real training, credentials or GPU resources. Keep reports "
+            "and shared evidence summaries concise; archive detailed literature separately."
+        )
     return ResearchConfig(
         brief=brief,
         seed_dir=str(seed),

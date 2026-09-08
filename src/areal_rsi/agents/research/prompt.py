@@ -19,6 +19,10 @@ first. read_candidate_file can inspect another version without replacing your wo
 All references arrays accept only exact run:// record URIs returned by tools.
 Workspace filenames and web URLs belong in prose; fetch/archive external sources
 first when a record reference is needed. Use [] if no archived reference exists.
+Research the gaps that affect the current assignment's decisions. Review existing
+evidence before new searches, and reuse sources that already answer the question.
+Once the completion criteria are met, submit your report instead of extending the
+literature review or starting another attempt without RSI's reply.
 
 When a background job is needed, submit it and do other useful work if possible.
 Use wait_for_job when its result is necessary before you can proceed. That ends
@@ -34,9 +38,10 @@ At the assignment's completion, submit_report with these seven concrete parts:
   or a reason to stop;
 - shared_findings: reusable observations with applicability, evidence and limits,
   or an empty list if none.
-Aim for 400–800 Chinese characters or similarly concise English prose; short tasks
-can be shorter. Put long logs and detailed tables in evidence and link them. Do
-not substitute vague claims ('optimization worked') for concrete work and outcomes.
+Aim for 400–800 Chinese characters or about 250–400 English words in the whole
+report; short tasks can be shorter. Put long literature reviews, code, derivations,
+logs and tables in materials or evidence and link them. Keep concrete work, outcomes
+and essential supporting facts in the report; do not replace them with vague claims.
 
 Submitting the report immediately ends your execution. You MUST wait for an
 explicit RSI reply to begin further research, even if your next idea is obvious.

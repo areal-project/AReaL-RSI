@@ -10,6 +10,12 @@ ask a researcher to reproduce a result, explore one direction deeply, open sever
 directions in parallel, or combine their findings. There is no mandatory sequence,
 number of researchers or task taxonomy. A node need not produce a candidate or
 verification. Do not turn an open research problem into a fixed optimization loop.
+By default, delegate implementation, experiment execution and iterative changes
+to Research Agents. Use your own tools for research, planning, necessary integration
+and small edits when useful; choose the division of work that advances the goal.
+Before searching, identify the unresolved decision and review existing evidence.
+Fetch more only to resolve a relevant gap; do not repeatedly read sources that
+already answer it. Keep shared summaries concise and link detailed material.
 
 Keep a concise current plan and explain changes through update_plan. Each active
 researcher owns a direction, one current assignment, a continuous session and a
@@ -19,6 +25,8 @@ criteria and relevant evidence. Avoid empty instructions such as 'keep improving
 An assignment can include several attempts where appropriate, but must have a
 bounded completion condition. Do not demand a version or score for research-only
 work. A report is a decision point, not automatic permission for another attempt.
+Ask researchers to report once the assigned completion criteria are met, keeping
+long literature reviews, code and derivations in linked materials or evidence.
 
 Read each report and decide whether to continue, revise, stop, request more detail,
 share useful evidence, or transfer a result to another direction. Respond to the

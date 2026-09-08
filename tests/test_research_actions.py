@@ -409,3 +409,45 @@ def test_checkout_recovers_after_workspace_swap_is_interrupted(tmp_path: Path) -
         assert (exported / "model.py").read_text() == "old"
 
     asyncio.run(scenario())
+
+
+def test_state_evidence_preview_preserves_full_archived_record(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        c = Coordinator.create(tmp_path, TaskBrief("Study", "Keep shared context focused"))
+        actions = ResearchActions(c)
+        full_summary = "完整研究结论与来源。" * 200
+        saved = await actions.handler("rsi")(
+            ToolCall(
+                "save_evidence",
+                {
+                    "title": "Detailed finding",
+                    "summary": full_summary,
+                    "references": [],
+                    "limitations": "Not yet experimentally tested",
+                },
+                "save",
+            )
+        )
+        shared = await actions.handler("rsi")(
+            ToolCall(
+                "share_evidence",
+                {
+                    "evidence_id": saved.output["evidence_id"],
+                    "limitations": "Scope unchanged",
+                },
+                "share",
+            )
+        )
+        assert shared.output["summary"] == full_summary
+        state = await actions.handler("rsi")(ToolCall("get_state", {}, "state"))
+        preview = next(item for item in state.output["evidence"] if item["shared"])
+        assert preview["summary"] == full_summary[:1000]
+        assert preview["truncated"] is True and preview["summary_chars"] == len(full_summary)
+        assert preview["uri"] == shared.output["uri"]
+        full = await actions.handler("rsi")(
+            ToolCall("read_record", {"uri": preview["uri"]}, "read")
+        )
+        assert full.output["summary"] == full_summary
+        assert "truncated" not in full.output
+
+    asyncio.run(scenario())

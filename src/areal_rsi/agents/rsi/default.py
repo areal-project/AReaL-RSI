@@ -15,13 +15,13 @@ from areal_rsi.api.base import (
     ModelVersion,
     RunState,
 )
-from areal_rsi.modules.runtime import DshAgentRuntime, DshSession
+from areal_rsi.api.modules import AgentSession, ConfiguredAgentRuntime
 
 
 class DefaultRsiAgent:
     def __init__(
         self,
-        runtime: DshAgentRuntime,
+        runtime: ConfiguredAgentRuntime,
         model: ModelVersion,
         baseline: str,
         benchmark: str,
@@ -46,7 +46,7 @@ class DefaultRsiAgent:
         self.research_agent_count = research_agent_count
         self.workflow_name = workflow_name
         self.evolution_target = evolution_target
-        self.session: DshSession | None = None
+        self.session: AgentSession | None = None
 
     async def chat(self, message: str) -> str | ExperimentPlan:
         if self.session is None:
@@ -65,7 +65,7 @@ class DefaultRsiAgent:
             self.session = await self.runtime.open(
                 AgentSpec(
                     "rsi-agent",
-                    "deepseek-harness@v1",
+                    "areal-agent-runtime@v1",
                     self.model,
                     (prompt,),
                 )
@@ -102,7 +102,7 @@ class DefaultRsiAgent:
             '只返回 JSON {"stop_agent_ids":[],"reason":"简短理由"}。'
         )
         session = await self.runtime.open(
-            AgentSpec("rsi-controller", "deepseek-harness@v1", self.model, (prompt,))
+            AgentSpec("rsi-controller", "areal-agent-runtime@v1", self.model, (prompt,))
         )
         try:
             answer = await ask_json(

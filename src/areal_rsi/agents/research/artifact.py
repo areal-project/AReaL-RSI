@@ -18,6 +18,7 @@ from areal_rsi.api.base import (
     ModelVersion,
     SolutionVersion,
 )
+from areal_rsi.api.modules import ConfiguredAgentRuntime
 from areal_rsi.base.storage import (
     FileContentStore,
     FileMemory,
@@ -28,7 +29,6 @@ from areal_rsi.base.storage import (
     safe_relative,
     write_json,
 )
-from areal_rsi.modules.runtime import DshAgentRuntime
 
 
 class ArtifactResearchAgent(DefaultResearchAgent):
@@ -37,7 +37,7 @@ class ArtifactResearchAgent(DefaultResearchAgent):
     def __init__(
         self,
         agent_id: str,
-        runtime: DshAgentRuntime,
+        runtime: ConfiguredAgentRuntime,
         model: ModelVersion,
         content: FileContentStore,
         memory: FileMemory,

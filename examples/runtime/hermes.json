@@ -1,0 +1,12 @@
+{
+  "default": {
+    "kind": "hermes",
+    "config": {
+      "hermesRoot": "~/.hermes/hermes-agent",
+      "python": "~/.hermes/hermes-agent/venv/bin/python"
+    }
+  },
+  "readable_paths": [
+    "~/.hermes/hermes-agent"
+  ]
+}

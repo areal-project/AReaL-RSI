@@ -7,8 +7,8 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Annotated, Any
 
-from mcp.server.fastmcp import FastMCP
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import Field, StrictBool
 
@@ -122,8 +122,8 @@ async def _invoke(operation: Callable[[], Awaitable[dict[str, Any]]]) -> str:
         raise ToolError("实验操作失败，请检查本地配置或实验日志。") from None
 
 
-def create_server(controller: ExperimentController) -> FastMCP:
-    server = FastMCP(
+def create_server(controller: ExperimentController) -> MCPServer:
+    server = MCPServer(
         "areal-rsi",
         instructions=(
             "先用 rsi_plan 生成固定配置的实验计划并展示给用户。"
@@ -135,7 +135,9 @@ def create_server(controller: ExperimentController) -> FastMCP:
 
     @server.tool(
         structured_output=False,
-        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False),
+        annotations=ToolAnnotations(
+            read_only_hint=False, destructive_hint=False, open_world_hint=False
+        ),
     )
     async def rsi_plan(goal: Goal, max_iterations: Iterations) -> str:
         """生成待确认计划，不启动实验。只接受目标和轮数；各 Agent 的有效模型、评测集和研究线数量
@@ -151,7 +153,7 @@ def create_server(controller: ExperimentController) -> FastMCP:
     @server.tool(
         structured_output=False,
         annotations=ToolAnnotations(
-            readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True
+            read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=True
         ),
     )
     async def rsi_start(plan_id: Identifier, confirmed: StrictBool) -> str:
@@ -161,7 +163,8 @@ def create_server(controller: ExperimentController) -> FastMCP:
         return await _invoke(lambda: controller.start(plan_id, confirmed=confirmed))
 
     @server.tool(
-        structured_output=False, annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False)
+        structured_output=False,
+        annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
     )
     async def rsi_status(run_id: Identifier | None = None) -> str:
         """查看指定实验或最近实验的有界聚合状态，不提供完整轨迹或隐藏评测明细。"""
@@ -170,7 +173,7 @@ def create_server(controller: ExperimentController) -> FastMCP:
     @server.tool(
         structured_output=False,
         annotations=ToolAnnotations(
-            readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False
+            read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=False
         ),
     )
     async def rsi_stop(run_id: Identifier) -> str:
@@ -179,7 +182,9 @@ def create_server(controller: ExperimentController) -> FastMCP:
 
     @server.tool(
         structured_output=False,
-        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=True),
+        annotations=ToolAnnotations(
+            read_only_hint=False, destructive_hint=False, open_world_hint=True
+        ),
     )
     async def rsi_resume(run_id: Identifier, confirmed: StrictBool) -> str:
         """恢复指定实验；confirmed 必须为用户明确确认后的 true。"""

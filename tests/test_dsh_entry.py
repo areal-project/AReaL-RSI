@@ -219,8 +219,7 @@ def test_existing_preset_refreshes_persona_and_preserves_tools(
     assert tree[1] == {"id": "tool-bash", "name": "@deepseek-ai/dsh-tool-bash"}
     tree[1]["config"] = {"timeout": 42}
     output.write_text(
-        yaml.safe_dump(tree)
-        + "- id: custom-tool\n  config:\n    cwd: !!js process.cwd()\n"
+        yaml.safe_dump(tree) + "- id: custom-tool\n  config:\n    cwd: !!js process.cwd()\n"
     )
     monkeypatch.setattr(dsh_profile, "PERSONA", "Updated Interaction Agent persona\n")
     dsh_profile.ensure_rsi_preset(tmp_path, home)
@@ -297,3 +296,28 @@ def test_mcp_environment_is_forwarded_at_runtime_without_persisting_values(
     assert "fixture-credential" not in path.read_text()
     assert "unrelated-credential" not in path.read_text()
     assert "override-fixture-key" not in path.read_text()
+
+
+def test_responses_frontend_uses_native_provider_and_runtime_proxy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RSI_TUI_MODEL_API", "responses")
+    path = dsh_config.write_profile_patch(tmp_path, tmp_path, "gpt-5.6-luna")
+    patch = yaml.safe_load(path.read_text().replace("!!js", "!!str"))
+    frontend = next(row for row in patch if row.get("id") == "dsh-tui")
+    provider = next(row for row in patch if row.get("id") == "llm-pi-ai")
+    assert frontend["config"]["provider"] == "rsi-responses"
+    route = provider["config"]["providers"]["rsi-responses"]
+    assert route["api"] == "openai-responses"
+    assert route["apiKeyEnv"] == "DEEPSEEK_API_KEY"
+    node = shutil.which("node")
+    assert node is not None
+    result = subprocess.run(
+        [node, "-e", "process.stdout.write(" + route["baseURL"] + ")"],
+        env={"DEEPSEEK_BASE_URL": "http://127.0.0.1:12345"},
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=5,
+    )
+    assert result.stdout == "http://127.0.0.1:12345/v1"

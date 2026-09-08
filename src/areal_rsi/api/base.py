@@ -346,7 +346,7 @@ class AgentSpec:
     """Explicit dependencies used to assemble one infrastructure Agent."""
 
     agent_id: str
-    # Runtime registry key, for example "deepseek-harness@v1".
+    # Runtime registry key, for example "areal-agent-runtime@v1".
     runtime: str
     model: ModelVersion
     prompt_templates: tuple[ContentRef, ...] = ()

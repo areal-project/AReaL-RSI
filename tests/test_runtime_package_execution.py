@@ -1,0 +1,493 @@
+"""Real package/SDK processes against a deterministic local model; no paid inference."""
+
+from __future__ import annotations
+
+import asyncio
+import importlib.util
+import json
+import os
+import shutil
+import tempfile
+import threading
+import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+
+from areal_rsi.api.base import AgentSpec, ModelVersion
+from areal_rsi.base.storage import FileContentStore, FileTrajectoryStore, now
+from areal_rsi.modules.runtime_package import PackageAgentRuntime, RuntimeSettings
+
+
+class ScriptedModel:
+    def __init__(self) -> None:
+        self.requests: list[dict[str, Any]] = []
+        self.results: list[str] = []
+        self.final_text: Any = lambda request: "RSI_FINAL_OK"
+        self.before_reply: Any = lambda: None
+        self.force_mcp = False
+        owner = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                owner.requests.append(request)
+                owner.before_reply()
+                if "messages" not in request:
+                    self.send_error(404, "Scripted endpoint supports Chat Completions and Messages")
+                    return
+                messages = request["messages"]
+                chat = self.path.endswith("/chat/completions")
+                tools = request.get("tools", [])
+                result_seen = any(
+                    m.get("role") == "tool"
+                    or (
+                        isinstance(m.get("content"), list)
+                        and any(b.get("type") == "tool_result" for b in m["content"])
+                    )
+                    for m in messages
+                )
+                if result_seen:
+                    owner.results.append(
+                        json.dumps(
+                            [m for m in messages if m.get("role") == "tool"]
+                            + [
+                                b
+                                for m in messages
+                                if isinstance(m.get("content"), list)
+                                for b in m["content"]
+                                if b.get("type") == "tool_result"
+                            ]
+                        )
+                    )
+                tool = None
+                for item in tools:
+                    t = item.get("function", item)
+                    if "workspace_run" in t["name"] or t["name"].split(".")[-1] in (
+                        "run",
+                        "workspace_run",
+                        "exec_command",
+                        "terminal",
+                        "shell",
+                        "Bash",
+                    ):
+                        tool = t
+                        break
+                if owner.force_mcp:
+                    tool = next(
+                        (
+                            t.get("function", t)
+                            for t in tools
+                            if "rsi_mcp_" in t.get("name", t.get("function", {}).get("name", ""))
+                        ),
+                        None,
+                    )
+                if not result_seen and tool:
+                    schema = tool.get("input_schema", tool.get("parameters", {}))
+                    properties = schema.get("properties", {})
+                    command = "printf RSI_TOOL_OK"
+                    args: dict[str, Any]
+                    if owner.force_mcp:
+                        args = {"expression": "6 * 7"}
+                    elif "argv" in properties:
+                        args = {"argv": ["sh", "-c", command]}
+                    elif "cmd" in properties:
+                        args = {"cmd": command}
+                    elif properties.get("command", {}).get("type") == "array":
+                        args = {"command": ["sh", "-c", command]}
+                    else:
+                        args = {"command": command}
+                    blocks = [
+                        {
+                            "type": "tool_use",
+                            "id": "call_proof",
+                            "name": tool["name"],
+                            "input": args,
+                        }
+                    ]
+                    stop = "tool_use"
+                else:
+                    blocks = [{"type": "text", "text": owner.final_text(request)}]
+                    stop = "end_turn"
+                self.send_response(200)
+                if chat and request.get("stream"):
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    delta = (
+                        {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_proof",
+                                    "type": "function",
+                                    "function": {
+                                        "name": blocks[0]["name"],
+                                        "arguments": json.dumps(blocks[0]["input"]),
+                                    },
+                                }
+                            ]
+                        }
+                        if stop == "tool_use"
+                        else {"content": "RSI_FINAL_OK"}
+                    )
+                    choices: list[dict[str, Any]] = [
+                        {"delta": delta, "finish_reason": None},
+                        {
+                            "delta": {},
+                            "finish_reason": "tool_calls" if stop == "tool_use" else "stop",
+                        },
+                    ]
+                    for choice in choices:
+                        event = {
+                            "id": "completion-proof",
+                            "object": "chat.completion.chunk",
+                            "model": request["model"],
+                            "choices": [{"index": 0, **choice}],
+                        }
+                        self.wfile.write(("data: " + json.dumps(event) + "\n\n").encode())
+                    self.wfile.write(b"data: [DONE]\n\n")
+                    self.wfile.flush()
+                    self.close_connection = True
+                elif chat:
+                    message: dict[str, Any] = {
+                        "role": "assistant",
+                        "content": owner.final_text(request),
+                    }
+                    if stop == "tool_use":
+                        message = {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call_proof",
+                                    "type": "function",
+                                    "function": {
+                                        "name": blocks[0]["name"],
+                                        "arguments": json.dumps(blocks[0]["input"]),
+                                    },
+                                }
+                            ],
+                        }
+                    body = json.dumps(
+                        {
+                            "id": "completion-proof",
+                            "object": "chat.completion",
+                            "created": 1,
+                            "model": request["model"],
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "message": message,
+                                    "finish_reason": "tool_calls" if stop == "tool_use" else "stop",
+                                }
+                            ],
+                            "usage": {
+                                "prompt_tokens": 10,
+                                "completion_tokens": 5,
+                                "total_tokens": 15,
+                            },
+                        }
+                    ).encode()
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                else:
+                    body = json.dumps(
+                        {
+                            "id": "msg-proof",
+                            "type": "message",
+                            "role": "assistant",
+                            "model": request["model"],
+                            "content": blocks,
+                            "stop_reason": stop,
+                            "stop_sequence": None,
+                            "usage": {"input_tokens": 10, "output_tokens": 5},
+                        }
+                    ).encode()
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+
+            def log_message(self, format: str, *args: Any) -> None:
+                pass
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.url = f"http://127.0.0.1:{self.server.server_port}"
+
+    def close(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join()
+
+
+@unittest.skipUnless(
+    importlib.util.find_spec("anthropic"), "Install the anthropic extra for SDK proof"
+)
+class RealPackageExecutionTest(unittest.IsolatedAsyncioTestCase):
+    async def check_harness(self, kind: str, config: dict[str, Any]) -> None:
+        model_server = ScriptedModel()
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp).resolve()
+                content = FileContentStore(root / "content")
+                trajectories = FileTrajectoryStore(root / "trajectories", content)
+                runtime = PackageAgentRuntime(
+                    root / "sessions",
+                    content,
+                    trajectories,
+                    settings=RuntimeSettings(
+                        {
+                            "default": {"kind": kind, "config": config},
+                            "readable_paths": [config["hermesRoot"]] if kind == "hermes" else [],
+                        }
+                    ),
+                    role="task-agent",
+                    dsh_root=Path(os.environ["RSI_TEST_DSH_ROOT"])
+                    if os.environ.get("RSI_TEST_DSH_ROOT")
+                    else None,
+                    base_url=model_server.url,
+                    api_key="local-proof",
+                    timeout=90,
+                )
+                model = ModelVersion(
+                    "model-proof", "test-model", await content.put_text("model"), now()
+                )
+                session = await runtime.open(
+                    AgentSpec(
+                        "task-agent",
+                        "deepseek-harness@v1",
+                        model,
+                        (await content.put_text("Use a shell tool, then give a final answer."),),
+                        tools=("bash@v1",),
+                    )
+                )
+                try:
+                    self.assertEqual(
+                        await session.send("Execute printf RSI_TOOL_OK"), "RSI_FINAL_OK"
+                    )
+                    self.assertTrue(any("RSI_TOOL_OK" in result for result in model_server.results))
+                    self.assertIn("tool.completed", [e["type"] for e in session.events])
+                except BaseException:
+                    for log in session.directory.rglob("*.log"):
+                        print(str(log), log.read_text(errors="replace")[-4000:])
+                    print(
+                        "model requests:",
+                        [
+                            (r.get("tools", []), r.get("messages", [])[-1:])
+                            for r in model_server.requests
+                        ],
+                    )
+                    raise
+                finally:
+                    await session.finish()
+        finally:
+            await asyncio.to_thread(model_server.close)
+
+    async def test_anthropic_tool_roundtrip(self) -> None:
+        await self.check_harness("anthropic", {})
+
+    @unittest.skipUnless(
+        os.environ.get("RSI_TEST_NATIVE_HARNESSES") == "1", "Opt in to native DSH installation"
+    )
+    async def test_dsh_tool_roundtrip(self) -> None:
+        from deepseek_harness_runtime import bundled_runtime_path  # type: ignore[import-untyped]
+
+        await self.check_harness("dsh", {"dshBin": str(bundled_runtime_path()), "profile": "sdk"})
+
+    @unittest.skipUnless(
+        os.environ.get("RSI_TEST_NATIVE_HARNESSES") == "1", "Opt in to native Codex execution"
+    )
+    async def test_codex_tool_roundtrip(self) -> None:
+        if not shutil.which("codex"):
+            self.skipTest("Official Codex CLI is not installed")
+        await self.check_harness(
+            "codex-cli", {"modelProtocol": "anthropic", "codexBin": shutil.which("codex")}
+        )
+
+    async def test_complete_rsi_experiment(self) -> None:
+        from unittest.mock import patch
+
+        from areal_rsi.api.base import ExperimentPlan, RunState
+        from areal_rsi.app import LocalApp
+
+        model_server = ScriptedModel()
+
+        def answer(request: dict[str, Any]) -> str:
+            system = json.dumps(request.get("system", []), ensure_ascii=False)
+            if "ResearchAgent improving" in system:
+                return json.dumps(
+                    {
+                        "reason": "local integration fixture",
+                        "files": {
+                            "prompt.md": (
+                                "Solve the task carefully. Verify your reasoning. "
+                                "End with #### followed by the numeric answer.\n"
+                            )
+                        },
+                    }
+                )
+            if "Choose the next version" in system:
+                return '{"candidate_index":0}'
+            if "外层研究控制器" in system:
+                return '{"stop_agent_ids":[],"reason":"continue fixture"}'
+            if "RSI 研发入口" in system:
+                return '{"plan":{"goal":"local integration proof","max_iterations":1}}'
+            return "#### 0"
+
+        model_server.final_text = answer
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp).resolve()
+                config = root / "runtime.json"
+                config.write_text('{"default":{"kind":"anthropic"}}')
+                with patch.dict(
+                    "os.environ",
+                    {
+                        "RSI_RUNTIME_CONFIG": str(config),
+                        "RSI_RESEARCH_AGENT_COUNT": "2",
+                        "RSI_TEACHER_MODEL": "fixture",
+                        "RSI_TEACHER_BASE_URL": model_server.url,
+                        "RSI_TARGET_MODEL": "fixture",
+                        "RSI_TARGET_BASE_URL": model_server.url,
+                        "RSI_TEACHER_API_KEY": "",
+                        "RSI_TARGET_API_KEY": "",
+                    },
+                    clear=True,
+                ):
+                    app = await LocalApp.create(root / "experiment", lambda _: None)
+                    try:
+                        plan = await app.rsi.chat("Run one iteration")
+                        assert isinstance(plan, ExperimentPlan)
+                        run = await app.service.start(plan)
+                        result = await asyncio.wait_for(app.service.tasks[run.run_id], 120)
+                        self.assertEqual(result.state, RunState.SUCCEEDED, result.error)
+                        self.assertEqual(len(result.research_agents), 2)
+                        self.assertTrue(list((app.root / "trajectories").glob("*.json")))
+                    finally:
+                        await app.close()
+        finally:
+            await asyncio.to_thread(model_server.close)
+
+    async def test_cancel_commits_terminal_and_reaps_worker(self) -> None:
+        from areal_agent_runtime.adapters.storage import FileSystemStateStore
+
+        model_server = ScriptedModel()
+        release = threading.Event()
+        model_server.before_reply = lambda: release.wait(20)
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp).resolve()
+                content = FileContentStore(root / "content")
+                runtime = PackageAgentRuntime(
+                    root / "sessions",
+                    content,
+                    FileTrajectoryStore(root / "trajectories", content),
+                    settings=RuntimeSettings({"default": {"kind": "anthropic"}}),
+                    role="task-agent",
+                    base_url=model_server.url,
+                    api_key="local",
+                    timeout=30,
+                )
+                model = ModelVersion("m", "fixture", await content.put_text("model"), now())
+                session = await runtime.open(
+                    AgentSpec("task-agent", "areal-agent-runtime@v1", model)
+                )
+                task = asyncio.create_task(session.send("wait"))
+                async with asyncio.timeout(15):
+                    while not model_server.requests:
+                        await asyncio.sleep(0.02)
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+                await session.finish()
+                self.assertIsNotNone(session.process.returncode)
+                state = FileSystemStateStore(session.directory / "data/state")
+                snapshot = await state.get_run(session.run_ids[-1])
+                assert snapshot is not None
+                self.assertEqual(snapshot.status, "cancelled")
+                self.assertIn("run.cancelled", [e["type"] for e in session.events])
+        finally:
+            release.set()
+            await asyncio.to_thread(model_server.close)
+
+    @unittest.skip("User requested skipping local Claude Code execution")
+    async def test_claude_code_execution(self) -> None:
+        await self.check_harness("claude-code", {})
+
+    @unittest.skip("Claude SDK also launches Claude Code; local execution excluded")
+    async def test_claude_sdk_execution(self) -> None:
+        await self.check_harness("claude-agent-sdk", {})
+
+    async def test_candidate_mcp_is_an_application_tool(self) -> None:
+        import sys
+
+        import areal_rsi
+
+        model_server = ScriptedModel()
+        model_server.force_mcp = True
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp).resolve()
+                workspace = root / "workspace"
+                shutil.copytree(Path(areal_rsi.__file__).parent / "default_harness", workspace)
+                content = FileContentStore(root / "content")
+                runtime = PackageAgentRuntime(
+                    root / "sessions",
+                    content,
+                    FileTrajectoryStore(root / "trajectories", content),
+                    settings=RuntimeSettings({"default": {"kind": "anthropic"}}),
+                    role="task-agent",
+                    base_url=model_server.url,
+                    api_key="local",
+                )
+                runtime.mcp_registry["math"] = {
+                    "serverName": "arithmetic",
+                    "transport": "stdio",
+                    "command": sys.executable,
+                    "args": [str(workspace / "tools/math_mcp.py")],
+                    "cwd": str(workspace),
+                }
+                model = ModelVersion("m", "fixture", await content.put_text("model"), now())
+                session = await runtime.open(
+                    AgentSpec("task-agent", "areal-agent-runtime@v1", model, mcp_servers=("math",)),
+                    workspace_root=str(workspace),
+                )
+                try:
+                    self.assertEqual(
+                        await session.send("Use the arithmetic MCP tool"), "RSI_FINAL_OK"
+                    )
+                    self.assertTrue(any("42" in r for r in model_server.results))
+                    completed = [e for e in session.events if e["type"] == "tool.completed"]
+                    self.assertEqual(len(completed), 1)
+                    self.assertIn("rsi_mcp_", json.dumps(completed))
+                finally:
+                    await session.finish()
+        finally:
+            await asyncio.to_thread(model_server.close)
+
+    @unittest.skipUnless(
+        os.environ.get("RSI_TEST_HERMES_ROOT"), "Set actual Hermes installation root"
+    )
+    async def test_hermes_tool_roundtrip(self) -> None:
+        root = Path(os.environ["RSI_TEST_HERMES_ROOT"]).resolve()
+        self.assertTrue((root / "venv/bin/tirith").is_file(), "Preinstall the real Tirith scanner")
+        await self.check_harness(
+            "hermes",
+            {
+                "hermesRoot": str(root),
+                "python": str(root / "venv/bin/python"),
+                "nativeToolsets": ["terminal"],
+                "env": {"TIRITH_BIN": str(root / "venv/bin/tirith")},
+            },
+        )
+
+    @unittest.skipUnless(
+        os.environ.get("RSI_TEST_DSH_ROOT"), "Set shared DSH CLI installation root"
+    )
+    async def test_dsh_shared_cli_tool_roundtrip(self) -> None:
+        await self.check_harness("dsh", {})

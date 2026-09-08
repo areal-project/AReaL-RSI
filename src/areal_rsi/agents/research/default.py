@@ -21,6 +21,7 @@ from areal_rsi.api.base import (
     ResearchChange,
     SolutionVersion,
 )
+from areal_rsi.api.modules import AgentSession, ConfiguredAgentRuntime
 from areal_rsi.base.storage import (
     FileContentStore,
     FileMemory,
@@ -31,14 +32,13 @@ from areal_rsi.base.storage import (
     write_json,
 )
 from areal_rsi.modules.harness import editable
-from areal_rsi.modules.runtime import DshAgentRuntime, DshSession
 
 
 class DefaultResearchAgent:
     def __init__(
         self,
         agent_id: str,
-        runtime: DshAgentRuntime,
+        runtime: ConfiguredAgentRuntime,
         model: ModelVersion,
         content: FileContentStore,
         memory: FileMemory,
@@ -46,7 +46,9 @@ class DefaultResearchAgent:
         root: Path,
         *,
         editable_path: Callable[[str], bool] = editable,
-        harness_description: str = "DeepSeek Harness；保持原始输出格式及工具契约",
+        harness_description: str = (
+            "由 ARealAgentRuntime 配置选择的 Harness；保持原始输出格式及工具契约"
+        ),
     ):
         self.agent_id = agent_id
         self.runtime = runtime
@@ -59,12 +61,12 @@ class DefaultResearchAgent:
         self.harness_description = harness_description
         self.last_trajectory: str | None = None
 
-    async def _session(self, system: str, workspace: Path, *, tools: bool = True) -> DshSession:
+    async def _session(self, system: str, workspace: Path, *, tools: bool = True) -> AgentSession:
         prompt = await self.content.put_text(system)
         return await self.runtime.open(
             AgentSpec(
                 self.agent_id,
-                "deepseek-harness@v1",
+                "areal-agent-runtime@v1",
                 self.model,
                 (prompt,),
                 tools=("bash@v1",) if tools else (),

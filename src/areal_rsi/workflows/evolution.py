@@ -250,6 +250,8 @@ class HarnessEvolutionWorkflow:
                 change = decode(self._change_type, json.loads(change_path.read_text()))
             else:
                 self.update_progress(agent.agent_id, phase="propose")
+                if self.state.plan.target is None:
+                    raise ValueError("固定演化工作流需要明确的优化目标")
                 change = await researcher.propose(
                     self.state.plan.goal, self.state.plan.target, current, train_report, bundle
                 )

@@ -416,7 +416,7 @@ class ExperimentPlan:
     workflow: str
     benchmark: str
     baseline_solution_id: str | None
-    target: EvolutionTarget
+    target: EvolutionTarget | None
     max_iterations: int
     research_agent_count: int = 1
     stop_when_goal_reached: bool = True
@@ -433,3 +433,7 @@ class ExperimentRun:
     started_at: str | None = None
     finished_at: str | None = None
     error: str | None = None
+    brief_ref: RecordRef | None = None
+    baseline_result_ref: RecordRef | None = None
+    best_result_ref: RecordRef | None = None
+    final_result_ref: RecordRef | None = None

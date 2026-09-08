@@ -172,7 +172,7 @@ class RunReader:
             "goal": run.plan.goal,
             "state": run.state.value,
             "workflow": run.plan.workflow,
-            "target": run.plan.target.value,
+            "target": run.plan.target.value if run.plan.target is not None else None,
             "benchmark": run.plan.benchmark,
             "model": model_name,
             "target_model": model_name,

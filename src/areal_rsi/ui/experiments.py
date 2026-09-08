@@ -171,9 +171,7 @@ class ExperimentController:
             "benchmark": run.plan.benchmark,
             "teacher_model_name": run.plan.config.get("teacher_model_name"),
             "agent_models": run.plan.config.get("agent_models"),
-            "interaction_model_name": run.plan.config.get(
-                "interaction_model_name", run.plan.config.get("frontend_model_name")
-            ),
+            "interaction_model_name": run.plan.config.get("interaction_model_name"),
             "target_model_name": run.plan.config.get(
                 "target_model_name", run.plan.config.get("model_name")
             ),

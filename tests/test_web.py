@@ -49,7 +49,7 @@ class WebTest(unittest.TestCase):
             research_agent_count=2,
             config={
                 "teacher_model_name": "teacher-default-fixture-model",
-                "frontend_model_name": "interaction-agent-fixture-model",
+                "interaction_model_name": "interaction-agent-fixture-model",
                 "agent_models": {
                     "rsi-agent": {"model": "rsi-agent-fixture-model"},
                     "research-agent-1": {"model": "research-agent-fixture-model"},

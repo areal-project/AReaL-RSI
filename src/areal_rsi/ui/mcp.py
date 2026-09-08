@@ -82,8 +82,6 @@ def _summary(value: dict[str, Any]) -> dict[str, Any]:
         config = plan.get("config", {})
         for key in ("teacher_model_name", "target_model_name", "interaction_model_name"):
             model = config.get(key)
-            if key == "interaction_model_name" and model is None:
-                model = config.get("frontend_model_name")
             if key == "target_model_name" and model is None:
                 model = config.get("model_name")  # 兼容历史单模型计划。
             if isinstance(model, str):

@@ -50,7 +50,7 @@ class FixtureController(ExperimentController):
                 "config": {
                     "teacher_model_name": "teacher-default-fixture-model",
                     "target_model_name": "task-agent-fixture-model",
-                    "frontend_model_name": "interaction-agent-fixture-model",
+                    "interaction_model_name": "interaction-agent-fixture-model",
                     "agent_models": {
                         "rsi-agent": {"model": "rsi-agent-fixture-model", "api_key": "SECRET"},
                         "research-agent-1": {

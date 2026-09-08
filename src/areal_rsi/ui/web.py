@@ -91,9 +91,7 @@ class RunReader:
         legacy_teacher = run.plan.config.get("teacher_model_name")
         if not isinstance(legacy_teacher, str):
             legacy_teacher = None
-        interaction_model = run.plan.config.get(
-            "interaction_model_name", run.plan.config.get("frontend_model_name")
-        )
+        interaction_model = run.plan.config.get("interaction_model_name")
         agents = []
         best_score = baseline_score
         for agent in run.research_agents:

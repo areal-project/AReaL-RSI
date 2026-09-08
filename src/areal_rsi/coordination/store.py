@@ -128,11 +128,17 @@ class ResearchStore:
             if agent_id == "rsi" or item.agent_id == agent_id or item.shared
         ]
 
-    def publish_evidence(self, evidence_id: str, *, limitations: str) -> EvidenceRecord:
+    def publish_evidence(
+        self, evidence_id: str, *, limitations: str, publication_id: str | None = None
+    ) -> EvidenceRecord:
         """Publication is a new record, preserving the researcher's original claim."""
         source = self.get("evidence", evidence_id, EvidenceRecord)
+        if publication_id is not None:
+            path = self.root / "evidence" / f"{safe_name(publication_id)}.json"
+            if path.exists():
+                return self.get("evidence", publication_id, EvidenceRecord)
         published = EvidenceRecord(
-            new_id("evidence"),
+            publication_id or new_id("evidence"),
             "rsi",
             source.title,
             source.summary,

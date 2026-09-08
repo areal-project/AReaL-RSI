@@ -62,6 +62,11 @@ When require_final_confirmation is set, finish needs a successful final result
 for the selected candidate that reaches the target. A search score alone is
 insufficient. Pass the intended candidate_id to finish, or an empty string to use
 the current final/best candidate.
+After reasonable research, you may conclude from the evidence that no worthwhile
+direction remains or the goal is not reachable within the constraints. Call
+stop_run with the best supported result, unmet target and reason for stopping.
+This stops the run and informs the user while preserving findings and scores.
+Do not repeatedly call finish or claim success when its required target is unmet.
 Use the user's language for public plans and summaries. Keep them concise and
 specific; do not expose hidden reasoning or fabricate progress.
 """

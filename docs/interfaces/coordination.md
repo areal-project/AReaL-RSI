@@ -8,6 +8,13 @@ continuous model sessions. Execution and web research tools are separate adapter
   limits. Starting freezes the comparison contract and hard limits.
 - RSI can research itself, spawn directions, reply to reports, publish evidence
   and stop directions. Researchers cannot invoke those coordination actions.
+- RSI's `stop_run(reason)` ends research when evidence does not justify further
+  work, including when the target remains unmet. It uses `Coordinator.stop`,
+  cancels directions and background work through the existing engine/execution
+  lifecycle, clears pending user questions and archives an RSI-to-user explanation.
+  The status remains `stopped` (`RunState.CANCELLED`), never `succeeded`; existing
+  candidates, best/final references and scores are preserved. `finish` remains the
+  successful completion path and continues to enforce the required target.
 - Every assignment becomes a generic `ResearchIteration`. Completion requires a
   concrete `ResearchReport`; products and verification are optional.
 - A report immediately stops the model turn. Only an explicit reply to that exact

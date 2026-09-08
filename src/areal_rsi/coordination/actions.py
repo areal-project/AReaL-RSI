@@ -117,6 +117,12 @@ RSI = [
         reason=STRING,
     ),
     definition(
+        "stop_run",
+        "End this run when further research is not worthwhile or the goal cannot be reached. "
+        "Explain the evidence and unmet goal to the user. Stops work without claiming success.",
+        reason=STRING,
+    ),
+    definition(
         "share_evidence",
         "Publish evidence for all directions, preserving provenance.",
         evidence_id=STRING,
@@ -203,10 +209,15 @@ class ResearchActions:
             if call.name not in allowed:
                 return ToolResult({"error": "Tool is not available to this role"})
             actor = self.c.actor(agent_id)
-            if actor.state == AgentState.STOPPED and call.name != "submit_report":
-                return ToolResult({"error": "Agent was stopped"}, stop=True, reason="stopped")
             key = effect_id("action", agent_id + ":" + call.call_id)
             action_path = self.c.store.root / "actions" / f"{key}.json"
+            stopping_replay = call.name == "stop_run" and action_path.exists()
+            if (
+                actor.state == AgentState.STOPPED
+                and call.name != "submit_report"
+                and not stopping_replay
+            ):
+                return ToolResult({"error": "Agent was stopped"}, stop=True, reason="stopped")
             if action_path.exists():
                 previous = json.loads(action_path.read_text())
                 if previous["name"] != call.name or previous["arguments"] != call.arguments:
@@ -380,6 +391,22 @@ class ResearchActions:
         if name == "stop_researcher":
             c.stop_agent(args["agent_id"], args["reason"])
             return ToolResult({"stopped": args["agent_id"]})
+        if name == "stop_run":
+            reason = args["reason"].strip()
+            if not reason:
+                raise ValueError(
+                    "Stopping requires an evidence-based reason and remaining limitation"
+                )
+            if c.state["status"] not in {"planned", "running", "paused", "stopped"}:
+                raise ValueError("This run has already concluded")
+            c.state["waiting_for_user"] = []
+            c.stop(reason)
+            message_id = c.enqueue("rsi", "user", reason, key=key)
+            return ToolResult(
+                {"status": "stopped", "reason": reason, "message_id": message_id},
+                stop=True,
+                reason="stopped",
+            )
         if name == "wait":
             c.wait(agent_id, args["reason"])
             return ToolResult({"waiting_for": args["reason"]}, stop=True, reason="message")

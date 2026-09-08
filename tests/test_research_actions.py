@@ -451,3 +451,120 @@ def test_state_evidence_preview_preserves_full_archived_record(tmp_path: Path) -
         assert "truncated" not in full.output
 
     asyncio.run(scenario())
+
+
+def test_rsi_can_stop_an_unmet_run_without_changing_scores(tmp_path: Path) -> None:
+    from areal_rsi.api.base import IterationState, RunState
+    from areal_rsi.api.research import ResearchMessage
+    from areal_rsi.coordination.jobs import ResearchExecution
+    from areal_rsi.execution import ApprovedCommand
+
+    async def scenario() -> None:
+        c = Coordinator.create(
+            tmp_path,
+            TaskBrief(
+                "Reach the target",
+                "Keep all measured evidence",
+                verification=VerificationContract(
+                    "accuracy", target=0.9, identity={"require_final_confirmation": True}
+                ),
+            ),
+            simulated=True,
+        )
+        c.start()
+        actions = ResearchActions(c)
+        candidate = await c.store.snapshot(
+            actions.workspace("rsi"), agent_id="operator", description="Measured candidate"
+        )
+        for phase in ("search", "final"):
+            result = VerifiedResult(
+                "result-" + phase,
+                candidate.candidate_id,
+                c.store.contract_digest(),
+                now(),
+                "succeeded",
+                0.3,
+                True,
+                phase=phase,
+                simulated=True,
+            )
+            ref = c.store.record_verification(result)
+            if phase == "search":
+                c.store.consider_best(result.result_id, simulated_run=True)
+            else:
+                run = c.store.run()
+                run.final_result_ref = ref
+                c.store.save_run(run)
+        before = c.store.run()
+        measured = {p.name: p.read_bytes() for p in (c.store.root / "verifications").glob("*.json")}
+        finish = await actions.handler("rsi")(
+            ToolCall(
+                "finish",
+                {
+                    "candidate_id": candidate.candidate_id,
+                    "summary": "Completed",
+                },
+                "finish",
+            )
+        )
+        assert "target" in finish.output["error"]
+        assignment = c.spawn(
+            key="a", direction="A", instruction="Explore", completion_criteria="Report findings"
+        )
+        agent = assignment["agent_id"]
+        denied = await actions.handler(agent)(ToolCall("stop_run", {"reason": "Give up"}, "denied"))
+        assert "not available" in denied.output["error"] and c.state["status"] == "running"
+        execution = ResearchExecution(
+            actions,
+            simulated=True,
+            mock_duration=60,
+            commands={"train": ApprovedCommand("train", ("synthetic-training",))},
+        )
+        try:
+            jobs = []
+            for key in ("one", "two"):
+                output = await actions.handler(agent)(
+                    ToolCall(
+                        "run_job",
+                        {
+                            "command_name": "train",
+                            "candidate_id": "",
+                            "parameters_json": "{}",
+                        },
+                        key,
+                    )
+                )
+                jobs.append(output.output["job_id"])
+            assert {execution.manager.get(key).state for key in jobs} == {"running", "queued"}
+            c.state["waiting_for_user"] = [{"message_id": "pending", "question": "More budget?"}]
+            c.save()
+            reason = (
+                "The supported score is simulated 0.30, below 0.90. Further work is not justified "
+                "by the remaining evidence and resources."
+            )
+            call = ToolCall("stop_run", {"reason": reason}, "stop")
+            stopped = await actions.handler("rsi")(call)
+            assert stopped.stop and stopped.output["status"] == "stopped"
+            assert c.state["status"] == "stopped" and c.store.run().state == RunState.CANCELLED
+            assert all(actor.state == AgentState.STOPPED for actor in c.actors())
+            assert c.actor(agent).iterations[0].state == IterationState.CANCELLED
+            assert c.state["waiting_for_user"] == [] and c.pending() == []
+            await execution.poll()
+            assert all(execution.manager.get(key).state == "cancelled" for key in jobs)
+            after = c.store.run()
+            assert (after.best_result_ref, after.final_result_ref) == (
+                before.best_result_ref,
+                before.final_result_ref,
+            )
+            assert {
+                p.name: p.read_bytes() for p in (c.store.root / "verifications").glob("*.json")
+            } == measured
+            message = c.store.get("messages", stopped.output["message_id"], ResearchMessage)
+            assert (message.sender, message.recipient, message.text) == ("rsi", "user", reason)
+            count = len(c.store.events())
+            repeated = await actions.handler("rsi")(call)
+            assert repeated == stopped and len(c.store.events()) == count
+        finally:
+            execution.close(cancel=True)
+
+    asyncio.run(scenario())

@@ -223,10 +223,11 @@ class PackageSession:
                 self.process.terminate()
             with suppress(TimeoutError):
                 await asyncio.wait_for(self.process.wait(), 10)
-        # Also reap native grandchildren on failed or timed-out cleanup.
-        with suppress(ProcessLookupError):
-            os.killpg(self.process.pid, signal.SIGKILL)
-        await self.process.wait()
+            # Also reap native grandchildren on failed or timed-out cleanup.
+            if self.process.returncode is None:
+                with suppress(ProcessLookupError):
+                    os.killpg(self.process.pid, signal.SIGKILL)
+                await self.process.wait()
         self.runtime.sessions.discard(self)
 
     async def _save(self) -> TrajectoryRef:

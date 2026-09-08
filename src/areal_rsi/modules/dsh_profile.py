@@ -45,37 +45,48 @@ def ensure_profile(root: Path) -> tuple[Path, Path]:
 
 
 def ensure_rsi_preset(root: Path, home: Path) -> Path:
-    """使用 DSH preset 接入协议，保留标准研发工具，只替换入口角色提示。"""
+    """启动时同步包内 Persona，保留已有 preset 中的工具和其他配置。"""
     destination = home / ".agent-presets" / "rsi"
     output = destination / "agent.cordis.yml"
     if output.exists():
-        return output  # 保留用户对 preset 的修改。
-    sources = list(
-        (root.resolve() / "dsh-cli/node_modules/.pnpm").glob(
-            f"@deepseek-ai+dsh-agent-presets@{DSH_VERSION}*/node_modules/"
-            "@deepseek-ai/dsh-agent-presets/presets/standard/agent.cordis.yml"
+        source = output
+    else:
+        sources = list(
+            (root.resolve() / "dsh-cli/node_modules/.pnpm").glob(
+                f"@deepseek-ai+dsh-agent-presets@{DSH_VERSION}*/node_modules/"
+                "@deepseek-ai/dsh-agent-presets/presets/standard/agent.cordis.yml"
+            )
         )
-    )
-    if len(sources) != 1:
-        raise RuntimeError("未找到唯一的固定版本 DSH standard preset，请重新准备 CLI")
-    tree = yaml.compose(sources[0].read_text())
+        if len(sources) != 1:
+            raise RuntimeError("未找到唯一的固定版本 DSH standard preset，请重新准备 CLI")
+        source = sources[0]
+    source_text = source.read_text()
+    # 保留 DSH 的 !!js 标签；不求值或丢弃已有工具配置中的表达式。
+    tree = yaml.compose(source_text)
     if not isinstance(tree, yaml.SequenceNode):
-        raise RuntimeError("无法识别 DSH standard preset")
+        raise RuntimeError("DSH preset 必须为配置列表")
     for row in tree.value:
+        if not isinstance(row, yaml.MappingNode):
+            raise RuntimeError("DSH preset 配置项必须为对象")
         if any(k.value == "id" and v.value == "persona" for k, v in row.value):
-            for key, config in row.value:
-                if key.value == "config":
-                    config.value = [
-                        (
-                            yaml.ScalarNode("tag:yaml.org,2002:str", "text"),
-                            yaml.ScalarNode("tag:yaml.org,2002:str", PERSONA, style="|"),
-                        )
-                    ]
+            config = next((v for k, v in row.value if k.value == "config"), None)
+            if not isinstance(config, yaml.MappingNode):
+                raise RuntimeError("DSH preset 的 persona.config 必须为对象")
+            config.value = [
+                (key, value) for key, value in config.value if key.value != "text"
+            ] + [
+                (
+                    yaml.ScalarNode("tag:yaml.org,2002:str", "text"),
+                    yaml.ScalarNode("tag:yaml.org,2002:str", PERSONA, style="|"),
+                )
+            ]
             break
     else:
-        raise RuntimeError("DSH standard preset 缺少 persona")
+        raise RuntimeError("DSH preset 缺少 persona")
     destination.mkdir(parents=True, exist_ok=True)
-    output.write_text(yaml.serialize(tree, allow_unicode=True))
+    rendered = yaml.serialize(tree, allow_unicode=True)
+    if not output.exists() or rendered != source_text:
+        output.write_text(rendered)
     (destination / "preset.yml").write_text(
         "name: Interaction Agent\ndescription: 日常研发与 RSI 实验入口\n"
     )

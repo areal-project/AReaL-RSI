@@ -209,14 +209,31 @@ def test_launch_uses_native_process_patches_and_absolute_mcp_root_without_saving
     installer.assert_not_called()
 
 
-def test_rsi_preset_keeps_standard_tools_and_preserves_user_edits(tmp_path: Path) -> None:
+def test_existing_preset_refreshes_persona_and_preserves_tools(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     home, _, _ = installed_profile(tmp_path)
     output = dsh_profile.ensure_rsi_preset(tmp_path, home)
     tree = yaml.safe_load(output.read_text())
     assert tree[0]["config"]["text"] == dsh_config.PERSONA
     assert tree[1] == {"id": "tool-bash", "name": "@deepseek-ai/dsh-tool-bash"}
-    output.write_text("user-customized-preset")
-    assert dsh_profile.ensure_rsi_preset(tmp_path, home).read_text() == "user-customized-preset"
+    tree[1]["config"] = {"timeout": 42}
+    output.write_text(
+        yaml.safe_dump(tree)
+        + "- id: custom-tool\n  config:\n    cwd: !!js process.cwd()\n"
+    )
+    monkeypatch.setattr(dsh_profile, "PERSONA", "Updated Interaction Agent persona\n")
+    dsh_profile.ensure_rsi_preset(tmp_path, home)
+    text = output.read_text()
+    refreshed = yaml.safe_load(text.replace("!!js", "!!str"))
+    assert refreshed[0]["config"]["text"] == "Updated Interaction Agent persona\n"
+    assert refreshed[1] == tree[1]
+    assert refreshed[2] == {"id": "custom-tool", "config": {"cwd": "process.cwd()"}}
+    assert "!!js" in text
+    modified = output.stat().st_mtime_ns
+    dsh_profile.ensure_rsi_preset(tmp_path, home)
+    assert output.read_text() == text
+    assert output.stat().st_mtime_ns == modified
 
 
 def test_setup_only_prepares_files_without_starting_gateway_or_tui(

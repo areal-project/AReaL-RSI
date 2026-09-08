@@ -45,7 +45,7 @@ nodes: [{ iteration_id, agent_id, state, parent_iteration_id?, title?,
 edges: [{ source: iteration_id, target: iteration_id, kind: parent|reference|merge, label? }]
 baseline, best, final: VerifiedResult|null
 budget: { model_calls, total_tokens, verify_calls, reserved_tokens?, elapsed_seconds? }
-jobs: [{ job_id, agent_id, status, description, gpu_ids?, progress_message?, error? }]
+jobs: [{ job_id, agent_id, status, title?, description?, gpu_ids?, progress_message?, error? }]
 messages: [{ message_id, sender, recipient, text, created_at }]
 waiting_for_user: [问题文本，或包含 text/question 的对象]
 events: [{ sequence, kind, created_at, agent_id?, iteration_id?, data }]

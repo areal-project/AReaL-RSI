@@ -260,12 +260,12 @@ function render() {
     document.createTextNode(score(run.final?.score)),
   );
   $("baseline-caption").textContent = run.baseline
-    ? "起点结果 / 独立最终确认"
+    ? "起点结果 / 最终确认"
     : "未设置起点 · 暂不计算相对提升";
   const nodes = run.nodes || [];
   $("node-count").textContent = integer(nodes.length);
   $("node-caption").textContent =
-    `${nodes.filter((node) => node.state === "completed").length} 已完成 · ${(run.agents || []).filter((agent) => agent.direction && agent.state !== "stopped").length} 个研究方向`;
+    `${nodes.filter((node) => node.state === "completed").length} 已完成 · ${(run.agents || []).filter((agent) => agent.direction).length} 个研究方向`;
   $("model-count").textContent =
     `${integer(run.budget?.model_calls ?? 0)} / ${integer(run.brief?.limits?.max_model_calls)}`;
   $("token-count").textContent =
@@ -300,14 +300,14 @@ function renderDirections(run) {
   replace(
     "directions",
     ...(run.agents || [])
-      .filter((agent) => agent.direction)
+      .filter((agent) => agent.agent_id)
       .map((agent) => {
         const item = element(
           "span",
           `direction ${agent.state}`,
-          `${agent.direction} · ${agent.wait_reason === "rsi_reply" ? "等待 RSI 回复" : label(agent.state)}`,
+          `${agent.direction || { rsi: "RSI Agent", interaction: "Interaction Agent" }[agent.agent_id] || agent.agent_id} · ${agent.wait_reason === "rsi_reply" ? "等待 RSI 回复" : label(agent.state)}`,
         );
-        if (agent.error) item.title = agent.error;
+        item.title = agent.error || agent.wait_reason || "";
         if (agent.state === "failed") {
           const retry = element("button", "", "重试");
           retry.addEventListener("click", () =>
@@ -634,7 +634,7 @@ function renderJobs(run) {
           const row = element("div", "job-row");
           const body = element("div");
           body.append(
-            element("h3", "", job.description || job.job_id),
+            element("h3", "", job.title || job.description || job.job_id),
             element(
               "p",
               "",

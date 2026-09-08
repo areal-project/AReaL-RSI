@@ -161,7 +161,7 @@ def public_detail(value: Json) -> Json:
     result["jobs"] = [
         _fields(
             job,
-            "job_id agent_id status description created_at started_at finished_at error "
+            "job_id agent_id status title description created_at started_at finished_at error "
             "gpu_ids progress progress_message",
         )
         for job in value.get("jobs", [])

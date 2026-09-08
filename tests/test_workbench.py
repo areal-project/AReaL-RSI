@@ -315,6 +315,9 @@ class FixtureBackend:
                 run, "run_" + {"pause": "paused", "resume": "resumed", "stop": "stopped"}[action]
             )
         elif action == "retry":
+            for agent in run["agents"]:
+                if agent["agent_id"] == params["agent_id"]:
+                    agent.update(state="waiting", error=None)
             self.event(run, "agent_retry_requested")
         elif action == "export":
             archive = Path(self.temporary.name) / "candidate.zip"

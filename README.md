@@ -1,8 +1,21 @@
 # AReaL-RSI
 
-AReaL-RSI 是基于 DeepSeek Harness 的本地研究与自迭代工具。用户通过中文对话生成实验计划，确认后由独立 ResearchAgent 研究线持续改进 Harness，并保存评测、版本和恢复检查点。
+AReaL-RSI 是一个按 run 归档的多 Agent 研究系统。RSI Agent 自主调研和组织研究方向，Research Agents 保持连续会话，完成任务后具体汇报并等待下一条指令。用户通过本地工作台查看进度和控制研究。
 
-当前支持本地 Harness 执行、内置算术示例、GSM8K 评测和可选的 Artifact 工作流。Interaction Agent、RSI Agent 和 ResearchAgent 组可以分别配置模型，默认使用 teacher。所有 ResearchAgent 共用一个模型。Task Agent 直接使用 target，不存在另一份 Task Agent 模型配置。当前阶段固定 target 的模型参数，迭代其提示词、技能、工具和 MCP 配置。
+新开放研究入口提供 KernelBench harness 优化和 CUHK-X 模型训练两个示例。原有固定工作流继续支持本地 Harness、内置算术、GSM8K 和 Artifact；该入口的 Interaction Agent、RSI Agent 和 ResearchAgent 组可以分别配置模型，默认使用 teacher。所有 ResearchAgent 共用一个模型。Task Agent 直接使用 target，不存在另一份 Task Agent 模型配置。当前阶段固定 target 的模型参数，迭代其提示词、技能、工具和 MCP 配置。
+
+## 开放式 Research 工作台
+
+新的多 Agent 入口支持连续会话、RSI 自主规划、报告后等待、后台作业、run 内共享证据和可交互搜索图。先配置 `.env` 的 `RSI_BASE_URL / RSI_API_KEY / RSI_MODEL / RSI_REASONING_EFFORT`，然后运行：
+
+```bash
+uv sync --locked
+uv run --env-file .env --locked rsi workbench --simulate-gpu
+```
+
+打开 [本地工作台](http://127.0.0.1:8766)，选择 KernelBench 或 CUHK-X。模拟模式仍调用真实研究模型，只模拟 GPU、Task 作业与成绩。真实资源配置、终端运行和恢复方法见[工作台使用说明](docs/research-workbench.md)，角色与流程见[设计说明](docs/rsi-research-design.md)，已跑通的链路与实际限制见[验收记录](docs/research-acceptance.md)。
+
+新入口通过 Responses API 运行研究模型，默认 `gpt-6-astra / xhigh`；下面的 teacher/target、TUI 与固定 evolution 命令属于原有入口，其配置继续兼容。
 
 ## 启动
 
@@ -141,18 +154,22 @@ uv run --env-file .env --locked rsi tui
 src/areal_rsi/
 ├── api/                  公共数据对象与协议
 ├── base/                 本地内容、Memory、轨迹与版本存储
-├── modules/              DSH 运行时、构建、Benchmark 与评测
+├── modules/              Responses / DSH 运行时、构建、Benchmark 与评测
+├── coordination/         持久消息、研究节点、工具、预算与调度
+├── execution/            后台作业、跨 run 资源分配与恢复
+├── adapters/             KernelBench / CUHK-X 数据与验证适配
 ├── agents/
-│   ├── rsi/              RSI Agent：对话、计划与研究线剪枝
-│   ├── research/         ResearchAgent：Harness / Artifact 提案与选版
+│   ├── interaction/      用户需求与进展解释
+│   ├── rsi/              RSI Agent：调研、计划与研究协调
+│   ├── research/         研究方向角色，以及旧 Harness / Artifact 适配
 │   └── common.py         共用 JSON 解析与格式重试
 ├── workflows/            Python 迭代、选版、停止和恢复
 ├── framework/            TrajectoryStore 与 Verifier 扩展框架
 ├── config.py             本机模型连接配置
-├── app.py                本地组件装配
-├── modules/              DSH 安装、TUI profile、动态 patch 与基础模块实现
+├── app.py                旧固定工作流组件装配
+├── research_app.py       开放式 Research 工作台组件装配
 ├── resources/dsh/        TUI Cordis patch 模板与 RSI Persona
-├── ui/                   薄 TUI 启动器、MCP、后台 worker 和只读 Web UI
+├── ui/                   Research 工作台、CLI，以及旧 TUI / MCP / Web 入口
 └── default_harness/      初始提示词、技能、工具与 MCP 配置
 ```
 

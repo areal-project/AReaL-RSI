@@ -1,59 +1,73 @@
-# Research workbench implementation
+# Research workbench delivery ledger
 
-This is the implementation ledger for the end-to-end research workbench. The
-existing fixed evolution workflows remain available. New research runs use the
-same run-owned records and generic `ResearchIteration`, with no mandatory
-baseline, solution, verification, or `EvolutionResult`.
+Implemented on `zwh/dev`, starting at `b97fa80`. All changes are local commits;
+nothing has been pushed. The original fixed evolution workflows remain available.
+The open research entry uses generic nodes and does not require a baseline,
+Solution, verification, or `EvolutionResult` for every task.
 
-## Delivery sequence
+## Delivered
 
-Each boundary receives its own local commits. Nothing is pushed automatically.
-Named local branch checkpoints will make the eventual dependent PRs reviewable.
+| Area | Implementation |
+| --- | --- |
+| Records | Hard limits plus free-text brief; assignments, concrete reports, run-owned evidence, immutable candidates and comparable verification records |
+| Sessions | Responses API, durable messages and tool effects, continuous per-direction context, safe compaction, explicit bounded retries; waiting makes no model requests |
+| Coordination | Separate Interaction / RSI / Research prompts; autonomous research planning, parallel directions, report/reply barrier, shared evidence, stop/pause/resume and global budgets |
+| Execution | Background jobs, whole-job GPU allocation across runs, cancellation, restart reconciliation, frozen verifier inputs and trusted result validation |
+| Examples | KernelBench fixed-model harness execution with development/search/final pools; CUHK-X training, anonymous inference and host scoring; simulated jobs plus real configuration preflight |
+| Workbench | Local chat and brief, plans, search graph and node details, reports, shared evidence, jobs, scores, budgets, retries and candidate ZIP export |
+| Entry points | `rsi workbench`, `rsi research`, real API preflight, operator config generator and reproducible CPU bridge smoke |
 
-1. **Research records**: hard constraints and natural-language brief, assignments,
-   seven-part reports, run-local evidence, immutable candidate snapshots and
-   comparable verification records.
-2. **Continuous sessions**: Responses transport, durable turns/tool calls,
-   cancellation, compaction and recovery. Waiting makes no model requests.
-3. **Collaboration**: Interaction / RSI / Research prompts, durable messages,
-   autonomous RSI decisions, report-to-reply barrier, budgets and run controls.
-4. **Execution**: background jobs, resource allocation, cancellation, restart
-   reconciliation and trusted verification commands.
-5. **Examples**: KernelBench harness search and CUHK-X training search, including
-   simulated GPU jobs and documentation for replacing them with real resources.
-6. **Workbench**: local chat, requirements, plan, search graph, reports, evidence,
-   scores, jobs and controls, followed by browser interaction and visual checks.
-7. **Integrated acceptance**: deterministic failure/recovery coverage, real model
-   behavioural mock runs for both examples, actual browser testing, final docs.
+## Commit boundaries for subsequent PRs
 
-## Acceptance requirements
+The history intentionally preserves small commits. Reviewable groups and their
+main commits are below; later integration fixes depend on the earlier modules.
+Before opening PRs, choose a dependent PR chain or cherry-pick the relevant fixes
+into topic branches. Do not submit this complete branch as one large PR.
 
-- Interaction preserves both machine-enforced constraints and a natural-language
-  brief; the original user messages stay with the run.
-- RSI chooses its own research sequence and agent count within limits, can search
-  papers itself, and can continue useful work while researchers execute.
-- A research direction retains its logical session and workspace. A completed
-  report ends execution until RSI explicitly replies. Waiting consumes no tokens.
-- Nodes archive task, concrete execution evidence and an intelligible report;
-  nodes without candidates or verification remain valid.
-- Messages, decisions, sessions, evidence, shared experience, jobs, baseline,
-  best and final result all belong to their run. Late/duplicate messages cannot
-  restart stopped agents or repeat completed work.
-- Only immutable candidates evaluated under the same trusted contract can become
-  best. Missing scores remain null; diagnostic/mock results are labelled.
-- KernelBench uses the target model and allowed harness edit scope. CUHK-X uses
-  training/design candidates, subject-separated local validation and public
-  competition constraints, with the user's confirmed organizer authorization.
-- GPU work can be simulated now and switched to documented real commands later.
-  Simulation is never evidence of real benchmark or competition performance.
-- Web interaction and graph rendering are tested in a real browser, including
-  waiting, no baseline, failure, multiple branches, refresh, pause and resume.
-- Existing relevant tests, lint and type checks pass, or an unchanged pre-existing
-  failure is reproduced and explicitly recorded.
+| Group | Main commits |
+| --- | --- |
+| Research records | `9baddb3` |
+| Continuous Responses runtime | `71b92a1`, `e930f23` |
+| Agent roles and coordination | `8b8ad96`, `3024c6a` |
+| Background execution and resource recovery | `aa06de8`, `b2c0e68` |
+| CUHK-X adapter and trusted verification | `1423201`, `4581e6d`, `8ec76a0`, `4e13dd9`, `99df3c9` |
+| Web research and evidence | `7b44a0f`, `a368a2a` |
+| KernelBench execution adapter | `913378f` |
+| Workbench and application assembly | `b20475b`, `5c16354`, `e581567` |
+| Real configuration, CLI and acceptance fixes | `25222eb`, `e182382`, `d857d22`, `5409f9f`, `b1c40d8`, `251828f`, subsequent stop-run and documentation commits |
 
-## Current evidence
+## Validation and practical limits
 
-- Starting point: clean `zwh/dev` at `b97fa80`.
-- Baseline implementation and previous validation: see the final section of
-  [the detailed design](rsi-research-implementation.md).
-- No new implementation or acceptance claims should be inferred from this plan.
+Detailed outcomes, run IDs, observed agent behaviour and artifact locations are
+recorded in [the acceptance report](research-acceptance.md). The report preserves
+failed rehearsals alongside successful ones rather than retroactively changing
+budgets or simulated outcomes.
+
+- Real Astra/xhigh API preflight covered tool calling, remembered context and
+  duplicate-message handling.
+- KernelBench completed a real-model workflow rehearsal with simulated Task Agent,
+  GPU work and scores. CUHK-X rehearsals covered real public-paper retrieval,
+  parallel research, shared evidence and explicit report replies.
+- A separate CUHK-X CPU smoke exercised actual PyTorch training, checkpoint
+  collection, search/final scoring, candidate selection and ZIP export using
+  synthetic data, without model calls or GPUs.
+- Real Chrome tests exercised the workbench at desktop and mobile sizes, graph
+  navigation, chat, lifecycle controls, retry, reload, disconnect and export.
+  An actual Interaction Agent conversation also updated a brief without starting
+  research prematurely.
+- Automated coverage includes resources, recovery, isolation boundaries, frozen
+  verification identities, sessions, coordination, CLI and UI. The acceptance
+  report records exact final results and the pre-existing macOS sandbox failure.
+
+GPU and competition-data validation remain dependent on the user's resources.
+The CPU smoke does not validate Docker/CUDA. KernelBench's upstream same-process
+kernel evaluator is not complete isolation against malicious generated Python;
+its current Task executor supports a Mac controller with an SSH Linux GPU runner.
+Simulation scores are only workflow fixtures and never benchmark claims.
+
+## Where to start
+
+- [Run the workbench and prepare real execution](research-workbench.md)
+- [Concise design](rsi-research-design.md)
+- [Detailed implementation reference](rsi-research-implementation.md)
+- [Acceptance evidence and remaining limitations](research-acceptance.md)

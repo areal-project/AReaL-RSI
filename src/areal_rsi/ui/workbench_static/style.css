@@ -833,6 +833,39 @@ main {
 .detail-section {
   margin-bottom: 21px;
 }
+.assignment-details {
+  margin-bottom: 24px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+.assignment-details summary {
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.8;
+  font-weight: 600;
+}
+.assignment-details summary::marker {
+  color: var(--green);
+}
+.assignment-expand,
+.assignment-collapse {
+  float: right;
+  color: var(--green);
+  font-size: 10px;
+  font-weight: 400;
+}
+.assignment-collapse,
+.assignment-details[open] .assignment-expand {
+  display: none;
+}
+.assignment-details[open] .assignment-collapse {
+  display: inline;
+}
+.assignment-details .detail-section {
+  margin-top: 18px;
+  margin-bottom: 0;
+}
 .detail-section h4 {
   font-size: 10px;
   font-weight: 600;

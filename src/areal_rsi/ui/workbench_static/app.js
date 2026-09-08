@@ -9,6 +9,7 @@ const state = {
   events: new Map(),
   cursors: new Map(),
   selected: new Map(),
+  assignmentExpansion: new Map(),
   graphSignature: "",
   detailSignature: "",
   messageSignature: "",
@@ -474,6 +475,29 @@ function section(title, value) {
   block.append(element("h4", "", title), element("p", "", value || "暂无记录"));
   return block;
 }
+function assignmentDetails(run, node) {
+  const instruction = node.assignment?.instruction || "暂无记录";
+  const criteria = node.assignment?.completion_criteria || "暂无记录";
+  const key = `${run.run_id}/${node.iteration_id}`;
+  const details = element("details", "assignment-details");
+  details.open =
+    state.assignmentExpansion.get(key) ??
+    instruction.length + criteria.length <= 240;
+  const summary = element("summary", "", "任务说明与完成条件");
+  summary.append(
+    element("span", "assignment-expand", "展开全文"),
+    element("span", "assignment-collapse", "收起"),
+  );
+  details.append(
+    summary,
+    section("任务说明", instruction),
+    section("完成条件", criteria),
+  );
+  details.addEventListener("toggle", () => {
+    if (details.isConnected) state.assignmentExpansion.set(key, details.open);
+  });
+  return details;
+}
 function renderNode(run) {
   const node = run.nodes?.find(
     (item) => item.iteration_id === state.selected.get(run.run_id),
@@ -497,13 +521,10 @@ function renderNode(run) {
   const heading = element("div", "detail-header");
   heading.append(
     badge(node.state),
-    element("h3", "", node.assignment?.instruction || "研究尝试"),
+    element("h3", "", "本轮任务"),
     element("p", "muted", node.iteration_id),
   );
-  const blocks = [
-    heading,
-    section("完成条件", node.assignment?.completion_criteria),
-  ];
+  const blocks = [heading, assignmentDetails(run, node)];
   if (node.report) {
     const names = {
       task_status: "任务执行情况",

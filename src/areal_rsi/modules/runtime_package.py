@@ -286,7 +286,7 @@ class PackageAgentRuntime:
         role: str,
         base_url: str,
         api_key: str,
-        timeout: float = 240,
+        timeout: float = 1200,
         max_tokens: int = 4096,
         dsh_root: Path | None = None,
         credential_env_names: Any = (),

@@ -153,7 +153,7 @@ class LocalApp:
                     role=agent_id,
                     base_url=proxy.url,
                     api_key="local-proxy",
-                    timeout=float(os.environ.get("RSI_TURN_TIMEOUT", "240")),
+                    timeout=float(os.environ.get("RSI_TURN_TIMEOUT", "1200")),
                     max_tokens=budget,
                     dsh_root=self.root,
                     credential_env_names=model_settings.credential_env_names,

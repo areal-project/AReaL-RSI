@@ -23,6 +23,7 @@ macOS 本地执行需要 Node.js 22.19+（或 24+）和 pnpm。默认后台选�
 - `RSI_TARGET_*`：Task Agent 的模型连接。
 - `RSI_AGENT_MODELS`：前台或研究角色的模型覆盖。
 - `RSI_TUI_MODEL_API`：前台使用 `chat-completions`（默认）或 `responses`。
+- `RSI_TURN_TIMEOUT`：后台单次 Agent turn 的超时，默认 1200 秒（20 分钟）。
 - `RSI_RUNTIME_CONFIG`：后台配置文件的绝对路径；样例见 `examples/runtime/`。
   支持 DSH、Codex、Claude Code/SDK、Anthropic、Hermes、Remote、Entrypoint、Fake；能力以各适配器为准。
 

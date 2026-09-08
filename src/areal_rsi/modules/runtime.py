@@ -166,7 +166,7 @@ class DshAgentRuntime:
         *,
         base_url: str,
         api_key: str,
-        timeout: float = 240,
+        timeout: float = 1200,
         max_tokens: int = 4096,
         mcp_registry: dict[str, dict[str, Any]] | None = None,
         tool_registry: dict[str, list[dict[str, Any]]] | None = None,

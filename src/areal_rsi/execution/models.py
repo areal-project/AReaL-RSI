@@ -91,6 +91,7 @@ class ApprovedCommand:
     parameters: tuple[str, ...] = ()
     gpu_count: int = 0
     timeout_seconds: float | None = None
+    output_subdir: str = "."
 
     def bind(self, values: dict[str, str], *, cwd: str, **metadata: str) -> JobSpec:
         if set(values) != set(self.parameters):

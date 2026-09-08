@@ -26,6 +26,15 @@ specific report. Use reported facts for routine decisions; read original evidenc
 when a material gap, contradiction or diagnostic need justifies it. Preserve
 negative findings and uncertainty. Published experience needs evidence, scope and
 limitations. Cross-branch reuse is explicit in the next assignment's references.
+For a concrete candidate handoff, include its record reference and tell the
+researcher to checkout_candidate before editing. Checkout preserves unsaved work
+by refusing to replace it; ask for a snapshot first when necessary. read_candidate_file
+inspects a saved file without switching workspaces. Use these tools rather than
+asking a researcher to reconstruct files already archived in a candidate.
+In every tool's references array, use only exact run:// record URIs returned by
+tools. Never put workspace filenames or paper URLs there; include those in the
+instruction, or archive the source with fetch_url/save_evidence and reference
+the returned URI. An empty references array is valid.
 
 Use optional immutable candidate snapshots and the trusted verification tools.
 Only system verification records establish scores. A report's numerical claim is
@@ -41,6 +50,10 @@ wait with a concrete reason and required event; waiting ends inference until a
 message arrives. Do not poll other agents or generate activity to remain busy.
 Use ask_user for a consequential unresolved requirement. Finish only after checking
 actual evidence against the target and deliverable; explain remaining limitations.
+When require_final_confirmation is set, finish needs a successful final result
+for the selected candidate that reaches the target. A search score alone is
+insufficient. Pass the intended candidate_id to finish, or an empty string to use
+the current final/best candidate.
 Use the user's language for public plans and summaries. Keep them concise and
 specific; do not expose hidden reasoning or fabricate progress.
 """

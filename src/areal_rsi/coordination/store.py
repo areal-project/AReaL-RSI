@@ -109,7 +109,16 @@ class ResearchStore:
         common boundary. Knowing a private URI is not an access grant.
         """
         uri = urlsplit(ref.uri)
-        allowed = {"briefs", "assignments", "reports", "evidence", "candidates", "verifications"}
+        allowed = {
+            "briefs",
+            "assignments",
+            "reports",
+            "evidence",
+            "materials",
+            "candidates",
+            "verifications",
+            "executions",
+        }
         path = safe_relative(unquote(uri.path.lstrip("/")))
         if (
             uri.scheme != "run"
@@ -164,6 +173,7 @@ class ResearchStore:
         description: str,
         parent_candidate_id: str | None = None,
         candidate_id: str | None = None,
+        scope_base_candidate_id: str | None = "",
     ) -> CandidateSnapshot:
         content = await self.content.snapshot(workspace)
         candidate = CandidateSnapshot(
@@ -188,11 +198,14 @@ class ResearchStore:
             for name in old_files.keys() | files.keys()
             if old_files.get(name) != files.get(name)
         ]
-        patterns = self.brief().limits.allowed_paths
-        if agent_id != "operator" and any(
-            not any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns) for name in changed
-        ):
-            raise ValueError("Candidate changes files outside the user's allowed_paths")
+        if agent_id != "operator":
+            # Provenance follows the last saved/adopted candidate, while the
+            # authorization boundary stays the run's original seed (or empty).
+            # Low-level callers retain the previous parent-comparison default.
+            scope_base = (
+                parent_candidate_id if scope_base_candidate_id == "" else scope_base_candidate_id
+            )
+            await self.check_candidate_scope(candidate, scope_base)
         self.put("candidates", candidate.candidate_id, candidate)
         self.event(
             "candidate_saved",
@@ -202,6 +215,28 @@ class ResearchStore:
             changed_files=changed,
         )
         return candidate
+
+    async def check_candidate_scope(
+        self, candidate: CandidateSnapshot, scope_base_candidate_id: str | None
+    ) -> None:
+        current = await self.content.read_json(candidate.content)
+        previous = (
+            await self.content.read_json(
+                self.get("candidates", scope_base_candidate_id, CandidateSnapshot).content
+            )
+            if scope_base_candidate_id is not None
+            else {"files": {}}
+        )
+        assert isinstance(current, dict) and isinstance(previous, dict)
+        files, old_files = current["files"], previous["files"]
+        assert isinstance(files, dict) and isinstance(old_files, dict)
+        patterns = self.brief().limits.allowed_paths
+        if any(
+            old_files.get(name) != files.get(name)
+            and not any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns)
+            for name in old_files.keys() | files.keys()
+        ):
+            raise ValueError("Candidate changes files outside the user's allowed_paths")
 
     async def export(self, candidate_id: str, destination: Path) -> Path:
         candidate = self.get("candidates", candidate_id, CandidateSnapshot)

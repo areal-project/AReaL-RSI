@@ -4,10 +4,100 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+
+_MAX_STREAM_ATTEMPTS = 3
+
+
+def _event_payload(event: bytes) -> dict[str, Any] | None:
+    """读取单个 SSE 事件的 JSON data；注释、DONE 和非 JSON 事件返回 None。"""
+    for line in event.splitlines():
+        if not line.startswith(b"data:"):
+            continue
+        data = line[5:].strip()
+        if not data or data == b"[DONE]":
+            continue
+        try:
+            payload = json.loads(data)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return None
+        return payload if isinstance(payload, dict) else None
+    return None
+
+
+def _retryable_stream_error(event: bytes) -> bool:
+    """只识别服务端明确声明的瞬时过载，认证和请求错误不能通过重试掩盖。"""
+    payload = _event_payload(event)
+    error = payload.get("error") if payload else None
+    if not isinstance(error, dict):
+        return False
+    message = str(error.get("message", "")).lower()
+    kind = str(error.get("type", "")).lower()
+    return kind in {"upstream_error", "server_error"} and any(
+        marker in message for marker in ("overload", "try again", "temporar")
+    )
+
+
+def _has_meaningful_delta(event: bytes) -> bool:
+    """正文、工具调用或 finish_reason 都意味着重放可能造成重复副作用。"""
+    payload = _event_payload(event)
+    if not payload:
+        return False
+    for choice in payload.get("choices") or []:
+        if choice.get("finish_reason") is not None:
+            return True
+        delta = choice.get("delta") or {}
+        if delta.get("content") not in (None, ""):
+            return True
+        if delta.get("tool_calls") or delta.get("function_call"):
+            return True
+    return False
+
+
+def _done(event: bytes) -> bool:
+    return any(
+        part.startswith(b"data:") and part[5:].strip() == b"[DONE]" for part in event.splitlines()
+    )
+
+
+def _relay_stream(response: Any, send_event: Callable[[bytes], None]) -> tuple[bytes, bool, bool]:
+    """转发一次上游流，返回原文、是否完成、是否可在无副作用前提下重试。"""
+    raw, event = bytearray(), bytearray()
+    # role-only 首事件暂存到真正输出出现；紧随其后的过载才可以透明重试。
+    pending: list[bytes] = []
+    meaningful = False
+    while line := response.readline():
+        raw.extend(line)
+        event.extend(line)
+        if line not in (b"\n", b"\r\n"):
+            continue
+        completed_event = bytes(event)
+        event.clear()
+        if _retryable_stream_error(completed_event) and not meaningful:
+            return bytes(raw), False, True
+        if _has_meaningful_delta(completed_event):
+            for buffered in pending:
+                send_event(buffered)
+            pending.clear()
+            meaningful = True
+            send_event(completed_event)
+        elif meaningful:
+            send_event(completed_event)
+        else:
+            pending.append(completed_event)
+        if _done(completed_event):
+            for buffered in pending:
+                send_event(buffered)
+            return bytes(raw), True, False
+    if event:
+        # 不完整事件已经来自实际响应，不能假定重放请求不会造成重复输出。
+        send_event(bytes(event))
+    return bytes(raw), False, False
 
 
 def normalize_tool_deltas(body: bytes) -> bytes:
@@ -72,7 +162,6 @@ class GatewayProxy:
                             self.send_header("Connection", "close")
                             self.end_headers()
                             self.close_connection = headers_sent = True
-                            raw, event = bytearray(), bytearray()
 
                             def send_event(data: bytes) -> None:
                                 chunk = normalize_tool_deltas(data)
@@ -80,23 +169,26 @@ class GatewayProxy:
                                 self.wfile.write(chunk + b"\r\n")
                                 self.wfile.flush()
 
+                            raw = bytearray()
                             try:
-                                while line := response.readline():
-                                    raw.extend(line)
-                                    event.extend(line)
-                                    if line in (b"\n", b"\r\n"):
-                                        completed_event = bytes(event)
-                                        send_event(completed_event)
-                                        event.clear()
-                                        # chat 协议在 DONE 处完成，不再等待上游关闭长连接。
-                                        if any(
-                                            part.startswith(b"data:")
-                                            and part[5:].strip() == b"[DONE]"
-                                            for part in completed_event.splitlines()
-                                        ):
-                                            break
-                                if event:
-                                    send_event(bytes(event))
+                                attempt_raw, _, retryable = _relay_stream(response, send_event)
+                                raw.extend(attempt_raw)
+                                # 已有正文或工具调用时绝不重放请求，避免重复输出或副作用。
+                                for attempt in range(1, _MAX_STREAM_ATTEMPTS):
+                                    if not retryable:
+                                        break
+                                    time.sleep(0.5 * attempt)
+                                    with urllib.request.urlopen(request, timeout=210) as retried:
+                                        attempt_raw, _, retryable = _relay_stream(
+                                            retried, send_event
+                                        )
+                                    raw.extend(attempt_raw)
+                                    entry["stream_retries"] = attempt
+                                if retryable:
+                                    send_event(
+                                        b'data: {"error":{"message":"upstream service remained '
+                                        b'overloaded after retries","type":"upstream_error"}}\n\n'
+                                    )
                                 self.wfile.write(b"0\r\n\r\n")
                                 self.wfile.flush()
                             finally:

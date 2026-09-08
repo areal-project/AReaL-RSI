@@ -350,10 +350,10 @@ class ResearchExecution:
     async def poll(self) -> bool:
         # A crash after the intent is stored but before manager.submit is safe:
         # the job has a stable identity and immutable input snapshot.
-        self.c.state["verify_calls"] = sum(
-            bool(info["verification"]) for info in self.jobs.values()
-        )
-        self.c.save()
+        verify_calls = sum(bool(info["verification"]) for info in self.jobs.values())
+        if self.c.state["verify_calls"] != verify_calls:
+            self.c.state["verify_calls"] = verify_calls
+            self.c.save()
         limits = self.c.store.brief().limits
         self.manager.gpu_ids, self.manager.max_jobs = limits.gpu_ids, limits.max_jobs
         self.manager.scheduling_enabled = False

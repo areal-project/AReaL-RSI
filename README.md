@@ -51,7 +51,7 @@ export RSI_AGENT_MODELS='{
 
 只覆盖 `model` 时继承 teacher 服务及认证；更换 `base_url` 后默认不继承原服务密钥。需要认证时，通过 `api_key_env` 引用本机环境变量，例如 `RESEARCH_API_KEY`，其值不会进入生成配置或计划。该变量必须存在，也可以显式设置为空以关闭认证。Agent 覆盖只接受 `model`、`base_url`、`api_key_env` 三项。不接受 `task-agent` 或 `research-agent-1`、`research-agent-2` 等单条研究线覆盖；Task Agent 始终使用 `RSI_TARGET_*`。
 
-未配置覆盖时，当前默认行为保持不变。所有后台 Agent 都有完整覆盖时，可以不配置 teacher/target 默认值。
+未配置覆盖时，当前默认行为保持不变。RSI Agent 和 ResearchAgent 都有完整覆盖时可以不配置 teacher；target 始终通过 `RSI_TARGET_*` 配置。
 
 首次准备当前数据目录的 DSH CLI、TUI 插件和 RSI preset（需要访问 npm 包仓库）：
 
@@ -107,7 +107,7 @@ uv run --env-file .env --locked rsi resume RUN_ID
 
 `rsi tui --resume` 恢复 DSH 对话；`rsi resume` 在当前终端恢复实验。使用原来的数据目录和模型配置。旧 Python 界面的 `/status`、`/stop`、`/resume` 不再是 RSI 的界面命令，DSH 自身命令由插件提供。
 
-统一安装固定版本的 `@deepseek-ai/dsh` CLI 与 `@deepseek-harness-tui/dsh-tui` 插件。DSH 版本由共享安装模块管理，多个 worker 并发启动时通过文件锁复用同一份完整安装。它们位于 `RSI_DATA_ROOT` 的 `dsh-cli/` 和 `dsh-home/`，无需全局安装 DSH。前台选择 TUI profile，后台选择 `sdk-minimal`，两者执行同一份 CLI；后台仅可读取共享安装，不能改写它。Python SDK 的依赖仍会附带预打包运行时，但 RSI 不启动该文件。RSI preset 首次复制 DSH 标准研发工具并设置入口角色，后续启动保留用户对 preset 的修改。上游 TUI 的语言、主题等界面偏好位于用户目录 `~/.dsh-tui`。
+统一安装固定版本的 `@deepseek-ai/dsh` CLI 与 [`@deepseek-harness-tui/dsh-tui`](https://github.com/ccch1mneyyy/dsh-TUI) 插件。插件包名、版本和 profile 位于 `modules/dsh_profile.py`；静态 Cordis patch 与 Persona 位于 `resources/dsh/`；`modules/dsh_config.py` 只填入模型、数据目录、workspace 和 MCP 环境变量名。DSH 版本由共享安装模块管理，多个 worker 并发启动时通过文件锁复用同一份完整安装。它们位于 `RSI_DATA_ROOT` 的 `dsh-cli/` 和 `dsh-home/`，无需全局安装 DSH。前台选择 TUI profile，后台选择 `sdk-minimal`，两者执行同一份 CLI；后台仅可读取共享安装，不能改写它。Python SDK 的依赖仍会附带预打包运行时，但 RSI 不启动该文件。RSI preset 首次复制 DSH 标准研发工具并设置入口角色，后续启动保留用户对 preset 的修改。上游 TUI 的语言、主题等界面偏好位于用户目录 `~/.dsh-tui`。
 
 ## Web UI
 
@@ -150,7 +150,9 @@ src/areal_rsi/
 ├── framework/            TrajectoryStore 与 Verifier 扩展框架
 ├── config.py             本机模型连接配置
 ├── app.py                本地组件装配
-├── ui/                   DSH TUI 入口、MCP、后台 worker 和只读 Web UI
+├── modules/              DSH 安装、TUI profile、动态 patch 与基础模块实现
+├── resources/dsh/        TUI Cordis patch 模板与 RSI Persona
+├── ui/                   薄 TUI 启动器、MCP、后台 worker 和只读 Web UI
 └── default_harness/      初始提示词、技能、工具与 MCP 配置
 ```
 

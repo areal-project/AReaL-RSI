@@ -11,6 +11,8 @@ from unittest.mock import Mock, sentinel
 import pytest
 import yaml  # type: ignore[import-untyped]
 
+import areal_rsi.modules.dsh_config as dsh_config
+import areal_rsi.modules.dsh_profile as dsh_profile
 import areal_rsi.ui.dsh as dsh
 from areal_rsi.modules.dsh import DSH_VERSION
 
@@ -19,8 +21,8 @@ PLUGIN_PATCH = "- insert:\n  - id: dsh-tui\n    name: '@deepseek-harness-tui/dsh
 
 def installed_profile(root: Path) -> tuple[Path, Path, Path]:
     home = root.resolve() / "dsh-home"
-    profile = home / "profiles" / dsh.PROFILE
-    source = profile / "node_modules" / dsh.TUI_PACKAGE / "cordis.patch.yml"
+    profile = home / "profiles" / dsh_profile.PROFILE
+    source = profile / "node_modules" / dsh_profile.TUI_PACKAGE / "cordis.patch.yml"
     source.parent.mkdir(parents=True)
     source.write_text(PLUGIN_PATCH)
     manifest = profile / "package.json"
@@ -28,10 +30,10 @@ def installed_profile(root: Path) -> tuple[Path, Path, Path]:
         json.dumps(
             {
                 "name": "fixture-profile",
-                "dependencies": {dsh.TUI_PACKAGE: dsh.TUI_VERSION},
+                "dependencies": {dsh_profile.TUI_PACKAGE: dsh_profile.TUI_VERSION},
                 "dsh": {
                     "profile": {
-                        "bundles": ["@deepseek-ai/dsh-base", dsh.TUI_PACKAGE],
+                        "bundles": ["@deepseek-ai/dsh-base", dsh_profile.TUI_PACKAGE],
                         "patchReload": "live",
                     }
                 },
@@ -60,19 +62,22 @@ def test_installed_profile_preparation_is_idempotent_without_pnpm(
 ) -> None:
     home, manifest, source = installed_profile(tmp_path)
     binary = tmp_path / "fake-dsh"
-    monkeypatch.setattr(dsh, "ensure_cli", lambda _: binary)
+    monkeypatch.setattr(dsh_profile, "ensure_cli", lambda _: binary)
     installer = Mock(side_effect=AssertionError("an installed plugin must not be reinstalled"))
-    monkeypatch.setattr("areal_rsi.ui.dsh.subprocess.run", installer)
-    monkeypatch.setattr("areal_rsi.ui.dsh.shutil.which", lambda _: None)
+    monkeypatch.setattr("areal_rsi.modules.dsh_profile.subprocess.run", installer)
+    monkeypatch.setattr("areal_rsi.modules.dsh_profile.shutil.which", lambda _: None)
 
-    assert dsh.ensure_profile(tmp_path) == (binary, home)
+    assert dsh_profile.ensure_profile(tmp_path) == (binary, home)
     prepared = manifest.read_bytes(), source.read_bytes()
-    assert dsh.ensure_profile(tmp_path) == (binary, home)
+    assert dsh_profile.ensure_profile(tmp_path) == (binary, home)
     assert (manifest.read_bytes(), source.read_bytes()) == prepared
     configured = json.loads(manifest.read_text())
-    assert configured["dsh"]["profile"]["bundles"] == ["@deepseek-ai/dsh-base", dsh.TUI_PACKAGE]
+    assert configured["dsh"]["profile"]["bundles"] == [
+        "@deepseek-ai/dsh-base",
+        dsh_profile.TUI_PACKAGE,
+    ]
     assert configured["dsh"]["profile"]["patchReload"] == "live"
-    assert configured["dependencies"][dsh.TUI_PACKAGE] == dsh.TUI_VERSION
+    assert configured["dependencies"][dsh_profile.TUI_PACKAGE] == dsh_profile.TUI_VERSION
     assert source.read_text() == PLUGIN_PATCH
     installer.assert_not_called()
 
@@ -80,12 +85,12 @@ def test_installed_profile_preparation_is_idempotent_without_pnpm(
 def test_missing_pnpm_fails_before_attempting_installation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(dsh, "ensure_cli", lambda _: tmp_path / "fake-dsh")
-    monkeypatch.setattr("areal_rsi.ui.dsh.shutil.which", lambda _: None)
+    monkeypatch.setattr(dsh_profile, "ensure_cli", lambda _: tmp_path / "fake-dsh")
+    monkeypatch.setattr("areal_rsi.modules.dsh_profile.shutil.which", lambda _: None)
     installer = Mock(side_effect=AssertionError("installation must not run without pnpm"))
-    monkeypatch.setattr("areal_rsi.ui.dsh.subprocess.run", installer)
+    monkeypatch.setattr("areal_rsi.modules.dsh_profile.subprocess.run", installer)
     with pytest.raises(RuntimeError, match=r"首次安装.*pnpm"):
-        dsh.ensure_profile(tmp_path)
+        dsh_profile.ensure_profile(tmp_path)
     installer.assert_not_called()
     assert not (tmp_path / "dsh-home").exists()
 
@@ -100,9 +105,9 @@ def test_launch_uses_native_process_patches_and_absolute_mcp_root_without_saving
     workspace.mkdir()
     monkeypatch.chdir(workspace)
     binary = tmp_path / "fake-dsh"
-    monkeypatch.setattr(dsh, "ensure_cli", lambda _: binary)
+    monkeypatch.setattr(dsh_profile, "ensure_cli", lambda _: binary)
     installer = Mock(side_effect=AssertionError("plugin was already installed"))
-    monkeypatch.setattr("areal_rsi.ui.dsh.subprocess.run", installer)
+    monkeypatch.setattr("areal_rsi.modules.dsh_profile.subprocess.run", installer)
     monkeypatch.setenv("RSI_TEACHER_BASE_URL", "https://gateway.example/api/")
     monkeypatch.setenv("RSI_TEACHER_API_KEY", "fixture-private-rsi-key")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "fixture-private-deepseek-key")
@@ -141,7 +146,7 @@ def test_launch_uses_native_process_patches_and_absolute_mcp_root_without_saving
     command = [
         str(binary),
         "--profile",
-        dsh.PROFILE,
+        dsh_profile.PROFILE,
         "--patch",
         str(root / "dsh-entry.patch.yml"),
     ]
@@ -203,12 +208,12 @@ def test_launch_uses_native_process_patches_and_absolute_mcp_root_without_saving
 
 def test_rsi_preset_keeps_standard_tools_and_preserves_user_edits(tmp_path: Path) -> None:
     home, _, _ = installed_profile(tmp_path)
-    output = dsh.ensure_rsi_preset(tmp_path, home)
+    output = dsh_profile.ensure_rsi_preset(tmp_path, home)
     tree = yaml.safe_load(output.read_text())
-    assert tree[0]["config"]["text"] == dsh.PERSONA
+    assert tree[0]["config"]["text"] == dsh_config.PERSONA
     assert tree[1] == {"id": "tool-bash", "name": "@deepseek-ai/dsh-tool-bash"}
     output.write_text("user-customized-preset")
-    assert dsh.ensure_rsi_preset(tmp_path, home).read_text() == "user-customized-preset"
+    assert dsh_profile.ensure_rsi_preset(tmp_path, home).read_text() == "user-customized-preset"
 
 
 def test_setup_only_prepares_files_without_starting_gateway_or_tui(
@@ -217,16 +222,16 @@ def test_setup_only_prepares_files_without_starting_gateway_or_tui(
     monkeypatch.setenv("RSI_TEACHER_MODEL", "teacher-default-fixture-model")
     monkeypatch.setenv("RSI_TEACHER_BASE_URL", "http://127.0.0.1:1/v1")
     home, _, _ = installed_profile(tmp_path)
-    monkeypatch.setattr(dsh, "ensure_cli", lambda _: tmp_path / "fake-dsh")
+    monkeypatch.setattr(dsh_profile, "ensure_cli", lambda _: tmp_path / "fake-dsh")
     gateway = Mock(side_effect=AssertionError("setup must not start a gateway"))
     popen = Mock(side_effect=AssertionError("setup must not launch an interactive process"))
     installer = Mock(side_effect=AssertionError("plugin was already installed"))
     monkeypatch.setattr(dsh, "GatewayProxy", gateway)
     monkeypatch.setattr("areal_rsi.ui.dsh.subprocess.Popen", popen)
-    monkeypatch.setattr("areal_rsi.ui.dsh.subprocess.run", installer)
+    monkeypatch.setattr("areal_rsi.modules.dsh_profile.subprocess.run", installer)
 
     assert dsh.launch_tui(tmp_path, setup_only=True) == 0
-    assert (home / "profiles" / dsh.PROFILE / "package.json").is_file()
+    assert (home / "profiles" / dsh_profile.PROFILE / "package.json").is_file()
     assert (tmp_path / "dsh-entry.patch.yml").is_file()
     gateway.assert_not_called()
     popen.assert_not_called()
@@ -241,7 +246,7 @@ def test_mcp_environment_is_forwarded_at_runtime_without_persisting_values(
         pytest.skip("DSH environment expressions require Node.js")
     overrides = json.dumps({"research-agent": {"api_key_env": "MODEL_OVERRIDE_KEY"}})
     monkeypatch.setenv("RSI_AGENT_MODELS", overrides)
-    path = dsh.write_profile_patch(tmp_path, tmp_path, "frontend-fixture-model")
+    path = dsh_config.write_profile_patch(tmp_path, tmp_path, "frontend-fixture-model")
     patch = yaml.safe_load(path.read_text().replace("!!js", "!!str"))
     mcp = next(
         item for row in patch for item in row.get("insert", []) if item.get("id") == "rsi-mcp"

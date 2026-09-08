@@ -12,11 +12,38 @@ from areal_rsi.api.base import (
     VerifierSpec,
 )
 from areal_rsi.base.storage import FileContentStore, FileVersionManager, json_bytes
-from areal_rsi.benchmarks import BenchmarkCatalog, create_builtin_registry
+from areal_rsi.benchmarks import BenchmarkCatalog, create_builtin_registry, create_registry
+from areal_rsi.benchmarks.catalog import BenchmarkBundle, BenchmarkDescriptor
+from areal_rsi.modules.benchmark import AccuracyEvaluation, ArithmeticBenchmark, ArithmeticVerifier
 from areal_rsi.modules.gsm8k import Gsm8kBenchmark, Gsm8kVerifier, prepare_dataset
 
 
 class BenchmarkCatalogTest(unittest.IsolatedAsyncioTestCase):
+    def test_external_registry_does_not_modify_builtin_registry(self) -> None:
+        descriptor = BenchmarkDescriptor(
+            "external-fixture", "v1", "External", "fixture", "external-fixture",
+            "embedded", "external-fixture", "accuracy-v1", (),
+        )
+
+        class ExternalAdapter:
+            def create(self, descriptor, config, content):
+                return BenchmarkBundle(
+                    descriptor, "external-fixture", ArithmeticBenchmark(),
+                    ArithmeticVerifier(content), AccuracyEvaluation(),
+                )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            content = FileContentStore(Path(temporary) / "content")
+            registry = create_registry(
+                content,
+                BenchmarkCatalog((descriptor,)),
+                {"external-fixture": ExternalAdapter()},
+            )
+            bundle = registry.create("external-fixture")
+            self.assertEqual(bundle.instance_id, "external-fixture")
+            with self.assertRaisesRegex(ValueError, "未知 Benchmark"):
+                create_builtin_registry(content).create("external-fixture")
+
     def test_builtin_catalog_exposes_public_metadata_only(self) -> None:
         catalog = BenchmarkCatalog.load()
 

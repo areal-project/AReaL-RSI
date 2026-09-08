@@ -124,6 +124,16 @@ class BenchmarkRegistry:
         self.adapters = dict(adapters)
         self.content = content
 
+    def register(
+        self, adapter_name: str, adapter: BenchmarkAdapter, *, replace: bool = False
+    ) -> None:
+        """Register an externally owned adapter without changing the built-in catalog."""
+        if not adapter_name.strip():
+            raise ValueError("Benchmark Adapter 名称不能为空")
+        if adapter_name in self.adapters and not replace:
+            raise ValueError(f"Benchmark Adapter 已注册：{adapter_name}")
+        self.adapters[adapter_name] = adapter
+
     def create(
         self,
         benchmark_id: str,
@@ -161,6 +171,19 @@ def create_builtin_registry(
         {"arithmetic-v1": ArithmeticAdapter(), "gsm8k-v1": Gsm8kAdapter()},
         content,
     )
+
+
+def create_registry(
+    content: FileContentStore,
+    catalog: BenchmarkCatalog,
+    adapters: Mapping[str, BenchmarkAdapter] | None = None,
+) -> BenchmarkRegistry:
+    """Assemble a registry from caller-owned catalog metadata and adapters.
+
+    External Benchmarks should use this entry point instead of adding imports to
+    ``create_builtin_registry`` or the default application manifest.
+    """
+    return BenchmarkRegistry(catalog, adapters or {}, content)
 
 
 def _mapping(value: object, label: str) -> dict[str, Any]:

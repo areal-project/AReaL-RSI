@@ -6,6 +6,7 @@ from areal_rsi.benchmarks.catalog import (
     BenchmarkDescriptor,
     BenchmarkRegistry,
     create_builtin_registry,
+    create_registry,
 )
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "BenchmarkDescriptor",
     "BenchmarkRegistry",
     "create_builtin_registry",
+    "create_registry",
 ]

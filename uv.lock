@@ -37,6 +37,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "deepseek-harness-sdk" },
+    { name = "httpx" },
     { name = "mcp" },
     { name = "pyyaml" },
 ]
@@ -51,6 +52,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "deepseek-harness-sdk", specifier = "==0.1.2rc1" },
+    { name = "httpx", specifier = ">=0.28,<1" },
     { name = "mcp", specifier = ">=1.28,<2" },
     { name = "pyyaml", specifier = ">=6,<7" },
 ]

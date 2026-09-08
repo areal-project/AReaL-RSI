@@ -69,8 +69,10 @@ class CandidateMcpProvider:
     async def invoke(self, call: ToolCall) -> ToolResult:
         from areal_agent_runtime.contracts import ErrorCategory, ErrorInfo, TextBlock, ToolResult
 
-        entry = next(item for item in self.catalog if item["spec"]["name"] == call.name)
         try:
+            entry = next((item for item in self.catalog if item["spec"]["name"] == call.name), None)
+            if entry is None:
+                raise ValueError(f"Unknown MCP tool: {call.name}")
             values = await invoke(
                 self.servers, ["call", entry["server"], entry["tool"], json.dumps(call.arguments)]
             )

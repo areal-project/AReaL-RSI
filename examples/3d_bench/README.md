@@ -1,5 +1,30 @@
 # 3D Benchmark: stage 1
 
+## One research iteration
+
+```bash
+uv run --env-file .env --locked python examples/3d_bench/run_research.py \
+  --baseline .rsi/datasets/3d-model-v2/outputs/model001_baseline_RUN_ID
+```
+
+This explicitly starts paid calls: one DefaultResearchAgent proposal followed
+by one Task Agent regeneration. Research uses the configured `research-agent`
+override or teacher connection. Target connection must match the baseline.
+Only `prompt.md` can change; tools, generation limits, task and validator stay
+fixed. The task is read from the saved baseline input, not Downloads.
+The saved `generation_environment` must match the current runner. Old runs
+without this field predate the ESM workspace fix and require a new baseline;
+historical evidence is never rewritten to claim environment equivalence.
+The previous failed model is evidence, not a file the researcher edits.
+
+Outputs are under `outputs/model001_research_*/`: research trajectory, proposed
+change, baseline/candidate Harness snapshots, and `comparison.json` linking both
+Task Agent runs. This is a same-training-task diagnostic experiment, not a
+held-out score, multi-task improvement claim or the full RSI planning workflow.
+No RSI Agent planning conversation or automatic version-selection loop runs.
+The one-shot driver currently composes existing research and runtime APIs in
+the example; it does not yet use the generic experiment scheduler.
+
 ## Real MODEL-001 baseline
 
 From the repository root, explicitly start one paid Task Agent run using the
@@ -12,7 +37,8 @@ uv run --env-file .env --locked python examples/3d_bench/run_baseline.py \
 
 This uses RSI's `DshAgentRuntime`, `task-agent`, bash tool and credential proxy,
 not GameAgent or a research workflow. `baseline.md` supplies minimal instructions;
-the public inputs are TARGET, the template helper prefix and Contract V2.
+the public inputs are TARGET, the template helper prefix, Contract V2, and the
+template's unchanged `package.json` declaring `"type": "module"`.
 Contract V2 explicitly takes precedence over incompatible TARGET export rules.
 There are no specialist skills, validator feedback retries, screenshots or VL judge.
 The model endpoint must support the Chat Completions tool protocol used by RSI.
@@ -29,6 +55,23 @@ this diagnostic report is not a benchmark score or visual-quality assessment.
 File collection currently lives in this external example. It does not change
 LocalHarnessRuntime's existing text output, and does not create an Artifact
 optimization workflow. Failed runs retain evidence and are not auto-retried.
+
+### Node syntax-check caveat
+
+On local Node v26.4.0, `node --check` can exit successfully for an invalid `.js`
+file with ESM exports when the package scope has no explicit module type. The
+check takes the CommonJS detection path; an ESM-only token triggers a retry
+indicator, but the syntax-check caller does not recompile as ESM. Explicit
+`"type": "module"` takes the actual module parser and reports the syntax error.
+See Node's [syntax-check entry](https://github.com/nodejs/node/blob/v26.4.0/lib/internal/main/check_syntax.js)
+and [module detection](https://github.com/nodejs/node/blob/v26.4.0/src/node_contextify.cc).
+
+The runner copies the same package bytes into the public workspace and rejects
+agent changes to that file. It does not expose validator source or install
+generation dependencies. `node --check src/model.js` now uses the same ESM mode
+as evaluation. For an explicit syntax-only check independent of package lookup,
+use `node --input-type=module --check < src/model.js`. Neither check proves
+Contract V2 compliance or visual quality. Existing failed models remain unchanged.
 
 This example prepares and checks the upstream Contract V2 evaluation runtime.
 It does not call an LLM, GameAgent, RSI, or Qwen-VL. No optimization experiment

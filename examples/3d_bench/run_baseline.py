@@ -27,6 +27,19 @@ from areal_rsi.modules.runtime import DshAgentRuntime, sandbox_wrapper
 
 EXAMPLE = Path(__file__).resolve().parent
 DATASET = EXAMPLE.parents[1] / ".rsi/datasets/3d-model-v2"
+GENERATION_ENVIRONMENT = "contract-v2-esm-v1"
+
+
+def prepare_public_workspace(template: Path, workspace: Path) -> None:
+    """Copy public inputs with the same explicit ESM package scope as evaluation."""
+    package = json.loads((template / "package.json").read_text())
+    if package.get("type") != "module":
+        raise ValueError("Contract V2 template must explicitly declare type=module")
+    # Validators and fixtures stay host-side. Package scripts alone grant no access to them.
+    for name in ("src/model.js", "CONTRACT_V2.md", "package.json"):
+        destination = workspace / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(template / name, destination)
 
 
 async def main(args):
@@ -41,11 +54,7 @@ async def main(args):
     for name, digest in manifest["files"].items():
         if hashlib.sha256((template / name).read_bytes()).hexdigest() != digest:
             raise ValueError(f"Fixed template changed: {name}")
-    # Only public framework inputs enter the generator workspace, never validator fixtures.
-    for name in ("src/model.js", "CONTRACT_V2.md"):
-        destination = workspace / name
-        destination.parent.mkdir(exist_ok=True)
-        shutil.copy2(template / name, destination)
+    prepare_public_workspace(template, workspace)
     (workspace / "TARGET.md").write_text(str(task.input))
     content = FileContentStore(run / "content")
     trajectories = FileTrajectoryStore(run / "trajectories", content)
@@ -53,7 +62,8 @@ async def main(args):
     model = await versions.create_model(
         connection.model, await content.put_json(connection.public_identity())
     )
-    prompt = await content.put_text((EXAMPLE / "baseline.md").read_text())
+    prompt_path = getattr(args, "prompt", None) or EXAMPLE / "baseline.md"
+    prompt = await content.put_text(prompt_path.read_text())
     harness = await versions.create_harness("3d-minimal-baseline-v1", prompt)
     solution = await versions.create_solution(model, harness)
     write_json(
@@ -64,6 +74,7 @@ async def main(args):
             "snapshot": manifest,
             "max_tokens": 4096,
             "timeout_seconds": 600,
+            "generation_environment": GENERATION_ENVIRONMENT,
         },
     )
     proxy = GatewayProxy(connection.base_url, connection.api_key)
@@ -86,6 +97,9 @@ async def main(args):
         )
         response = await session.send("Read TARGET.md and implement src/model.js.")
         trace = await session.finish()
+        package = workspace / "package.json"
+        if package.is_symlink() or package.read_bytes() != (template / "package.json").read_bytes():
+            raise ValueError("Task Agent modified the fixed module configuration")
         source = workspace / "src/model.js"
         if source.is_symlink() or not source.is_file():
             raise ValueError("Task output is missing or a symlink")
@@ -134,9 +148,13 @@ async def main(args):
         if session is not None:
             await session.finish()
         proxy.close()
+    return run
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--tasks", type=Path, required=True)
+    parser.add_argument(
+        "--prompt", type=Path, help="Harness prompt override; all other settings fixed"
+    )
     asyncio.run(main(parser.parse_args()))

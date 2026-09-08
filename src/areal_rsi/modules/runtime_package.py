@@ -340,6 +340,9 @@ class PackageAgentRuntime:
             selection.setdefault("config", {}).update(
                 dshHome=str(directory / "dsh-home"), profile="agent-runtime"
             )
+        missing_mcp = [name for name in agent.mcp_servers if name not in self.mcp_registry]
+        if missing_mcp:
+            raise ValueError(f"Unknown MCP servers: {missing_mcp}")
         config = {
             "runtime": selection,
             "directory": str(directory),

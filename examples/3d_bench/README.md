@@ -1,5 +1,35 @@
 # 3D Benchmark: stage 1
 
+## Real MODEL-001 baseline
+
+From the repository root, explicitly start one paid Task Agent run using the
+target connection in your local `.env`:
+
+```bash
+uv run --env-file .env --locked python examples/3d_bench/run_baseline.py \
+  --tasks /Users/jjsong/Downloads/model_tasks_100
+```
+
+This uses RSI's `DshAgentRuntime`, `task-agent`, bash tool and credential proxy,
+not GameAgent or a research workflow. `baseline.md` supplies minimal instructions;
+the public inputs are TARGET, the template helper prefix and Contract V2.
+Contract V2 explicitly takes precedence over incompatible TARGET export rules.
+There are no specialist skills, validator feedback retries, screenshots or VL judge.
+The model endpoint must support the Chat Completions tool protocol used by RSI.
+
+Each run creates `.rsi/datasets/3d-model-v2/outputs/model001_baseline_*/` with
+input snapshots, trajectory/content records, workspace `src/model.js`, file-type
+`task-result.json`, raw validator stdout/stderr and `validation.json`.
+The generation budget is 4096 output tokens per request with a 600-second
+request timeout. This is not a total-token cap for the full agent loop.
+Validation uses a fresh runtime copy and macOS sandbox-exec with network denied.
+Validation failures may include infrastructure errors: inspect the raw logs;
+this diagnostic report is not a benchmark score or visual-quality assessment.
+
+File collection currently lives in this external example. It does not change
+LocalHarnessRuntime's existing text output, and does not create an Artifact
+optimization workflow. Failed runs retain evidence and are not auto-retried.
+
 This example prepares and checks the upstream Contract V2 evaluation runtime.
 It does not call an LLM, GameAgent, RSI, or Qwen-VL. No optimization experiment
 is started. Only the scripts and this README are tracked here.
@@ -50,7 +80,9 @@ and the viewer build; it is not a Benchmark score. The template model is an
 empty placeholder and is expected to fail candidate validation.
 
 After a trusted implementation replaces **only the createModel body** in the
-workspace's `src/model.js`, preserving the executor-owned prefix:
+workspace's `src/model.js`, preserving the executor-owned prefix, publish that
+file as the task output. The external verifier accepts a file `ContentRef` (the
+file contents are the model.js artifact) and injects it into the fixed viewer.
 
 ```bash
 bash examples/3d_bench/run.sh validate \

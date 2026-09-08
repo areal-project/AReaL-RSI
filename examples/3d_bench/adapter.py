@@ -18,7 +18,7 @@ from areal_rsi.api.base import (
     VerificationResult,
     VerificationStatus,
 )
-from areal_rsi.base.storage import DIRECTORY_TYPE, FileContentStore, now
+from areal_rsi.base.storage import FileContentStore, now
 from areal_rsi.benchmarks.catalog import BenchmarkBundle
 
 
@@ -49,15 +49,17 @@ class ThreeModelVerifier:
 
     async def verify(self, request: VerificationRequest) -> VerificationResult:
         result = request.result
-        if result.output.media_type != DIRECTORY_TYPE:
-            raise ValueError("3D verifier 要求目录型 TaskResult.output")
-        artifact = await self.content.resolve_path(result.output)
-        source = artifact / "src" / "model.js"
+        if result.output.media_type not in (None, "text/javascript", "text/plain; charset=utf-8"):
+            raise ValueError("3D verifier 要求 model.js 文件型 TaskResult.output")
+        source = await self.content.resolve_path(result.output)
         if not source.is_file():
-            raise ValueError("3D artifact 缺少 src/model.js")
+            raise ValueError("3D TaskResult.output 必须是 model.js 文件内容")
         with tempfile.TemporaryDirectory(prefix="rsi-3d-verify-") as temporary:
             workspace = Path(temporary) / "viewer"
-            shutil.copytree(self.runtime_path / "viewer-template", workspace)
+            template = self.runtime_path / "viewer-template"
+            if not template.is_dir():
+                template = self.runtime_path
+            shutil.copytree(template, workspace)
             shutil.copy2(source, workspace / "src/model.js")
             completed = await asyncio.to_thread(
                 subprocess.run,

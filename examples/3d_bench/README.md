@@ -11,6 +11,8 @@ is started. Only the scripts and this README are tracked here.
   (Git-ignored).
 - A separate workspace: writable copy; only `src/model.js` may change.
 - Separate output directories: validation receipts, screenshots, run metadata.
+- `benchmark.yaml` and `registry.py`: external manifest and explicit
+  adapter assembly; they are not part of AReaL-RSI's built-in registry.
 
 Source: [upstream README](https://code.alipay.com/AReaL/GameAgent/blob/xss-gdd-text2model/gdd-model-runner/README.md),
 branch `xss-gdd-text2model`.
@@ -90,3 +92,29 @@ not the 1024x1024 three-quarter views described by Downloads/verify.
 Stage 1 fixes runtime bytes and dependencies. Browser, OS, fonts and rendering
 driver also affect screenshots; record/pin those in a later isolated runtime
 before claiming cross-machine reproducibility.
+
+## External adapter smoke check
+
+The adapter can be assembled without changing the default application registry:
+
+```bash
+PYTHONPATH=examples/3d_bench \
+  RSI_3D_TASKS_PATH=/Users/jjsong/Downloads/model_tasks_100 \
+  RSI_3D_RUNTIME_PATH=.rsi/datasets/3d-model-v2 \
+  uv run --locked python - <<'PY'
+import asyncio
+from pathlib import Path
+from areal_rsi.base.storage import FileContentStore
+from areal_rsi.api.base import BenchmarkSplit
+from registry import create_3d_registry_from_environment
+
+async def main():
+    registry, config = create_3d_registry_from_environment(
+        FileContentStore(Path('/tmp/rsi-3d-content')))
+    bundle = registry.create('3d-model-v1', config)
+    tasks = await bundle.benchmark.list_tasks(BenchmarkSplit.TRAIN)
+    print(bundle.instance_id, tasks[0].task_id)
+
+asyncio.run(main())
+PY
+```

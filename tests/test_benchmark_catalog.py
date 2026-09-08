@@ -4,7 +4,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from areal_rsi.api.base import BenchmarkSplit, TaskResult, TrajectoryRef
+from areal_rsi.api.base import (
+    BenchmarkSplit,
+    TaskResult,
+    TrajectoryRef,
+    VerificationRequest,
+    VerifierSpec,
+)
 from areal_rsi.base.storage import FileContentStore, FileVersionManager, json_bytes
 from areal_rsi.benchmarks import BenchmarkCatalog, create_builtin_registry
 from areal_rsi.modules.gsm8k import Gsm8kBenchmark, Gsm8kVerifier, prepare_dataset
@@ -63,8 +69,14 @@ class BenchmarkCatalogTest(unittest.IsolatedAsyncioTestCase):
                 }
             )
             result = TaskResult(output, TrajectoryRef("trace"))
-            direct_result = await direct_verifier.verify(task, solution, result)
-            adapter_result = await bundle.verifier.verify(task, solution, result)
+            request = VerificationRequest(
+                task,
+                solution,
+                result,
+                VerifierSpec(bundle.descriptor.verifier, "injected"),
+            )
+            direct_result = await direct_verifier.verify(request)
+            adapter_result = await bundle.verifier.verify(request)
             self.assertEqual(adapter_result, direct_result)
 
     def test_environment_configuration_is_typed_and_validated(self) -> None:

@@ -30,7 +30,13 @@ from areal_rsi.api.base import (
     Task,
     TaskResult,
     Trajectory,
+    TrajectoryMaterialization,
     TrajectoryRef,
+    TrajectoryStorageType,
+    TrajectoryStoreSpec,
+    VerificationRequest,
+    VerificationStatus,
+    VerifierSpec,
 )
 from areal_rsi.api.modules import (
     AgentRuntime,
@@ -39,8 +45,12 @@ from areal_rsi.api.modules import (
     Benchmark,
     HarnessRuntime,
     TrainingBackend,
+    TrajectoryNormalizer,
+    TrajectorySource,
     TrajectoryStore,
+    TrajectoryStoreFactory,
     Verifier,
+    VerifierFactory,
 )
 from areal_rsi.api.workflow import ResearchAgent, RsiAgent, WorkflowContext
 
@@ -186,6 +196,28 @@ class InterfaceDesignTest(unittest.TestCase):
             "application/vnd.areal-rsi.trajectories+json",
         )
         self.assertIn("bundle", TrajectoryStore.__dict__)
+        self.assertIn("query", TrajectoryStore.__dict__)
+        self.assertIn("create", TrajectoryStoreFactory.__dict__)
+        self.assertIn("fetch", TrajectorySource.__dict__)
+        self.assertIn("normalize", TrajectoryNormalizer.__dict__)
+
+    def test_trajectory_store_spec_describes_local_and_remote_storage(self) -> None:
+        local = TrajectoryStoreSpec(
+            store_id="local",
+            provider="filesystem",
+            storage_type=TrajectoryStorageType.LOCAL,
+            uri="./runs",
+        )
+        remote = TrajectoryStoreSpec(
+            store_id="remote",
+            provider="external",
+            storage_type=TrajectoryStorageType.REMOTE,
+            uri="trajectory://project",
+            materialization=TrajectoryMaterialization.REFERENCE,
+        )
+
+        self.assertEqual(local.materialization, TrajectoryMaterialization.SNAPSHOT)
+        self.assertEqual(remote.storage_type, TrajectoryStorageType.REMOTE)
 
     def test_agent_runtime_uses_a_multi_turn_session(self) -> None:
         spec_fields = {item.name for item in fields(AgentSpec)}
@@ -216,17 +248,30 @@ class InterfaceDesignTest(unittest.TestCase):
         self.assertIn("build", ArtifactBuilder.__dict__)
         self.assertIn("prune", RsiAgent.__dict__)
 
-    def test_task_result_gives_verifier_the_output_and_solution(self) -> None:
+    def test_verifier_receives_one_structured_request(self) -> None:
         result = TaskResult(
             output=ContentRef(uri="content://task-output", digest="sha256:output"),
             trajectory=TrajectoryRef("trajectory_1"),
         )
+        request = VerificationRequest(
+            task=Task(task_id="task_1", input={"prompt": "question"}),
+            solution=self._solution(),
+            result=result,
+            verifier=VerifierSpec(
+                verifier_id="user-verifier",
+                provider="python",
+                entrypoint="user.verifier:Verifier",
+            ),
+        )
 
         self.assertEqual(result.output.uri, "content://task-output")
+        self.assertEqual(request.result.trajectory.trajectory_id, "trajectory_1")
         self.assertEqual(
             list(signature(Verifier.verify).parameters),
-            ["self", "task", "solution", "result"],
+            ["self", "request"],
         )
+        self.assertIn("create", VerifierFactory.__dict__)
+        self.assertEqual(VerificationStatus.SUCCEEDED, "succeeded")
 
     def test_rsi_chat_and_workflow_have_no_wrapper_results(self) -> None:
         self.assertFalse(hasattr(base_api, "ConversationInput"))

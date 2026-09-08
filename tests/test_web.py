@@ -12,11 +12,15 @@ from pathlib import Path
 from typing import Any
 
 from areal_rsi.api.base import (
+    ContentRef,
     EvolutionTarget,
     ExperimentPlan,
     ExperimentRun,
+    HarnessVersion,
+    ModelVersion,
     ResearchAgentState,
     RunState,
+    SolutionVersion,
 )
 from areal_rsi.base.storage import write_json
 from areal_rsi.ui.web import ResearchServer, RunReader
@@ -27,6 +31,14 @@ class WebTest(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
+        content = ContentRef("content://fixture", "sha256:fixture")
+        baseline = SolutionVersion(
+            "solution_base",
+            ModelVersion("model_target", "task-agent-fixture-model", content, "fixture-time"),
+            HarnessVersion("harness_base", "fixture-harness", content, "fixture-time"),
+            "fixture-time",
+        )
+        write_json(self.root / "versions" / "solution_base.json", baseline)
         plan = ExperimentPlan(
             "真实记录字段 <script>alert(1)</script>",
             "harness-evolution",
@@ -35,7 +47,16 @@ class WebTest(unittest.TestCase):
             EvolutionTarget.HARNESS,
             3,
             research_agent_count=2,
-            config={"research_directions": ["工具验证", "上下文组织"], "secret": "must-not-leak"},
+            config={
+                "teacher_model_name": "teacher-default-fixture-model",
+                "interaction_model_name": "interaction-agent-fixture-model",
+                "agent_models": {
+                    "rsi-agent": {"model": "rsi-agent-fixture-model"},
+                    "research-agent-1": {"model": "research-agent-fixture-model"},
+                    "research-agent-2": {"model": "research-agent-fixture-model"},
+                },
+                "secret": "must-not-leak",
+            },
         )
         self.experiment = ExperimentRun(
             "run_fixture",
@@ -80,8 +101,20 @@ class WebTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(headers["Cache-Control"], "no-store")
         data = json.loads(body)
+        self.assertEqual(data["teacher_model"], "teacher-default-fixture-model")
+        self.assertEqual(data["interaction_model"], "interaction-agent-fixture-model")
+        self.assertEqual(data["rsi_model"], "rsi-agent-fixture-model")
+        self.assertEqual(
+            [agent["model"] for agent in data["agents"]],
+            [
+                "research-agent-fixture-model",
+                "research-agent-fixture-model",
+            ],
+        )
+        self.assertEqual(data["target_model"], "task-agent-fixture-model")
+        self.assertEqual(data["model"], "task-agent-fixture-model")
         self.assertFalse(data["worker_alive"])
-        self.assertEqual([a["direction"] for a in data["agents"]], ["工具验证", "上下文组织"])
+        self.assertTrue(all("direction" not in agent for agent in data["agents"]))
         self.assertEqual(data["agents"][0]["phase"], "propose")
         self.assertNotIn(b"must-not-leak", body)
         self.assertNotIn("config", data)

@@ -14,6 +14,7 @@ from areal_rsi.api.base import (
     ExperimentRun,
     ResearchChange,
     SolutionVersion,
+    VerifierSpec,
 )
 from areal_rsi.api.modules import (
     ArtifactBuilder,
@@ -73,6 +74,7 @@ class WorkflowContext:
     research_agents: tuple[ResearchAgent, ...]
     benchmark: Benchmark
     verifier: Verifier
+    verifier_spec: VerifierSpec
     evaluation: Evaluation
     harness_builder: HarnessBuilder | None = None
     training_backend: TrainingBackend | None = None

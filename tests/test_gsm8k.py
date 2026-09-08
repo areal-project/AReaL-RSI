@@ -6,7 +6,13 @@ import unittest
 from decimal import Decimal
 from pathlib import Path
 
-from areal_rsi.api.base import BenchmarkSplit, TaskResult, TrajectoryRef
+from areal_rsi.api.base import (
+    BenchmarkSplit,
+    TaskResult,
+    TrajectoryRef,
+    VerificationRequest,
+    VerifierSpec,
+)
 from areal_rsi.base.storage import FileContentStore, FileVersionManager, json_bytes
 from areal_rsi.modules.gsm8k import Gsm8kBenchmark, Gsm8kVerifier, final_answer, prepare_dataset
 
@@ -62,7 +68,10 @@ class Gsm8kTest(unittest.IsolatedAsyncioTestCase):
                 }
             )
             result = TaskResult(output, TrajectoryRef("trace"))
-            self.assertTrue((await verifier.verify(task, solution, result)).passed)
+            spec = VerifierSpec("gsm8k-verifier", "injected")
+            self.assertTrue(
+                (await verifier.verify(VerificationRequest(task, solution, result, spec))).passed
+            )
             wrong = await store.put_json(
                 {
                     "task_id": task.task_id,
@@ -71,11 +80,20 @@ class Gsm8kTest(unittest.IsolatedAsyncioTestCase):
                 }
             )
             self.assertFalse(
-                (await verifier.verify(task, solution, TaskResult(wrong, result.trajectory))).passed
+                (
+                    await verifier.verify(
+                        VerificationRequest(
+                            task,
+                            solution,
+                            TaskResult(wrong, result.trajectory),
+                            spec,
+                        )
+                    )
+                ).passed
             )
             task.input = "changed"
             with self.assertRaises(ValueError):
-                await verifier.verify(task, solution, result)
+                await verifier.verify(VerificationRequest(task, solution, result, spec))
             self.assertNotEqual(
                 task.input, (await benchmark.list_tasks(BenchmarkSplit.TRAIN))[0].input
             )

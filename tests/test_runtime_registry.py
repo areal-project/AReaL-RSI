@@ -14,7 +14,7 @@ from areal_rsi.modules.runtime import DshAgentRuntime
 class RuntimeRegistryTest(unittest.IsolatedAsyncioTestCase):
     async def test_only_registered_tools_are_assembled(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             content = FileContentStore(root / "content")
             trajectories = FileTrajectoryStore(root / "trajectories", content)
             model = ModelVersion("model_fixture", "fixture", await content.put_text("model"), now())
@@ -24,6 +24,7 @@ class RuntimeRegistryTest(unittest.IsolatedAsyncioTestCase):
                 trajectories,
                 base_url="http://127.0.0.1:1",
                 api_key="fixture",
+                credential_env_names=("MODEL_CREDENTIAL",),
                 tool_registry={"custom@v1": [{"id": "custom", "name": "test-package"}]},
             )
             with self.assertRaisesRegex(ValueError, "未注册工具"):
@@ -31,18 +32,33 @@ class RuntimeRegistryTest(unittest.IsolatedAsyncioTestCase):
                     AgentSpec("agent", "deepseek-harness@v1", model, tools=("memory@v1",))
                 )
             with (
-                patch.dict(os.environ, {"RSI_API_KEY": "host-only-sentinel"}),
+                patch.dict(
+                    os.environ,
+                    {
+                        "RSI_API_KEY": "host-only-sentinel",
+                        "MODEL_CREDENTIAL": "reference-only-sentinel",
+                    },
+                ),
                 patch("areal_rsi.modules.runtime.DeepSeekHarness") as sdk,
                 patch(
+                    "areal_rsi.modules.runtime.ensure_cli", return_value=root / "shared-dsh"
+                ) as ensure,
+                patch(
                     "areal_rsi.modules.runtime.sandbox_wrapper",
-                    side_effect=lambda directory, _: directory / "dsh",
-                ),
+                    side_effect=lambda directory, _workspace, _cli: directory / "dsh",
+                ) as sandbox,
             ):
                 session = await runtime.open(
                     AgentSpec("agent", "deepseek-harness@v1", model, tools=("custom@v1",))
                 )
                 spec = yaml.safe_load(Path(sdk.call_args.kwargs["patches"][0]).read_text())
                 self.assertEqual(sdk.call_args.kwargs["env"]["RSI_API_KEY"], "")
+                self.assertEqual(sdk.call_args.kwargs["env"]["MODEL_CREDENTIAL"], "")
                 self.assertEqual(os.environ["RSI_API_KEY"], "host-only-sentinel")
                 self.assertIn({"insert": [{"id": "custom", "name": "test-package"}]}, spec)
+                ensure.assert_called_once_with(root)
+                self.assertEqual(sandbox.call_args.args[2], root / "shared-dsh")
+                self.assertEqual(
+                    sdk.call_args.kwargs["dsh_bin"], str(sandbox.call_args.args[0] / "dsh")
+                )
                 await session.finish()

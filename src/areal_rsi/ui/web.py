@@ -78,10 +78,23 @@ class RunReader:
         if model_path.exists():
             solution = decode(SolutionVersion, json.loads(model_path.read_text()))
             model_name = solution.model.name
-        directions = run.plan.config.get("research_directions", [])
+        configured_models = run.plan.config.get("agent_models", {})
+        model_names = (
+            {
+                agent_id: spec["model"]
+                for agent_id, spec in configured_models.items()
+                if isinstance(spec, dict) and isinstance(spec.get("model"), str)
+            }
+            if isinstance(configured_models, dict)
+            else {}
+        )
+        legacy_teacher = run.plan.config.get("teacher_model_name")
+        if not isinstance(legacy_teacher, str):
+            legacy_teacher = None
+        interaction_model = run.plan.config.get("interaction_model_name")
         agents = []
         best_score = baseline_score
-        for index, agent in enumerate(run.research_agents):
+        for agent in run.research_agents:
             state = progress.get(agent.agent_id, {})
             phase = state.get("phase", "waiting")
             if agent.state.value == "succeeded":
@@ -110,15 +123,10 @@ class RunReader:
                         "finished_at": step.finished_at,
                     }
                 )
-            direction = (
-                directions[index]
-                if isinstance(directions, list) and index < len(directions)
-                else "未指定"
-            )
             agents.append(
                 {
                     "agent_id": agent.agent_id,
-                    "direction": direction,
+                    "model": model_names.get(agent.agent_id, legacy_teacher),
                     "state": agent.state.value,
                     "completed_iterations": len(history),
                     "max_iterations": run.plan.max_iterations,
@@ -141,6 +149,14 @@ class RunReader:
             "target": run.plan.target.value,
             "benchmark": run.plan.benchmark,
             "model": model_name,
+            "target_model": model_name,
+            "rsi_model": model_names.get("rsi-agent", legacy_teacher),
+            "interaction_model": interaction_model if isinstance(interaction_model, str) else None,
+            "teacher_model": (
+                run.plan.config["teacher_model_name"]
+                if isinstance(run.plan.config.get("teacher_model_name"), str)
+                else None
+            ),
             "baseline_solution_id": run.plan.baseline_solution_id,
             "best_solution_id": run.best_solution_id,
             "baseline_score": baseline_score,

@@ -11,6 +11,7 @@ from areal_rsi.api.base import (
     EvolutionTarget,
     ExperimentPlan,
     ExperimentRun,
+    JsonObject,
     ModelVersion,
     RunState,
 )
@@ -26,16 +27,23 @@ class DefaultRsiAgent:
         benchmark: str,
         *,
         benchmark_description: str = "用户配置的 Benchmark",
-        research_directions: tuple[str, ...] = ("通用 Harness 改进",),
+        research_agent_count: int = 1,
         workflow_name: str = "harness-evolution",
         evolution_target: EvolutionTarget = EvolutionTarget.HARNESS,
+        target_model_name: str | None = None,
+        model_plan_config: JsonObject | None = None,
     ):
         self.runtime = runtime
         self.model = model
+        self.target_model_name = target_model_name
+        self.model_plan_config = model_plan_config or {
+            "rsi_model_name": model.name,
+            "target_model_name": target_model_name,
+        }
         self.baseline = baseline
         self.benchmark = benchmark
         self.benchmark_description = benchmark_description
-        self.research_directions = research_directions
+        self.research_agent_count = research_agent_count
         self.workflow_name = workflow_name
         self.evolution_target = evolution_target
         self.session: DshSession | None = None
@@ -49,8 +57,9 @@ class DefaultRsiAgent:
                 '返回 {"plan":{"goal":"用户目标","max_iterations":整数}}。'
                 "不确定轮数时询问用户。不要声称已经执行实验；计划会由 TUI 展示确认。"
                 f"当前配置的优化对象是 {target_label}，benchmark={self.benchmark}，"
-                f"模型={self.model.name}。"
-                f"配置了 {len(self.research_directions)} 条独立研究线。"
+                f"teacher 模型={self.model.name}，"
+                f"待优化的目标模型={self.target_model_name or '由实验基线确定'}。"
+                f"配置了 {self.research_agent_count} 条独立研究线，它们使用同一个实验目标。"
                 f"Benchmark 说明：{self.benchmark_description}"
             )
             self.session = await self.runtime.open(
@@ -74,9 +83,11 @@ class DefaultRsiAgent:
                 self.baseline,
                 self.evolution_target,
                 iterations,
-                research_agent_count=len(self.research_directions),
+                research_agent_count=self.research_agent_count,
                 stop_when_goal_reached=False,
-                config={"research_directions": list(self.research_directions)},
+                config={
+                    **self.model_plan_config,
+                },
             )
         return str(data.get("reply", "请描述你想优化的目标。"))
 
@@ -99,7 +110,6 @@ class DefaultRsiAgent:
                 json.dumps(
                     {
                         "goal": run.plan.goal,
-                        "directions": run.plan.config.get("research_directions", []),
                         "agents": [
                             {
                                 "agent_id": a.agent_id,
@@ -130,5 +140,3 @@ class DefaultRsiAgent:
     async def close(self) -> None:
         if self.session:
             await self.session.finish()
-
-

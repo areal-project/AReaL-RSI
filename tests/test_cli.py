@@ -18,6 +18,6 @@ def test_missing_model_configuration_has_actionable_error(tmp_path: Path) -> Non
         timeout=10,
     )
     assert result.returncode == 2
-    assert "RSI_MODEL" in result.stderr
+    assert "RSI_TEACHER_MODEL" in result.stderr
     assert "--env-file .env" in result.stderr
     assert "Traceback" not in result.stderr

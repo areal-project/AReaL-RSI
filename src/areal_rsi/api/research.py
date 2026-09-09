@@ -33,7 +33,9 @@ class ResearchLimits:
             "max_jobs",
         ):
             value = getattr(self, name)
-            if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+                raise ValueError(f"{name} must be a valid nonnegative number")
+            if value == 0 and name != "max_verify_calls":
                 raise ValueError(f"{name} must be positive")
             if not math.isfinite(value):
                 raise ValueError(f"{name} must be finite")

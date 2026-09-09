@@ -167,6 +167,7 @@ def test_only_reply_to_current_summary_can_start_and_edits_invalidate_readiness(
         )
         assert not unready.output["ready"] and len(unready.output["issues"]) == 2
         brief = TaskBrief("研究一种方法", "先整理方法和证据，不运行实验")
+        brief.limits.max_verify_calls = 0
         await tools(ToolCall("update_brief", {"brief_json": json.dumps(encode(brief))}, "brief"))
         prepare = ToolCall(
             "prepare_research",

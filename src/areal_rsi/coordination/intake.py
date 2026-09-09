@@ -97,6 +97,8 @@ def validate_execution(config: ResearchConfig) -> list[str]:
         issues.append("验证程序尚未提供固定的协议和数据身份")
     if config.brief.verification is not None and config.verifier is None:
         issues.append("已约定验证指标，但尚未接入实际验证程序")
+    if config.brief.verification is not None and config.brief.limits.max_verify_calls == 0:
+        issues.append("已约定验证指标，但验证调用预算为零")
     if config.verifier and config.brief.verification is None:
         issues.append("已接入验证器，还需要约定验证指标和比较方式")
     identity = config.metadata.get("verification_identity")

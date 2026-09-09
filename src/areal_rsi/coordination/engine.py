@@ -343,7 +343,8 @@ class ResearchEngine:
                     encode(c.store.get("messages", identifier, ResearchMessage))
                     for identifier in c.state["inboxes"].get(agent_id, [])
                     if identifier != message.message_id
-                    and c.store.get("messages", identifier, ResearchMessage).sender == "user"
+                    and c.store.get("messages", identifier, ResearchMessage).sender
+                    == ("user" if agent_id in {"rsi", "interaction"} else "rsi")
                 ],
             )
             if (

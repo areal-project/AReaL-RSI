@@ -850,3 +850,53 @@ def test_busy_interaction_receives_user_steering_and_new_message_retries_failure
             await engine.close()
 
     asyncio.run(scenario())
+
+
+def test_supervisor_update_arriving_with_report_is_consumed_before_report(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        c = Coordinator.create(tmp_path, TaskBrief("任务", "执行中的负责人补充"))
+        c.start()
+        branch = c.spawn(
+            key="worker", direction="接入", instruction="实现接口", completion_criteria="报告"
+        )
+        researcher = branch["agent_id"]
+        updates: list[str] = []
+
+        async def respond(agent: str, index: int, payload: Json) -> Json:
+            if index == 0:
+                updates.append(
+                    c.message_researcher(researcher, "有效分数不等于达到目标", key="update")
+                )
+            else:
+                assert "有效分数不等于达到目标" in json.dumps(payload["input"], ensure_ascii=False)
+                assert not c.pending_updates(researcher)
+            return packet(call("report", "report" + str(index)))
+
+        async def handle(item: ToolCall) -> ToolResult:
+            return ToolResult(c.report(researcher, key=item.call_id, fields=fields()), stop=True)
+
+        transport = RoutedTransport(respond)
+        runtime = ResponsesRuntime(
+            ResponsesConfig(base_url="https://example.test", api_key="test"), transport
+        )
+        engine = ResearchEngine(c, runtime, lambda _: ToolSet(definitions("report"), handle))
+        try:
+            await engine._drive(researcher)
+            assert transport.counts[researcher] == 2
+            actor = c.actor(researcher)
+            assert len(actor.iterations) == 1 and actor.iterations[0].report_ref is not None
+            assert updates[0] in c.state["delivered"]
+            assert (
+                c.message_researcher(researcher, "有效分数不等于达到目标", key="update")
+                == updates[0]
+            )
+            try:
+                c.message_researcher(researcher, "下一项任务", key="after_report")
+            except ValueError as exc:
+                assert "assign" in str(exc)
+            else:
+                raise AssertionError("Report barrier was bypassed")
+        finally:
+            await engine.close()
+
+    asyncio.run(scenario())

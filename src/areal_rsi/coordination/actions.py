@@ -84,6 +84,18 @@ COMMON = [
 ]
 RSI = [
     definition(
+        "retry_researcher",
+        "检查失败原因后恢复研究员的原任务与会话，不新建节点。",
+        agent_id=STRING,
+    ),
+    definition(
+        "message_researcher",
+        "向研究员当前未完成的任务补充要求或证据。工具边界送入原会话，不创建新节点。"
+        "已经提交报告时使用 assign 回复报告并下发下一项任务。",
+        agent_id=STRING,
+        instruction=STRING,
+    ),
+    definition(
         "update_plan",
         "保存简明的当前研究计划，并说明调整原因。",
         plan=STRING,
@@ -376,6 +388,21 @@ class ResearchActions:
             result = c.spawn(**values) if name == "spawn_researcher" else c.assign(**values)
             await self.initialize_workspace(result["agent_id"])
             return ToolResult(result)
+        if name == "message_researcher":
+            return ToolResult(
+                {
+                    "message_id": c.message_researcher(
+                        args["agent_id"],
+                        args["instruction"],
+                        key=key,
+                    )
+                }
+            )
+        if name == "retry_researcher":
+            if args["agent_id"] in {"rsi", "interaction"}:
+                raise ValueError("只能恢复 Research Agent")
+            c.retry_agent(args["agent_id"])
+            return ToolResult({"resumed": args["agent_id"]})
         if name == "submit_report":
             values = {
                 **args,

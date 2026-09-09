@@ -586,3 +586,37 @@ def test_rsi_can_stop_an_unmet_run_without_changing_scores(tmp_path: Path) -> No
             execution.close(cancel=True)
 
     asyncio.run(scenario())
+
+
+def test_rsi_is_notified_and_can_retry_the_same_failed_research_task(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        from areal_rsi.api.research import ResearchMessage
+
+        c = Coordinator.create(tmp_path, TaskBrief("研究", "失败恢复"))
+        c.start()
+        branch = c.spawn(
+            key="branch", direction="接入", instruction="实现", completion_criteria="报告"
+        )
+        agent = branch["agent_id"]
+        message, _ = c.begin_turn(agent)
+        c.end_turn(agent, error="stream_read_error")
+        notifications = [
+            m
+            for m in c.store.records("messages", ResearchMessage)
+            if m.sender == "runtime" and m.recipient == "rsi"
+        ]
+        assert len(notifications) == 1 and agent in notifications[0].text
+        actions = ResearchActions(c)
+        result = await actions.handler("rsi")(
+            ToolCall("retry_researcher", {"agent_id": agent}, "retry")
+        )
+        assert result.output["resumed"] == agent
+        assert c.actor(agent).state == AgentState.WAITING
+        assert len(c.actor(agent).iterations) == 1
+        assert c.state["active"][agent] == message.message_id
+        denied = await actions.handler("interaction")(
+            ToolCall("retry_researcher", {"agent_id": agent}, "denied")
+        )
+        assert "error" in denied.output
+
+    asyncio.run(scenario())

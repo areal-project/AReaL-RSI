@@ -234,7 +234,13 @@ class HttpResponsesTransport:
                 raise ResponsesError("Responses terminal event has no response object")
             return response
         if event.get("type") == "error":
-            raise ResponsesError("Responses stream reported an error; inspect the saved event")
+            detail = event.get("error")
+            code = str(detail.get("code", "unknown")) if isinstance(detail, dict) else "unknown"
+            if not code.isidentifier() or len(code) > 80:
+                code = "unknown"
+            raise ResponsesError(
+                f"Responses stream reported an error ({code}); inspect saved event"
+            )
         return None
 
 

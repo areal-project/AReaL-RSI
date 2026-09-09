@@ -331,6 +331,15 @@ class Coordinator:
                 "你可以发送补充消息继续，或点击重试。",
                 key="failure:" + effect_id(agent_id, error + str(self.state.get("model_calls"))),
             )
+            if agent_id not in {"rsi", "interaction"}:
+                self.enqueue(
+                    "runtime",
+                    "rsi",
+                    f"研究员 {agent_id} 执行停止：{error}。原任务、会话与已完成操作均已保存。"
+                    "请检查原因，决定用 retry_researcher 恢复、停止方向或向用户报告阻塞。",
+                    key="researcher-failure:"
+                    + effect_id(agent_id, error + str(self.state.get("model_calls"))),
+                )
             # Preserve the active delivery for explicit recovery of the same turn.
             return
         identifier = self.state["active"].pop(agent_id, None)
@@ -349,10 +358,11 @@ class Coordinator:
         self.save()
 
     def receive_during_turn(self, agent_id: str, message_id: str) -> None:
-        """Acknowledge a user message only after the runtime has durably saved it."""
+        """Acknowledge user or supervisor updates after the runtime has saved them."""
         message = self.store.get("messages", message_id, ResearchMessage)
-        if message.sender != "user" or message.recipient != agent_id:
-            raise ValueError("Only user steering may interrupt an active delivery")
+        allowed = {"user"} if agent_id in {"rsi", "interaction"} else {"rsi"}
+        if message.sender not in allowed or message.recipient != agent_id:
+            raise ValueError("Only the agent's user or supervisor may update an active delivery")
         followups = self.state.setdefault("turn_followups", {}).setdefault(agent_id, [])
         if message_id not in followups:
             followups.append(message_id)
@@ -562,11 +572,60 @@ class Coordinator:
         )
         return {"agent_id": agent_id, "iteration_id": node_id, "assignment_id": assignment_id}
 
+    def pending_updates(self, agent_id: str) -> list[str]:
+        actor = self.actor(agent_id)
+        node = next(n for n in actor.iterations if n.iteration_id == actor.current_iteration_id)
+        assignment = self.store.public_record(node.assignment_ref)
+        original = effect_id("message", assignment["assignment_id"])
+        return [
+            identifier
+            for identifier in self.state["inboxes"].get(agent_id, [])
+            if identifier != self.state["active"].get(agent_id)
+            and self.store.get("messages", identifier, ResearchMessage).reply_to == original
+        ]
+
+    def message_researcher(self, agent_id: str, instruction: str, *, key: str) -> str:
+        if agent_id in {"rsi", "interaction"} or self.state["status"] != "running":
+            raise ValueError("任务补充只能发给运行中的研究方向")
+        if not instruction.strip():
+            raise ValueError("任务补充不能为空")
+        identifier = effect_id("message", key)
+        path = self.store.root / "messages" / (identifier + ".json")
+        if path.exists():
+            previous = self.store.get("messages", identifier, ResearchMessage)
+            if previous.recipient != agent_id or previous.text != instruction:
+                raise ValueError("Task update key reused with different content")
+            return identifier
+        actor = self.actor(agent_id)
+        node = next(
+            (n for n in actor.iterations if n.iteration_id == actor.current_iteration_id), None
+        )
+        if (
+            node is None
+            or node.report_ref is not None
+            or actor.state
+            not in {
+                AgentState.RUNNING,
+                AgentState.WAITING,
+            }
+        ):
+            raise ValueError("当前没有未完成的任务；收到报告后请用 assign 下发下一项任务")
+        assignment = self.store.public_record(node.assignment_ref)
+        return self.enqueue(
+            "rsi",
+            agent_id,
+            instruction,
+            key=key,
+            reply_to=effect_id("message", assignment["assignment_id"]),
+        )
+
     def report(self, agent_id: str, *, key: str, fields: dict[str, Any]) -> dict[str, str]:
         actor = self.actor(agent_id)
         if not actor.iterations:
             raise ValueError("No assigned research node")
         node = next(n for n in actor.iterations if n.iteration_id == actor.current_iteration_id)
+        if self.pending_updates(agent_id):
+            raise ValueError("RSI 有新的任务补充尚未处理，请先接收补充消息再提交报告")
         assignment = decode(Assignment, self.store.public_record(node.assignment_ref))
         report_id = effect_id("report", key)
         path = self.store.root / "reports" / f"{report_id}.json"

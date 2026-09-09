@@ -198,3 +198,210 @@ def test_process_stdout_is_not_a_score_and_outputs_can_be_collected(tmp_path: Pa
             execution.close(cancel=True)
 
     asyncio.run(scenario())
+
+
+def test_job_subscription_survives_other_messages_and_notifies_rsi_observer(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        from areal_rsi.api.research import ResearchMessage
+
+        c = Coordinator.create(
+            tmp_path, TaskBrief("Research", "Wait for actual work"), simulated=True
+        )
+        c.start()
+        c.begin_turn("rsi")
+        c.wait("rsi", "Waiting for reports")
+        c.end_turn("rsi")
+        assignment = c.spawn(
+            key="a", direction="A", instruction="Run", completion_criteria="Report"
+        )
+        researcher = assignment["agent_id"]
+        c.begin_turn(researcher)
+        actions = ResearchActions(c)
+        execution = ResearchExecution(
+            actions,
+            simulated=True,
+            mock_duration=0.05,
+            commands={
+                "task": ApprovedCommand("task", ("configured-command",), ()),
+            },
+        )
+        try:
+            call = ToolCall(
+                "run_job",
+                {
+                    "command_name": "task",
+                    "candidate_id": "",
+                    "parameters_json": "{}",
+                },
+                "task",
+            )
+            job = await actions.handler(researcher)(call)
+            job_id = job.output["job_id"]
+            for agent_id in [researcher, "rsi"]:
+                await actions.handler(agent_id)(
+                    ToolCall("wait_for_job", {"job_id": job_id}, "wait")
+                )
+            c.end_turn(researcher)
+            c.enqueue("user", "rsi", "状态如何？", key="status-question")
+            c.begin_turn("rsi")
+            c.wait("rsi", "已经回复用户，继续等执行结果")
+            c.end_turn("rsi")
+            assert c.pending() == []
+            for _ in range(100):
+                if not await execution.poll():
+                    break
+                await asyncio.sleep(0.01)
+            assert set(c.pending()) == {researcher, "rsi"}
+            notices = [
+                m for m in c.store.records("messages", ResearchMessage) if m.sender == "system"
+            ]
+            assert len(notices) == 2
+            for agent_id in [researcher, "rsi"]:
+                c.begin_turn(agent_id)
+                c.end_turn(agent_id)
+            for _ in range(3):
+                await execution.poll()
+            assert c.pending() == []
+            assert (
+                len(
+                    [
+                        m
+                        for m in c.store.records("messages", ResearchMessage)
+                        if m.sender == "system"
+                    ]
+                )
+                == 2
+            )
+        finally:
+            execution.close(cancel=True)
+
+    asyncio.run(scenario())
+
+
+def test_completed_legacy_job_recovers_missing_delivery_after_restart(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        from areal_rsi.coordination.store import ResearchStore
+
+        c = Coordinator.create(
+            tmp_path, TaskBrief("Research", "Continue after baseline"), simulated=True
+        )
+        c.start()
+        c.begin_turn("rsi")
+        actions = ResearchActions(c)
+        commands = {"task": ApprovedCommand("task", ("configured-command",), ())}
+        execution = ResearchExecution(
+            actions, simulated=True, mock_duration=0.02, commands=commands
+        )
+        job = await actions.handler("rsi")(
+            ToolCall(
+                "run_job",
+                {
+                    "command_name": "task",
+                    "candidate_id": "",
+                    "parameters_json": "{}",
+                },
+                "task",
+            )
+        )
+        job_id = job.output["job_id"]
+        c.wait("rsi", "等待起点评测结束")
+        c.end_turn("rsi")
+        for _ in range(100):
+            if not await execution.poll():
+                break
+            await asyncio.sleep(0.01)
+        # Reproduce the old state: result processed, subscribed, but no completion message.
+        info = execution.jobs[job_id]
+        assert info["processed"]
+        info["waiting"] = True
+        info.pop("waiters", None)
+        execution.save()
+        execution.close()
+        recovered = Coordinator(ResearchStore(tmp_path, c.store.run_id))
+        resumed = ResearchExecution(ResearchActions(recovered), simulated=True, commands=commands)
+        try:
+            await resumed.poll()
+            assert recovered.pending() == ["rsi"]
+            before = list(recovered.state["inboxes"]["rsi"])
+            # Also repair a lost notified marker without duplicating an existing message.
+            resumed.jobs[job_id].pop("waiters")
+            await resumed.poll()
+            assert recovered.state["inboxes"]["rsi"] == before
+            assert resumed.jobs[job_id]["waiters"]["rsi"]["notified"]
+        finally:
+            resumed.close()
+
+    asyncio.run(scenario())
+
+
+def test_late_completion_does_not_cross_report_or_stop_barrier(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        from areal_rsi.api.research import ResearchMessage
+
+        for finish in ("report", "stop"):
+            c = Coordinator.create(
+                tmp_path / finish, TaskBrief("Research", "Respect report boundary"), simulated=True
+            )
+            c.start()
+            assignment = c.spawn(
+                key="a", direction="A", instruction="Run", completion_criteria="Report"
+            )
+            agent_id = assignment["agent_id"]
+            c.begin_turn(agent_id)
+            actions = ResearchActions(c)
+            execution = ResearchExecution(
+                actions,
+                simulated=True,
+                mock_duration=0.02,
+                commands={
+                    "task": ApprovedCommand("task", ("configured-command",), ()),
+                },
+            )
+            try:
+                job = await actions.handler(agent_id)(
+                    ToolCall(
+                        "run_job",
+                        {
+                            "command_name": "task",
+                            "candidate_id": "",
+                            "parameters_json": "{}",
+                        },
+                        "task",
+                    )
+                )
+                await actions.handler(agent_id)(
+                    ToolCall("wait_for_job", {"job_id": job.output["job_id"]}, "wait")
+                )
+                if finish == "report":
+                    c.report(
+                        agent_id,
+                        key="report",
+                        fields={
+                            field: "已归档当前执行情况，等待 RSI 指令"
+                            for field in [
+                                "task_status",
+                                "work",
+                                "problems",
+                                "results",
+                                "interpretation",
+                                "next_steps",
+                            ]
+                        },
+                    )
+                else:
+                    c.stop_agent(agent_id, "RSI stopped this direction")
+                c.end_turn(agent_id)
+                for _ in range(100):
+                    if not await execution.poll():
+                        break
+                    await asyncio.sleep(0.01)
+                assert agent_id not in c.pending()
+                assert not [
+                    m
+                    for m in c.store.records("messages", ResearchMessage)
+                    if m.sender == "system" and m.recipient == agent_id
+                ]
+            finally:
+                execution.close(cancel=True)
+
+    asyncio.run(scenario())

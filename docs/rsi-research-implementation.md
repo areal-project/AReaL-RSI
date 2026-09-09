@@ -536,7 +536,7 @@ RSI_DATA_ROOT/
 
 消息有稳定 ID、来源、接收者、引用和回复关系。Coordinator 先保存 Assignment 和节点，再投递 user 消息；上报先保存 ResearchReport，再进入 waiting(rsi_reply) 并通知 RSI。下一项任务必须回复当前报告 ID。原始消息与动作留档，不靠解析报告文字自动批准执行。
 
-Responses session.json 保留完整历史、实际模型 context、回合和工具状态；请求与响应分文件保存。完成消息重复投递不再调用模型，未完成工具按稳定 call_id 恢复。submit_report、wait 和 wait_for_job 是明确停止点，同批后续工具不再执行。后台作业完成仅恢复仍等待该作业的原任务，不越过 report 屏障。
+Responses session.json 保留完整历史、实际模型 context、回合和工具状态；请求与响应分文件保存。完成消息重复投递不再调用模型，未完成工具按稳定 call_id 恢复。submit_report、wait 和 wait_for_job 是明确停止点，同批后续工具不再执行。wait_for_job 按调用者持久化作业订阅，后续消息或等待说明的变化不会取消订阅；作业完成仅恢复已订阅且尚未结束的原任务，不越过 report 屏障。结果落盘和完成通知分别确认，重启可补发漏掉的通知，同一通知不会重复唤醒模型。
 
 compact 发生在新回合前或完整工具 batch 落盘后的安全边界，旧记录保留。恢复 prompt 使用角色、最新 brief/计划、当前节点、方向状态及预算；系统事实优先于旧摘要。等待期间只检查本地事件，不调用模型。RSI 可以主动继续有用研究，但没有定时唤醒以制造思考。
 

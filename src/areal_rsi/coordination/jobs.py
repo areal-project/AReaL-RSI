@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 import shutil
 from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
 from areal_rsi.api.base import AgentState, ContentRef, IterationState
-from areal_rsi.api.research import CandidateSnapshot, VerifiedResult
+from areal_rsi.api.research import CandidateSnapshot, ResearchMessage, VerifiedResult
 from areal_rsi.base.storage import decode, encode, now, write_json
 from areal_rsi.coordination.actions import STRING, ResearchActions, definition
 from areal_rsi.coordination.coordinator import effect_id
@@ -188,6 +189,13 @@ class ResearchExecution:
                 shutil.copytree(source, destination, dirs_exist_ok=True)
                 return ToolResult({"destination": args["destination"]})
             if call.name == "wait_for_job" and not record.terminal:
+                self.waiters(info).setdefault(
+                    agent_id,
+                    {
+                        "iteration_id": self.c.actor(agent_id).current_iteration_id,
+                        "notified": False,
+                    },
+                )
                 info["waiting"] = True
                 self.save()
                 self.c.wait(agent_id, "job:" + job_id)
@@ -348,6 +356,49 @@ class ResearchExecution:
             "result": info.get("result"),
         }
 
+    @staticmethod
+    def waiters(info: dict[str, Any]) -> dict[str, Any]:
+        # Existing runs recorded only the owner's subscription. Preserve it on upgrade.
+        if "waiters" not in info:
+            info["waiters"] = (
+                {info["agent_id"]: {"iteration_id": info["iteration_id"], "notified": False}}
+                if info.get("waiting")
+                else {}
+            )
+        return info["waiters"]  # type: ignore[no-any-return]
+
+    def notify_completion(self, record: JobRecord) -> None:
+        info = self.jobs[record.job_id]
+        for agent_id, subscription in self.waiters(info).items():
+            if subscription["notified"]:
+                continue
+            actor = self.c.actor(agent_id)
+            node_active = agent_id == "rsi" or any(
+                n.iteration_id == subscription["iteration_id"] and n.state == IterationState.RUNNING
+                for n in actor.iterations
+            )
+            if actor.state in {AgentState.STOPPED, AgentState.FAILED} or not node_active:
+                continue
+            # A later message/turn can change wait_reason without cancelling a subscription.
+            # enqueue is idempotent, including a crash before notified is saved.
+            key = "job:" + record.job_id
+            if agent_id != info["agent_id"]:
+                key += ":" + agent_id
+            text = "你订阅的作业已完成。请读取结果，在原任务和会话中继续推进。\n" + json.dumps(
+                self.public(record), ensure_ascii=False
+            )
+            with suppress(FileNotFoundError):
+                # Older notifications can have a different JSON field order after reload.
+                text = self.c.store.get("messages", effect_id("message", key), ResearchMessage).text
+            self.c.enqueue(
+                "system",
+                agent_id,
+                text,
+                key=key,
+            )
+            subscription["notified"] = True
+            self.save()
+
     async def poll(self) -> bool:
         # A crash after the intent is stored but before manager.submit is safe:
         # the job has a stable identity and immutable input snapshot.
@@ -373,7 +424,11 @@ class ResearchExecution:
         records = self.manager.poll()
         for record in records:
             info = self.jobs.get(record.job_id)
-            if info is None or not record.terminal or info["processed"]:
+            if info is None or not record.terminal:
+                continue
+            if info["processed"]:
+                # Result persistence and message delivery are separate durable effects.
+                self.notify_completion(record)
                 continue
             if info["verification"]:
                 assert self.read_verification is not None
@@ -456,27 +511,10 @@ class ResearchExecution:
                 if not result_path.exists():
                     self.c.store.put("executions", record.job_id, info["result"])
                 info["result"]["uri"] = self.c.store.paths.reference(result_path).uri
-            actor = self.c.actor(info["agent_id"])
-            node_active = actor.agent_id == "rsi" or any(
-                n.iteration_id == info["iteration_id"] and n.state == IterationState.RUNNING
-                for n in actor.iterations
-            )
-            if (
-                info["waiting"]
-                and actor.state not in {AgentState.STOPPED, AgentState.FAILED}
-                and actor.wait_reason == "job:" + record.job_id
-                and node_active
-            ):
-                self.c.enqueue(
-                    "system",
-                    actor.agent_id,
-                    "The job you were waiting for finished. Continue the same assignment.\n"
-                    + json.dumps(self.public(record), ensure_ascii=False),
-                    key="job:" + record.job_id,
-                )
+            self.notify_completion(record)
             info["processed"] = True
             self.save()
-            self.c.store.event("job_completed", agent_id=actor.agent_id, job=self.public(record))
+            self.c.store.event("job_completed", agent_id=info["agent_id"], job=self.public(record))
         return any(not record.terminal for record in records)
 
     def close(self, *, cancel: bool = False) -> None:

@@ -20,7 +20,12 @@ continuous model sessions. Execution and web research tools are separate adapter
 - A report immediately stops the model turn. Only an explicit reply to that exact
   report can issue the next assignment. The session and workspace are reused.
 - A background job can wake the same assignment without creating another node;
-  this is separate from the report-to-RSI barrier.
+  this is separate from the report-to-RSI barrier. `wait_for_job` durably subscribes
+  its caller (including RSI observing another agent's job). Later messages and
+  free-form `wait_reason` changes do not cancel that subscription. Completion is
+  delivered once per subscriber; a processed result with a missing notification
+  is reconciled on restart. Finished assignments and stopped directions are not
+  resumed by late job results.
 - Messages and tool effects have stable identities. Recovering a delivery reuses
   the same session turn and reconciles the same effect; completed effects return
   their original result. A stopped direction archives late reports without wakeup.

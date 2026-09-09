@@ -200,7 +200,8 @@ class ResearchApp:
             raise ValueError("请先与 Interaction 确认研究目标和执行条件")
         config = self.config(c)
         config.brief = c.store.brief()
-        if "intake" in c.state:
+        pending_setup = c.state.get("execution_setup") == "pending"
+        if "intake" in c.state and not pending_setup:
             issues = validate_execution(config)
             if issues:
                 raise ValueError("；".join(issues))
@@ -214,7 +215,8 @@ class ResearchApp:
         active.execution.read_verification = self._verification_reader(c, config)
         active.execution.instructions = str(config.metadata.get("execution_instructions", ""))
         active.engine.max_concurrent_turns = config.brief.limits.max_agents + 2
-        await self._seed(c, config)
+        if not pending_setup:
+            await self._seed(c, config)
         await active.actions.initialize_workspace("rsi")
         write_json(
             c.store.root / "coordination" / "started-config.json", config.public(), immutable=True
@@ -224,6 +226,30 @@ class ResearchApp:
             c.save()
         c.start()
         active.engine.wake()
+
+    async def freeze_execution(self, c: Coordinator) -> None:
+        config = self.config(c)
+        issues = validate_execution(config)
+        if c.state.get("intake", {}).get("execution_required") and not (
+            config.commands or config.verifier
+        ):
+            issues.append("尚未接入实际执行命令")
+        if issues:
+            raise ValueError("；".join(issues))
+        active = self.active[c.store.run_id]
+        active.config = config
+        active.execution.commands = {item.name: item for item in config.commands}
+        active.execution.verifier = config.verifier
+        active.execution.execution_env = config.execution_env
+        active.execution.read_verification = self._verification_reader(c, config)
+        active.execution.instructions = str(config.metadata.get("execution_instructions", ""))
+        await self._seed(c, config)
+        write_json(
+            c.store.root / "coordination" / "execution-config.json", config.public(), immutable=True
+        )
+        c.state["execution_setup"] = "ready"
+        c.save()
+        c.store.event("execution_ready")
 
     def _verification_reader(
         self, c: Coordinator, config: ResearchConfig
@@ -296,7 +322,10 @@ class ResearchApp:
         )
         execution.instructions = str(config.metadata.get("execution_instructions", ""))
         ResearchIntake(
-            actions, repository=self.repository, start=lambda message: self.start(c, message)
+            actions,
+            repository=self.repository,
+            start=lambda message: self.start(c, message),
+            freeze_execution=lambda: self.freeze_execution(c),
         )
 
         async def poll() -> bool:
@@ -422,6 +451,8 @@ class ResearchApp:
             "nodes": nodes,
             "edges": edges,
             "messages": messages,
+            "agent_activity": c.state.get("agent_activity", {}),
+            "execution_setup": c.state.get("execution_setup", "ready"),
             "jobs": jobs,
             "evidence": encode(c.store.records("evidence", EvidenceRecord)),
             "final": c.store.public_record(run.final_result_ref) if run.final_result_ref else None,

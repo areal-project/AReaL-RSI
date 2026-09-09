@@ -337,3 +337,73 @@ def test_kernel_preparation_reads_standard_selection_file_and_pins_target(
         assert len(prepared_calls) == 1
 
     asyncio.run(scenario())
+
+
+def test_handoff_starts_rsi_before_adapter_and_blocks_jobs_until_freeze(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        app = app_at(tmp_path)
+        c = app.coordinator((await app.create({}))["run_id"])
+        active = await app.attach(c)
+        interaction = active.actions.handler("interaction")
+        rsi = active.actions.handler("rsi")
+        try:
+            await interaction(
+                ToolCall(
+                    "update_brief",
+                    {
+                        "brief_json": json.dumps(
+                            encode(TaskBrief("一个通用实验", "环境与目标明确，封装由研究员实现"))
+                        )
+                    },
+                    "brief",
+                )
+            )
+            original = c.user_message("先检查", key="original")
+            c.begin_turn("interaction")
+            followup = c.user_message("信息够了，直接开始", key="followup")
+            c.receive_during_turn("interaction", followup)
+            state = await interaction(ToolCall("get_state", {}, "state"))
+            assert state.output["current_message_id"] == followup
+            result = await interaction(
+                ToolCall(
+                    "handoff_research",
+                    {
+                        "summary": "研究用户要求的实验；接入由 RSI 完成",
+                        "execution_required": True,
+                        "confirmation_message_id": followup,
+                    },
+                    "handoff",
+                )
+            )
+            assert result.stop and result.output["started"]
+            assert c.state["status"] == "running" and c.state["execution_setup"] == "pending"
+            assert c.state["inboxes"]["rsi"]
+            assert original in c.state["inboxes"]["interaction"]
+            refused = await rsi(
+                ToolCall(
+                    "run_job",
+                    {"command_name": "check", "candidate_id": "", "parameters_json": "{}"},
+                    "early",
+                )
+            )
+            assert "尚未冻结" in refused.output["error"]
+            refused = await rsi(ToolCall("freeze_execution", {}, "empty"))
+            assert "尚未接入" in refused.output["error"]
+            command = ApprovedCommand("check", (sys.executable, "-c", "print(1)"))
+            await rsi(
+                ToolCall(
+                    "set_execution",
+                    {"execution_json": json.dumps({"commands": [encode(command)]})},
+                    "configure",
+                )
+            )
+            frozen = await rsi(ToolCall("freeze_execution", {}, "freeze"))
+            assert frozen.output["ready"] and c.state["execution_setup"] == "ready"
+            assert (c.store.root / "coordination/execution-config.json").exists()
+            assert "check" in active.execution.commands
+            refused = await rsi(ToolCall("set_execution", {"execution_json": "{}"}, "late"))
+            assert "已经开始" in refused.output["error"]
+        finally:
+            await app.close()
+
+    asyncio.run(scenario())

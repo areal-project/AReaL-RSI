@@ -125,6 +125,7 @@ class ResearchExecution:
                         "verification_available": self.verifier is not None,
                         "instructions": self.instructions,
                         "simulated": self.simulated,
+                        "execution_setup": self.c.state.get("execution_setup", "ready"),
                     }
                 )
             if call.name in {"run_job", "verify_candidate"}:
@@ -199,6 +200,8 @@ class ResearchExecution:
         return handle
 
     async def submit(self, agent_id: str, call: ToolCall) -> ToolResult:
+        if self.c.state.get("execution_setup") == "pending":
+            raise ValueError("执行接入尚未冻结；RSI 调用 freeze_execution 后才能运行作业")
         key = effect_id("job", agent_id + ":" + call.call_id).replace("job_", "job-", 1)
         if key in self.jobs:
             record = self.find_job(key)

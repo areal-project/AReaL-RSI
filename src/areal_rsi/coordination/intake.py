@@ -141,8 +141,31 @@ class ResearchIntake:
         *,
         repository: Path,
         start: Callable[[str | None], Awaitable[None]],
+        freeze_execution: Callable[[], Awaitable[None]] | None = None,
     ):
         self.actions, self.c, self.repository, self.start = actions, actions.c, repository, start
+        self.freeze_execution = freeze_execution
+        actions.register(
+            definition(
+                "handoff_research",
+                "用户已经明确要求开始且需求已谈清时，直接将需求交给 RSI 并启动研究。"
+                "summary 简述目标、约束、评判方式和已知环境；confirmation_message_id 必须来自"
+                "当前真实用户消息。执行封装尚未完成时由 RSI 组织接入，"
+                "冻结验证配置前不启动正式作业。",
+                summary=STRING,
+                confirmation_message_id=STRING,
+                execution_required={"type": "boolean"},
+            ),
+            self.handler,
+            roles={"interaction"},
+        )
+        actions.register(
+            definition(
+                "freeze_execution", "RSI 在接入完成后检查并冻结执行配置，随后允许正式作业。"
+            ),
+            self.handler,
+            roles={"rsi"},
+        )
         for tool in (
             definition("get_setup", "查看需求整理进度、执行配置和仍缺少的条件。"),
             definition(
@@ -201,7 +224,10 @@ class ResearchIntake:
                 confirmation_message_id=STRING,
             ),
         ):
-            actions.register(tool, self.handler, roles={"interaction"})
+            roles = {"interaction"}
+            if tool["name"] not in {"prepare_research", "start_research"}:
+                roles.add("rsi")
+            actions.register(tool, self.handler, roles=roles)
 
     @property
     def path(self) -> Path:
@@ -219,9 +245,9 @@ class ResearchIntake:
         write_json(self.path.parent / "configurations" / f"{digest}.json", value, immutable=True)
         write_json(self.path, value)
         intake = self.c.state.setdefault("intake", {})
-        intake.update(
-            status="discussing", prepared_at=None, environment=description, config_revision=digest
-        )
+        intake.update(environment=description, config_revision=digest)
+        if self.c.state["status"] == "planned":
+            intake.update(status="discussing", prepared_at=None)
         self.c.save()
         self.c.store.event("environment_updated", description=description)
 
@@ -229,6 +255,7 @@ class ResearchIntake:
         config = self.config()
         return {
             **self.c.state.get("intake", {}),
+            "execution_setup": self.c.state.get("execution_setup", "ready"),
             "seed_dir": config.seed_dir,
             "commands": encode(config.commands),
             "verifier_available": config.verifier is not None,
@@ -259,6 +286,15 @@ class ResearchIntake:
         ):
             raise ValueError("导入配置的验证指标与当前需求不同，请先与用户确认")
         config.brief = current.brief
+        if self.c.state["status"] != "planned":
+            if incoming.limits.gpu_ids != current.brief.limits.gpu_ids:
+                raise ValueError("接入不能改变已约定 GPU 资源")
+            if incoming.limits.allowed_paths != current.brief.limits.allowed_paths:
+                raise ValueError("接入不能改变已约定的修改范围")
+            if incoming.verification and current.brief.verification:
+                for key, value in current.brief.verification.identity.items():
+                    if incoming.verification.identity.get(key) != value:
+                        raise ValueError("接入不能改变已约定的验证条件：" + key)
         config.model, config.reasoning_effort = current.model, current.reasoning_effort
         config.base_url, config.api_key_env = current.base_url, current.api_key_env
         config.brief.limits.gpu_ids = incoming.limits.gpu_ids
@@ -284,6 +320,44 @@ class ResearchIntake:
         async def handle(call: ToolCall) -> ToolResult:
             if call.name == "get_setup":
                 return ToolResult(self.setup())
+            if call.name == "handoff_research":
+                identifier = call.arguments["confirmation_message_id"]
+                if (
+                    self.c.state.get("started_at")
+                    and self.c.state.get("intake", {}).get("confirmation_message_id") == identifier
+                ):
+                    return ToolResult({"started": True}, stop=True, reason="handoff")
+                message = self.c.store.get("messages", identifier, ResearchMessage)
+                if (
+                    identifier not in self.c.current_message_ids(agent_id)
+                    or message.sender != "user"
+                ):
+                    raise ValueError("启动依据必须是当前回合真实用户的明确指令")
+                config = self.config()
+                summary = call.arguments["summary"].strip()
+                if (
+                    not summary
+                    or not config.brief.instructions.strip()
+                    or config.brief.objective in {"新的研究", "新研究"}
+                ):
+                    raise ValueError("先保存明确的目标、约束和研究说明")
+                if self.c.state["status"] != "planned":
+                    raise ValueError("研究已经开始")
+                self.c.state["execution_setup"] = "pending"
+                self.c.state.setdefault("intake", {}).update(
+                    status="ready",
+                    summary=summary,
+                    execution_required=call.arguments["execution_required"],
+                )
+                self.c.save()
+                await self.start(identifier)
+                self.c.enqueue(
+                    "interaction",
+                    "user",
+                    summary + "\n\n研究已启动，RSI 已接手推进。",
+                    key="handoff:" + call.call_id,
+                )
+                return ToolResult({"started": True}, stop=True, reason="handoff")
             if (
                 call.name == "start_research"
                 and self.c.state.get("started_at")
@@ -291,7 +365,19 @@ class ResearchIntake:
                 == call.arguments["confirmation_message_id"]
             ):
                 return ToolResult({"started": True})
-            if self.c.state["status"] != "planned":
+            preparing = (
+                agent_id == "rsi"
+                and self.c.state["status"] == "running"
+                and self.c.state.get("execution_setup") == "pending"
+            )
+            if call.name == "freeze_execution":
+                if self.c.state.get("execution_setup") == "ready":
+                    return ToolResult({"ready": True})
+                if not preparing or self.freeze_execution is None:
+                    raise ValueError("当前没有待完成的 RSI 执行接入")
+                await self.freeze_execution()
+                return ToolResult({"ready": True})
+            if self.c.state["status"] != "planned" and not preparing:
                 raise ValueError("研究已经开始，执行方式和评测条件不能再改；需要变更时新建研究")
             args = call.arguments
             if call.name == "get_adapter_guide":
@@ -422,7 +508,7 @@ class ResearchIntake:
                 identifier = args["confirmation_message_id"]
                 message = self.c.store.get("messages", identifier, ResearchMessage)
                 if (
-                    identifier != self.c.state["active"].get("interaction")
+                    identifier not in self.c.current_message_ids("interaction")
                     or message.sender != "user"
                     or message.created_at <= (intake.get("prepared_at") or "")
                 ):

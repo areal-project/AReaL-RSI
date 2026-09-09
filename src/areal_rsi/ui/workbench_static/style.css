@@ -799,6 +799,37 @@ main {
   border-radius: 8px;
   color: #8d713b;
 }
+.pending-question {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin-top: 6px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: inherit;
+  background: transparent;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.pending-question[aria-pressed="true"] { border-color: #dac18a; background: #fffdf6; }
+.message-target { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.message-target label { font-size: 11px; color: var(--muted); flex-shrink: 0; }
+.message-target select {
+  min-width: 0;
+  width: 100%;
+  padding: 6px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: white;
+}
+.message-reply { color: var(--muted); border-left: 2px solid var(--line); padding-left: 8px; font-size: 11px; }
+.agent-errors { padding: 12px 17px 0; }
+.agent-error { border: 1px solid #ebc8c0; background: #fff7f4; border-radius: 8px; padding: 12px; font-size: 12px; }
+.agent-error p { margin: 6px 0 10px; overflow-wrap: anywhere; }
 .detail-panel {
   padding: 22px 20px;
   max-height: 650px;

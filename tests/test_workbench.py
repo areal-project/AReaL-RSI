@@ -452,6 +452,41 @@ class WorkbenchHttpTest(unittest.TestCase):
         self.assertEqual(len(subsequent["nodes"]), 3)
         self.assertNotIn(PRIVATE, self.request("GET", "/api/runs")[2].decode())
 
+    def test_question_identity_and_reply_routing_cross_the_http_boundary(self) -> None:
+        run_id = self.create()
+        run = self.backend.runs[run_id]
+        question = {
+            "message_id": "rsi_question",
+            "agent_id": "rsi",
+            "question": "模型返回 401，请修复访问权限后告诉我。",
+            "created_at": datetime.now(UTC).isoformat(),
+        }
+        run["waiting_for_user"] = [{**question, "private": PRIVATE}]
+        run["messages"].append(
+            {
+                "message_id": "user_reply",
+                "sender": "user",
+                "recipient": "rsi",
+                "text": "已恢复",
+                "reply_to": question["message_id"],
+                "private": PRIVATE,
+            }
+        )
+        status, _, raw = self.request("GET", f"/api/runs/{run_id}")
+        self.assertEqual(status, 200)
+        self.assertNotIn(PRIVATE, raw.decode())
+        detail = json.loads(raw)
+        self.assertEqual(detail["waiting_for_user"], [question])
+        self.assertEqual(detail["messages"][-1]["reply_to"], question["message_id"])
+        params = {
+            "text": "已恢复",
+            "message_id": "reply",
+            "reply_to": question["message_id"],
+            "recipient": "rsi",
+        }
+        self.assertEqual(self.request("POST", f"/api/runs/{run_id}/chat", params)[0], 200)
+        self.assertEqual(self.backend.calls[-1], ("chat", {**params, "run_id": run_id}))
+
     def test_cross_site_host_and_missing_token_rejected_before_backend(self) -> None:
         count = len(self.backend.calls)
         for headers in (

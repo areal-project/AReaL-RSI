@@ -18,6 +18,7 @@ const state = {
   sending: false,
   busy: false,
   drafts: new Map(),
+  replyTargets: new Map(),
   graphRunId: null,
   detailNodeId: null,
   refreshSequence: 0,
@@ -290,27 +291,115 @@ function render() {
   renderBrief(run);
   renderJobs(run);
   renderEvents();
-  const questions = run.waiting_for_user || [];
-  $("pending-questions").hidden = !questions.length;
-  $("pending-questions").textContent = questions.length
-    ? `需要你补充：${questions.map((question) => (typeof question === "string" ? question : question.text || question.question || "请查看对话")).join("\n")}`
-    : "";
-  const interaction = (run.agents || []).find(
-    (agent) => agent.agent_id === "interaction",
-  );
+  const target = renderReplyTarget(run);
+  renderAgentErrors(run);
   const ended = !["planned", "running", "paused"].includes(run.status);
+  const responding = (run.agents || []).find((agent) => agent.agent_id === target.recipient);
   $("chat-input").disabled = ended;
-  $("send-message").disabled = ended || state.sending;
+  $("chat-recipient").disabled = ended || state.sending;
+  $("send-message").disabled = ended || state.sending || target.stale;
+  $("chat-input-label").textContent = `向 ${agentName(target.recipient)} 发送消息`;
+  $("chat-input").placeholder = target.reply_to
+    ? "回答这个问题，或说明处理进展…"
+    : "补充想法、提供环境，或询问进展…";
   $("chat-status").textContent = ended
     ? "研究已结束，记录保留供查看"
+    : target.stale
+    ? "该问题已回复，请重新选择发送对象"
     : run.status === "paused"
     ? "研究已暂停，消息将在继续后处理"
     : state.sending
     ? "正在发送…"
-    : interaction?.state === "running"
-      ? "Interaction Agent 正在整理你的需求…"
+    : responding?.state === "running"
+      ? `${agentName(target.recipient)} 正在处理…`
       : "Enter 发送 · Shift+Enter 换行";
   if (run.budget_stop_reason) notice(run.budget_stop_reason);
+}
+
+function agentName(id) {
+  return id === "rsi" ? "RSI Agent" : "Interaction Agent";
+}
+function questionPreview(question, length = 48) {
+  const text = (question.question || question.text || "请查看对话").replace(/\s+/g, " ");
+  return text.length > length ? `${text.slice(0, length)}…` : text;
+}
+function renderReplyTarget(run) {
+  const questions = (run.waiting_for_user || []).filter((q) => q.message_id);
+  const choices = [
+    ...questions.map((q) => ({
+      value: q.message_id,
+      text: `回复 ${agentName(q.agent_id)} · ${questionPreview(q, 24)}`,
+      recipient: q.agent_id,
+      reply_to: q.message_id,
+    })),
+    { value: "interaction", recipient: "interaction", text: "Interaction Agent · 新消息" },
+    ...(run.status !== "planned"
+      ? [{ value: "rsi", recipient: "rsi", text: "RSI Agent · 新消息" }] : []),
+  ];
+  let selected = state.replyTargets.get(run.run_id);
+  const hasDraft = !!$("chat-input").value.trim();
+  if (!selected || (!hasDraft && !choices.some((c) => c.value === selected.value)))
+    selected = { value: choices[0].value, explicit: false };
+  if (!selected.explicit && !hasDraft) selected.value = choices[0].value;
+  state.replyTargets.set(run.run_id, selected);
+  let target = choices.find((c) => c.value === selected.value);
+  if (!target) {
+    // Never silently redirect a draft if another browser already answered its question.
+    target = { value: selected.value, recipient: "interaction", stale: true,
+      text: "问题已回复，请重新选择" };
+    choices.unshift(target);
+  }
+  const select = $("chat-recipient");
+  const signature = JSON.stringify(choices);
+  if (select.dataset.signature !== signature) {
+    select.replaceChildren(...choices.map((choice) => {
+      const option = element("option", "", choice.text);
+      option.value = choice.value;
+      return option;
+    }));
+    select.dataset.signature = signature;
+  }
+  select.value = selected.value;
+  const pending = $("pending-questions");
+  pending.hidden = !questions.length;
+  const questionSignature = JSON.stringify([run.run_id, questions, selected.value]);
+  if (pending.dataset.signature !== questionSignature) {
+    pending.replaceChildren(element("strong", "", "等待你的回复"), ...questions.map((q) => {
+      const button = element("button", "pending-question",
+        `${agentName(q.agent_id)} · ${questionPreview(q)}`);
+      button.type = "button";
+      button.title = q.question || q.text;
+      button.setAttribute("aria-pressed", String(selected.value === q.message_id));
+      button.addEventListener("click", () => {
+        state.replyTargets.set(run.run_id, { value: q.message_id, explicit: true });
+        render();
+        $("chat-input").focus();
+      });
+      return button;
+    }));
+    pending.dataset.signature = questionSignature;
+  }
+  return target;
+}
+
+function renderAgentErrors(run) {
+  const failures = (run.agents || []).filter((agent) =>
+    ["rsi", "interaction"].includes(agent.agent_id) && agent.state === "failed");
+  const container = $("agent-errors");
+  container.hidden = !failures.length;
+  const signature = JSON.stringify([run.run_id, failures, run.status]);
+  if (container.dataset.signature === signature) return;
+  container.replaceChildren(...failures.map((agent) => {
+    const block = element("div", "agent-error");
+    block.append(element("strong", "", `${agentName(agent.agent_id)} 暂时无法继续`),
+      element("p", "", agent.error || "调用失败，请检查模型服务与网络。"));
+    const retry = element("button", "secondary", "处理后重试");
+    retry.disabled = !["planned", "running"].includes(run.status);
+    retry.addEventListener("click", () => control("retry", { agent_id: agent.agent_id }));
+    block.append(retry);
+    return block;
+  }));
+  container.dataset.signature = signature;
 }
 
 function renderIntake(run) {
@@ -342,7 +431,7 @@ function renderDirections(run) {
         const item = element(
           "span",
           `direction ${agent.state}`,
-          `${agent.direction || { rsi: "RSI Agent", interaction: "Interaction Agent" }[agent.agent_id] || agent.agent_id} · ${agent.wait_reason === "rsi_reply" ? "等待 RSI 回复" : label(agent.state)}`,
+          `${agent.direction || { rsi: "RSI Agent", interaction: "Interaction Agent" }[agent.agent_id] || agent.agent_id} · ${agent.wait_reason === "rsi_reply" ? "等待 RSI 回复" : agent.state === "waiting" && agent.wait_reason === "user" ? "等待你回复" : label(agent.state)}`,
         );
         item.title = agent.error || agent.wait_reason || "";
         if (agent.state === "failed") {
@@ -645,7 +734,7 @@ function renderMessages(run) {
         "span",
         "",
         message.sender === "user"
-          ? "你"
+          ? `你 → ${agentName(message.recipient)}`
           : message.sender === "rsi"
             ? "RSI Agent"
             : "Interaction Agent",
@@ -656,6 +745,11 @@ function renderMessages(run) {
     if (message.sender === "user") content.textContent = message.text;
     else appendFormattedText(content, message.text || "");
     block.append(heading, content);
+    if (message.sender === "user" && message.reply_to) {
+      const question = messages.find((item) => item.message_id === message.reply_to);
+      if (question) block.insertBefore(
+        element("p", "message-reply", `回复：${questionPreview(question, 60)}`), content);
+    }
     return block;
   });
   container.replaceChildren(...blocks);
@@ -870,6 +964,8 @@ $("chat-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const text = $("chat-input").value.trim();
   if (!text || !state.runId || state.sending) return;
+  const target = renderReplyTarget(state.run);
+  if (target.stale) return;
   const runId = state.runId;
   state.sending = true;
   $("send-message").disabled = true;
@@ -878,8 +974,10 @@ $("chat-form").addEventListener("submit", async (event) => {
     await api(`/api/runs/${encodeURIComponent(runId)}/chat`, {
       text,
       message_id: crypto.randomUUID(),
+      ...(target.reply_to ? { reply_to: target.reply_to } : { recipient: target.recipient }),
     });
     state.drafts.set(runId, "");
+    state.replyTargets.delete(runId);
     if (state.runId === runId && $("chat-input").value.trim() === text)
       $("chat-input").value = "";
     await refresh(true);
@@ -891,6 +989,10 @@ $("chat-form").addEventListener("submit", async (event) => {
     $("send-message").disabled = false;
     if (state.run) render();
   }
+});
+$("chat-recipient").addEventListener("change", (event) => {
+  state.replyTargets.set(state.runId, { value: event.target.value, explicit: true });
+  render();
 });
 $("chat-input").addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {

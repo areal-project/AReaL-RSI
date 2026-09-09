@@ -190,6 +190,7 @@
                 class="pending-questions"
                 hidden
               ></div>
+              <div id="agent-errors" class="agent-errors" hidden></div>
               <div id="messages" class="messages" aria-live="polite">
                 <div class="chat-intro">
                   <span class="agent-avatar">I</span>
@@ -201,8 +202,12 @@
                 </div>
               </div>
               <form id="chat-form" class="composer">
+                <div class="message-target">
+                  <label for="chat-recipient">发送给</label>
+                  <select id="chat-recipient"></select>
+                </div>
                 <label class="sr-only" for="chat-input"
-                  >向 Interaction Agent 发送消息</label
+                  id="chat-input-label">发送消息</label
                 ><textarea
                   id="chat-input"
                   rows="3"

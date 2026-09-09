@@ -113,7 +113,7 @@ def public_detail(value: Json) -> Json:
     result["intake"] = _fields(value.get("intake"), "status summary environment execution_required")
     result["pending_agents"] = [a for a in value.get("pending_agents", []) if isinstance(a, str)]
     result["waiting_for_user"] = [
-        _fields(question, "question_id text question created_at")
+        _fields(question, "message_id agent_id question_id text question created_at")
         if isinstance(question, dict)
         else question
         for question in value.get("waiting_for_user", [])
@@ -155,7 +155,7 @@ def public_detail(value: Json) -> Json:
         if isinstance(edge, dict)
     ]
     result["messages"] = [
-        _fields(message, "message_id sender recipient text created_at")
+        _fields(message, "message_id sender recipient text created_at reply_to")
         for message in value.get("messages", [])
         if isinstance(message, dict)
         and (message.get("sender") == "user" or message.get("recipient") == "user")
@@ -178,7 +178,7 @@ def public_detail(value: Json) -> Json:
             event.get("data"),
             "reason direction title instruction completion_criteria parent_iteration_id "
             "report_id evidence_id candidate_id job_id status text message_id sender recipient "
-            "resumed simulated request_id model reasoning_effort",
+            "reply_to resumed simulated request_id model reasoning_effort",
         )
         result["events"].append(entry)
     return result
@@ -386,7 +386,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             ):
                 action = parts[3]
                 allowed = {
-                    "chat": "text message_id",
+                    "chat": "text message_id reply_to recipient",
                     "start": "",
                     "pause": "",
                     "resume": "",

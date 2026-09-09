@@ -36,6 +36,7 @@ TickHook = Callable[[], Awaitable[bool | None]]
 class ToolSet:
     definitions: list[Json]
     call: ToolHandler
+    instructions: str = ""
 
 
 class BudgetExceeded(ResponsesError):
@@ -271,8 +272,12 @@ class ResearchEngine:
             role_prompt = {"rsi": RSI_PROMPT, "interaction": INTERACTION_PROMPT}.get(
                 agent_id, RESEARCH_PROMPT
             )
+            toolset = self.tools_factory(agent_id)
             prompt = (
-                role_prompt + "\n\n以下是本次模型回合开始时的状态快照。"
+                role_prompt
+                + "\n\n"
+                + toolset.instructions
+                + "\n\n以下是本次模型回合开始时的状态快照。"
                 "事实变化后，以后续工具结果和更新的会话检查点为准。"
                 "不要用这份初始快照覆盖较新的计划、方向或预算记录。"
                 + "\n\n当前 run 的系统状态：\n"
@@ -295,7 +300,6 @@ class ResearchEngine:
                     "prompt_id": prompt_id,
                 },
             )
-            toolset = self.tools_factory(agent_id)
 
             async def event_sink(event: Json) -> None:
                 await self._event(agent_id, session, event)

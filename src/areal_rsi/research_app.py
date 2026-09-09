@@ -22,6 +22,7 @@ from areal_rsi.api.research import (
 from areal_rsi.base.runs import FileRunStore
 from areal_rsi.base.storage import decode, encode, new_id, now, write_json
 from areal_rsi.coordination.actions import ResearchActions
+from areal_rsi.coordination.agent_tools import AgentTools
 from areal_rsi.coordination.config import ResearchConfig
 from areal_rsi.coordination.coordinator import Coordinator
 from areal_rsi.coordination.engine import ResearchEngine, ToolSet
@@ -41,6 +42,7 @@ class ActiveResearch:
     config: ResearchConfig
     actions: ResearchActions
     execution: ResearchExecution
+    tools: AgentTools
     engine: ResearchEngine
     task: asyncio.Task[None]
 
@@ -271,11 +273,18 @@ class ResearchApp:
             return existing
         if existing:
             existing.execution.close()
+            await existing.tools.close()
         config = self.config(c)
         runtime = self.runtime_factory(config)
         actions = ResearchActions(c)
         await actions.initialize_workspace("rsi")
         register_sources(actions)
+        agent_tools = AgentTools(
+            actions,
+            self.root,
+            environment=lambda: self.config(c).execution_env,
+            credential_names=(config.api_key_env,),
+        )
         execution = ResearchExecution(
             actions,
             commands={item.name: item for item in config.commands},
@@ -299,7 +308,11 @@ class ResearchApp:
         engine = ResearchEngine(
             c,
             runtime,
-            lambda agent_id: ToolSet(actions.definitions(agent_id), actions.handler(agent_id)),
+            lambda agent_id: ToolSet(
+                actions.definitions(agent_id),
+                actions.handler(agent_id),
+                agent_tools.instructions(agent_id),
+            ),
             tick_hook=poll,
         )
 
@@ -312,9 +325,10 @@ class ResearchApp:
                 c.store.event("worker_error", error=str(exc))
             finally:
                 execution.close(cancel=c.state["status"] == "stopped")
+                await agent_tools.close()
 
         task = asyncio.create_task(serve(), name="research:" + c.store.run_id)
-        active = ActiveResearch(c, config, actions, execution, engine, task)
+        active = ActiveResearch(c, config, actions, execution, agent_tools, engine, task)
         self.active[c.store.run_id] = active
         return active
 

@@ -17,7 +17,10 @@ objective 用简短的研究标题（建议 20–40 字），具体要求放在 
 并非每项研究都需要 GPU、起点版本、候选产物、数值 target 或验证器，不要强行补齐。
 
 需要运行代码或实验时，按用户提供的环境完成接入：
-- inspect_environment 查看用户给出的目录或配置说明；load_execution_config 导入已有执行配置。
+- read/glob/grep 查看用户给出的环境说明和代码；bash 检查本机或 SSH 远端的实际可用性。
+  检查工具是否可用以当前工具列表和真实执行结果为准，不沿用历史消息中已经过时的能力限制。
+  只做本次需求所需的准备和检查，正式研究及长实验在交给 RSI 后推进。
+  inspect_environment 仍可查看已有配置；load_execution_config 导入执行配置。
 - set_execution 保存已约定的起点目录、普通执行命令和非敏感环境变量。
   系统分配的输出目录占位符固定为 {output}，在 parameters 中声明 output；
   workspace 同理。不能自行改名为 output_dir。公开输出默认就在输出根目录 output_subdir='.'。

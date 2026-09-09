@@ -48,7 +48,7 @@ def register_sources(actions: ResearchActions, client: ResearchWebClient | None 
             query=STRING,
         ),
         factory,
-        roles={"rsi", "research"},
+        roles={"rsi", "research", "interaction"},
     )
     actions.register(
         definition(
@@ -58,5 +58,5 @@ def register_sources(actions: ResearchActions, client: ResearchWebClient | None 
             offset={"type": "integer", "minimum": 0},
         ),
         factory,
-        roles={"rsi", "research"},
+        roles={"rsi", "research", "interaction"},
     )

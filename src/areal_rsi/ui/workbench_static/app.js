@@ -253,7 +253,9 @@ function render() {
   const needsResume = run.worker_alive === false && (
     run.status === "running" || (run.status === "planned" && run.pending_agents?.length)
   );
-  $("run-status").textContent = needsResume ? "待恢复" : label(run.status);
+  $("run-status").textContent = needsResume ? "待恢复"
+    : run.status === "running" && run.execution_setup === "pending"
+    ? "研究中 · 接入准备" : label(run.status);
   $("run-status").className = `status ${run.status}`;
   $("start").hidden = run.status !== "planned" || run.intake?.status !== "ready";
   $("start").disabled = state.busy || run.agents?.some(
@@ -710,7 +712,8 @@ function renderNode(run) {
 
 function renderMessages(run) {
   const messages = run.messages || [];
-  const signature = JSON.stringify([run.run_id, messages]);
+  const busy = (run.agents || []).filter(agent => agent.state === "running");
+  const signature = JSON.stringify([run.run_id, messages, busy, run.agent_activity]);
   if (signature === state.messageSignature) return;
   state.messageSignature = signature;
   if (!messages.length) {
@@ -735,6 +738,8 @@ function renderMessages(run) {
           ? `你 → ${agentName(message.recipient)}`
           : message.sender === "rsi"
             ? "RSI Agent"
+            : message.sender === "runtime"
+            ? "系统状态"
             : "Interaction Agent",
       ),
       element("time", "", time(message.created_at)),
@@ -750,6 +755,23 @@ function renderMessages(run) {
     }
     return block;
   });
+  for (const agent of busy) {
+    const activity = run.agent_activity?.[agent.agent_id];
+    const toolNames = {read: "读取文件", grep: "检索代码", glob: "查找文件", bash: "执行命令",
+      write: "写入文件", edit: "修改文件", spawn_researcher: "安排研究任务"};
+    const action = activity?.type === "tool_started"
+      ? (toolNames[activity.tool] || `执行 ${activity.tool}`)
+      : activity?.type === "tool_completed"
+      ? `已完成${toolNames[activity.tool] || activity.tool}，继续处理`
+      : "模型正在处理任务";
+    const progress = element("article", "message assistant progress-message");
+    progress.setAttribute("role", "status");
+    const name = agent.direction || agentName(agent.agent_id);
+    progress.append(element("div", "message-label", `${name} · 进行中`),
+      element("p", "", action),
+      element("time", "muted", activity?.updated_at ? `最近活动 ${time(activity.updated_at)}` : ""));
+    blocks.push(progress);
+  }
   container.replaceChildren(...blocks);
   container.scrollTop = follow ? container.scrollHeight : previous;
 }

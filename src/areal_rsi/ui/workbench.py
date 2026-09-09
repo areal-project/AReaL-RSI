@@ -107,11 +107,16 @@ def public_detail(value: Json) -> Json:
     result = _fields(
         value,
         "run_id objective status simulated plan started_at finished_at event_cursor "
-        "worker_alive waiting_for_user budget_stop_reason",
+        "worker_alive waiting_for_user budget_stop_reason execution_setup",
     )
     result["brief"] = _brief(value.get("brief"))
     result["intake"] = _fields(value.get("intake"), "status summary environment execution_required")
     result["pending_agents"] = [a for a in value.get("pending_agents", []) if isinstance(a, str)]
+    result["agent_activity"] = {
+        name: _fields(activity, "type tool updated_at")
+        for name, activity in value.get("agent_activity", {}).items()
+        if isinstance(name, str) and isinstance(activity, dict)
+    }
     result["waiting_for_user"] = [
         _fields(question, "message_id agent_id question_id text question created_at")
         if isinstance(question, dict)

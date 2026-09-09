@@ -692,7 +692,8 @@ main {
   padding: 22px 19px;
   height: 387px;
   overflow-y: auto;
-  flex: 1;
+  flex: none;
+  min-height: 0;
 }
 .chat-intro {
   text-align: left;

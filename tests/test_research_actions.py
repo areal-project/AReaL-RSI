@@ -549,7 +549,13 @@ def test_rsi_can_stop_an_unmet_run_without_changing_scores(tmp_path: Path) -> No
             assert all(actor.state == AgentState.STOPPED for actor in c.actors())
             assert c.actor(agent).iterations[0].state == IterationState.CANCELLED
             assert c.state["waiting_for_user"] == [] and c.pending() == []
-            await execution.poll()
+            # A running job acknowledges cancellation through its supervisor;
+            # requesting cancellation does not synchronously reap the process.
+            for _ in range(100):
+                await execution.poll()
+                if all(execution.manager.get(key).state == "cancelled" for key in jobs):
+                    break
+                await asyncio.sleep(0.01)
             assert all(execution.manager.get(key).state == "cancelled" for key in jobs)
             after = c.store.run()
             assert (after.best_result_ref, after.final_result_ref) == (

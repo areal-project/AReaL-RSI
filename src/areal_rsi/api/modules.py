@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from areal_rsi.api.base import (
     AgentSpec,
@@ -197,6 +197,23 @@ class HarnessRuntime(Protocol):
         *,
         config: JsonObject | None = None,
     ) -> TaskResult: ...
+
+
+@runtime_checkable
+class BatchHarnessRuntime(HarnessRuntime, Protocol):
+    """Optional batch execution; return exactly one result per public Task ID.
+
+    Repeated calls with the same execution_key must reconnect to existing work.
+    Implementations own remote stop/recovery when the awaiting task is cancelled.
+    """
+
+    async def run_many(
+        self,
+        solution: SolutionVersion,
+        tasks: Sequence[Task],
+        *,
+        config: JsonObject | None = None,
+    ) -> Mapping[str, TaskResult]: ...
 
 
 class HarnessBuilder(Protocol):

@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, Mock, patch
 
 from areal_rsi.api.base import AgentSpec, ModelVersion
 from areal_rsi.base.storage import FileContentStore, FileTrajectoryStore, now
@@ -102,6 +105,79 @@ class PackageRuntimeTest(unittest.IsolatedAsyncioTestCase):
             out, err = await process.communicate()
             self.assertNotEqual(process.returncode, 0)
             self.assertIn(b"PermissionError", err)
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS sandbox-exec integration")
+    async def test_shared_dsh_links_use_canonical_paths_without_broadening_access(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            shared = root / "shared"
+            cli = shared / "dsh-cli/node_modules/.bin/dsh"
+            cli.parent.mkdir(parents=True)
+            cli.write_text('#!/bin/sh\nexec /bin/cat "$1"\n')
+            cli.chmod(0o755)
+            home = shared / "runtime-dsh/fixture"
+            profile = home / "profiles/agent-runtime"
+            (profile / "node_modules").mkdir(parents=True)
+            for name in ("package.json", "cordis.yml", "cordis.patch.yml"):
+                (profile / name).write_text("{}")
+            public = home / "runtime.txt"
+            public.write_text("shared runtime")
+            experiment = root / "experiments/example"
+            experiment.mkdir(parents=True)
+            (experiment / "dsh-cli").symlink_to(shared / "dsh-cli", target_is_directory=True)
+            (experiment / "runtime-dsh").symlink_to(
+                shared / "runtime-dsh", target_is_directory=True
+            )
+            hidden = experiment / "private-validation.txt"
+            hidden.write_text("hidden answer")
+            content = FileContentStore(experiment / "content")
+            runtime = PackageAgentRuntime(
+                experiment / "sessions",
+                content,
+                FileTrajectoryStore(experiment / "traces", content),
+                settings=RuntimeSettings({}),
+                role="research-agent",
+                base_url="http://localhost:1",
+                api_key="local-proxy",
+                dsh_root=experiment,
+            )
+            model = ModelVersion("model-test", "test", await content.put_text("model"), now())
+            with (
+                patch(
+                    "areal_rsi.modules.dsh.ensure_cli",
+                    return_value=experiment / "dsh-cli/node_modules/.bin/dsh",
+                ),
+                patch(
+                    "areal_rsi.modules.runtime_dsh.ensure_profile",
+                    return_value=experiment / "runtime-dsh/fixture",
+                ),
+                patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=Mock())),
+            ):
+                session = await runtime.open(
+                    AgentSpec("research-agent-1", "areal-agent-runtime@v1", model)
+                )
+            request = json.loads((session.directory / "request.json").read_text())
+            self.assertEqual(request["runtime"]["config"]["dshBin"], str(cli))
+            module_link = session.directory / "dsh-home/profiles/agent-runtime/node_modules"
+            self.assertEqual(module_link.readlink(), profile / "node_modules")
+            prefix = ["/usr/bin/sandbox-exec", "-f", str(session.directory / "sandbox.sb")]
+            allowed = subprocess.run(
+                [*prefix, str(cli), str(public)], capture_output=True, timeout=10
+            )
+            self.assertEqual(allowed.returncode, 0, allowed.stderr.decode())
+            self.assertEqual(allowed.stdout, b"shared runtime")
+            denied = subprocess.run(
+                [*prefix, str(cli), str(hidden)], capture_output=True, timeout=10
+            )
+            self.assertNotEqual(denied.returncode, 0)
+            self.assertNotIn(b"hidden answer", denied.stdout)
+            write = subprocess.run(
+                [*prefix, "/bin/sh", "-c", 'echo changed > "$1"', "sh", str(public)],
+                capture_output=True,
+                timeout=10,
+            )
+            self.assertNotEqual(write.returncode, 0)
+            self.assertEqual(public.read_text(), "shared runtime")
 
     def test_all_bootstrap_kinds_are_selectable(self) -> None:
         for kind in (

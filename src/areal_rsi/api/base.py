@@ -77,7 +77,7 @@ class ModelVersion:
 
 @dataclass(slots=True)
 class HarnessVersion:
-    """One snapshot of the complete user Harness directory."""
+    """Reproducible Harness snapshot: local directory or remote configuration refs."""
 
     version_id: str
     name: str
@@ -111,7 +111,7 @@ class SolutionVersion:
 
 @dataclass(slots=True)
 class HarnessChange:
-    """A single patch proposed against the current Harness version."""
+    """One change: local file patch or backend-validated remote configuration JSON."""
 
     patch: ContentRef
     reason: str

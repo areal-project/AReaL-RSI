@@ -18,6 +18,7 @@ from typing import Any, Protocol, TypeAlias
 from areal_rsi.agents.rsi import DefaultRsiAgent
 from areal_rsi.api.base import ExperimentPlan, ExperimentRun, JsonObject, RunState, SolutionVersion
 from areal_rsi.base.storage import FileRecords, decode, encode, new_id, now, safe_name, write_json
+from areal_rsi.experiment_config import launch_digest, plan_environment
 from areal_rsi.workflows.service import LocalExperimentService
 
 
@@ -36,10 +37,10 @@ class ExperimentApp(Protocol):
 AppFactory: TypeAlias = Callable[[Path, Callable[[str], None]], Awaitable[ExperimentApp]]
 
 
-async def _local_app(root: Path, emit: Callable[[str], None]) -> ExperimentApp:
-    from areal_rsi.app import LocalApp
+async def _configured_app(root: Path, emit: Callable[[str], None]) -> ExperimentApp:
+    from areal_rsi.app import create_app
 
-    return await LocalApp.create(root, emit)
+    return await create_app(root, emit)
 
 
 @contextmanager
@@ -108,7 +109,7 @@ class ExperimentController:
         self,
         root: Path,
         *,
-        app_factory: AppFactory = _local_app,
+        app_factory: AppFactory = _configured_app,
         worker_command: Sequence[str] | None = None,
     ):
         self.root = root.resolve()
@@ -169,6 +170,8 @@ class ExperimentController:
             "workflow": run.plan.workflow,
             "target": run.plan.target.value,
             "benchmark": run.plan.benchmark,
+            "mode": run.plan.config.get("mode"),
+            "research_harness": run.plan.config.get("research_harness"),
             "teacher_model_name": run.plan.config.get("teacher_model_name"),
             "agent_models": run.plan.config.get("agent_models"),
             "interaction_model_name": run.plan.config.get("interaction_model_name"),
@@ -203,7 +206,13 @@ class ExperimentController:
                 research_agent_count=len(app.service.context.research_agents),
                 stop_when_goal_reached=False,
                 config={
+                    "mode": os.environ.get("RSI_MODE", "local"),
                     **app.model_plan_config(),
+                    **(
+                        {"launch_digest": launch_digest(self.root)}
+                        if (self.root / "launch.json").exists()
+                        else {}
+                    ),
                 },
             )
             app.service.validate(plan)
@@ -244,7 +253,11 @@ class ExperimentController:
                     stderr=subprocess.STDOUT,
                     start_new_session=True,
                     pass_fds=(lock.fileno(),),
-                    env={**os.environ, "RSI_DATA_ROOT": str(self.root)},
+                    env={
+                        **os.environ,
+                        **plan_environment(self.root, run.plan.config),
+                        "RSI_DATA_ROOT": str(self.root),
+                    },
                 )
             self._children[run.run_id] = child
             identity = _process_identity(child.pid)
@@ -276,6 +289,7 @@ class ExperimentController:
                 run_id = json.loads(binding.read_text())["run_id"]
             else:
                 plan = decode(ExperimentPlan, record["plan"])
+                plan_environment(self.root, plan.config)
                 run = ExperimentRun(
                     new_id("run"),
                     plan,
@@ -337,7 +351,7 @@ async def run_worker(
     token: str,
     lock_fd: int,
     *,
-    app_factory: AppFactory = _local_app,
+    app_factory: AppFactory = _configured_app,
 ) -> int:
     """内部 CLI 入口；调用方必须传入控制层启动时继承的专属锁 FD。"""
     controller = ExperimentController(root, app_factory=app_factory)
@@ -383,6 +397,7 @@ async def run_worker(
     try:
         # 让启动前已经收到的停止请求优先执行，避免继续装配或提交评测。
         await asyncio.sleep(0)
+        os.environ.update(plan_environment(controller.root, run.plan.config))
         app = await app_factory(controller.root, lambda text: print(text, flush=True))
         await app.bind_plan(run.plan)
         if (

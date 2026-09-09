@@ -21,7 +21,7 @@ server.serve_forever()
 | GET `/api/runs` | `list` | `{}` → `{"runs": [...]}` |
 | POST `/api/runs` | `create` | `{message?, message_id?}` → `{run_id}` |
 | GET `/api/runs/{id}?after=N` | `detail` | `{run_id, after}` → 下方快照 |
-| POST `/api/runs/{id}/chat` | `chat` | `{run_id, text, message_id}` → `{run_id, message_id?}` |
+| POST `/api/runs/{id}/chat` | `chat` | `{run_id, text, message_id?, reply_to?, recipient?}` → `{run_id, message_id, status}` |
 | POST `/api/runs/{id}/start` | `start` | `{run_id}` → `{status}` |
 | POST `/api/runs/{id}/pause` | `pause` | `{run_id}` → `{status}` |
 | POST `/api/runs/{id}/resume` | `resume` | `{run_id}` → `{status}` |
@@ -31,6 +31,10 @@ server.serve_forever()
 创建请求只接受首条消息和消息 ID，也可以用 `{}` 新建空对话。HTTP 层固定传入 `conversation=true`，不接受模板选择或模拟模式。Interaction 在准备阶段逐步保存 brief 与执行配置，用 `prepare_research` 发布总结；用户后续明确要求开始，才调用 `start_research`。按钮 `start` 使用相同的准备状态检查。
 
 chat/control 在消息或状态持久化后返回，不等待模型完整回合。Web 不提供通用产物导出入口；候选快照与研究结论按 run 保存。内部应用的旧归档操作不属于 Web API。
+
+回复问题时，`reply_to` 使用 `waiting_for_user[].message_id`，后端按原提问者投递，不经过另一个 Agent 转述。只有被回答的问题会移出待回复列表。`recipient` 可为 `interaction` 或 `rsi`；与 `reply_to` 同传时必须匹配。没有 `reply_to` 时，显式 `recipient` 表示独立消息；两者都省略时，若恰有一个待回复问题则自动回复它，否则发给 Interaction，保留所有待回复问题。RSI 仅在研究启动后接收用户消息。
+
+客户端以稳定 `message_id` 重试同一请求；已归档回复的接收者和 `reply_to` 不会因问题已关闭而改变，也不会重复唤醒 Agent。新请求指向不存在、跨 run 或已回答的问题时返回 400。暂停期间可以归档消息，但必须继续研究后才会执行。前端明确显示回复对象，保留输入草稿，不会因轮询发现问题已被其他窗口回答而将草稿自动发给另一个对象。
 
 `detail` 在每次读取时返回完整公共快照；只有 `events` 按 `after` 增量返回：
 
@@ -49,8 +53,8 @@ edges: [{ source: iteration_id, target: iteration_id, kind: parent|reference|mer
 baseline, best, final: VerifiedResult|null
 budget: { model_calls, total_tokens, verify_calls, reserved_tokens?, elapsed_seconds? }
 jobs: [{ job_id, agent_id, status, title?, description?, gpu_ids?, progress_message?, error? }]
-messages: [{ message_id, sender, recipient, text, created_at }]
-waiting_for_user: [问题文本，或包含 text/question 的对象]
+messages: [{ message_id, sender, recipient, text, created_at, reply_to? }]
+waiting_for_user: [{ message_id, agent_id, question, created_at }]
 events: [{ sequence, kind, created_at, agent_id?, iteration_id?, data }]
 event_cursor: 当前最大的事件序号
 budget_stop_reason?: string

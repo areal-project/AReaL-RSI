@@ -101,3 +101,17 @@ with metadata-only access to runtime aliases. Run IDs, the unsuccessful first
 CPU setup attempt, successful replay and browser artifacts are documented in
 [the acceptance report](research-acceptance.md). Actual KernelBench GPU and CUHK-X
 competition evaluation still require the user's environment.
+
+## Direct RSI questions and replies (2026-09-09)
+
+RSI can ask the user directly about decisions or external blockers. Replies keep
+their question identity and return to the author's existing session; waiting does
+not invoke the model. Pending questions and replies survive restart, and replying
+to one question preserves the others. The workbench displays authors and reply
+targets, protects drafts against stale questions, and exposes model failures with
+an explicit retry of the original turn.
+
+The backend/prompt change, web interaction, and documentation are separate local
+commits. Validation includes 404 tests, a real Astra run with a failing then
+repaired CPU access probe, and desktop/mobile browser checks. Details and the
+limits of that probe are recorded in [acceptance](research-acceptance.md).

@@ -112,6 +112,7 @@ def public_detail(value: Json) -> Json:
     result["brief"] = _brief(value.get("brief"))
     result["intake"] = _fields(value.get("intake"), "status summary environment execution_required")
     result["pending_agents"] = [a for a in value.get("pending_agents", []) if isinstance(a, str)]
+    result["execution_blocker"] = _fields(value.get("execution_blocker"), "job_id error created_at")
     result["agent_activity"] = {
         name: _fields(activity, "type tool updated_at")
         for name, activity in value.get("agent_activity", {}).items()

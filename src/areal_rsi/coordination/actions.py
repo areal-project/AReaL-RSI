@@ -126,7 +126,8 @@ RSI = [
     ),
     definition(
         "stop_run",
-        "根据现有证据结束研究，说明最佳结果、未达目标和停止原因；不能把停止记作成功。",
+        "根据研究证据结束研究，说明最佳结果、未达目标和停止原因。环境故障应 ask_user 等待修复，"
+        "不能用 stop_run 结束；用户仍可从工作台明确停止。",
         reason=STRING,
     ),
     definition(
@@ -422,6 +423,12 @@ class ResearchActions:
                 )
             if c.state["status"] not in {"planned", "running", "paused", "stopped"}:
                 raise ValueError("This run has already concluded")
+            if c.state["status"] != "stopped" and (blocker := c.execution_blocker()):
+                raise ValueError(
+                    f"验证作业 {blocker['job_id']} 仍有基础设施错误，不能据此结束整个研究。"
+                    "请用 ask_user 说明故障、已做检查及需要的处理，保留当前任务等待回复；"
+                    "用户可在工作台明确停止研究。"
+                )
             c.stop(reason)
             message_id = c.enqueue("rsi", "user", reason, key=key)
             return ToolResult(

@@ -59,6 +59,7 @@ const eventNames = {
   run_paused: "研究暂停",
   run_resumed: "研究继续",
   run_stopped: "研究停止",
+  run_reopened: "恢复研究",
   agent_created: "建立研究方向",
   assignment_created: "下发研究任务",
   report_submitted: "收到研究报告",
@@ -326,8 +327,8 @@ function render() {
     (agent) => agent.agent_id === "interaction" && agent.state === "running",
   );
   $("pause").hidden = run.status !== "running";
-  $("resume").hidden = run.status !== "paused" && !needsResume;
-  $("resume").textContent = needsResume
+  $("resume").hidden = run.status !== "paused" && !(run.status === "stopped" && run.started_at) && !needsResume;
+  $("resume").textContent = run.status === "stopped" ? "恢复研究" : needsResume
     ? (run.status === "planned" ? "继续对话" : "恢复执行") : "继续";
   $("stop").hidden = !["planned", "running", "paused"].includes(run.status);
   $("stop").textContent = run.status === "planned" ? "结束对话" : "停止";
@@ -509,6 +510,8 @@ function renderOverview(run) {
     blocks.push(element("p", "live-warning", "调度已断开，请恢复执行以继续接收结果。"));
   if (run.status === "paused") blocks.push(element("p", "live-warning", "研究已暂停。继续后恢复任务调度。"));
   if (waiting) blocks.push(element("p", "live-warning", `${waiting} 个问题等待你回复，请查看需求与对话。`));
+  if (run.execution_blocker?.job_id && !jobs.length)
+    blocks.push(element("p", "live-warning", `执行环境需要处理：${run.execution_blocker.error || "验证未能运行"}。已有研究记录保留。`));
   for (const job of jobs) {
     const card = element("button", "live-task");
     card.dataset.work = `job:${job.job_id}`;

@@ -264,8 +264,15 @@ class ResearchApp:
                 "simulated": c.state["simulated"],
             }
             if record.state != "succeeded":
+                from areal_rsi.execution.diagnostics import failure_summary
+
                 return VerifiedResult(
-                    **kwargs, status="infra_error", error=record.error or record.state
+                    **kwargs,
+                    status="infra_error",
+                    error=failure_summary(
+                        c.store.root / "execution-outputs" / record.job_id,
+                        record.error or record.state,
+                    ),
                 )
             if c.state["simulated"]:
                 path = c.store.root / "simulation" / "scores.json"
@@ -548,6 +555,8 @@ class ResearchApp:
         elif action == "resume":
             if c.state["status"] == "paused":
                 c.resume()
+            elif c.state["status"] == "stopped":
+                c.reopen()
             elif c.state["status"] not in {"planned", "running"}:
                 raise ValueError("This run cannot be resumed")
             active = await self.attach(c)

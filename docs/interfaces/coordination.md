@@ -15,6 +15,9 @@ continuous model sessions. Execution and web research tools are separate adapter
   The status remains `stopped` (`RunState.CANCELLED`), never `succeeded`; existing
   candidates, best/final references and scores are preserved. `finish` remains the
   successful completion path and continues to enforce the required target.
+  If the latest verification is `infra_error`, `stop_run` is rejected: RSI must
+  diagnose the issue or use `ask_user` and wait. `execution_blocker` in the state
+  summary identifies this condition. An explicit user stop remains available.
 - Every assignment becomes a generic `ResearchIteration`. Completion requires a
   concrete `ResearchReport`; products and verification are optional.
 - A report immediately stops the model turn. Only an explicit reply to that exact
@@ -31,8 +34,12 @@ continuous model sessions. Execution and web research tools are separate adapter
   their original result. A stopped direction archives late reports without wakeup.
 - Waiting has no active inference. RSI can still perform useful work while other
   directions run; only an explicit wait or completed turn yields control.
-- Pause preserves unfinished deliveries for recovery. Stop is terminal. A failed
-  agent needs an explicit retry; its active delivery remains available for recovery.
+- Pause preserves unfinished deliveries for recovery. A stopped, previously
+  started research run can be reopened explicitly by the user via `resume`.
+  It retains scores, reports, candidates and sessions, restarts the controllers,
+  and makes reported directions stopped by the run available for RSI assignments.
+  Individually stopped directions and cancelled unfinished work remain archived;
+  reopening does not replay completed jobs. A failed agent needs an explicit retry.
 
 All messages, effects, plans, events and session data live below their run. Raw
 session content and private verifier files are not public research records.

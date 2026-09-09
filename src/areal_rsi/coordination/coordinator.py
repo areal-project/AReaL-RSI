@@ -18,7 +18,13 @@ from areal_rsi.api.base import (
     ResearchIteration,
     RunState,
 )
-from areal_rsi.api.research import Assignment, ResearchMessage, ResearchReport, TaskBrief
+from areal_rsi.api.research import (
+    Assignment,
+    ResearchMessage,
+    ResearchReport,
+    TaskBrief,
+    VerifiedResult,
+)
 from areal_rsi.base.storage import decode, encode, new_id, now, safe_name, write_json
 from areal_rsi.coordination.store import ResearchStore
 
@@ -700,7 +706,54 @@ class Coordinator:
         self.save()
         self.store.event("run_resumed")
 
+    def reopen(self) -> None:
+        """Explicit user recovery; completed work and cancelled executions stay archived."""
+        if self.state["status"] != "stopped":
+            raise ValueError("Only a stopped research run can be reopened")
+        if not self.state.get("started_at"):
+            raise ValueError("This discussion has not started research")
+        stop_events = [event for event in self.store.events() if event.kind == "run_stopped"]
+        stop_reason = stop_events[-1].data.get("reason") if stop_events else None
+        stopped_by_run = self.state.get("run_stop_agents")
+        for actor in self.actors():
+            controller = actor.agent_id in {"rsi", "interaction"}
+            reported = bool(actor.iterations and actor.iterations[-1].report_ref)
+            was_active = (
+                actor.agent_id in stopped_by_run
+                if stopped_by_run is not None
+                else actor.wait_reason == stop_reason
+            )
+            if controller or (reported and was_active):
+                actor.state = AgentState.WAITING
+                actor.wait_reason = "message" if controller else "rsi_reply"
+                self.save_actor(actor)
+                self.end_turn(actor.agent_id)
+        run = self.store.run()
+        run.state, run.finished_at = RunState.RUNNING, None
+        self.store.save_run(run)
+        self.state["status"] = "running"
+        self.save()
+        self.enqueue(
+            "user",
+            "rsi",
+            "恢复本次研究。沿用已有会话、任务、候选和正式结果；先检查最后的阻塞与最新执行说明，"
+            "再安排后续工作。已完成的评测不要重复执行；环境问题请向用户提问并等待，不能据此结束研究。",
+            key=new_id("reopen"),
+        )
+        self.store.event("run_reopened")
+
+    def execution_blocker(self) -> dict[str, Any] | None:
+        results = self.store.records("verifications", VerifiedResult)
+        latest = max(results, key=lambda result: result.created_at, default=None)
+        if latest is None or latest.status != "infra_error":
+            return None
+        return {"job_id": latest.result_id, "error": latest.error, "created_at": latest.created_at}
+
     def stop(self, reason: str) -> None:
+        if self.state["status"] != "stopped":
+            self.state["run_stop_agents"] = [
+                actor.agent_id for actor in self.actors() if actor.state != AgentState.STOPPED
+            ]
         self.state["status"] = "stopped"
         self.state["waiting_for_user"] = []
         for actor in self.actors():
@@ -734,6 +787,7 @@ class Coordinator:
             "status": self.state["status"],
             "brief": encode(self.store.brief()),
             "plan": self.state["plan"],
+            "execution_blocker": self.execution_blocker(),
             "agents": encode(self.actors()),
             "simulated": self.state["simulated"],
             "best": self.store.public_record(run.best_result_ref) if run.best_result_ref else None,

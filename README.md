@@ -11,6 +11,46 @@ AReaL-RSI 是基于 DeepSeek Harness 的本地研究与自迭代工具。用户�
 
 需要 macOS、Python 3.11+、uv，以及 Node.js 22.19+（或 24+）和 pnpm。选择 DSH 时，前台 TUI 和后台研究 worker 共用当前数据目录内的 DSH CLI `0.1.2-rc.1`。Python SDK 负责调用这份 CLI，后台通过 macOS 的 `sandbox-exec` 隔离工作目录。
 
+最小 demo：填写 `.env` 后，直接打开原生 DSH TUI。在对话中问“怎么启动 RSI 实验？给我一个 demo”，
+会得到示例和确认步骤。
+
+```bash
+uv run --env-file .env --locked rsi tui
+```
+
+两种模式使用相同的实验 YAML 入口：
+
+| 配置 | local | remote |
+| --- | --- | --- |
+| 示例 | `examples/local/arithmetic.yaml` | `examples/remote/livecodebench.yaml` |
+| `mode` | `local` | `remote` |
+| `benchmark` | 本地 Benchmark | Arena Benchmark 固定版本 |
+| `harness` | 初始能力目录，`default` 为内置版本 | Arena 初始 Harness 固定版本 |
+| `model` | `target` 引用 `RSI_TARGET_*`，也可指定模型名 | Arena Model 固定版本 |
+| `research_harness` | `dsh` | `dsh` |
+
+在同一个对话中选择实验，不需要重启 TUI：
+
+```text
+用 local 算术 demo 生成一个 1 轮的实验计划。
+用 remote LCB demo 生成一个 1 轮的实验计划。
+使用 examples/local/arithmetic.yaml 生成一个 1 轮的实验计划。
+```
+
+Interaction Agent 分别通过 `rsi_plan(preset="arithmetic")`、`rsi_plan(preset="lcb")`
+或 `rsi_plan(config_path="…")` 选择配置，同时传入目标和轮数。`preset` 与 `config_path`
+二选一；两者均省略时使用算术 demo。mode 从 YAML 读取并写入计划。
+
+demo 中的 `research_harness: dsh` 明确选择 ARealAgentRuntime 的 DSH，优先于旧
+`RSI_RUNTIME_CONFIG` 中 RSI Agent / ResearchAgent 的配置。移除此字段可使用高级 Runtime 配置。
+Task Agent 的 Runtime 独立：local 来自 Runtime 配置，remote 由 Arena Harness 固定。
+Benchmark 决定对应 Verifier；模型地址和凭证仍由 `.env` 配置，不写入实验 YAML。
+进入对话后说“请生成一个 1 轮、1 个 ResearchAgent 的 Harness 自迭代实验计划”，
+核对计划并回复“确认”才会启动。默认工作区为 `.rsi`，`RSI_DATA_ROOT` 可覆盖它。
+每份计划在工作区的 `experiments/` 下拥有独立数据目录，保存 YAML 和 Runtime JSON 快照，
+共用 DSH 安装。修改源文件或在对话中切换模式不会改变已有计划；更改快照会被拒绝执行。
+状态、停止、恢复和 Web 面板按实验 ID 定位目录，恢复也会读取已保存的 mode。
+
 先准备本机配置文件：
 
 ```bash
@@ -80,7 +120,7 @@ unset RSI_DATA_ROOT RSI_BENCHMARK RSI_RESEARCH_AGENT_COUNT
 uv run --env-file .env --locked rsi tui
 ```
 
-各类 Agent 的有效模型、评测集和研究线数量由启动配置决定，写入对话目标不会改变它们。三条研究线设置 `RSI_RESEARCH_AGENT_COUNT=3`；轮数通过 `rsi_plan` 指定。所有 ResearchAgent 接收相同的实验目标并使用同一个模型，但保留独立 Session、workspace、Memory 查询、迭代状态和版本分支。仅改变 Interaction Agent 或未被使用的默认值不会影响后台恢复；后台模型覆盖变化会按角色校验。目标基线只由有效 Task 模型及初始 Harness 决定，同一目录可保存多组配置，不覆盖旧实验。
+各类 Agent 的模型连接和研究线数量来自宿主环境；mode、评测集和 Harness 由每次选择的实验 YAML 决定。三条研究线设置 `RSI_RESEARCH_AGENT_COUNT=3`；轮数通过 `rsi_plan` 指定。所有 ResearchAgent 接收相同的实验目标并使用同一个模型，但保留独立 Session、workspace、Memory 查询、迭代状态和版本分支。仅改变 Interaction Agent 或未被使用的默认值不会影响后台恢复；后台模型覆盖变化会按角色校验。目标基线只由有效 Task 模型及初始 Harness 决定，同一目录可保存多组配置，不覆盖旧实验。
 
 `.env` 被 Git 忽略，`.env.example` 仅包含空模板。认证信息不写入模型版本或实验配置；模型请求显式设置 `store=false`。
 
@@ -112,6 +152,16 @@ uv run --env-file .env --locked rsi resume RUN_ID
 
 统一安装固定版本的 `@deepseek-ai/dsh` CLI 与 [`@deepseek-harness-tui/dsh-tui`](https://github.com/ccch1mneyyy/dsh-TUI) 插件。插件包名、版本和 profile 位于 `modules/dsh_profile.py`；静态 Cordis patch 与 Persona 位于 `resources/dsh/`；`modules/dsh_config.py` 只填入模型、数据目录、workspace 和 MCP 环境变量名。DSH 版本由共享安装模块管理，多个 worker 并发启动时通过文件锁复用同一份完整安装。它们位于 `RSI_DATA_ROOT` 的 `dsh-cli/` 和 `dsh-home/`，无需全局安装 DSH。前台选择 TUI profile，DSH 后台使用带 Runtime bundle 的 `agent-runtime` profile，两者默认执行同一份 CLI；后台仅可读取共享安装，不能改写它。Python SDK 的依赖仍会附带预打包运行时，但 RSI 不启动该文件。RSI preset 首次复制 DSH 标准研发工具；每次启动从 `resources/dsh/persona.md` 同步 Interaction Agent 角色定义，并保留 preset 中的工具等其他配置。角色提示修改后需重启 TUI；新对话会使用当前定义。上游 TUI 的语言、主题等界面偏好位于用户目录 `~/.dsh-tui`。
 
+## Remote Mode
+
+设置 `RSI_MODE=remote`、`RSI_REMOTE_BACKEND`、`RSI_REMOTE_CONFIG` 和独立的
+`RSI_DATA_ROOT` 可使用远端评测。本地负责研究与编排，具体 backend 提供任务执行、
+Verifier 和候选构建。EnvArena 是当前内置实现（`envarena`，默认值），位于
+`modules/remote/envarena/`；其候选通过远端 API 创建能力配置并继承远端 Runtime。
+
+本地研究沿用 `RSI_RUNTIME_CONFIG` 选择 Runtime package 的 Harness，并在恢复时核对配置。
+最小 LCB 测试的配置、启动和恢复命令见 [Remote 示例](examples/remote/README.md)。
+
 ## Web UI
 
 另开一个终端，在项目目录加载同一份配置，使用与 TUI 相同的数据目录：
@@ -123,6 +173,9 @@ uv run --env-file .env --locked rsi web --port 8765
 浏览器打开 [http://127.0.0.1:8765](http://127.0.0.1:8765)，查看独立研究线、执行阶段、TRAIN/VALIDATE 得分、版本关系及选版依据。页面自动刷新，只读并绑定本机；无需模型连接配置。
 
 指定单个实验：`uv run --env-file .env --locked rsi web --port 8765 --run RUN_ID`。
+
+Web 和 TUI 需要读取同一工作区，页面顶部会显示实际目录。若两个终端的 `RSI_DATA_ROOT`
+不同，可显式指定：`uv run --locked rsi web --root .rsi/my-workspace --port 8765`。
 
 ## 多研究线与示例
 

@@ -29,6 +29,7 @@ from areal_rsi.api.base import (
     VerificationResult,
     VerificationStatus,
 )
+from areal_rsi.api.modules import BatchHarnessRuntime
 from areal_rsi.api.workflow import ResearchAgent, WorkflowContext
 from areal_rsi.base.evidence import FileEvidenceStore
 from areal_rsi.base.storage import FileRecords, decode, encode, new_id, now, safe_name, write_json
@@ -181,6 +182,25 @@ class HarnessEvolutionWorkflow:
             if "evidence" not in cached:
                 raise ValueError("Legacy trajectory-only evaluation; start a new experiment")
             return report, decode(ContentRef, cached["evidence"])
+        # Batch submission feeds the existing per-task generation checkpoints.
+        if isinstance(ctx.harness_runtime, BatchHarnessRuntime) and any(
+            not (folder / f"task-{index}.json").exists()
+            for index in range(1, len(tasks) + 1)
+        ):
+            batch_results = await ctx.harness_runtime.run_many(
+                solution, tasks,
+                config={
+                    "execution_key": f"{self.state.run_id}/{folder.relative_to(self.folder)}",
+                    "run_id": self.state.run_id,
+                    "split": split.value,
+                },
+            )
+            if set(batch_results) != {task.task_id for task in tasks}:
+                raise ValueError("Batch results must match all requested task IDs")
+            for index, task in enumerate(tasks, 1):
+                generated = folder / f"generation-{index}.json"
+                if not generated.exists() and not (folder / f"task-{index}.json").exists():
+                    write_json(generated, {"task": task, "result": batch_results[task.task_id]}, immutable=True)
         concurrency = ctx.evaluation_concurrency
         if type(concurrency) is not int or concurrency < 1:
             raise ValueError("evaluation_concurrency must be a positive integer")

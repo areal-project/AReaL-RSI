@@ -59,7 +59,14 @@ class WorkerWorkflowFixture:
     async def run(self, context: WorkflowContext, plan: ExperimentPlan) -> ExperimentRun:
         self.state.state = RunState.RUNNING
         self.records.save(self.state.run_id, self.state, immutable=False)
-        write_json(self.root / f"{self.state.run_id}-entered.json", {"pid": os.getpid()})
+        write_json(
+            self.root / f"{self.state.run_id}-entered.json",
+            {
+                "pid": os.getpid(),
+                "mode": os.environ.get("RSI_MODE"),
+                "runtime_config": os.environ.get("RSI_RUNTIME_CONFIG"),
+            },
+        )
         self.emit("offline worker entered")
         if plan.goal == "fixture failure":
             raise RuntimeError("PRIVATE_FAILURE_DETAILS")

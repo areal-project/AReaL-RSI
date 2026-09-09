@@ -21,3 +21,15 @@ def test_missing_model_configuration_has_actionable_error(tmp_path: Path) -> Non
     assert "RSI_TEACHER_MODEL" in result.stderr
     assert "--env-file .env" in result.stderr
     assert "Traceback" not in result.stderr
+
+
+def test_tui_entry_is_not_bound_to_an_experiment() -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "areal_rsi", "tui", "--help"],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert "--mode" not in result.stdout
+    assert "--config" not in result.stdout
+    assert "--resume" in result.stdout

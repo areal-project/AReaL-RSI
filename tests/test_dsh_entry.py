@@ -114,6 +114,8 @@ def test_launch_uses_native_process_patches_and_absolute_mcp_root_without_saving
     monkeypatch.setenv("RSI_TEACHER_MODEL", "teacher-default-fixture-model")
     monkeypatch.setenv("RSI_TARGET_MODEL", "target-default-fixture-model")
     monkeypatch.setenv("INTERACTION_MODEL_KEY", "fixture-interaction-agent-key")
+    monkeypatch.setenv("ARENA_OPENAPI_TOKEN", "fixture-private-arena-key")
+    monkeypatch.setenv("RSI_MODE", "remote")
     monkeypatch.setenv(
         "RSI_AGENT_MODELS",
         json.dumps(
@@ -195,6 +197,9 @@ def test_launch_uses_native_process_patches_and_absolute_mcp_root_without_saving
     assert "process.env[key]" in mcp["config"]["env"]
     assert "RSI_API_KEY" in mcp["config"]["env"]
     assert "RSI_RESEARCH_AGENT_COUNT" in mcp["config"]["env"]
+    assert "RSI_MODE" in mcp["config"]["env"]
+    assert "RSI_ARENA_CONFIG" in mcp["config"]["env"]
+    assert "ARENA_OPENAPI_TOKEN" in mcp["config"]["env"]
     assert "DEEPSEEK_API_KEY" not in mcp["config"]["env"]
     assert mcp["config"]["failOnStartupError"] is True
     for path in root.rglob("*"):
@@ -202,6 +207,7 @@ def test_launch_uses_native_process_patches_and_absolute_mcp_root_without_saving
             assert "fixture-private-rsi-key" not in path.read_text()
             assert "fixture-private-deepseek-key" not in path.read_text()
             assert "fixture-interaction-agent-key" not in path.read_text()
+            assert "fixture-private-arena-key" not in path.read_text()
     child.wait.assert_called_once_with()
     child.terminate.assert_not_called()
     proxy.close.assert_called_once_with()

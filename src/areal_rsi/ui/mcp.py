@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
@@ -14,6 +14,7 @@ from pydantic import Field, StrictBool
 
 from areal_rsi.config import ModelConfigurationError
 from areal_rsi.ui.experiments import ExperimentController
+from areal_rsi.ui.workspace import ExperimentWorkspace
 
 Goal = Annotated[str, Field(strict=True, min_length=1, max_length=4000)]
 Iterations = Annotated[int, Field(strict=True, ge=1, le=20)]
@@ -44,6 +45,8 @@ def _summary(value: dict[str, Any]) -> dict[str, Any]:
         "workflow",
         "target",
         "benchmark",
+        "mode",
+        "research_harness",
         "teacher_model_name",
         "target_model_name",
         "interaction_model_name",
@@ -80,7 +83,14 @@ def _summary(value: dict[str, Any]) -> dict[str, Any]:
             if key in plan
         }
         config = plan.get("config", {})
-        for key in ("teacher_model_name", "target_model_name", "interaction_model_name"):
+        for key in (
+            "teacher_model_name",
+            "target_model_name",
+            "interaction_model_name",
+            "research_harness",
+            "mode",
+            "remote_backend",
+        ):
             model = config.get(key)
             if key == "target_model_name" and model is None:
                 model = config.get("model_name")  # 兼容历史单模型计划。
@@ -122,7 +132,7 @@ async def _invoke(operation: Callable[[], Awaitable[dict[str, Any]]]) -> str:
         raise ToolError("实验操作失败，请检查本地配置或实验日志。") from None
 
 
-def create_server(controller: ExperimentController) -> MCPServer:
+def create_server(controller: ExperimentController | ExperimentWorkspace) -> MCPServer:
     server = MCPServer(
         "areal-rsi",
         instructions=(
@@ -139,15 +149,27 @@ def create_server(controller: ExperimentController) -> MCPServer:
             read_only_hint=False, destructive_hint=False, open_world_hint=False
         ),
     )
-    async def rsi_plan(goal: Goal, max_iterations: Iterations) -> str:
-        """生成待确认计划，不启动实验。只接受目标和轮数；各 Agent 的有效模型、评测集和研究线数量
-        来自启动配置，不能通过 goal 改变。teacher/target 只是默认值。
-        RSI_AGENT_MODELS 可按 Interaction Agent、RSI Agent 和 ResearchAgent 组覆盖；
-        Task Agent 直接使用
-        Target Model，不单独配置。所有 ResearchAgent 共用一个模型。请展示返回的完整模型映射；
-        不符合用户要求时
-        需修改本机配置并重启 TUI。此工具没有实验模板名参数。
+    async def rsi_plan(
+        goal: Goal,
+        max_iterations: Iterations,
+        preset: Literal["arithmetic", "lcb"] | None = None,
+        config_path: Annotated[str, Field(strict=True, min_length=1, max_length=4096)]
+        | None = None,
+    ) -> str:
+        """生成待确认计划，不启动实验。preset=arithmetic 是 local 算术 demo，preset=lcb 是
+        remote EnvArena LCB demo；省略时使用 arithmetic。也可用 config_path 选择项目中的实验
+        YAML，与 preset 二选一；mode 从 YAML 读取。同一 TUI 可创建两种模式的计划，无需重启。
+        实验 YAML 与 Runtime 配置按计划保存快照。请展示 mode、研究 Harness、所有 Agent 模型、
+        Benchmark、研究线数量和轮数，再等待用户确认。模型连接与凭证仍来自宿主环境。
         """
+        if isinstance(controller, ExperimentWorkspace):
+            return await _invoke(
+                lambda: controller.plan(
+                    goal, max_iterations, preset=preset, config_path=config_path
+                )
+            )
+        if preset or config_path:
+            raise ToolError("此旧控制器不支持选择实验配置，请使用 rsi tui。")
         return await _invoke(lambda: controller.plan(goal, max_iterations))
 
     @server.tool(
@@ -197,4 +219,4 @@ def create_server(controller: ExperimentController) -> MCPServer:
 
 def serve(root: Path) -> None:
     """只管理 MCP 连接生命周期；退出时不停止已启动的后台实验。"""
-    create_server(ExperimentController(root)).run(transport="stdio")
+    create_server(ExperimentWorkspace(root)).run(transport="stdio")

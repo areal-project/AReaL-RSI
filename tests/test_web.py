@@ -97,6 +97,8 @@ class WebTest(unittest.TestCase):
             client.close()
 
     def test_live_projection_and_no_private_content(self) -> None:
+        listing = json.loads(self.request("/api/runs")[2])
+        self.assertEqual(listing["workspace_root"], str(self.root.resolve()))
         status, headers, body = self.request("/api/runs/run_fixture")
         self.assertEqual(status, 200)
         self.assertEqual(headers["Cache-Control"], "no-store")

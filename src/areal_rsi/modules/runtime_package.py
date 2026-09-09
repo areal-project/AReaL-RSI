@@ -71,8 +71,19 @@ class RuntimeSettings:
 
     @classmethod
     def from_environment(cls) -> RuntimeSettings:
+        from areal_rsi.experiment_config import configured_research_harness
+
         path = os.environ.get("RSI_RUNTIME_CONFIG")
-        return cls(json.loads(Path(path).expanduser().read_text()) if path else {})
+        value = json.loads(Path(path).expanduser().read_text()) if path else {}
+        harness = configured_research_harness()
+        if harness:
+            if not isinstance(value, dict):
+                raise ValueError("Runtime config must be an object")
+            config = {"modelProtocol": "responses"} if harness == "codex-cli" else {}
+            roles = value.setdefault("roles", {})
+            for role in ("rsi-agent", "research-agent"):
+                roles[role] = {"kind": harness, "config": config}
+        return cls(value)
 
     def select(self, role: str) -> dict[str, Any]:
         role = "research-agent" if role.startswith("research-agent-") else role
@@ -330,13 +341,17 @@ class PackageAgentRuntime:
         if selection["kind"] == "dsh" and not selection.get("config", {}).get("dshBin"):
             from areal_rsi.modules.dsh import ensure_cli
 
-            cli = await asyncio.to_thread(ensure_cli, self.dsh_root or self.root.parent)
+            # Experiment directories link to shared installations. sandbox-exec checks
+            # the executable path too, so use the same canonical path as the read grant.
+            cli = (await asyncio.to_thread(ensure_cli, self.dsh_root or self.root.parent)).resolve()
             selection.setdefault("config", {}).setdefault("dshBin", str(cli))
             readable.append(cli.absolute().parent.parent.parent.resolve())
         if selection["kind"] == "dsh":
             from areal_rsi.modules.runtime_dsh import ensure_profile
 
-            home = await asyncio.to_thread(ensure_profile, self.dsh_root or self.root.parent)
+            home = (
+                await asyncio.to_thread(ensure_profile, self.dsh_root or self.root.parent)
+            ).resolve()
             readable.append(home)
             profile = directory / "dsh-home/profiles/agent-runtime"
             profile.mkdir(parents=True)

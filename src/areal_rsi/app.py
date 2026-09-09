@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -19,6 +20,7 @@ from areal_rsi.api.base import (
 from areal_rsi.api.workflow import WorkflowContext
 from areal_rsi.base.catalog import LocalModelCatalog
 from areal_rsi.base.storage import (
+    DIRECTORY_TYPE,
     FileContentStore,
     FileMemory,
     FileTrajectoryStore,
@@ -35,6 +37,7 @@ from areal_rsi.config import (
 )
 from areal_rsi.modules.gateway import GatewayProxy
 from areal_rsi.modules.harness import LocalHarnessBuilder, LocalHarnessRuntime
+from areal_rsi.modules.local.config import LocalConfig
 from areal_rsi.modules.runtime_package import PackageAgentRuntime, RuntimeSettings
 from areal_rsi.workflows.service import LocalExperimentService, WorkflowFactory
 
@@ -68,6 +71,13 @@ class LocalApp:
             workflows if workflows is not None else {"harness-evolution": None}
         ):
             raise ValueError("选中的 Python Workflow 尚未注册")
+        if any((root / "remote" / name).exists() for name in ("backend.json", "config.json")):
+            raise ValueError("数据目录属于 remote mode，请设置独立的 RSI_DATA_ROOT")
+        baseline_file = root / "baseline.json"
+        if baseline_file.exists():
+            baseline = json.loads(baseline_file.read_text())
+            if baseline["harness"]["content"].get("media_type") != DIRECTORY_TYPE:
+                raise ValueError("数据目录属于 remote mode，请设置独立的 RSI_DATA_ROOT")
         runtime_settings = RuntimeSettings.from_environment()
         model_settings = AgentModelSettings.from_environment()
         research_agent_count = research_agent_count_from_environment()
@@ -86,7 +96,8 @@ class LocalApp:
                 if agent_id.startswith("research-agent-")
             },
         }
-        target_connection = ModelConfig.from_environment("target")
+        local_config = LocalConfig.from_environment()
+        target_connection = local_config.target_connection()
         runtime_connections = {**connections, "task-agent": target_connection}
         for role in runtime_connections:
             runtime_settings.select(role)
@@ -98,9 +109,17 @@ class LocalApp:
         self.versions = FileVersionManager(self.root / "versions")
         self.trajectories = FileTrajectoryStore(self.root / "trajectories", self.content)
         self.memory = FileMemory(self.root / "memory")
-        benchmark_kind = os.environ.get("RSI_BENCHMARK", "arithmetic-v1")
+        benchmark_kind = local_config.benchmark
         bundle = create_builtin_registry(self.content).create(
-            benchmark_kind, environment=os.environ
+            benchmark_kind,
+            {
+                "data_path": str(local_config.dataset),
+                "train_limit": local_config.train_limit,
+                "validate_limit": local_config.validate_limit,
+            }
+            if benchmark_kind == "gsm8k"
+            else {},
+            environment=os.environ,
         )
         benchmark = bundle.benchmark
         verifier = bundle.verifier
@@ -119,7 +138,7 @@ class LocalApp:
         )
         self.baseline = await catalog.baseline(
             self.target_model,
-            await self.content.snapshot(Path(__file__).parent / "default_harness"),
+            await self.content.snapshot(local_config.harness),
         )
         self.agent_proxies, self.agent_runtimes = {}, {}
         proxies: dict[ModelConfig, GatewayProxy] = {}
@@ -130,8 +149,6 @@ class LocalApp:
             proxy = proxies[connection]
             budget = 4096 if agent_id == "task-agent" else 12288
             selection = runtime_settings.select(agent_id)
-            import json
-
             key = (connection, budget, json.dumps(selection, sort_keys=True))
             if key not in runtimes:
                 runtimes[key] = PackageAgentRuntime(
@@ -202,7 +219,9 @@ class LocalApp:
             for agent_id, model in self.agent_models.items()
         }
         return {
+            "mode": "local",
             "runtime_config_digest": self.runtime_settings.identity,
+            "research_harness": self.runtime_settings.select("research-agent")["kind"],
             "agent_models": models,
             "interaction_model_name": self.interaction_model_name,
             "target_model_name": self.target_model.name,
@@ -211,6 +230,9 @@ class LocalApp:
 
     async def bind_plan(self, plan: ExperimentPlan) -> None:
         """按 Run 校验配置并恢复它的基线；目录本身不绑定模型。"""
+        mode = self.model_plan_config()["mode"]
+        if plan.config.get("mode", mode) != mode:
+            raise ModelConfigurationError("实验模式与已确认计划不一致。")
         recorded_runtime = plan.config.get("runtime_config_digest")
         if recorded_runtime != self.runtime_settings.identity:
             raise ModelConfigurationError(
@@ -288,10 +310,10 @@ class LocalApp:
 
     async def close(self) -> None:
         try:
-            await self.rsi.close()
             for run_id, task in self.service.tasks.items():
                 if not task.done():
                     await self.service.stop(run_id)
+            await self.rsi.close()
         finally:
             unique = list(dict.fromkeys(self.agent_proxies.values()))
             try:
@@ -310,3 +332,14 @@ class LocalApp:
                 )
         finally:
             await asyncio.gather(*(asyncio.to_thread(proxy.close) for proxy in unique))
+
+
+async def create_app(root: Path, emit: Callable[[str], None]) -> LocalApp:
+    mode = os.environ.get("RSI_MODE", "local")
+    if mode == "local":
+        return await LocalApp.create(root, emit)
+    if mode == "remote":
+        from areal_rsi.remote_app import RemoteApp
+
+        return await RemoteApp.create(root, emit)
+    raise ValueError("RSI_MODE 只支持 local 或 remote")

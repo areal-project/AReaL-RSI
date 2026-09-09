@@ -1,6 +1,7 @@
 "use strict";
 const colors=["#64d9c3","#91b8ff","#ffc984","#d5a1f6","#ee91b0","#b5d78d","#72c7ec","#deb687"];
 const states={planned:"待启动",running:"运行中",succeeded:"已完成",failed:"失败",cancelled:"已停止"};
+const remoteStates={prepared:"准备中",submitting:"提交中",submitted:"已提交",unknown:"提交待核对",rejected:"提交被拒绝",stop_requested:"正在停止",collected:"结果已回收",RUNNING:"运行中",PENDING:"等待中",AGGREGATING:"汇总中",DONE:"已完成",STOPPING:"停止中",STOPPED:"已停止",FAILED:"失败",CANCELLED:"已取消",TIMEOUT:"超时"};
 const phases={waiting:"等待首轮",research:"分析当前版本",evaluate_train:"执行 TRAIN 评测",evaluate_validate:"执行 VALIDATE 评测",propose:"提出修改",build:"构建候选版本",select:"选择下一轮版本",iteration_completed:"本轮完成",completed:"研究完成",failed:"执行失败",cancelled:"已停止",pruned:"已剪枝"};
 const esc=value=>String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const percent=value=>typeof value==="number"&&Number.isFinite(value)?`${(value*100).toFixed(1)}%`:"—";
@@ -47,6 +48,7 @@ function render(run){
     <p class="meta">${esc(run.workflow)} · ${esc(run.benchmark)} · Interaction Agent ${esc(run.interaction_model||"未记录")} · RSI Agent ${esc(run.rsi_model||run.teacher_model||"未记录")} · 目标模型 ${esc(run.target_model||run.model||"未记录")}</p>
     ${run.state==="running"&&!run.worker_alive?'<div class="notice">记录显示运行中，但未发现持有此 Run 执行锁的进程。请通过 CLI 核对或恢复；页面不会重新启动实验。</div>':""}
     ${run.error?`<div class="notice">${esc(run.error)}</div>`:""}
+    ${run.remote_jobs?.length?`<details class="goal" data-key="remote-jobs"><summary>远端评测任务（${run.remote_jobs.length}）</summary>${run.remote_jobs.map(job=>`<p>${job.url?`<a href="${esc(job.url)}" target="_blank" rel="noopener noreferrer">${esc(job.job_id)}</a>`:esc(job.job_id||"提交待核对")} · ${esc(remoteStates[job.state]||job.state)} · 成功 ${Number(job.task_counts?.done||0)}，失败 ${Number(job.task_counts?.failed||0)}，取消 ${Number(job.task_counts?.cancelled||0)} / 共 ${Number(job.task_counts?.total||0)} 题</p>`).join("")}</details>`:""}
     <section class="stats" aria-label="实验概览"><div class="stat"><div class="label">基线验证得分</div><div class="value">${percent(run.baseline_score)}</div><div class="meta">${run.baseline_score===null?(run.state==="running"&&run.worker_alive&&run.baseline_progress?.task_count?`正在评测 ${run.baseline_progress.task}/${run.baseline_progress.task_count} 题`:"尚无有效基线结果"):"固定数据分区"}</div></div>
     <div class="stat"><div class="label">历史最佳验证得分</div><div class="value">${percent(run.best_score)}</div><div class="meta">允许持平或退化，不保证提升</div></div>
     <div class="stat"><div class="label">已完成研究轮次</div><div class="value">${completed} <span class="meta">/ ${run.max_iterations*run.research_agent_count}</span></div><div class="meta">${run.research_agent_count} 条独立研究线</div></div>
@@ -59,14 +61,15 @@ async function get(path){const response=await fetch(path,{cache:"no-store"});con
 async function refresh(){
   if(busy)return;busy=true;
   try{
-    const {runs}=await get("/api/runs");
+    const {runs,workspace_root}=await get("/api/runs");
+    document.getElementById("workspace").textContent=workspace_root||"未提供，请重启 Web 服务";
     if(!runs.some(r=>r.run_id===selected))selected=runs[0]?.run_id||"";
     document.getElementById("runs").innerHTML=runs.map(run=>`<a href="#${encodeURIComponent(run.run_id)}" class="${run.run_id===selected?"selected":""}"><span class="name">${esc(run.goal)}</span><span class="sub">${esc(states[run.state]||run.state)} · ${run.research_agent_count} 条研究线</span><span class="sub">${esc(run.run_id)}</span></a>`).join("")||'<p class="meta">暂无实验</p>';
     if(selected){
       const run=await get(`/api/runs/${encodeURIComponent(selected)}`);
       const signature=JSON.stringify({...run,observed_at:null});
       if(signature!==lastRendered){const opened=[...document.querySelectorAll("details[open]")].map(el=>el.dataset.key);render(run);for(const detail of document.querySelectorAll("details"))detail.open=opened.includes(detail.dataset.key);lastRendered=signature;}
-    }else{document.getElementById("main").innerHTML='<section class="empty"><h1>还没有实验记录</h1><p>在使用相同 RSI_DATA_ROOT 的终端中运行 <code>uv run rsi tui</code>，确认一个实验后这里会自动显示进度。</p></section>';lastRendered="";}
+    }else{document.getElementById("main").innerHTML='<section class="empty"><h1>当前工作区没有实验记录</h1><p>请核对上方的读取目录是否与 TUI 一致。可用 <code>rsi web --root 实验工作区</code> 显式指定；确认实验后这里会自动显示进度。</p></section>';lastRendered="";}
     document.getElementById("connection").textContent=`已连接 · ${new Date().toLocaleTimeString("zh-CN",{hour12:false})}`;
   }catch(error){document.getElementById("connection").textContent=`读取失败：${error.message} · 将自动重试`;}finally{busy=false;}
 }

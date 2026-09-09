@@ -68,6 +68,8 @@ budget_stop_reason?: string
 
 准备阶段显示对话和需求摘要，研究开始后展示计划、搜索图和执行记录。没有验证协议时隐藏成绩卡。`agents[].direction` 是 RSI 为当前方向起的名称，不由前端填写固定场景标题。配置、环境变量和密钥不进入 intake 公共投影。
 
+消息接收对象和手机端研究切换共用 `dropdown.js` 的 `WorkbenchDropdown`，以 `update(choices, value, disabled)` 更新选项、当前值与禁用状态。按钮和弹出菜单均使用工作台样式；支持键盘选择、文字定位、Esc/外部点击关闭、长列表滚动和视口内定位。菜单渲染在卡片之外，后台刷新保留当前浏览位置。
+
 浏览器每 1.5 秒获取公共状态，不会触发模型。事件游标断开后继续获取，节点选择和图的滚动位置按 run 保存在浏览器；刷新不会变成新的模型任务。对话输入和节点详情独立更新，后台刷新不会重置正在输入的消息或当前详情滚动位置。模型和作业状态由 backend 提供。正式 ResearchApp 默认过滤模拟记录并拒绝访问其详情；原始数据的来源标记不被改写。
 
 验收 fixture：`.venv/bin/python tests/test_workbench.py --serve`，在 `http://127.0.0.1:8877` 展示模拟研究和创建/聊天/开始/控制交互。fixture 只用于界面验收；真实应用需连接 Coordinator 和 ResearchEngine。HTTP 测试覆盖这些操作、事件游标、空分数/零分数、字段投影和跨站防护。

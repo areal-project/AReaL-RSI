@@ -9,6 +9,7 @@
       content="讨论研究目标，跟踪研究方向、实验和可验证的结果。"
     />
     <link rel="stylesheet" href="/style.css" />
+    <script defer src="/dropdown.js"></script>
     <script defer src="/app.js"></script>
   </head>
   <body>
@@ -32,8 +33,8 @@
       <header class="topbar">
         <div class="mobile-brand">
           RSI
-          <select id="mobile-runs" aria-label="选择研究"></select
-          ><button id="mobile-new" class="quiet">＋ 新建</button>
+          <div id="mobile-runs"></div>
+          <button id="mobile-new" class="quiet">＋ 新建</button>
         </div>
         <div class="breadcrumb">
           研究空间 <span>/</span> <span id="run-short">准备开始</span>
@@ -203,8 +204,8 @@
               </div>
               <form id="chat-form" class="composer">
                 <div class="message-target">
-                  <label for="chat-recipient">发送给</label>
-                  <select id="chat-recipient"></select>
+                  <label for="chat-recipient-trigger">发送给</label>
+                  <div id="chat-recipient"></div>
                 </div>
                 <label class="sr-only" for="chat-input"
                   id="chat-input-label">发送消息</label

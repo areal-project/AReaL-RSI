@@ -26,6 +26,16 @@ const state = {
   creating: false,
 };
 const emptyChat = $("messages").firstElementChild.cloneNode(true);
+const runDropdown = new WorkbenchDropdown($("mobile-runs"), {
+  label: "选择研究", placeholder: "暂无研究", onChange: (value) => selectRun(value),
+});
+const recipientDropdown = new WorkbenchDropdown($("chat-recipient"), {
+  label: "发送给",
+  onChange: (value) => {
+    state.replyTargets.set(state.runId, { value, explicit: true });
+    render();
+  },
+});
 const statuses = {
   planned: "待确认",
   running: "进行中",
@@ -169,13 +179,11 @@ function renderRuns() {
     "run-list",
     ...(buttons.length ? buttons : [element("p", "muted", "还没有研究记录")]),
   );
-  $("mobile-runs").replaceChildren(
-    ...state.runs.map((run) => {
-      const option = element("option", "", run.objective || "未命名研究");
-      option.value = run.run_id;
-      option.selected = run.run_id === state.runId;
-      return option;
-    }),
+  runDropdown.update(
+    state.runs.map((run) => ({
+      value: run.run_id, text: run.objective || "未命名研究", description: label(run.status),
+    })),
+    state.runId,
   );
 }
 async function selectRun(runId) {
@@ -296,7 +304,6 @@ function render() {
   const ended = !["planned", "running", "paused"].includes(run.status);
   const responding = (run.agents || []).find((agent) => agent.agent_id === target.recipient);
   $("chat-input").disabled = ended;
-  $("chat-recipient").disabled = ended || state.sending;
   $("send-message").disabled = ended || state.sending || target.stale;
   $("chat-input-label").textContent = `向 ${agentName(target.recipient)} 发送消息`;
   $("chat-input").placeholder = target.reply_to
@@ -346,20 +353,11 @@ function renderReplyTarget(run) {
   if (!target) {
     // Never silently redirect a draft if another browser already answered its question.
     target = { value: selected.value, recipient: "interaction", stale: true,
-      text: "问题已回复，请重新选择" };
+      text: "问题已回复，请重新选择", disabled: true };
     choices.unshift(target);
   }
-  const select = $("chat-recipient");
-  const signature = JSON.stringify(choices);
-  if (select.dataset.signature !== signature) {
-    select.replaceChildren(...choices.map((choice) => {
-      const option = element("option", "", choice.text);
-      option.value = choice.value;
-      return option;
-    }));
-    select.dataset.signature = signature;
-  }
-  select.value = selected.value;
+  recipientDropdown.update(choices, selected.value,
+    state.sending || !["planned", "running", "paused"].includes(run.status));
   const pending = $("pending-questions");
   pending.hidden = !questions.length;
   const questionSignature = JSON.stringify([run.run_id, questions, selected.value]);
@@ -928,9 +926,6 @@ $("welcome-input").addEventListener("keydown", (event) => {
     $("welcome-form").requestSubmit();
   }
 });
-$("mobile-runs").addEventListener("change", (event) =>
-  selectRun(event.target.value),
-);
 for (const name of ["chat", "node", "brief"])
   $(`${name}-tab`).addEventListener("click", () => switchTab(name));
 for (const button of $("controls").querySelectorAll("button"))
@@ -989,10 +984,6 @@ $("chat-form").addEventListener("submit", async (event) => {
     $("send-message").disabled = false;
     if (state.run) render();
   }
-});
-$("chat-recipient").addEventListener("change", (event) => {
-  state.replyTargets.set(state.runId, { value: event.target.value, explicit: true });
-  render();
 });
 $("chat-input").addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {

@@ -27,14 +27,12 @@ body {
   margin: 0;
 }
 button,
-select,
 input,
 textarea {
   font: inherit;
 }
 button,
 a,
-select,
 input,
 textarea {
   -webkit-tap-highlight-color: transparent;
@@ -50,7 +48,6 @@ button:disabled {
 button:focus-visible,
 a:focus-visible,
 textarea:focus-visible,
-select:focus-visible,
 input:focus-visible,
 [tabindex]:focus-visible {
   outline: 3px solid #9abeb0;
@@ -815,17 +812,89 @@ main {
 .pending-question[aria-pressed="true"] { border-color: #dac18a; background: #fffdf6; }
 .message-target { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
 .message-target label { font-size: 11px; color: var(--muted); flex-shrink: 0; }
-.message-target select {
+.dropdown {
   min-width: 0;
-  width: 100%;
-  padding: 6px;
-  font: inherit;
-  font-size: 11px;
-  color: var(--ink);
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  background: white;
 }
+.message-target .dropdown { flex: 1; }
+.dropdown-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 36px;
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcf9;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+}
+.dropdown-trigger:not(:disabled):hover,
+.dropdown-trigger[aria-expanded="true"] {
+  border-color: #9ab6a6;
+  background: var(--green-light);
+  filter: none;
+}
+.dropdown-caption {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dropdown-chevron {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  margin: -4px 2px 0 0;
+  border-right: 1.5px solid var(--green);
+  border-bottom: 1.5px solid var(--green);
+  transform: rotate(45deg);
+}
+.dropdown-trigger[aria-expanded="true"] .dropdown-chevron {
+  transform: rotate(225deg);
+  margin-top: 4px;
+}
+.dropdown-menu {
+  position: fixed;
+  z-index: 1000;
+  margin: 0;
+  padding: 5px;
+  border: 1px solid #dbe5dc;
+  border-radius: 11px;
+  background: #fff;
+  color: var(--ink);
+  box-shadow: 0 12px 36px #233b2926, 0 2px 6px #233b290a;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #c2d0c4 transparent;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.dropdown-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 42px;
+  padding: 9px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.dropdown-option + .dropdown-option { margin-top: 2px; }
+.dropdown-option-body { min-width: 0; overflow-wrap: anywhere; }
+.dropdown-option-body small { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; }
+.dropdown-option:hover:not([aria-disabled="true"]),
+.dropdown-option.active { background: #f1f5ef; }
+.dropdown-option[aria-selected="true"] { color: var(--green); background: var(--green-light); }
+.dropdown-option.active { box-shadow: inset 0 0 0 1px #9ab6a6; }
+.dropdown-option[aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
+.dropdown-check { flex-shrink: 0; width: 14px; visibility: hidden; color: var(--green); }
+.dropdown-option[aria-selected="true"] .dropdown-check { visibility: visible; }
 .message-reply { color: var(--muted); border-left: 2px solid var(--line); padding-left: 8px; font-size: 11px; }
 .agent-errors { padding: 12px 17px 0; }
 .agent-error { border: 1px solid #ebc8c0; background: #fff7f4; border-radius: 8px; padding: 12px; font-size: 12px; }
@@ -1097,13 +1166,8 @@ main {
     gap: 10px;
     font-weight: 600;
   }
-  .mobile-brand select {
-    max-width: 220px;
-    padding: 6px;
-    border: 1px solid var(--line);
-    border-radius: 5px;
-    background: white;
-    font-size: 11px;
+  .mobile-brand .dropdown {
+    width: 220px;
   }
   .mobile-brand .quiet {
     font-size: 11px;
@@ -1134,8 +1198,8 @@ main {
   .topbar {
     gap: 5px;
   }
-  .mobile-brand select {
-    max-width: 150px;
+  .mobile-brand .dropdown {
+    width: 150px;
   }
   .topbar-right .badge {
     font-size: 8px;

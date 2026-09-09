@@ -294,6 +294,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             assets: dict[tuple[str, ...], str] = {
                 ("",): "index.html",
                 ("app.js",): "app.js",
+                ("dropdown.js",): "dropdown.js",
                 ("style.css",): "style.css",
             }
             asset = assets.get(tuple(parts))

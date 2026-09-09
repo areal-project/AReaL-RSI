@@ -403,7 +403,7 @@ class WorkbenchHttpTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("研究工作台", body.decode())
         self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
-        for asset in ("/app.js", "/style.css"):
+        for asset in ("/app.js", "/dropdown.js", "/style.css"):
             self.assertEqual(self.request("GET", asset)[0], 200)
         run_id = self.create()
         self.assertEqual(

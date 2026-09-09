@@ -329,7 +329,7 @@ class RealPackageExecutionTest(unittest.IsolatedAsyncioTestCase):
         os.environ.get("RSI_TEST_NATIVE_HARNESSES") == "1", "Opt in to native DSH installation"
     )
     async def test_dsh_streaming_events_are_complete_and_durable(self) -> None:
-        from deepseek_harness_runtime import bundled_runtime_path  # type: ignore[import-untyped]
+        from deepseek_harness_runtime import bundled_runtime_path
 
         await self.check_harness(
             "dsh",

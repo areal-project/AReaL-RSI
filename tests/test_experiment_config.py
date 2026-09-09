@@ -133,6 +133,49 @@ def test_custom_config_without_harness_override_keeps_runtime(
     assert RuntimeSettings.from_environment().select("research-agent")["kind"] == "codex-cli"
 
 
+@pytest.mark.parametrize("role_specific", [False, True])
+def test_matching_research_harness_preserves_backend_options(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, role_specific: bool
+) -> None:
+    config = tmp_path / "experiment.yaml"
+    config.write_text("research_harness: codex-cli\n")
+    selected = {"kind": "codex-cli", "config": {"codexBin": "/custom/codex"}}
+    value = (
+        {"roles": {"research-agent": selected}, "default": {"kind": "fake"}}
+        if role_specific
+        else {"default": selected}
+    )
+    runtime = tmp_path / "runtime.json"
+    runtime.write_text(json.dumps(value))
+    monkeypatch.setenv("RSI_LOCAL_CONFIG", str(config))
+    monkeypatch.setenv("RSI_RUNTIME_CONFIG", str(runtime))
+    settings = RuntimeSettings.from_environment()
+    assert settings.select("research-agent")["config"] == {
+        "codexBin": "/custom/codex",
+        "modelProtocol": "responses",
+    }
+    assert settings.select("task-agent")["kind"] == ("fake" if role_specific else "codex-cli")
+    # Role settings are independent copies, not shared mutable configuration.
+    settings.roles["research-agent"]["config"]["codexBin"] = "/changed"
+    assert settings.select("rsi-agent")["config"].get("codexBin") != "/changed"
+
+
+def test_switching_research_harness_drops_incompatible_options(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = tmp_path / "experiment.yaml"
+    config.write_text("research_harness: dsh\n")
+    runtime = tmp_path / "runtime.json"
+    runtime.write_text(
+        json.dumps({"default": {"kind": "codex-cli", "config": {"codexBin": "/custom/codex"}}})
+    )
+    monkeypatch.setenv("RSI_LOCAL_CONFIG", str(config))
+    monkeypatch.setenv("RSI_RUNTIME_CONFIG", str(runtime))
+    settings = RuntimeSettings.from_environment()
+    assert settings.select("research-agent") == {"kind": "dsh", "config": {}}
+    assert settings.select("task-agent")["config"]["codexBin"] == "/custom/codex"
+
+
 @pytest.mark.parametrize("extra", ["api_key: SECRET", "research_harness: unknown", "model: []"])
 def test_invalid_local_configuration_fails_without_echoing_secrets(
     tmp_path: Path,

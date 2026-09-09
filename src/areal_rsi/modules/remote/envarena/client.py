@@ -321,7 +321,8 @@ class ArenaClient:
                     raise
             version = await self.get(path + "/versions/1.0.0")
         if version.get("status") == "DRAFT":
-            if version.get("spec", {}).get("metadata", {}).get("rsi_spec_sha256") != digest:
+            # A digest label is not proof of content: drafts can be edited in place.
+            if version.get("spec") != spec:
                 raise ValueError("远端草稿内容与请求不符，拒绝发布")
             try:
                 await self.post(path + "/versions/1.0.0/publish")
@@ -329,7 +330,7 @@ class ArenaClient:
                 if exc.status != 409:
                     raise
         published = await self.version(kind, ref)
-        if published.get("spec", {}).get("metadata", {}).get("rsi_spec_sha256") != digest:
+        if published.get("spec") != spec:
             raise ValueError("远端版本内容与请求不符，拒绝复用")
         return ref
 

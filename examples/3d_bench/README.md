@@ -13,10 +13,13 @@ uv run --env-file .env --locked python examples/3d_bench/run_local.py
 ```
 
 The script reads the checked-in target at
-`examples/3d_bench/cases/model-001/TARGET.md`, starts one local RSI
-round, lets the Task Agent produce `model.js`, lets the Research Agent inspect
+`examples/3d_bench/cases/model-001/TARGET.md`, starts a local RSI experiment
+with three prompt evolution rounds, lets the Task Agent produce `model.js`, lets the Research Agent inspect
 the saved evidence, and records the run under the ignored `.rsi/datasets/`
 directory. The configured local model connections come from `.env`.
+
+For a shorter end-to-end check, append `--iterations 1` to the command.
+Resume with `--resume PATH`; the recorded iteration count is preserved.
 
 This example keeps the generic RSI workflow visible while keeping private task
 collections, internal repository URLs, and private evaluator data out of Git.

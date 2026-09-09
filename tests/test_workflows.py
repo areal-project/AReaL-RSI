@@ -30,6 +30,7 @@ from areal_rsi.api.base import (
     VerificationResult,
     VerifierSpec,
 )
+from areal_rsi.api.modules import BatchHarnessRuntime
 from areal_rsi.api.workflow import WorkflowContext
 from areal_rsi.base.evidence import FileEvidenceStore
 from areal_rsi.base.storage import (
@@ -253,6 +254,57 @@ class WorkflowTest(unittest.IsolatedAsyncioTestCase):
         # Three initial generations plus TRAIN and candidate VALIDATE, no regenerated baseline.
         self.assertEqual(self.runtime.calls, 9)
         self.assertEqual(len(list(folder.glob("task-*.json"))), 3)
+
+    async def test_generation_timeout_has_a_readable_error_summary(self) -> None:
+        with patch.object(self.runtime, "run", AsyncMock(side_effect=TimeoutError())):
+            result = await self.execute()
+        self.assertEqual(result.state, RunState.FAILED)
+        self.assertIn("TimeoutError", result.error or "")
+
+    async def test_batch_verifier_resume_does_not_repeat_generation(self) -> None:
+        original = self.runtime
+
+        class BatchFixture:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def run(
+                self, solution: SolutionVersion, task: Task, *, config: JsonObject | None = None
+            ) -> TaskResult:
+                raise AssertionError("Batch evaluation must not call single-task run")
+
+            async def run_many(
+                self,
+                solution: SolutionVersion,
+                tasks: Sequence[Task],
+                *,
+                config: JsonObject | None = None,
+            ) -> dict[str, TaskResult]:
+                self.calls += 1
+                limit = asyncio.Semaphore(2)
+
+                async def execute(task: Task) -> TaskResult:
+                    async with limit:
+                        return await original.run(solution, task, config=config)
+
+                results = await asyncio.gather(*(execute(task) for task in tasks))
+                return {task.task_id: result for task, result in zip(tasks, results, strict=True)}
+
+        batch = BatchFixture()
+        self.context.harness_runtime = batch
+        await self.test_bounded_tasks_and_verifier_resume_reuse_generated_outputs()
+        # Baseline, TRAIN and candidate each submit once, despite the verifier outage.
+        self.assertEqual(batch.calls, 3)
+
+    async def test_incomplete_batch_is_rejected_before_checkpoints_are_written(self) -> None:
+        batch = AsyncMock(spec=BatchHarnessRuntime)
+        batch.run_many.return_value = {}
+        self.context.harness_runtime = batch
+        result = await self.execute()
+        self.assertEqual(result.state, RunState.FAILED)
+        self.assertIn("批量执行", result.error or "")
+        batch.run.assert_not_awaited()
+        self.assertFalse(list((self.root / "runs").rglob("generation-*.json")))
 
     async def test_parallel_independent_lines_and_honest_flat_scores(self) -> None:
         run = await self.execute()

@@ -8,11 +8,13 @@ import json
 import math
 import time
 from collections.abc import Callable, Mapping, Sequence
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
 
 from areal_rsi.api.base import (
     BenchmarkSplit,
+    ContentRef,
     EvaluationReport,
     JsonObject,
     SolutionVersion,
@@ -30,6 +32,7 @@ from areal_rsi.base.storage import (
     decode,
     encode,
     now,
+    safe_relative,
     write_json,
 )
 from areal_rsi.modules.remote.envarena.benchmark import ArenaBenchmark
@@ -334,13 +337,11 @@ class ArenaHarnessRuntime:
             # Fetch bounded primary outputs, not arbitrary workspace directories or reward files.
             if (
                 isinstance(name, str)
-                and (
-                    name.endswith(".py")
-                    or name in {"response.txt", "runner_result.json"}
-                )
+                and any(fnmatchcase(name, pattern) for pattern in self.config.artifact_globs)
                 and type(size) is int
                 and 0 < size <= 2 * 1024 * 1024
             ):
+                safe_relative(name)
                 data = await self.client.artifact(remote_id, name, attempt)
                 if len(data) > 2 * 1024 * 1024:
                     raise ValueError("Arena artifact 大小与声明不符")
@@ -441,6 +442,11 @@ class ArenaVerifier:
             0 if failed else score,
             {"execution_failed": float(failed), "weight": float(weight)},
             str(arena["feedback"]),
+            # Publish collected outputs as files in the workflow's evidence bundle.
+            attachments=tuple(
+                decode(ContentRef, artifact["content"])
+                for artifact in arena.get("artifact_refs", [])
+            ),
         )
 
 

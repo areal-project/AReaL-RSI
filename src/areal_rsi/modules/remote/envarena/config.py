@@ -12,6 +12,7 @@ from areal_rsi.experiment_config import read_config
 from areal_rsi.modules.remote.envarena.client import ArenaClient, reference
 
 EDITABLE = frozenset({"system_prompt", "skills", "tools", "mcp"})
+DEFAULT_ARTIFACT_GLOBS = ("*.py", "*.js", "response.txt", "runner_result.json")
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,7 @@ class ArenaConfig:
     timeout_seconds: float = 3600
     target_score: float = 1
     source_job: str | None = None
+    artifact_globs: tuple[str, ...] = DEFAULT_ARTIFACT_GLOBS
 
     @classmethod
     async def load(cls, path: Path, client: ArenaClient) -> ArenaConfig:
@@ -51,6 +53,7 @@ class ArenaConfig:
             "research_harness",
             "mode",
             "backend",
+            "artifact_globs",
         }
         if set(raw) - supported:
             raise ValueError("remote 配置包含未知字段；凭证请通过环境变量设置")
@@ -104,6 +107,16 @@ class ArenaConfig:
                 raise ValueError(f"{name} 必须是有限正数")
         if raw.get("target_score", 1) > 1:
             raise ValueError("target_score 必须在 (0,1] 内")
+        artifact_globs = raw.get("artifact_globs", list(DEFAULT_ARTIFACT_GLOBS))
+        if not isinstance(artifact_globs, list) or any(
+            not isinstance(pattern, str)
+            or not pattern
+            or pattern.startswith("/")
+            or "\\" in pattern
+            or ".." in pattern.split("/")
+            for pattern in artifact_globs
+        ):
+            raise ValueError("artifact_globs 必须是相对文件名匹配规则列表")
         return cls(
             benchmark=refs["benchmark"],
             harness=refs["harness"],
@@ -118,4 +131,5 @@ class ArenaConfig:
             timeout_seconds=raw.get("timeout_seconds", 3600),
             target_score=raw.get("target_score", 1),
             source_job=source,
+            artifact_globs=tuple(artifact_globs),
         )

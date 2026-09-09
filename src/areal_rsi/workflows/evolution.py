@@ -182,13 +182,31 @@ class HarnessEvolutionWorkflow:
             if "evidence" not in cached:
                 raise ValueError("Legacy trajectory-only evaluation; start a new experiment")
             return report, decode(ContentRef, cached["evidence"])
-        # Batch submission feeds the existing per-task generation checkpoints.
-        if isinstance(ctx.harness_runtime, BatchHarnessRuntime) and any(
-            not (folder / f"task-{index}.json").exists()
-            for index in range(1, len(tasks) + 1)
-        ):
+        concurrency = ctx.evaluation_concurrency
+        if type(concurrency) is not int or concurrency < 1:
+            raise ValueError("evaluation_concurrency must be a positive integer")
+        semaphore = asyncio.Semaphore(concurrency)
+        finished = 0
+
+        # Batch providers reconnect the original full job after interruption. Once
+        # generation is checkpointed, verifier retries must not call the provider.
+        missing = [
+            (index, task)
+            for index, task in enumerate(tasks, 1)
+            if not (folder / f"task-{index}.json").exists()
+            and not (folder / f"generation-{index}.json").exists()
+        ]
+        if isinstance(ctx.harness_runtime, BatchHarnessRuntime) and missing:
+            self.update_progress(
+                agent_id,
+                phase=f"evaluate_{split.value}",
+                task_count=len(tasks),
+                completed_tasks=len(tasks) - len(missing),
+                solution_id=solution.solution_id,
+            )
             batch_results = await ctx.harness_runtime.run_many(
-                solution, tasks,
+                solution,
+                tasks,
                 config={
                     "execution_key": f"{self.state.run_id}/{folder.relative_to(self.folder)}",
                     "run_id": self.state.run_id,
@@ -196,16 +214,13 @@ class HarnessEvolutionWorkflow:
                 },
             )
             if set(batch_results) != {task.task_id for task in tasks}:
-                raise ValueError("Batch results must match all requested task IDs")
-            for index, task in enumerate(tasks, 1):
-                generated = folder / f"generation-{index}.json"
-                if not generated.exists() and not (folder / f"task-{index}.json").exists():
-                    write_json(generated, {"task": task, "result": batch_results[task.task_id]}, immutable=True)
-        concurrency = ctx.evaluation_concurrency
-        if type(concurrency) is not int or concurrency < 1:
-            raise ValueError("evaluation_concurrency must be a positive integer")
-        semaphore = asyncio.Semaphore(concurrency)
-        finished = 0
+                raise ValueError("批量执行必须返回完整且无额外题目的结果")
+            for index, task in missing:
+                write_json(
+                    folder / f"generation-{index}.json",
+                    {"task": task, "result": batch_results[task.task_id]},
+                    immutable=True,
+                )
 
         async def execute(index: int, task: Task) -> tuple[TaskResult, VerificationResult]:
             nonlocal finished
@@ -246,7 +261,8 @@ class HarnessEvolutionWorkflow:
         if failures:
             raise RuntimeError(
                 f"{len(failures)}/{len(tasks)} task executions failed: "
-                + "; ".join(str(error) for error in failures[:3])
+                # Some exceptions, notably TimeoutError, have an empty message.
+                + "; ".join(f"{type(error).__name__}: {error}" for error in failures[:3])
             )
         results: list[VerificationResult] = []
         files: list[EvidenceFile] = []

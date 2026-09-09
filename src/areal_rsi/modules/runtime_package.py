@@ -79,10 +79,22 @@ class RuntimeSettings:
         if harness:
             if not isinstance(value, dict):
                 raise ValueError("Runtime config must be an object")
-            config = {"modelProtocol": "responses"} if harness == "codex-cli" else {}
             roles = value.setdefault("roles", {})
+            if not isinstance(roles, dict):
+                raise ValueError("Runtime roles must be an object")
             for role in ("rsi-agent", "research-agent"):
-                roles[role] = {"kind": harness, "config": config}
+                selected = roles.get(role, value.get("default", {}))
+                # Preserve backend-specific settings only when the selected kind matches.
+                if isinstance(selected, dict) and selected.get("kind") == harness:
+                    selected = copy.deepcopy(selected)
+                else:
+                    selected = {"kind": harness, "config": {}}
+                config = selected.setdefault("config", {})
+                if not isinstance(config, dict):
+                    raise ValueError("Runtime backend config must be an object")
+                if harness == "codex-cli":
+                    config.setdefault("modelProtocol", "responses")
+                roles[role] = selected
         return cls(value)
 
     def select(self, role: str) -> dict[str, Any]:

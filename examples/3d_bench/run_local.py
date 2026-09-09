@@ -348,20 +348,21 @@ class IsolatedVerifier:
         return verification
 
 
-def check_plan(plan, baseline_id, benchmark_name):
+def check_plan(plan, baseline_id, benchmark_name, iterations=3):
     if not isinstance(plan, ExperimentPlan) or (
-        plan.max_iterations != 3
+        plan.max_iterations != iterations
         or plan.research_agent_count != 1
         or plan.target != EvolutionTarget.HARNESS
         or plan.baseline_solution_id != baseline_id
         or plan.benchmark != benchmark_name
         or plan.workflow != "harness-evolution"
     ):
-        raise ValueError("RSI plan exceeds the authorized one-round prompt experiment")
+        raise ValueError("RSI plan exceeds the authorized prompt experiment")
 
 
 async def main(
-    tasks, *, resume=None, retry_incomplete=False, all_tasks=False, task_ids=None, concurrency=None
+    tasks, *, resume=None, retry_incomplete=False, all_tasks=False, task_ids=None,
+    concurrency=None, iterations=None
 ):
     if retry_incomplete and resume is None:
         raise ValueError("Incomplete retry requires an explicit resume directory")
@@ -405,8 +406,16 @@ async def main(
         selected = tuple(decode(Task, item) for item in saved.get("tasks", [saved.get("task")]))
         concurrency = saved.get("concurrency", 1)
         reuse_outputs = saved.get("reuse_baseline_samples", False)
+        # Resume keeps the original budget; older runs used three iterations.
+        recorded_iterations = saved.get("iterations", 3)
+        if iterations is not None and iterations != recorded_iterations:
+            raise ValueError("Resume iteration count differs from recorded experiment")
+        iterations = recorded_iterations
         scope = saved["scope"]
     else:
+        iterations = 3 if iterations is None else iterations
+        if type(iterations) is not int or iterations < 1:
+            raise ValueError("Iterations must be a positive integer")
         if all_tasks or task_ids:
             selected = load_tasks(tasks)
             if task_ids:
@@ -476,6 +485,7 @@ async def main(
             "snapshot": snapshot,
             "scope": scope,
             "concurrency": concurrency,
+            "iterations": iterations,
             "reuse_baseline_samples": reuse_outputs,
             "models": models,
             "generation_environment": GENERATION_ENVIRONMENT,
@@ -516,7 +526,7 @@ async def main(
             target_model_name=models["task-agent"].name,
         )
         message = (
-            "Start exactly three iterations with one Research Agent to improve the reusable "
+            f"Start exactly {iterations} iterations with one Research Agent to improve the reusable "
             "Harness "
             f"for the selected {len(selected)} 3D modeling tasks. "
             "Only change prompt.md; preserve framework helpers, file output, "
@@ -532,10 +542,10 @@ async def main(
             emit("Resume existing RSI plan and completed workflow checkpoints")
         else:
             (root / "rsi-request.txt").write_text(message)
-            emit("RSI Agent: request three-iteration plan")
+            emit(f"RSI Agent: request {iterations}-iteration plan")
             plan = await rsi.chat(message)
             write_json(root / "rsi-plan.json", plan)
-        check_plan(plan, baseline.solution_id, benchmark.name)
+        check_plan(plan, baseline.solution_id, benchmark.name, iterations)
         await rsi.close()
         verifier = IsolatedVerifier(root / "verification", content, emit, environment=environment)
         researcher = DefaultResearchAgent(
@@ -626,11 +636,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--retry-incomplete-task", action="store_true")
+    parser.add_argument("--iterations", type=int, help="Prompt evolution rounds; default: 3")
     args = parser.parse_args()
     asyncio.run(
         main(
             CASE,
             resume=args.resume,
             retry_incomplete=args.retry_incomplete_task,
+            iterations=args.iterations,
         )
     )

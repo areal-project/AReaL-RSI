@@ -71,8 +71,14 @@ Run：`research_e1f522da6f334c7d`。自主研究阶段运行 122 次模型调用
 
 ## 自动化检查与剩余边界
 
-最终全套执行收集 394 项，结果为 **393 passed、1 failed**。唯一失败项是已有 macOS 集成测试 `tests/test_runtime_isolation.py::IsolationTest::test_shell_cannot_read_a_sibling_answer_file`：前面的公开文件读取、私有文件拒绝等检查通过；末尾通过 `sandbox-exec` 启动 `.venv/bin/python` 检查 PTY 时出现 `Operation not permitted`，退出码 71。不能将这一结果描述为整套测试全绿，或声称该平台完整隔离集成验收通过。
+上述演练完成时，全套执行收集 394 项，结果为 **393 passed、1 failed**。唯一失败项是已有 macOS 集成测试 `tests/test_runtime_isolation.py::IsolationTest::test_shell_cannot_read_a_sibling_answer_file`：前面的公开文件读取、私有文件拒绝等检查通过；末尾通过 `sandbox-exec` 启动 `.venv/bin/python` 检查 PTY 时出现 `Operation not permitted`，退出码 71。不能将这一结果描述为整套测试全绿，或声称该平台完整隔离集成验收通过。
 
 Ruff 对 `src/tests/scripts` 的检查、mypy 对 113 个文件的检查以及 `git diff --check` 均通过。最后的长任务排版修正另通过 7 项工作台测试、JavaScript 语法检查和实际浏览器验证。前一轮另外记录了 62 个 subtests 通过；最终这次使用双 quiet 输出，没有单列 subtest 计数。
 
 尚未完成的实际环境验收包括：真实 CUDA 性能/正确性、真实 Docker 候选隔离、SSH GPU 作业取消与重连、真实比赛数据与模型训练效果。KernelBench 上游在同一 Python 进程加载候选与 reference，当前 wrapper 不能宣称已隔离恶意 kernel 对评测机制的攻击。V3 已完成未达标停止与导出验收，仍不能算作达成研究目标。
+
+## 中文 Prompt 调整
+
+上述完整演练使用的是此前的英文角色 prompt。根据用户的中文偏好，随后将 Interaction、RSI、Research 角色指令、compact/恢复/预算提示、系统消息和两个模拟示例任务说明改为中文，默认用简体中文生成计划、任务、报告和证据摘要。历史档案保持原样。
+
+本次调整通过会话、调度、协作、应用和 CLI 的 64 项回归测试及 2 个 subtests，Ruff 和 mypy 通过；没有重新运行完整的真实模型演练，不能将此前的行为结论视为中文版 prompt 的新增实测。

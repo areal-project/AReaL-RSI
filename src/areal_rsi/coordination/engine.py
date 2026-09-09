@@ -262,11 +262,10 @@ class ResearchEngine:
             )
             prompt = (
                 role_prompt
-                + "\n\nThe following state is a snapshot from the start of this model turn. "
-                "Later tool results and newer continuation checkpoints take precedence "
-                "when facts have changed. Do not overwrite newer plans, directions or "
-                "budget records with values from this initial snapshot."
-                + "\n\nCurrent authoritative run state:\n"
+                + "\n\n以下是本次模型回合开始时的状态快照。"
+                "事实变化后，以后续工具结果和更新的会话检查点为准。"
+                "不要用这份初始快照覆盖较新的计划、方向或预算记录。"
+                + "\n\n当前 run 的系统状态：\n"
                 + json.dumps(state, ensure_ascii=False)
             )
             prompt_id = hashlib.sha256(prompt.encode()).hexdigest()

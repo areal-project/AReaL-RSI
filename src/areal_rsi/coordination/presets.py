@@ -12,16 +12,15 @@ from areal_rsi.execution import ApprovedCommand
 def example_config(name: str, *, repository: Path) -> ResearchConfig:
     if name == "kernelbench":
         brief = TaskBrief(
-            "Improve a reusable KernelBench harness for a fixed task model",
-            "Optimize only skills/*.md in the initial DeepSeek harness. Keep the skill general "
-            "across kernel tasks; never embed task answers. Inspect development trajectories, "
-            "evaluate the initial harness on search validation, assign one research direction, "
-            "and use the fixed Task Agent through the verifier to compare candidate harnesses. "
-            "The target model and GPU configuration will be supplied for real execution. "
-            "For this workflow rehearsal GPU and Task Agent execution are explicitly simulated; "
-            "exercise meaningful assignments, file edits, reports and at least one explicit RSI "
-            "reply. Final confirmation and exported files demonstrate the workflow, not actual "
-            "KernelBench improvement.",
+            "为固定目标模型优化通用的 KernelBench harness",
+            "只优化初始 DeepSeek harness 中的 skills/*.md。"
+            "技能应适用于不同 kernel 任务，不能嵌入题目答案。"
+            "检查开发轨迹，在 search 验证上评测初始 harness，安排一条研究方向，"
+            "通过 verifier 调用固定 Task Agent 比较候选 harness。"
+            "真实执行时另行提供目标模型和 GPU 配置。"
+            "本次流程演练明确模拟 GPU 和 Task Agent 执行；请完成有意义的任务分配、文件修改和报告，"
+            "并至少验证一次 RSI 明确回复后继续研究的过程。最终确认和文件导出只证明流程连通，"
+            "不能据此声称 KernelBench 性能提升。",
             ResearchLimits(
                 max_agents=1,
                 max_nodes=6,
@@ -33,7 +32,7 @@ def example_config(name: str, *, repository: Path) -> ResearchConfig:
             VerificationContract(
                 "fast_1",
                 target=0.65,
-                description="Correct and faster fraction under a fixed task model and budget",
+                description="固定目标模型和预算下，结果正确且运行更快的题目比例",
                 identity={
                     "example": "kernelbench",
                     "feedback": "aggregate_only",
@@ -44,17 +43,15 @@ def example_config(name: str, *, repository: Path) -> ResearchConfig:
         seed = repository / "examples" / "kernelbench" / "seed"
     elif name == "cuhkx":
         brief = TaskBrief(
-            "Research and improve CUHK-X small-model training and design",
-            "Optimize architecture, training and allowed multimodal design for CUHK-X's 40-class "
-            "human activity recognition task. No RGB camera input, large pretrained backbone, "
-            "or model over 100 MB. The user has confirmed organizer authorization for this "
-            "LLM-assisted workflow. Search actual papers and mainstream methods to inform your "
-            "plan; decide useful research directions yourself, within the agent limit. Reuse the "
-            "provided small CNN as reference material; there is no evaluated starting baseline. "
-            "Keep validation subjects separate and prediction paths anonymous. For this rehearsal "
-            "training/GPU and validation scores are explicitly simulated. Demonstrate paper "
-            "research, multiple directions if justified, evidence sharing, an explicit next "
-            "assignment, and final verification. Do not claim competition performance from it.",
+            "调研并优化 CUHK-X 小模型训练与设计",
+            "针对 CUHK-X 的 40 类人体活动识别任务，优化架构、训练与允许的多模态设计。"
+            "不得使用 RGB 摄像头输入、大型预训练骨干或超过 100 MB 的模型。"
+            "用户已确认主办方允许本次 LLM 辅助工作流。搜索真实论文和主流方法支持规划，"
+            "在 Agent 数量上限内自主决定有价值的方向。"
+            "提供的小型 CNN 仅作为参考源码，没有已评测 baseline。"
+            "验证 subject 与训练分开，推理路径匿名。本次演练明确模拟训练、GPU 和验证分数。"
+            "请演练论文调研、必要时的多方向探索、共享证据、明确的下一项任务和最终验证，"
+            "不能据此声称取得比赛成绩。",
             ResearchLimits(
                 max_agents=2,
                 max_nodes=8,
@@ -65,7 +62,7 @@ def example_config(name: str, *, repository: Path) -> ResearchConfig:
             VerificationContract(
                 "accuracy",
                 target=0.65,
-                description="Clip accuracy on a frozen subject-separated anonymous validation set",
+                description="在固定、按 subject 隔离且匿名的验证集上计算 clip 准确率",
                 identity={
                     "example": "cuhkx",
                     "classes": 40,
@@ -79,13 +76,10 @@ def example_config(name: str, *, repository: Path) -> ResearchConfig:
         raise ValueError("Unknown example template")
     if name == "cuhkx":
         brief.instructions += (
-            " This is a bounded workflow rehearsal: inspect enough primary-source evidence "
-            "to choose feasible directions, then act on the findings; an exhaustive literature "
-            "survey is unnecessary. Simulation jobs publish simulation.json, not weights. "
-            "The simulated verifier accepts a frozen source-only candidate and does not "
-            "require an actual checkpoint. Exercise candidate refinement and report decisions "
-            "without waiting for real training, credentials or GPU resources. Keep reports "
-            "and shared evidence summaries concise; archive detailed literature separately."
+            "这是有边界的流程演练：查看足以选择可行方向的一手证据，然后执行，不需要穷尽文献。"
+            "模拟作业只发布 simulation.json，不产生权重；模拟 verifier 接受冻结的纯源码候选，"
+            "不要求实际 checkpoint。请演练候选改进与报告决策，不等待真实训练、凭据或 GPU 资源。"
+            "报告和公共证据摘要保持简洁，详细文献另行归档。"
         )
     return ResearchConfig(
         brief=brief,

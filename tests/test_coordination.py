@@ -201,5 +201,5 @@ def test_report_correction_retry_recovers_enqueue_gap_with_same_id(
         "messages", recovered.state["inboxes"][agent_id][0], ResearchMessage
     )
     assert corrective.reply_to == original.message_id
-    assert "does not authorize a new assignment" in corrective.text
+    assert "不授权新任务" in corrective.text
     assert len(recovered.actor(agent_id).iterations) == 1

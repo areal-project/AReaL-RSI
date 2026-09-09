@@ -72,7 +72,7 @@ class RoutedTransport:
         self.payloads: list[Json] = []
 
     async def request(self, config: ResponsesConfig, payload: Json, event_sink: EventSink) -> Json:
-        raw = payload["instructions"].split("Current authoritative run state:\n", 1)[1]
+        raw = payload["instructions"].split("当前 run 的系统状态：\n", 1)[1]
         state = json.JSONDecoder().raw_decode(raw)[0]
         agent_id = state["agent_id"]
         index = self.counts.get(agent_id, 0)
@@ -396,13 +396,13 @@ class EngineTest(unittest.IsolatedAsyncioTestCase):
 
         async def respond(agent_id: str, index: int, payload: Json) -> Json:
             self.assertEqual(agent_id, "rsi")
-            self.assertIn("snapshot from the start of this model turn", payload["instructions"])
+            self.assertIn("本次模型回合开始时的状态快照", payload["instructions"])
             if index == 0:
                 return packet(call("plan", "make_plan"))
             if index == 1:
                 self.assertNotIn("tools", payload)
                 raw = payload["instructions"].split(
-                    "Latest authoritative checkpoint state (supersedes the turn-start snapshot):\n",
+                    "最新系统状态（优先于回合开始时的快照）：\n",
                     1,
                 )[1]
                 latest = json.JSONDecoder().raw_decode(raw)[0]
@@ -671,11 +671,11 @@ class EngineTest(unittest.IsolatedAsyncioTestCase):
                     }
                 )
             self.assertEqual(index, 2)
-            context = json.dumps(payload["input"])
+            context = json.dumps(payload["input"], ensure_ascii=False)
             self.assertIn("The input contract matches.", context)
             self.assertIn("Saved input contract evidence", context)
-            self.assertIn("Continue the original assignment in this same node and session", context)
-            self.assertIn("does not authorize a new assignment", context)
+            self.assertIn("在同一个节点和会话中继续原任务", context)
+            self.assertIn("不授权新任务", context)
             return packet(call("report", "corrected_report"))
 
         def tools(agent_id: str) -> ToolSet:

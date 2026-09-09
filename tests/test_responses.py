@@ -618,11 +618,11 @@ class ResponsesRuntimeTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(result.stop_reason, "budget_exhausted")
         for index, payload in enumerate(transport.payloads):
-            self.assertIn(f"{5 - index} model call(s) remaining", payload["instructions"])
+            self.assertIn(f"剩余 {5 - index} 次模型调用", payload["instructions"])
             self.assertEqual(payload["model"], "gpt-6-astra")
             self.assertEqual(payload["reasoning"], {"effort": "xhigh"})
-        self.assertNotIn("nearly exhausted", transport.payloads[0]["instructions"])
-        self.assertIn("role's report, explicit wait", transport.payloads[-1]["instructions"])
+        self.assertNotIn("额度即将耗尽", transport.payloads[0]["instructions"])
+        self.assertIn("按角色使用报告、明确等待", transport.payloads[-1]["instructions"])
 
     async def test_incomplete_response_never_executes_partial_tools(self) -> None:
         transport = ScriptedTransport(response(call("write", "a"), status="incomplete"))

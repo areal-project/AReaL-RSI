@@ -165,7 +165,7 @@ class Coordinator:
         self.enqueue(
             "interaction",
             "rsi",
-            "Begin this research run.\n"
+            "开始本次研究，以下是用户目标与约束：\n"
             + json.dumps(encode(self.store.brief()), ensure_ascii=False),
             key="initial",
         )
@@ -291,15 +291,13 @@ class Coordinator:
         self.enqueue(
             "rsi",
             agent_id,
-            "User-requested protocol recovery for the existing research node "
+            "用户已请求恢复现有研究节点的报告协议："
             + node.iteration_id
-            + ": your previous final response ended without submitting the required report. "
-            "Continue the original assignment in this same node and session. Use the existing "
-            "workspace, prior tool results and evidence; do not repeat completed tool effects. "
-            "Submit the report tool with concrete completed work, problems, actual results, "
-            "uncertainties and remaining steps. If an external dependency blocks completion, "
-            "use an explicit waiting tool. This correction does not authorize a new assignment, "
-            "research node or direction; after reporting, wait for an explicit RSI reply.",
+            + "。你上次的最终回复没有提交要求的报告。"
+            "在同一个节点和会话中继续原任务，使用已有工作区、工具结果与证据，不要重复已完成的工具操作。"
+            "调用 submit_report，写清已完成的工作、问题、实际结果、不确定性和剩余事项。"
+            "如果外部依赖阻碍完成，使用明确的等待工具。"
+            "本次修正不授权新任务、新节点或新方向；上报后等待 RSI 的明确回复。",
             key="report-retry:" + intent["retry_id"],
             reply_to=original,
         )
@@ -453,7 +451,7 @@ class Coordinator:
         self.enqueue(
             agent_id,
             "rsi",
-            "Research report:\n" + json.dumps(encode(report), ensure_ascii=False),
+            "研究报告：\n" + json.dumps(encode(report), ensure_ascii=False),
             key=report_id,
             references=(node.report_ref,),
             reply_to=assignment.assignment_id,

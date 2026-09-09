@@ -46,6 +46,12 @@ uv run --env-file .env --locked rsi research --example cuhkx --simulate-gpu
 
 例子只是初始目标和资源上限。KernelBench 默认一条研究方向；CUHK-X 最多两条，RSI 自行决定调研、分工和迭代顺序。`--example` 必须配合 `--simulate-gpu`；真实任务使用下方的 `--config`。
 
+## Prompt 与展示语言
+
+Interaction、RSI、Research 三个角色的系统 prompt，以及 compact、恢复、预算提醒和两个模拟示例的任务说明使用中文。默认用简体中文生成对话、计划、研究方向、任务、报告与证据摘要；用户明确要求其他语言时可以切换。工具名、JSON 字段、路径、记录 ID 和必要的原文保留原样；工具 schema 的英文说明也继续保留。被优化的 Task Agent harness 是独立产物，其种子 prompt 不随研究角色的语言偏好自动修改。
+
+角色 prompt 分别位于 `src/areal_rsi/agents/{interaction,rsi,research}/prompt.py`，compact 与恢复指令位于 `src/areal_rsi/modules/responses.py`。修改后重启工作台进程，后续模型回合使用新指令；已有报告、任务说明和会话历史保持原始语言。验收记录中的完整模型演练使用此前的英文 prompt，不能将其称为中文版 prompt 的完整行为验收。
+
 ## 等待、暂停和恢复
 
 终端每隔两秒读取本地状态并输出有变化的 JSON 摘要，读取状态不会调用模型。Research Agent 提交 report 后停止推理，直到 RSI 明确回复；等待作业时由完成消息唤醒同一会话。RSI 可以在其他 Agent 工作时继续有用的调研，也可以显式等待。

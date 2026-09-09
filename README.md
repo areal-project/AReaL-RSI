@@ -174,6 +174,9 @@ uv run --env-file .env --locked rsi web --port 8765
 
 指定单个实验：`uv run --env-file .env --locked rsi web --port 8765 --run RUN_ID`。
 
+Web 和 TUI 需要读取同一工作区，页面顶部会显示实际目录。若两个终端的 `RSI_DATA_ROOT`
+不同，可显式指定：`uv run --locked rsi web --root .rsi/my-workspace --port 8765`。
+
 ## 多研究线与示例
 
 在启动 TUI 前指定 ResearchAgent 数量（默认一条）：

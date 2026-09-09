@@ -81,6 +81,7 @@ def main() -> None:
     commands.add_parser("status", help="列出本地实验")
     web = commands.add_parser("web", help="启动本地只读研究面板，不启动实验")
     web.add_argument("--port", type=int, default=8765)
+    web.add_argument("--root", type=Path, help="实验工作区，优先于 RSI_DATA_ROOT")
     web.add_argument("--run", dest="run_id")
     args = parser.parse_args()
     if args.command == "_mcp":
@@ -95,7 +96,9 @@ def main() -> None:
     if args.command == "web":
         from areal_rsi.ui.web import serve
 
-        serve(data_root(), port=args.port, run_id=args.run_id)
+        serve(
+            args.root.expanduser() if args.root else data_root(), port=args.port, run_id=args.run_id
+        )
         return
     if args.command == "status":
         print(

@@ -247,7 +247,13 @@ class ResearchHandler(BaseHTTPRequestHandler):
                     media + "; charset=utf-8",
                 )
             elif path == "/api/runs":
-                self.json_response(200, {"runs": self.server.reader.list()})
+                self.json_response(
+                    200,
+                    {
+                        "workspace_root": str(self.server.reader.root),
+                        "runs": self.server.reader.list(),
+                    },
+                )
             elif path.startswith("/api/runs/"):
                 self.json_response(200, self.server.reader.detail(path.removeprefix("/api/runs/")))
             else:
@@ -266,6 +272,7 @@ class ResearchHandler(BaseHTTPRequestHandler):
 def serve(root: Path, *, port: int = 8765, run_id: str | None = None) -> None:
     with ResearchServer(root, port=port, run_id=run_id) as server:
         print(f"RSI 研究面板：http://127.0.0.1:{server.server_port}/", flush=True)
+        print(f"读取工作区：{server.reader.root}", flush=True)
         print("只读展示，关闭页面不会停止实验。Ctrl+C 停止 Web 服务。", flush=True)
         with suppress(KeyboardInterrupt):
             server.serve_forever(poll_interval=0.25)

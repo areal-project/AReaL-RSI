@@ -61,14 +61,15 @@ async function get(path){const response=await fetch(path,{cache:"no-store"});con
 async function refresh(){
   if(busy)return;busy=true;
   try{
-    const {runs}=await get("/api/runs");
+    const {runs,workspace_root}=await get("/api/runs");
+    document.getElementById("workspace").textContent=workspace_root||"未提供，请重启 Web 服务";
     if(!runs.some(r=>r.run_id===selected))selected=runs[0]?.run_id||"";
     document.getElementById("runs").innerHTML=runs.map(run=>`<a href="#${encodeURIComponent(run.run_id)}" class="${run.run_id===selected?"selected":""}"><span class="name">${esc(run.goal)}</span><span class="sub">${esc(states[run.state]||run.state)} · ${run.research_agent_count} 条研究线</span><span class="sub">${esc(run.run_id)}</span></a>`).join("")||'<p class="meta">暂无实验</p>';
     if(selected){
       const run=await get(`/api/runs/${encodeURIComponent(selected)}`);
       const signature=JSON.stringify({...run,observed_at:null});
       if(signature!==lastRendered){const opened=[...document.querySelectorAll("details[open]")].map(el=>el.dataset.key);render(run);for(const detail of document.querySelectorAll("details"))detail.open=opened.includes(detail.dataset.key);lastRendered=signature;}
-    }else{document.getElementById("main").innerHTML='<section class="empty"><h1>还没有实验记录</h1><p>在使用相同 RSI_DATA_ROOT 的终端中运行 <code>uv run rsi tui</code>，确认一个实验后这里会自动显示进度。</p></section>';lastRendered="";}
+    }else{document.getElementById("main").innerHTML='<section class="empty"><h1>当前工作区没有实验记录</h1><p>请核对上方的读取目录是否与 TUI 一致。可用 <code>rsi web --root 实验工作区</code> 显式指定；确认实验后这里会自动显示进度。</p></section>';lastRendered="";}
     document.getElementById("connection").textContent=`已连接 · ${new Date().toLocaleTimeString("zh-CN",{hour12:false})}`;
   }catch(error){document.getElementById("connection").textContent=`读取失败：${error.message} · 将自动重试`;}finally{busy=false;}
 }

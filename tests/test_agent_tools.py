@@ -14,6 +14,29 @@ import pytest
 from areal_rsi.modules.dsh_tools import definitions
 
 
+def test_shell_output_reaches_model_once_without_losing_execution_details() -> None:
+    from areal_rsi.coordination.agent_tools import model_output
+
+    original = {
+        "isError": False,
+        "content": [{"type": "text", "text": "partial output\nwarning"}],
+        "value": {
+            "exitCode": 2,
+            "timedOut": False,
+            "stdout": {"text": "partial output", "truncated": True, "spillPath": "/tmp/full"},
+            "stderr": {"text": "warning", "truncated": False},
+        },
+    }
+    projected = model_output("bash", original)
+    assert "content" not in projected
+    assert projected["value"] == original["value"]
+    assert projected["isError"] is False
+    assert "content" in original
+    assert model_output("read", original) is original
+    error = {"isError": True, "content": [{"type": "text", "text": "OUTCOME_UNKNOWN"}]}
+    assert model_output("bash", error) is error
+
+
 @pytest.fixture
 def installation() -> Path:
     configured = os.environ.get("RSI_DSH_TOOLS_TEST_INSTALLATION")

@@ -298,17 +298,16 @@ def build_config(args: argparse.Namespace) -> ResearchConfig:
             else ()
         )
         verify_timeout = limits.max_wall_seconds
-        objective = "Improve a reusable KernelBench harness for " + target_model
+        objective = "为 " + target_model + " 改进通用的 KernelBench harness"
         instructions = (
-            f"Optimize {'only skills/*' if scope == 'skills' else 'the full harness'} for kernel "
-            f"optimization on the fixed task model {target_model}. Keep changes general across "
-            "tasks; never embed answers. Evaluate the initial harness on search as a baseline. "
-            "Use the develop command and read_job_output_file to inspect development summaries, "
-            "target code and trajectories; keep this material out of the candidate harness. "
-            "Derive general improvements, assign focused research, and compare frozen candidates "
-            "through the trusted verifier. Search/final raw tasks and traces are private. "
-            "The target uses the existing DSH sandbox; no GPU development tool is supplied by "
-            "the default seed. RSI decides when to perform the independent final confirmation."
+            f"固定目标模型为 {target_model}，优化范围为"
+            f"{'仅 skills/*' if scope == 'skills' else '整个 harness'}。"
+            "改进应能用于不同题目，不得在 harness 中嵌入题目答案。"
+            "先在 search 上测量起点，再比较候选。使用 develop 命令运行开发题，"
+            "用 read_job_output_file 查看公开摘要、目标代码与轨迹；这些材料不要写进候选 harness。"
+            "从轨迹提取通用改进，安排有针对性的研究，并用可信验证器测量固定候选。"
+            "search/final 的原始题目与轨迹不公开。目标模型使用现有 DSH 沙箱；"
+            "默认起点未配置 GPU 开发工具。由 RSI 决定何时进行独立的 final 确认。"
         )
         metric = "fast_1"
     else:
@@ -345,29 +344,23 @@ def build_config(args: argparse.Namespace) -> ResearchConfig:
             "{phase}",
             *local,
         )
-        objective = "Research and improve CUHK-X small-model training and design"
+        objective = "改进 CUHK-X 小模型的训练与设计"
         instructions = (
-            "Research papers and mainstream methods before choosing useful directions. Decide "
-            "when to reproduce, branch, combine findings or stop within the configured limits. "
-            "The seed is an unevaluated implementation reference, not a scored baseline. Optimize "
-            "architecture, training and permitted multimodal design for 40-class activity "
-            "recognition. No RGB camera input or large pretrained backbone; the entire inference "
-            "candidate package must remain within 100,000,000 bytes. The user has confirmed "
-            "organizer authorization for this LLM-assisted workflow. Train via the approved train "
-            "command, wait without polling the model, then collect_job_output to destination "
-            "trained so trained/checkpoint.pt is present before snapshotting and verification. "
-            "Optional training.json requests bounded hyperparameters; operator resource/time "
-            "limits remain fixed. Validation labels and original subject paths are private. "
-            "Local held-out accuracy is not Kaggle leaderboard performance. RSI decides when "
-            "to perform independent final verification; do not submit to Kaggle automatically."
+            "先检索论文和常用方法，再选择有价值的方向。由 RSI 根据证据决定复现、"
+            "并行探索、整合发现或停止。起点是未经测量的实现参考，不是已有分数的 baseline。"
+            "为 40 类活动识别优化结构、训练和允许的多模态设计；不能使用 RGB 摄像头输入"
+            "或大型预训练骨干，完整推理包不超过 100,000,000 字节。"
+            "用 train 命令训练，等待完成后用 collect_job_output 将输出收集到 trained，"
+            "确保 trained/checkpoint.pt 存在再保存候选并验证。"
+            "可通过 training.json 请求范围内的超参数，执行端的资源和时间上限保持不变。"
+            "验证标签和原始参与者路径不公开。本机保留集 accuracy 不等于 Kaggle 排名成绩。"
+            "由 RSI 决定何时进行独立 final 验证，不自动向 Kaggle 提交。"
         )
         if args.allow_local:
-            instructions += " This is a real CPU execution on synthetic data, not competition data."
+            instructions += " 当前在合成数据上真实执行 CPU 训练，使用的不是比赛数据。"
         metric = "accuracy"
     if args.instructions_file:
-        instructions += "\n\nAdditional user guidance:\n" + args.instructions_file.read_text(
-            encoding="utf-8"
-        )
+        instructions += "\n\n用户补充说明：\n" + args.instructions_file.read_text(encoding="utf-8")
     return ResearchConfig(
         brief=TaskBrief(
             objective,
@@ -376,7 +369,7 @@ def build_config(args: argparse.Namespace) -> ResearchConfig:
             VerificationContract(
                 metric,
                 target=args.target,
-                description="Frozen search comparison and independent final confirmation",
+                description="固定 search 比较条件，并进行独立的 final 确认",
                 identity={
                     "example": example,
                     "feedback": "aggregate_only",

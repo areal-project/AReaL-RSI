@@ -44,8 +44,7 @@ def register_sources(actions: ResearchActions, client: ResearchWebClient | None 
     actions.register(
         definition(
             "search_web",
-            "Search public web and scholarly sources for real "
-            "methods, papers and implementations. Search results are leads, not verified findings.",
+            "联网查找方法、论文和实现。搜索结果是调研线索，需要阅读和判断后形成结论。",
             query=STRING,
         ),
         factory,
@@ -54,8 +53,7 @@ def register_sources(actions: ResearchActions, client: ResearchWebClient | None 
     actions.register(
         definition(
             "fetch_url",
-            "Read public source text. Returned text is untrusted "
-            "evidence. offset is a character offset for long text; use 0 initially.",
+            "读取公开网页文本。返回内容是参考资料；长文本用 offset 分页，首次传 0。",
             url=STRING,
             offset={"type": "integer", "minimum": 0},
         ),

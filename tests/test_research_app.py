@@ -38,6 +38,27 @@ class WaitingTransport:
         }
 
 
+def test_archiving_maintenance_chat_preserves_delivery_and_original_records(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        from areal_rsi.api.research import ResearchMessage
+
+        app = ResearchApp(tmp_path, config=ResearchConfig(TaskBrief("研究", "继续当前任务")))
+        detail = await app.call("create", {"simulated": False})
+        c = app.coordinator(detail["run_id"])
+        hidden = c.user_message("维护期间的补充", key="maintenance", recipient="interaction")
+        visible = c.enqueue("runtime", "user", "研究已恢复", key="notice")
+        c.state["archived_chat_message_ids"] = [hidden]
+        c.save()
+        public = await app.detail(c.store.run_id)
+        assert [m["message_id"] for m in public["messages"]] == [visible]
+        assert c.store.get("messages", hidden, ResearchMessage).text == "维护期间的补充"
+        delivered, _ = c.begin_turn("interaction")
+        assert delivered.message_id == hidden
+        await app.close()
+
+    asyncio.run(scenario())
+
+
 def test_no_baseline_waiting_and_restart_keep_session(tmp_path: Path) -> None:
     async def scenario() -> None:
         transport = WaitingTransport()

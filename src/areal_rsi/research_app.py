@@ -405,10 +405,12 @@ class ResearchApp:
                                 "kind": "reference",
                             }
                         )
+        archived_chat = set(c.state.get("archived_chat_message_ids", []))
         messages = [
             encode(m)
             for m in c.store.records("messages", ResearchMessage)
-            if m.sender == "user" or m.recipient == "user"
+            if (m.sender == "user" or m.recipient == "user")
+            and m.message_id not in archived_chat
         ]
         messages.sort(key=lambda m: m["created_at"])
         jobs_path = c.store.root / "coordination" / "jobs.json"

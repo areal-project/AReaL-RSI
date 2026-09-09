@@ -279,7 +279,7 @@ function render() {
   );
   $("baseline-caption").textContent = run.baseline
     ? "起点结果 / 最终确认"
-    : "未设置起点";
+    : "暂无起点评测结果";
   const nodes = run.nodes || [];
   $("node-count").textContent = integer(nodes.length);
   $("node-caption").textContent =

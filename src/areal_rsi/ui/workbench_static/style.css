@@ -1310,3 +1310,62 @@ main {
     transition: none !important;
   }
 }
+
+/* Live execution and research share the canvas, but keep distinct identities. */
+.metrics { padding: 15px 0; margin-bottom: 18px; }
+.metric > span { margin-bottom: 8px; }
+.metric strong { font-size: 24px; }
+.live-overview { border-color: #c8d9c8; overflow: hidden; }
+.live-overview .card-heading { padding-bottom: 12px; flex-wrap: wrap; gap: 8px; }
+.live-summary { font-size: 10px; color: var(--muted); }
+.live-task { display: block; width: calc(100% - 32px); margin: 0 16px 12px; text-align: left; padding: 15px; border: 1px solid #dce7d9; border-radius: 9px; background: #f7faf4; }
+.live-task:hover, .live-task:focus-visible { border-color: #7b9c7b; background: #f1f7ec; }
+.live-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.live-title h3 { font-size: 14px; font-weight: 600; }
+.live-stage { font-size: 12px; margin-top: 9px; color: var(--green); }
+.live-description { font-size: 11px; line-height: 1.7; color: #637567; margin-top: 5px; overflow-wrap: anywhere; }
+.live-meta { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 9px; font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.live-meta > span:empty { display: none; }
+.live-meta > span:first-child { color: var(--green); font-weight: 600; }
+.live-link { margin-left: auto; color: var(--green); }
+.live-next, .live-idle, .live-last { margin: 0 20px 15px; font-size: 11px; line-height: 1.8; overflow-wrap: anywhere; }
+.live-next { color: #67776a; }
+.live-warning { margin: 0 16px 12px; padding: 10px 12px; background: #fbf1df; color: #85672d; border-radius: 6px; font-size: 11px; }
+.live-agent { display: block; width: calc(100% - 40px); margin: 0 20px 14px; text-align: left; border: 0; background: transparent; font-size: 11px; }
+.live-agent strong { font-weight: 500; color: var(--green); }
+.live-agent p { color: var(--muted); margin-top: 6px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.job-progress-bar { height: 4px; background: #e3ebdf; border-radius: 4px; overflow: hidden; margin: 10px 0 4px; }
+.job-progress-bar > span { display: block; height: 100%; background: #779565; border-radius: inherit; }
+.graph-count { display: block; font-size: 10px; margin-top: 5px; }
+.graph-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; justify-content: flex-end; }
+.graph-node { width: 214px; min-height: 109px; }
+.graph-node.active-node { border: 1.5px solid #6e9466; background: #f8fcf4; box-shadow: 0 0 0 3px #dcebd655; }
+.graph-node.active-node.selected { box-shadow: 0 0 0 3px #c4dac4; }
+.graph-node.execution-node .node-top > span:first-child { color: #54785b; }
+.node-progress { font-size: 10px; margin-top: 8px; color: #617859; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.graph-lane { max-width: 500px; }
+.graph-edge.execution, .legend-line.execution { border-top-style: dotted; border-color: #64856b; }
+.job-row { display: flex; width: 100%; text-align: left; border: 0; border-top: 1px solid #eff2ec; background: transparent; padding: 14px 2px; }
+.job-row:hover { background: #f8faf5; }
+.job-row .job-body { flex: 1; min-width: 0; }
+.job-row h3 { font-size: 12px; }
+.job-row .job-meta { margin-top: 7px; }
+.job-row > .status { flex-shrink: 0; }
+.task-item { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.task-item:last-child { border: 0; }
+.task-item-title { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.task-item-title strong { font-size: 11px; font-weight: 550; }
+.task-item p { font-size: 10px; margin-top: 4px; }
+.task-item .status { font-size: 9px; }
+.status.starting { color: var(--green); background: #edf5e8; }
+.status.timed_out, .status.lost { color: var(--red); background: #f8ece8; }
+@media (max-width: 720px) {
+  .metrics { padding: 0; }
+  .metric { padding: 12px; }
+  .metric strong { font-size: 22px; }
+  .live-overview .card-heading { align-items: flex-start; }
+  .graph-card .card-heading { align-items: flex-start; flex-wrap: wrap; gap: 10px; }
+  .graph-controls { justify-content: flex-start; }
+  .graph-lane { max-width: 300px; }
+  .live-meta { gap: 6px 10px; }
+}

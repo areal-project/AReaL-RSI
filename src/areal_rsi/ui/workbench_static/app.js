@@ -49,6 +49,9 @@ const statuses = {
   succeeded: "已完成",
   cancelled: "已取消",
   created: "已创建",
+  starting: "启动中",
+  timed_out: "已超时",
+  lost: "执行失联",
 };
 const eventNames = {
   run_created: "创建研究",
@@ -99,7 +102,7 @@ function integer(value) {
   return Number.isFinite(value) ? value.toLocaleString("zh-CN") : "—";
 }
 function time(value) {
-  const date = new Date(value);
+  const date = new Date(timestamp(value));
   return Number.isNaN(date.getTime())
     ? ""
     : date.toLocaleTimeString("zh-CN", {
@@ -107,6 +110,67 @@ function time(value) {
         minute: "2-digit",
         hour12: false,
       });
+}
+function timestamp(value) {
+  return typeof value === "number" && value < 1e12 ? value * 1000 : value;
+}
+function duration(start, end) {
+  if (!start) return "尚未开始";
+  const seconds = Math.max(0, Math.floor(((end ? new Date(timestamp(end)).getTime() : Date.now())
+    - new Date(timestamp(start)).getTime()) / 1000));
+  if (!Number.isFinite(seconds)) return "";
+  if (seconds < 60) return `${seconds} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  return minutes < 60 ? `${minutes} 分 ${seconds % 60} 秒` : `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分`;
+}
+const activeJob = (job) => ["pending", "queued", "starting", "running"].includes(job.status);
+const activeNode = (node) => ["pending", "running"].includes(node.state);
+const phaseName = (phase) => ({search: "迭代验证", final: "最终验证", diagnostic: "诊断检查"}[phase] || "验证");
+function jobTitle(job) {
+  return job.is_baseline ? "起点评测" : job.title || job.description
+    || (job.verification ? phaseName(job.phase) : "研究执行");
+}
+function progressText(job) {
+  const p = job.progress;
+  return p?.total > 0 ? `${p.completed} / ${p.total} ${p.unit || "项"}已完成` : "";
+}
+function progressBar(job) {
+  const p = job.progress;
+  if (!(p?.total > 0)) return element("span");
+  const bar = element("div", "job-progress-bar");
+  bar.setAttribute("role", "progressbar");
+  bar.setAttribute("aria-label", `${jobTitle(job)}完成进度`);
+  bar.setAttribute("aria-valuemin", "0");
+  bar.setAttribute("aria-valuemax", String(p.total));
+  bar.setAttribute("aria-valuenow", String(p.completed));
+  const fill = element("span");
+  fill.style.width = `${100 * p.completed / p.total}%`;
+  bar.append(fill);
+  return bar;
+}
+function progressFreshness(job) {
+  const updated = job.progress?.updated_at;
+  if (!updated) return activeJob(job) ? "等待执行器上报细项进度" : "";
+  const age = Date.now() - new Date(timestamp(updated)).getTime();
+  return `${age > 45000 && activeJob(job) ? "进度暂未更新 · " : "进度更新于 "}${time(updated)}`;
+}
+function agentAction(run, agent) {
+  const activity = run.agent_activity?.[agent.agent_id];
+  const names = {read: "读取文件", grep: "检索代码", glob: "查找文件", bash: "执行命令",
+    write: "写入文件", edit: "修改文件", spawn_researcher: "安排研究任务",
+    verify: "提交验证", wait: "等待后续消息", submit_report: "提交本轮报告"};
+  return activity?.type === "tool_started" ? names[activity.tool] || `执行 ${activity.tool}`
+    : activity?.type === "tool_completed" ? `已完成${names[activity.tool] || activity.tool}，继续处理`
+    : "模型正在处理任务";
+}
+function selectWork(run, id) {
+  state.selected.set(run.run_id, id);
+  localStorage.setItem(`rsi.workbench.node.${run.run_id}`, id);
+  switchTab("node");
+  renderGraph(run);
+  renderNode(run);
+  if (window.matchMedia("(max-width: 720px)").matches)
+    $("node-panel").closest(".inspector").scrollIntoView({block: "start"});
 }
 function notice(message = "") {
   $("notice").hidden = !message;
@@ -294,6 +358,7 @@ function render() {
   $("score-metric").hidden = $("baseline-metric").hidden = !run.brief?.verification;
   $("metrics").classList.toggle("without-score", !run.brief?.verification);
   renderIntake(run);
+  renderOverview(run);
   renderDirections(run);
   renderGraph(run);
   renderMessages(run);
@@ -326,7 +391,8 @@ function render() {
 }
 
 function agentName(id) {
-  return id === "rsi" ? "RSI Agent" : "Interaction Agent";
+  return {rsi: "RSI Agent", interaction: "Interaction Agent"}[id]
+    || state.run?.agents?.find((agent) => agent.agent_id === id)?.direction || "Research Agent";
 }
 function questionPreview(question, length = 48) {
   const text = (question.question || question.text || "请查看对话").replace(/\s+/g, " ");
@@ -422,6 +488,75 @@ function renderIntake(run) {
   replace("intake-retry", ...items);
 }
 
+function agentStatus(run, agent) {
+  if (agent.state !== "waiting") return label(agent.state);
+  if (agent.wait_reason === "user") return "等待你回复";
+  if (agent.wait_reason === "rsi_reply") return "已报告 · 等待 RSI 指令";
+  if ((run.jobs || []).some((job) => activeJob(job) && (job.agent_id === agent.agent_id
+    || `job:${job.job_id}` === agent.wait_reason))) return "等待作业结果";
+  return "等待后续消息";
+}
+function renderOverview(run) {
+  $("live-overview").hidden = run.status === "planned";
+  const jobs = (run.jobs || []).filter(activeJob);
+  const busy = (run.agents || []).filter((agent) => agent.state === "running");
+  const waiting = (run.waiting_for_user || []).length;
+  const heading = element("div", "card-heading");
+  heading.append(element("h2", "", "当前进展"), element("span", "live-summary",
+    [jobs.length ? `${jobs.length} 个待完成作业` : "", busy.length ? `${busy.length} 个 Agent 处理中` : ""].filter(Boolean).join(" · ") || "暂无执行活动"));
+  const blocks = [heading];
+  if (run.worker_alive === false && run.status === "running")
+    blocks.push(element("p", "live-warning", "调度已断开，请恢复执行以继续接收结果。"));
+  if (run.status === "paused") blocks.push(element("p", "live-warning", "研究已暂停。继续后恢复任务调度。"));
+  if (waiting) blocks.push(element("p", "live-warning", `${waiting} 个问题等待你回复，请查看需求与对话。`));
+  for (const job of jobs) {
+    const card = element("button", "live-task");
+    card.dataset.work = `job:${job.job_id}`;
+    const title = element("div", "live-title");
+    title.append(element("h3", "", jobTitle(job)), badge(job.status));
+    card.append(title,
+      element("p", "live-stage", job.progress?.stage || ({queued: "等待执行资源", pending: "等待调度", starting: "启动执行器"}[job.status] || "执行器正在运行")),
+      element("p", "live-description", job.progress?.message || job.progress_message || "等待执行器上报细项进度"),
+      progressBar(job));
+    const meta = element("div", "live-meta");
+    meta.append(element("span", "", progressText(job)),
+      element("span", "", `${job.agent_name || agentName(job.agent_id)} · ${job.started_at ? `已运行 ${duration(job.started_at, job.finished_at)}` : "等待启动"}`),
+      element("span", "", progressFreshness(job)), element("span", "live-link", "查看作业 →"));
+    card.append(meta);
+    card.addEventListener("click", () => selectWork(run, `job:${job.job_id}`));
+    blocks.push(card);
+  }
+  for (const agent of busy) {
+    const node = run.nodes?.find((n) => n.iteration_id === agent.current_iteration_id);
+    const line = element(node ? "button" : "div", "live-agent");
+    line.append(element("strong", "", `${agentName(agent.agent_id)} · ${agentAction(run, agent)}`));
+    if (node) {
+      line.append(element("p", "", node.title || node.assignment?.instruction || "执行本轮研究任务"));
+      line.dataset.work = node.iteration_id;
+      line.addEventListener("click", () => selectWork(run, node.iteration_id));
+    }
+    blocks.push(line);
+  }
+  if (!jobs.length && !busy.length) {
+    const rsi = run.agents?.find((a) => a.agent_id === "rsi");
+    const latest = (state.events.get(run.run_id) || []).at(-1);
+    blocks.push(element("p", "live-idle", waiting ? "等待你的补充，再继续推进研究。"
+      : run.status !== "running" ? label(run.status)
+      : rsi?.error || (rsi?.wait_reason && !["message", "user", "rsi_reply"].includes(rsi.wait_reason)
+        ? `当前没有作业或模型调用。RSI 的等待说明：${rsi.wait_reason}`
+        : "当前没有作业或模型调用；Agent 正在等待后续消息。")));
+    if (latest) blocks.push(element("p", "live-last muted", `最近动态：${eventNames[latest.kind] || latest.kind} · ${time(latest.created_at)}`));
+  }
+  const rsi = run.agents?.find((a) => a.agent_id === "rsi");
+  if (jobs.length && rsi?.state === "waiting")
+    blocks.push(element("p", "live-next", "下一步 · 作业完成后将结果交回 Agent，RSI 据此安排后续研究。"));
+  const focus = document.activeElement?.dataset.work;
+  const scroll = $("live-overview").scrollTop;
+  replace("live-overview", ...blocks);
+  $("live-overview").scrollTop = scroll;
+  if (focus) [...$("live-overview").querySelectorAll("[data-work]")]
+    .find((el) => el.dataset.work === focus)?.focus({preventScroll: true});
+}
 function renderDirections(run) {
   replace(
     "directions",
@@ -431,7 +566,7 @@ function renderDirections(run) {
         const item = element(
           "span",
           `direction ${agent.state}`,
-          `${agent.direction || { rsi: "RSI Agent", interaction: "Interaction Agent" }[agent.agent_id] || agent.agent_id} · ${agent.wait_reason === "rsi_reply" ? "等待 RSI 回复" : agent.state === "waiting" && agent.wait_reason === "user" ? "等待你回复" : label(agent.state)}`,
+          `${agentName(agent.agent_id)} · ${agentStatus(run, agent)}`,
         );
         item.title = agent.error || agent.wait_reason || "";
         if (agent.state === "failed") {
@@ -447,13 +582,21 @@ function renderDirections(run) {
 }
 
 function renderGraph(run) {
-  const nodes = run.nodes || [];
+  // Jobs are display objects, not persisted ResearchIterations or research outcomes.
+  const nodes = [...(run.nodes || []), ...(run.jobs || []).map((job) => ({
+    iteration_id: `job:${job.job_id}`, agent_id: job.agent_id, state: job.status,
+    parent_iteration_id: job.iteration_id, title: jobTitle(job), job,
+  }))];
+  const active = nodes.filter((node) => node.job ? activeJob(node.job) : activeNode(node));
+  $("graph-count").textContent = `${run.nodes?.length || 0} 个研究节点 · ${run.jobs?.length || 0} 个作业 · ${active.length} 个待执行 / 进行中`;
+  $("graph-active").hidden = !active.length;
   const selected = state.selected.get(run.run_id);
   const signature = JSON.stringify([
     run.run_id,
     nodes,
     run.edges,
-    run.agents?.map((agent) => [agent.agent_id, agent.direction]),
+    run.agents?.map((agent) => [agent.agent_id, agent.direction, agent.state, agent.wait_reason]),
+    run.agent_activity,
     selected,
   ]);
   if (signature === state.graphSignature) return;
@@ -480,8 +623,8 @@ function renderGraph(run) {
     return;
   }
   const byId = new Map(nodes.map((node) => [node.iteration_id, node]));
-  const agents = [...new Set(nodes.map((node) => node.agent_id))];
-  viewport.style.height = `${Math.min(520, Math.max(210, agents.length * 153 + 25))}px`;
+  const agents = [...new Set(nodes.map((node) => node.agent_id))].sort((a, b) => a === b ? 0 : a === "rsi" ? -1 : b === "rsi" ? 1 : 0);
+  viewport.style.height = `${Math.min(520, Math.max(210, agents.length * 174 + 25))}px`;
   const positions = new Map();
   function depth(node, visited = new Set()) {
     if (!node?.parent_iteration_id || visited.has(node.iteration_id)) return 0;
@@ -494,27 +637,38 @@ function renderGraph(run) {
   let widest = 1;
   agents.forEach((agentId, row) => {
     const direction =
-      run.agents?.find((agent) => agent.agent_id === agentId)?.direction ||
-      `研究方向 ${row + 1}`;
+      (agentId === "rsi" ? "RSI 执行" : run.agents?.find((agent) => agent.agent_id === agentId)?.direction) ||
+      agentName(agentId);
     const lane = element("div", "graph-lane", direction);
-    lane.style.top = `${row * 153 + 20}px`;
+    lane.title = direction;
+    lane.style.top = `${row * 174 + 20}px`;
     canvas.append(lane);
+    let nextColumn = 0, attempt = 0;
     nodes
       .filter((node) => node.agent_id === agentId)
-      .forEach((node, index) => {
-        const column = Math.max(index, depth(node));
+      .sort((a, b) => {
+        // Place an execution immediately after the iteration that submitted it.
+        const order = (node) => node.job?.iteration_id
+          ? nodes.findIndex((n) => n.iteration_id === node.job.iteration_id) + 0.5
+          : nodes.indexOf(node);
+        return order(a) - order(b);
+      })
+      .forEach((node) => {
+        const column = Math.max(nextColumn, depth(node));
+        nextColumn = column + 1;
         widest = Math.max(widest, column + 1);
-        const position = { x: 24 + column * 232, y: row * 153 + 46 };
+        const position = { x: 24 + column * 246, y: row * 174 + 46 };
         positions.set(node.iteration_id, position);
+        const ongoing = node.job ? activeJob(node.job) : activeNode(node);
         const button = element(
           "button",
-          `graph-node ${selected === node.iteration_id ? "selected" : ""}`,
+          `graph-node ${node.job ? "execution-node" : ""} ${ongoing ? "active-node" : ""} ${selected === node.iteration_id ? "selected" : ""}`,
         );
         button.dataset.node = node.iteration_id;
         button.style.left = `${position.x}px`;
         button.style.top = `${position.y}px`;
         const top = element("div", "node-top");
-        top.append(element("span", "", `尝试 ${index + 1}`), badge(node.state));
+        top.append(element("span", "", node.job ? "执行作业" : `研究 ${++attempt}`), badge(node.state));
         button.append(
           top,
           element(
@@ -523,6 +677,12 @@ function renderGraph(run) {
             node.title || node.assignment?.instruction || "研究尝试",
           ),
         );
+        if (node.job) {
+          button.append(element("p", "node-progress", progressText(node.job) || node.job.progress?.stage || "查看执行状态"), progressBar(node.job));
+        } else if (ongoing) {
+          const owner = run.agents?.find((agent) => agent.agent_id === node.agent_id);
+          button.append(element("p", "node-progress", owner?.state === "running" ? agentAction(run, owner) : owner ? agentStatus(run, owner) : "执行本轮任务"));
+        }
         if (typeof node.verification?.score === "number")
           button.append(
             element(
@@ -535,20 +695,7 @@ function renderGraph(run) {
           "aria-pressed",
           String(selected === node.iteration_id),
         );
-        button.addEventListener("click", () => {
-          state.selected.set(run.run_id, node.iteration_id);
-          localStorage.setItem(
-            `rsi.workbench.node.${run.run_id}`,
-            node.iteration_id,
-          );
-          switchTab("node");
-          renderGraph(run);
-          renderNode(run);
-          if (window.matchMedia("(max-width: 720px)").matches)
-            $("node-panel")
-              .closest(".inspector")
-              .scrollIntoView({ block: "start" });
-        });
+        button.addEventListener("click", () => selectWork(run, node.iteration_id));
         canvas.append(button);
       });
   });
@@ -565,19 +712,19 @@ function renderGraph(run) {
       edges.push({
         source: node.parent_iteration_id,
         target: node.iteration_id,
-        kind: "parent",
+        kind: node.job ? "execution" : "parent",
       });
   for (const edge of edges) {
     const source = positions.get(edge.source),
       target = positions.get(edge.target);
     if (!source || !target || edge.source === edge.target) continue;
-    const x1 = source.x + 190,
+    const x1 = source.x + 214,
       y1 = source.y + 46,
       x2 = target.x,
       y2 = target.y + 46;
     const line = element(
       "div",
-      `graph-edge ${["reference", "merge"].includes(edge.kind) ? edge.kind : "parent"}`,
+      `graph-edge ${["reference", "merge", "execution"].includes(edge.kind) ? edge.kind : "parent"}`,
     );
     Object.assign(line.style, {
       left: `${x1}px`,
@@ -587,11 +734,11 @@ function renderGraph(run) {
     });
     line.setAttribute("aria-hidden", "true");
     line.title =
-      edge.label || (edge.kind === "parent" ? "继续探索" : "引用 / 合并经验");
+      edge.label || (edge.kind === "parent" ? "继续探索" : edge.kind === "execution" ? "执行作业" : "引用 / 合并经验");
     canvas.prepend(line);
   }
-  canvas.style.width = `${widest * 232 + 22}px`;
-  canvas.style.height = `${agents.length * 153 + 16}px`;
+  canvas.style.width = `${widest * 246 + 22}px`;
+  canvas.style.height = `${agents.length * 174 + 16}px`;
   viewport.scrollTo({ left: scroll.left, top: scroll.top });
   if (focused)
     [...canvas.querySelectorAll("button")]
@@ -628,6 +775,11 @@ function assignmentDetails(run, node) {
   return details;
 }
 function renderNode(run) {
+  const job = run.jobs?.find((item) => `job:${item.job_id}` === state.selected.get(run.run_id));
+  if (job) {
+    renderJobDetail(run, job);
+    return;
+  }
   const node = run.nodes?.find(
     (item) => item.iteration_id === state.selected.get(run.run_id),
   );
@@ -638,8 +790,8 @@ function renderNode(run) {
     const blank = element("div", "empty-detail");
     blank.append(
       element("span", "empty-symbol", "↖"),
-      element("h3", "", "选择一个研究节点"),
-      element("p", "", "查看具体任务、尝试、问题、结果和共享证据。"),
+      element("h3", "", "选择一个研究节点或作业"),
+      element("p", "", "查看任务、执行进度、研究报告与结果。"),
     );
     replace("node-panel", blank);
     return;
@@ -682,7 +834,7 @@ function renderNode(run) {
     blocks.push(
       section(
         "验证记录",
-        `${score(node.verification.score)} · ${node.verification.phase || "search"}`,
+        `${score(node.verification.score)} · ${phaseName(node.verification.phase)}`,
       ),
     );
   for (const evidence of node.evidence || []) {
@@ -708,6 +860,49 @@ function renderNode(run) {
   }
   replace("node-panel", ...blocks);
   $("node-panel").scrollTop = position;
+}
+
+function renderJobDetail(run, job) {
+  const id = `job:${job.job_id}`;
+  const signature = JSON.stringify([run.run_id, job, Math.floor(Date.now() / 10000)]);
+  if (signature === state.detailSignature) return;
+  state.detailSignature = signature;
+  const scroll = state.detailNodeId === id ? $("node-panel").scrollTop : 0;
+  state.detailNodeId = id;
+  const heading = element("div", "detail-header");
+  heading.append(badge(job.status), element("h3", "", jobTitle(job)), element("p", "muted", job.job_id));
+  const blocks = [heading, section(activeJob(job) ? "当前执行" : "最后上报的执行情况", job.error || job.progress?.message || job.progress_message
+    || (activeJob(job) ? "执行器尚未上报细项进度。" : label(job.status)))];
+  const progress = element("section", "detail-section");
+  progress.append(element("h4", "", job.progress?.stage || "执行进度"),
+    element("p", "", progressText(job)), progressBar(job),
+    element("p", "muted", progressFreshness(job)));
+  blocks.push(progress);
+  if (job.progress?.items?.length) {
+    const items = element("section", "detail-section task-items");
+    items.append(element("h4", "", "分项进度"));
+    for (const item of job.progress.items) {
+      const row = element("div", "task-item");
+      const title = element("div", "task-item-title");
+      title.append(element("strong", "", item.label || item.id || "子任务"), badge(item.status));
+      row.append(title, element("p", "muted", item.message));
+      items.append(row);
+    }
+    blocks.push(items);
+  }
+  blocks.push(section("执行信息", `${job.agent_name || agentName(job.agent_id)}\n${job.started_at ? `开始于 ${time(job.started_at)} · 已运行 ${duration(job.started_at, job.finished_at)}` : "等待调度启动"}${job.gpu_ids?.length ? `\nGPU ${job.gpu_ids.join(", ")}` : ""}`));
+  if (job.verification) blocks.push(section("验证用途", job.is_baseline
+    ? "评测起点版本，作为后续优化的比较依据。"
+    : job.phase === "final" ? "确认选定版本的最终表现。" : "评估本轮候选，供 RSI 决定下一步研究。"));
+  if (typeof job.result?.score === "number") blocks.push(section("正式验证结果", score(job.result.score)));
+  if (job.candidate_id) blocks.push(section("评测版本", job.candidate_id));
+  if (job.iteration_id) {
+    const parent = element("button", "quiet", "查看所属研究节点 →");
+    parent.addEventListener("click", () => selectWork(run, job.iteration_id));
+    blocks.push(parent);
+  }
+  replace("node-panel", ...blocks);
+  $("node-panel").scrollTop = scroll;
 }
 
 function renderMessages(run) {
@@ -824,23 +1019,27 @@ function renderBrief(run) {
   replace("brief-panel", ...blocks);
 }
 function renderJobs(run) {
-  const jobs = run.jobs || [];
-  $("job-count").textContent = jobs.length;
+  const jobs = [...(run.jobs || [])].sort((a, b) => Number(activeJob(b)) - Number(activeJob(a)));
+  $("job-count").textContent = `${jobs.filter(activeJob).length} 进行中 / ${jobs.length}`;
+  const focused = document.activeElement?.dataset.job;
+  const scroll = $("jobs").scrollTop;
   replace(
     "jobs",
     ...(jobs.length
       ? jobs.map((job) => {
-          const row = element("div", "job-row");
-          const body = element("div");
+          const row = element("button", "job-row");
+          row.dataset.job = job.job_id;
+          row.addEventListener("click", () => selectWork(run, `job:${job.job_id}`));
+          const body = element("div", "job-body");
           body.append(
-            element("h3", "", job.title || job.description || job.job_id),
+            element("h3", "", jobTitle(job)),
             element(
               "p",
               "",
-              job.progress_message ||
-                job.error ||
-                `${job.gpu_ids?.length ? `GPU ${job.gpu_ids.join(", ")} · ` : ""}${job.agent_id || ""}`,
+              job.error || job.progress?.message || job.progress_message || job.progress?.stage || label(job.status),
             ),
+            element("p", "job-meta", `${job.agent_name || agentName(job.agent_id)} · ${job.started_at ? `已运行 ${duration(job.started_at, job.finished_at)}` : "等待启动"}${progressText(job) ? ` · ${progressText(job)}` : ""}`),
+            progressBar(job),
           );
           row.append(body, badge(job.status));
           return row;
@@ -853,6 +1052,9 @@ function renderJobs(run) {
           ),
         ]),
   );
+  $("jobs").scrollTop = scroll;
+  if (focused) [...$("jobs").querySelectorAll("button")]
+    .find((button) => button.dataset.job === focused)?.focus({preventScroll: true});
 }
 function renderEvents() {
   const events = [...state.events.values()]
@@ -952,6 +1154,16 @@ for (const name of ["chat", "node", "brief"])
   $(`${name}-tab`).addEventListener("click", () => switchTab(name));
 for (const button of $("controls").querySelectorAll("button"))
   button.addEventListener("click", () => control(button.dataset.action));
+$("graph-active").addEventListener("click", () => {
+  const active = [...$("graph-canvas").querySelectorAll(".active-node")];
+  const current = active.findIndex((node) => node.dataset.node === state.selected.get(state.runId));
+  const next = active[(current + 1) % active.length];
+  if (!next) return;
+  const position = {left: Math.max(0, next.offsetLeft - 24), top: Math.max(0, next.offsetTop - 46)};
+  selectWork(state.run, next.dataset.node);
+  $("graph-viewport").scrollTo(position);
+  [...$("graph-canvas").querySelectorAll("button")].find((node) => node.dataset.node === next.dataset.node)?.focus({preventScroll: true});
+});
 $("graph-reset").addEventListener("click", () =>
   $("graph-viewport").scrollTo({ left: 0, top: 0, behavior: "smooth" }),
 );

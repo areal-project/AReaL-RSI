@@ -101,6 +101,7 @@
         </section>
         <div class="workspace-grid">
           <div class="research-column">
+            <section class="card live-overview" id="live-overview" aria-label="当前进展" hidden></section>
             <section class="card intake-card" id="intake-overview" hidden>
               <div class="card-heading"><h2>研究准备</h2><span id="intake-status" class="status"></span></div>
               <div class="intake-body">
@@ -113,15 +114,16 @@
               <div class="card-heading">
                 <div>
                   <h2>研究图</h2>
+                  <span id="graph-count" class="muted graph-count"></span>
                 </div>
-                <button id="graph-reset" class="quiet" title="返回研究图起点">
+                <div class="graph-controls"><button id="graph-active" class="quiet" hidden>定位进行中 ◎</button><button id="graph-reset" class="quiet" title="返回研究图起点">
                   回到起点 ↖
-                </button>
+                </button></div>
               </div>
               <div class="graph-legend">
                 <span><i class="legend-line"></i>继续探索</span
                 ><span><i class="legend-line shared"></i>引用 / 合并经验</span
-                >
+                ><span><i class="legend-line execution"></i>执行作业</span>
               </div>
               <div
                 id="graph-viewport"
@@ -180,7 +182,7 @@
               >
                 需求与对话</button
               ><button id="node-tab" role="tab" aria-selected="false">
-                节点详情</button
+                任务详情</button
               ><button id="brief-tab" role="tab" aria-selected="false">
                 研究约束
               </button>

@@ -110,6 +110,8 @@ def public_detail(value: Json) -> Json:
         "worker_alive waiting_for_user budget_stop_reason",
     )
     result["brief"] = _brief(value.get("brief"))
+    result["intake"] = _fields(value.get("intake"), "status summary environment execution_required")
+    result["pending_agents"] = [a for a in value.get("pending_agents", []) if isinstance(a, str)]
     result["waiting_for_user"] = [
         _fields(question, "question_id text question created_at")
         if isinstance(question, dict)
@@ -376,7 +378,9 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             parts, _ = self._path()
             if parts == ["api", "runs"]:
                 action = "create"
-                params = _fields(params, "template objective instructions max_agents simulated")
+                if set(params) - {"message", "message_id"}:
+                    raise ValueError("请直接发送研究需求，由 Interaction 整理配置")
+                params = {**_fields(params, "message message_id"), "conversation": True}
             elif (
                 len(parts) == 4 and parts[:2] == ["api", "runs"] and IDENTIFIER.fullmatch(parts[2])
             ):
@@ -388,7 +392,6 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                     "resume": "",
                     "stop": "reason",
                     "retry": "agent_id",
-                    "export": "candidate_id",
                 }
                 if action not in allowed:
                     self._json(404, {"error": "操作不存在"})

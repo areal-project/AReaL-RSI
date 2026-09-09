@@ -10,12 +10,10 @@ import sys
 import tempfile
 import threading
 import unittest
-import zipfile
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
-from areal_rsi.ui.workbench import MAX_BODY_BYTES, WorkbenchDownload, WorkbenchServer
+from areal_rsi.ui.workbench import MAX_BODY_BYTES, WorkbenchServer
 
 Json = dict[str, Any]
 PRIVATE = "PRIVATE_SENTINEL_DO_NOT_EXPOSE"
@@ -44,15 +42,20 @@ class FixtureBackend:
         self.temporary.cleanup()
 
     def create(self, params: Json) -> Json:
-        if not isinstance(params.get("objective"), str) or not params["objective"].strip():
-            raise ValueError("请填写一个具体的研究目标")
+        objective = params.get("objective") or params.get("message") or "新的研究"
         run_id = f"demo_{len(self.runs) + 1}"
         run: Json = {
             "run_id": run_id,
-            "objective": params["objective"],
+            "objective": objective,
             "status": "planned",
             "simulated": True,
             "plan": "",
+            "intake": {
+                "status": "discussing",
+                "summary": "",
+                "environment": "",
+                "private": PRIVATE,
+            },
             "agents": [],
             "nodes": [],
             "messages": [],
@@ -66,7 +69,7 @@ class FixtureBackend:
             "waiting_for_user": [],
             "budget": {"model_calls": 0, "total_tokens": 0, "verify_calls": 0},
             "brief": {
-                "objective": params["objective"],
+                "objective": objective,
                 "instructions": params.get("instructions", ""),
                 "limits": {
                     "max_agents": params.get("max_agents", 1),
@@ -267,7 +270,7 @@ class FixtureBackend:
         ]:
             self.event(run, kind, title=title)
 
-    async def call(self, action: str, params: Json) -> Json | WorkbenchDownload:
+    async def call(self, action: str, params: Json) -> Json:
         self.calls.append((action, params))
         await asyncio.sleep(0)
         if action == "bootstrap":
@@ -275,7 +278,10 @@ class FixtureBackend:
         if action == "list":
             return {"runs": list(reversed(list(self.runs.values())))}
         if action == "create":
-            return {"run_id": self.create(params)["run_id"], "private": PRIVATE}
+            created = self.create(params)
+            if params.get("message"):
+                await self.call("chat", {"run_id": created["run_id"], "text": params["message"]})
+            return {"run_id": created["run_id"], "private": PRIVATE}
         run = self.runs[params["run_id"]]
         if action == "detail":
             value = copy.deepcopy(run)
@@ -304,6 +310,7 @@ class FixtureBackend:
                     }
                 )
             run["brief"]["instructions"] += "\n" + params["text"]
+            run["intake"].update(status="ready", summary="只修改 skills，固定评测条件。")
             self.event(run, "message", text="用户补充研究要求")
         elif action == "start":
             self.populate(run)
@@ -319,13 +326,6 @@ class FixtureBackend:
                 if agent["agent_id"] == params["agent_id"]:
                     agent.update(state="waiting", error=None)
             self.event(run, "agent_retry_requested")
-        elif action == "export":
-            archive = Path(self.temporary.name) / "candidate.zip"
-            with zipfile.ZipFile(archive, "w") as output:
-                output.writestr(
-                    "README.md", "Simulated fixture artifact, not a measured improvement.\n"
-                )
-            return WorkbenchDownload(archive, "research-candidate.zip")
         else:
             raise ValueError("未知操作")
         return {"run_id": run["run_id"], "status": run["status"]}
@@ -393,12 +393,12 @@ class WorkbenchHttpTest(unittest.TestCase):
         status, _, body = self.request(
             "POST",
             "/api/runs",
-            {"objective": "检查可复用 skills", "max_agents": 2, "simulated": True},
+            {"message": "检查可复用 skills", "message_id": "first"},
         )
         self.assertEqual(status, 200)
         return str(json.loads(body)["run_id"])
 
-    def test_chat_start_graph_controls_export_over_real_http(self) -> None:
+    def test_conversation_graph_and_controls_over_real_http(self) -> None:
         status, headers, body = self.request("GET", "/")
         self.assertEqual(status, 200)
         self.assertIn("研究工作台", body.decode())
@@ -431,10 +431,8 @@ class WorkbenchHttpTest(unittest.TestCase):
         for action, expected in (("pause", "paused"), ("resume", "running"), ("stop", "stopped")):
             result = self.request("POST", f"/api/runs/{run_id}/{action}", {})
             self.assertEqual(json.loads(result[2])["status"], expected)
-        status, headers, data = self.request("POST", f"/api/runs/{run_id}/export", {})
-        self.assertEqual(status, 200)
-        self.assertTrue(data.startswith(b"PK"))
-        self.assertIn("research-candidate.zip", headers["Content-Disposition"])
+        status, _, _ = self.request("POST", f"/api/runs/{run_id}/export", {})
+        self.assertEqual(status, 404)
 
     def test_cursor_and_projection_hide_private_configuration_and_internal_messages(self) -> None:
         run_id = self.create()
@@ -444,6 +442,7 @@ class WorkbenchHttpTest(unittest.TestCase):
         self.assertNotIn(PRIVATE, raw.decode())
         detail = json.loads(raw)
         self.assertNotIn("config", detail)
+        self.assertNotIn("private", detail["intake"])
         self.assertNotIn("raw_trace", detail["nodes"][0]["report"])
         self.assertEqual(len(detail["messages"]), 2)
         subsequent = json.loads(
@@ -484,7 +483,7 @@ class WorkbenchHttpTest(unittest.TestCase):
         self.request(
             "POST", f"/api/runs/{run_id}/export", {"destination": "/arbitrary", "path": "/secret"}
         )
-        self.assertEqual(self.backend.calls[-1], ("export", {"run_id": run_id}))
+        self.assertNotEqual(self.backend.calls[-1][0], "export")
 
     def test_body_and_content_type_validation(self) -> None:
         self.assertEqual(self.request("POST", "/api/runs", [], headers={})[0], 400)

@@ -22,9 +22,7 @@ const state = {
   detailNodeId: null,
   refreshSequence: 0,
   latestAppliedSequence: 0,
-  allowSimulation: false,
-  defaultSimulated: false,
-  hasConfig: false,
+  creating: false,
 };
 const emptyChat = $("messages").firstElementChild.cloneNode(true);
 const statuses = {
@@ -61,6 +59,9 @@ const eventNames = {
   budget_exhausted: "达到预算边界",
   session_compacted: "保存会话检查点",
   agent_retry_requested: "恢复 Agent",
+  brief_updated: "更新研究需求",
+  environment_updated: "更新执行环境",
+  research_ready: "研究准备完成",
 };
 
 function element(tag, className = "", text = "") {
@@ -127,7 +128,6 @@ async function api(path, body) {
     const error = await response.json().catch(() => ({}));
     throw new Error(error.error || `请求失败（${response.status}）`);
   }
-  if (response.headers.get("Content-Disposition")) return response;
   return response.json();
 }
 
@@ -157,7 +157,7 @@ function renderRuns() {
       element(
         "small",
         "",
-        `${label(run.status)}${run.simulated ? " · 模拟" : ""}`,
+        label(run.status),
       ),
     );
     button.append(body);
@@ -240,19 +240,24 @@ function render() {
   $("objective").textContent =
     run.objective || run.brief?.objective || "未命名研究";
   $("run-short").textContent = run.run_id;
-  $("simulated").hidden = !run.simulated;
-  const needsResume = run.status === "running" && run.worker_alive === false;
+  $("workspace").classList.toggle("discussing", run.status === "planned");
+  const needsResume = run.worker_alive === false && (
+    run.status === "running" || (run.status === "planned" && run.pending_agents?.length)
+  );
   $("run-status").textContent = needsResume ? "待恢复" : label(run.status);
   $("run-status").className = `status ${run.status}`;
-  $("start").hidden = run.status !== "planned";
+  $("start").hidden = run.status !== "planned" || run.intake?.status !== "ready";
+  $("start").disabled = state.busy || run.agents?.some(
+    (agent) => agent.agent_id === "interaction" && agent.state === "running",
+  );
   $("pause").hidden = run.status !== "running";
   $("resume").hidden = run.status !== "paused" && !needsResume;
-  $("resume").textContent = needsResume ? "恢复执行" : "继续";
+  $("resume").textContent = needsResume
+    ? (run.status === "planned" ? "继续对话" : "恢复执行") : "继续";
   $("stop").hidden = !["running", "paused"].includes(run.status);
-  $("export").disabled = !run.best?.candidate_id || state.busy;
   $("best-score").textContent = score(run.best?.score);
   $("best-caption").textContent = run.best
-    ? `${run.brief?.verification?.metric || "验证分数"}${run.best.simulated ? " · 模拟结果" : " · 同一验证条件"}`
+    ? `${run.brief?.verification?.metric || "验证分数"} · 同一验证条件`
     : "尚无可比较的验证结果";
   replace(
     "baseline-score",
@@ -262,7 +267,7 @@ function render() {
   );
   $("baseline-caption").textContent = run.baseline
     ? "起点结果 / 最终确认"
-    : "未设置起点 · 暂不计算相对提升";
+    : "未设置起点";
   const nodes = run.nodes || [];
   $("node-count").textContent = integer(nodes.length);
   $("node-caption").textContent =
@@ -274,6 +279,9 @@ function render() {
   $("plan").textContent =
     run.plan || "研究开始后，RSI 会在这里说明当前方向和下一步。";
   $("plan").classList.toggle("muted", !run.plan);
+  $("score-metric").hidden = $("baseline-metric").hidden = !run.brief?.verification;
+  $("metrics").classList.toggle("without-score", !run.brief?.verification);
+  renderIntake(run);
   renderDirections(run);
   renderGraph(run);
   renderMessages(run);
@@ -289,12 +297,39 @@ function render() {
   const interaction = (run.agents || []).find(
     (agent) => agent.agent_id === "interaction",
   );
-  $("chat-status").textContent = state.sending
+  const ended = !["planned", "running", "paused"].includes(run.status);
+  $("chat-input").disabled = ended;
+  $("send-message").disabled = ended || state.sending;
+  $("chat-status").textContent = ended
+    ? "研究已结束，记录保留供查看"
+    : run.status === "paused"
+    ? "研究已暂停，消息将在继续后处理"
+    : state.sending
     ? "正在发送…"
     : interaction?.state === "running"
       ? "Interaction Agent 正在整理你的需求…"
       : "Enter 发送 · Shift+Enter 换行";
   if (run.budget_stop_reason) notice(run.budget_stop_reason);
+}
+
+function renderIntake(run) {
+  const preparing = run.status === "planned";
+  $("intake-overview").hidden = !preparing;
+  $("node-tab").hidden = preparing && !run.nodes?.length;
+  $("intake-status").textContent = run.intake?.status === "ready" ? "待你确认" : "整理中";
+  $("intake-summary").textContent = run.intake?.status === "ready"
+    ? run.intake.summary
+    : run.brief?.instructions || "先和 Interaction 讨论目标，它会在这里整理研究要求。";
+  $("intake-environment").textContent = run.intake?.environment || "";
+  const failed = run.agents?.find((agent) => agent.agent_id === "interaction" && agent.state === "failed");
+  const items = [];
+  if (failed) {
+    items.push(element("p", "error", failed.error || "Interaction 暂时未能完成回复。"));
+    const retry = element("button", "secondary", "重试回复");
+    retry.addEventListener("click", () => control("retry", {agent_id: "interaction"}));
+    items.push(retry);
+  }
+  replace("intake-retry", ...items);
 }
 
 function renderDirections(run) {
@@ -399,7 +434,7 @@ function renderGraph(run) {
             element(
               "p",
               "node-score",
-              `${score(node.verification.score)}${node.verification.simulated ? " · 模拟" : ""}`,
+              score(node.verification.score),
             ),
           );
         button.setAttribute(
@@ -553,7 +588,7 @@ function renderNode(run) {
     blocks.push(
       section(
         "验证记录",
-        `${score(node.verification.score)} · ${node.verification.phase || "search"}${node.verification.simulated ? " · 模拟结果" : ""}`,
+        `${score(node.verification.score)} · ${node.verification.phase || "search"}`,
       ),
     );
   for (const evidence of node.evidence || []) {
@@ -612,11 +647,35 @@ function renderMessages(run) {
       ),
       element("time", "", time(message.created_at)),
     );
-    block.append(heading, element("div", "message-content", message.text));
+    const content = element("div", "message-content");
+    if (message.sender === "user") content.textContent = message.text;
+    else appendFormattedText(content, message.text || "");
+    block.append(heading, content);
     return block;
   });
   container.replaceChildren(...blocks);
   container.scrollTop = follow ? container.scrollHeight : previous;
+}
+function appendFormattedText(container, text) {
+  // A small DOM-only renderer for the common emphasis, code and links in replies.
+  // User/model text is never interpreted as HTML.
+  const pattern = /```[^\n]*\n([\s\S]*?)```|\*\*([^*\n]+)\*\*|`([^`\n]+)`|\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g;
+  let offset = 0;
+  for (const match of text.matchAll(pattern)) {
+    container.append(document.createTextNode(text.slice(offset, match.index)));
+    if (match[1] !== undefined) container.append(element("pre", "message-code", match[1]));
+    else if (match[2]) container.append(element("strong", "", match[2]));
+    else if (match[3]) container.append(element("code", "", match[3]));
+    else {
+      const link = element("a", "", match[4]);
+      link.href = match[5];
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      container.append(link);
+    }
+    offset = match.index + match[0].length;
+  }
+  container.append(document.createTextNode(text.slice(offset)));
 }
 function renderBrief(run) {
   const brief = run.brief || {},
@@ -724,21 +783,7 @@ async function control(action, params = {}) {
       `/api/runs/${encodeURIComponent(state.runId)}/${action}`,
       params,
     );
-    if (result instanceof Response) {
-      const blob = await result.blob();
-      const url = URL.createObjectURL(blob);
-      const link = element("a");
-      link.href = url;
-      const disposition = result.headers.get("Content-Disposition") || "";
-      const filename = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
-      link.download = filename
-        ? decodeURIComponent(filename)
-        : "rsi-artifact.zip";
-      document.body.append(link);
-      link.click();
-      link.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } else if (result.notice) notice(result.notice);
+    if (result.notice) notice(result.notice);
     await refresh(true);
   } catch (error) {
     notice(error.message);
@@ -746,21 +791,44 @@ async function control(action, params = {}) {
     state.busy = false;
     for (const button of $("controls").querySelectorAll("button"))
       button.disabled = false;
-    $("export").disabled = !state.run?.best?.candidate_id;
+    if (state.run) render();
   }
 }
 
-function openCreate() {
-  $("create-error").hidden = true;
-  $("create-simulated").checked = state.defaultSimulated;
-  updateCreateEnvironment();
-  $("create-dialog").showModal();
-  $("new-objective").focus();
+async function createConversation(message = "") {
+  if (state.creating) return;
+  state.creating = true;
+  $("new-run").disabled = $("mobile-new").disabled = $("welcome-send").disabled = true;
+  notice();
+  try {
+    const result = await api("/api/runs", { message, message_id: crypto.randomUUID() });
+    if (!result.run_id) throw new Error("未能读取研究记录，请刷新列表。");
+    await loadRuns();
+    state.runId = null;
+    await selectRun(result.run_id);
+    switchTab("chat");
+    $("welcome-input").value = "";
+    $("chat-input").focus();
+  } catch (error) {
+    notice(error.message);
+  } finally {
+    state.creating = false;
+    $("new-run").disabled = $("mobile-new").disabled = $("welcome-send").disabled = false;
+  }
 }
-$("new-run").addEventListener("click", openCreate);
-$("mobile-new").addEventListener("click", openCreate);
-$("welcome-new").addEventListener("click", openCreate);
-$("close-dialog").addEventListener("click", () => $("create-dialog").close());
+$("new-run").addEventListener("click", () => createConversation());
+$("mobile-new").addEventListener("click", () => createConversation());
+$("welcome-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const message = $("welcome-input").value.trim();
+  if (message) createConversation(message);
+});
+$("welcome-input").addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+    event.preventDefault();
+    $("welcome-form").requestSubmit();
+  }
+});
 $("mobile-runs").addEventListener("change", (event) =>
   selectRun(event.target.value),
 );
@@ -793,32 +861,6 @@ for (const name of ["jobs", "activity"])
       $(`${other}-tab`).setAttribute("aria-selected", String(other === name));
     }
   });
-$("create-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  $("create-submit").disabled = true;
-  $("create-error").hidden = true;
-  try {
-    const result = await api("/api/runs", {
-      template: $("template").value,
-      objective: $("new-objective").value.trim(),
-      instructions: $("new-instructions").value.trim(),
-      max_agents: Number($("max-agents").value),
-      simulated: $("create-simulated").checked,
-    });
-    if (!result.run_id)
-      throw new Error("研究已创建，但没有返回记录编号，请刷新列表。");
-    $("create-dialog").close();
-    await loadRuns();
-    state.runId = null;
-    await selectRun(result.run_id);
-    switchTab("chat");
-  } catch (error) {
-    $("create-error").textContent = error.message;
-    $("create-error").hidden = false;
-  } finally {
-    updateCreateEnvironment();
-  }
-});
 $("chat-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const text = $("chat-input").value.trim();
@@ -852,34 +894,10 @@ $("chat-input").addEventListener("keydown", (event) => {
   }
 });
 
-function updateCreateEnvironment() {
-  const simulated = $("create-simulated").checked;
-  $("create-submit").disabled =
-    !state.token || (!simulated && !state.hasConfig);
-  $("create-environment").textContent = simulated
-    ? "使用模拟作业验证流程，研究 Agent 仍会调用已配置的模型。"
-    : state.hasConfig
-      ? "使用启动工作台时提供的执行配置。创建后可继续确认目标与约束。"
-      : "尚未配置执行环境。请用 --config 指定配置，或用 --simulate-gpu 启动流程演练。";
-}
 async function bootstrap() {
   const config = await api("/api/bootstrap");
   state.token = config.csrf_token;
-  state.allowSimulation = config.allow_simulation === true;
-  state.defaultSimulated =
-    state.allowSimulation && config.default_simulated === true;
-  state.hasConfig = config.has_config === true;
-  $("create-simulated").disabled = !state.allowSimulation;
-  $("create-simulated").checked = state.defaultSimulated;
-  $("simulation-help").textContent = state.allowSimulation
-    ? "验证流程，不代表真实成绩"
-    : "启动时未启用模拟作业";
-  const openResearch = $("template").querySelector('[value="research"]');
-  openResearch.disabled = !state.hasConfig;
-  openResearch.hidden = !state.hasConfig;
-  updateCreateEnvironment();
 }
-$("create-simulated").addEventListener("change", updateCreateEnvironment);
 
 async function boot() {
   try {

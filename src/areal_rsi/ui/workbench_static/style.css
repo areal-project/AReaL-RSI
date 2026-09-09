@@ -291,10 +291,6 @@ main {
   border-radius: 5px;
   font-weight: 500;
 }
-.simulation {
-  background: #fff2d7;
-  color: #956e2e;
-}
 .notice {
   margin-top: 16px;
   padding: 12px 15px;
@@ -747,6 +743,14 @@ main {
   border-radius: 9px;
   padding: 11px 13px;
 }
+.message-content code, .message-code {
+  font-size: 0.9em;
+  background: var(--paper);
+  border-radius: 5px;
+  padding: 2px 4px;
+}
+.message-code { white-space: pre-wrap; padding: 12px; }
+.message-content a { color: var(--green); text-underline-offset: 3px; }
 .message.pending {
   opacity: 0.65;
 }
@@ -952,120 +956,45 @@ main {
 .welcome .primary {
   padding: 13px 20px;
 }
-.welcome .primary span {
-  margin-left: 24px;
-}
-.welcome-examples {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-top: 55px;
-  color: #8c9788;
-  font-size: 10px;
-}
-.welcome-examples span {
-  padding: 9px 12px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-}
-dialog {
-  padding: 0;
+/* Preparation centers the conversation; research views appear after start. */
+.welcome-composer {
+  padding: 20px;
+  background: #fff;
   border: 1px solid var(--line);
   border-radius: 16px;
-  width: min(570px, calc(100vw - 32px));
-  color: var(--ink);
-  box-shadow: 0 20px 70px #19302321;
+  box-shadow: 0 8px 32px #253f3508;
 }
-dialog::backdrop {
-  background: #15291d44;
-  backdrop-filter: blur(3px);
-}
-#create-form {
-  padding: 26px;
-}
-.dialog-heading {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 23px;
-}
-.dialog-heading h2 {
-  font-size: 22px;
-  margin-top: 8px;
-}
-.dialog-heading .quiet {
-  font-size: 23px;
-  line-height: 1;
-}
-dialog label {
-  display: block;
-  font-size: 12px;
-  font-weight: 500;
-  margin: 17px 0 8px;
-}
-dialog select,
-dialog textarea,
-dialog input[type="number"] {
+.welcome-composer textarea {
   width: 100%;
-  border: 1px solid #dce4d8;
-  border-radius: 8px;
-  background: #fff;
-  padding: 10px 11px;
-  line-height: 1.7;
-  font-size: 12px;
-  color: var(--ink);
-}
-dialog textarea {
   resize: vertical;
+  min-height: 120px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  line-height: 1.8;
 }
-dialog input[type="number"] {
-  max-width: 120px;
-}
-.form-row {
-  display: flex;
-  gap: 35px;
-  align-items: center;
-}
-.checkbox {
-  display: flex;
-  gap: 9px;
-  align-items: center;
-  font-size: 11px;
-}
-.checkbox small {
-  display: block;
-  font-size: 10px;
-  color: var(--muted);
-  margin-top: 5px;
-  font-weight: 400;
-}
-.checkbox input {
-  accent-color: var(--green);
-}
-#create-environment {
-  margin-top: 12px;
-  line-height: 1.6;
-}
-.dialog-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 18px;
-  margin-top: 24px;
-  border-top: 1px solid var(--line);
-  padding-top: 20px;
-}
-.dialog-footer .muted {
-  font-size: 10px;
-}
-.form-error {
-  color: var(--red);
-  font-size: 11px;
-  margin-top: 15px;
-}
-body.modal-open {
-  overflow: hidden;
-}
+.composer-bottom > span { color: var(--muted); font-size: 11px; }
+.intake-body { padding: 0 22px 22px; }
+.intake-body p { font-size: 13px; }
+#intake-environment { margin-top: 22px; }
+#intake-retry .error { color: var(--red); margin: 15px 0; }
+.metrics.without-score { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.discussing .metrics,
+.discussing .graph-card,
+.discussing .plan-card,
+.discussing .activity-card { display: none; }
+.discussing .workspace-grid { grid-template-columns: minmax(0, 1fr) 300px; }
+.discussing .inspector { grid-column: 1; grid-row: 1; position: static; }
+.discussing .research-column { grid-column: 2; grid-row: 1; }
+.discussing .messages { height: clamp(350px, calc(100dvh - 370px), 650px); }
+.discussing .message .message-content { font-size: 14px; }
+.discussing .messages { padding: 25px; }
+.discussing .composer { padding: 18px 25px; }
+.discussing .composer textarea { font-size: 14px; }
+.discussing .chat-intro { padding: 28px 12px; }
+.discussing .chat-intro h3 { font-size: 17px; }
+.discussing .chat-intro p { font-size: 13px; max-width: 370px; }
+
 @media (min-width: 1650px) {
   main {
     padding-left: 42px;
@@ -1262,32 +1191,20 @@ body.modal-open {
   .welcome h1 {
     font-size: 29px;
   }
-  .welcome-examples {
-    margin-top: 35px;
-  }
   .activity-card .card-heading > .muted {
     max-width: 90px;
     text-align: right;
     line-height: 1.6;
   }
-  .dialog-footer {
-    align-items: flex-end;
-  }
-  .dialog-footer .muted {
-    max-width: 165px;
-  }
-  .form-row {
-    gap: 20px;
-  }
-  #create-form {
-    padding: 21px;
-  }
-  .form-row label {
-    font-size: 10px;
-  }
-  .checkbox small {
-    font-size: 9px;
-  }
+}
+@media (max-width: 720px) {
+  .discussing .workspace-grid { grid-template-columns: 1fr; }
+  .discussing .research-column { grid-column: 1; grid-row: 2; }
+  .discussing .inspector { grid-column: 1; grid-row: 1; }
+  .discussing .messages { height: 360px; padding: 20px; }
+  .discussing .composer { padding: 16px 20px; }
+  .welcome-composer { padding: 16px; }
+  .welcome { padding-top: 50px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *,

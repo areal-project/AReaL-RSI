@@ -458,6 +458,8 @@ class ResearchApp:
                 "with Ctrl+C, then resume it here; viewing and export remain available."
             )
         if action == "chat":
+            if c.state["status"] not in {"planned", "running", "paused"}:
+                raise ValueError("研究已结束，记录仍可查看；新的研究请另建对话")
             text = str(params["text"]).strip()
             if not text or len(text) > 12000:
                 raise ValueError("Message must contain 1–12000 characters")

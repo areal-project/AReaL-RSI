@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -20,6 +21,7 @@ from areal_rsi.api.modules import Benchmark, Verifier
 from areal_rsi.api.workflow import WorkflowContext
 from areal_rsi.base.catalog import LocalModelCatalog
 from areal_rsi.base.storage import (
+    DIRECTORY_TYPE,
     FileContentStore,
     FileMemory,
     FileTrajectoryStore,
@@ -70,6 +72,16 @@ class LocalApp:
             workflows if workflows is not None else {"harness-evolution": None}
         ):
             raise ValueError("选中的 Python Workflow 尚未注册")
+        if any((root / "remote" / name).exists() for name in ("backend.json", "config.json")):
+            raise ValueError("数据目录属于 remote mode，请设置独立的 RSI_DATA_ROOT")
+        baseline_file = root / "baseline.json"
+        if baseline_file.exists():
+            baseline = json.loads(baseline_file.read_text())
+            if (
+                baseline["harness"]["content"].get("media_type")
+                != DIRECTORY_TYPE
+            ):
+                raise ValueError("数据目录属于 remote mode，请设置独立的 RSI_DATA_ROOT")
         runtime_settings = RuntimeSettings.from_environment()
         model_settings = AgentModelSettings.from_environment()
         research_agent_count = research_agent_count_from_environment()
@@ -141,8 +153,6 @@ class LocalApp:
             proxy = proxies[connection]
             budget = 4096 if agent_id == "task-agent" else 12288
             selection = runtime_settings.select(agent_id)
-            import json
-
             key = (connection, budget, json.dumps(selection, sort_keys=True))
             if key not in runtimes:
                 runtimes[key] = PackageAgentRuntime(
@@ -300,10 +310,10 @@ class LocalApp:
 
     async def close(self) -> None:
         try:
-            await self.rsi.close()
             for run_id, task in self.service.tasks.items():
                 if not task.done():
                     await self.service.stop(run_id)
+            await self.rsi.close()
         finally:
             unique = list(dict.fromkeys(self.agent_proxies.values()))
             try:
@@ -322,3 +332,14 @@ class LocalApp:
                 )
         finally:
             await asyncio.gather(*(asyncio.to_thread(proxy.close) for proxy in unique))
+
+
+async def create_app(root: Path, emit: Callable[[str], None]) -> LocalApp:
+    mode = os.environ.get("RSI_MODE", "local")
+    if mode == "local":
+        return await LocalApp.create(root, emit)
+    if mode == "remote":
+        from areal_rsi.remote_app import RemoteApp
+
+        return await RemoteApp.create(root, emit)
+    raise ValueError("RSI_MODE 只支持 local 或 remote")

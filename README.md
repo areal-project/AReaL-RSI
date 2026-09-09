@@ -112,6 +112,16 @@ uv run --env-file .env --locked rsi resume RUN_ID
 
 统一安装固定版本的 `@deepseek-ai/dsh` CLI 与 [`@deepseek-harness-tui/dsh-tui`](https://github.com/ccch1mneyyy/dsh-TUI) 插件。插件包名、版本和 profile 位于 `modules/dsh_profile.py`；静态 Cordis patch 与 Persona 位于 `resources/dsh/`；`modules/dsh_config.py` 只填入模型、数据目录、workspace 和 MCP 环境变量名。DSH 版本由共享安装模块管理，多个 worker 并发启动时通过文件锁复用同一份完整安装。它们位于 `RSI_DATA_ROOT` 的 `dsh-cli/` 和 `dsh-home/`，无需全局安装 DSH。前台选择 TUI profile，DSH 后台使用带 Runtime bundle 的 `agent-runtime` profile，两者默认执行同一份 CLI；后台仅可读取共享安装，不能改写它。Python SDK 的依赖仍会附带预打包运行时，但 RSI 不启动该文件。RSI preset 首次复制 DSH 标准研发工具；每次启动从 `resources/dsh/persona.md` 同步 Interaction Agent 角色定义，并保留 preset 中的工具等其他配置。角色提示修改后需重启 TUI；新对话会使用当前定义。上游 TUI 的语言、主题等界面偏好位于用户目录 `~/.dsh-tui`。
 
+## Remote Mode
+
+设置 `RSI_MODE=remote`、`RSI_REMOTE_BACKEND`、`RSI_REMOTE_CONFIG` 和独立的
+`RSI_DATA_ROOT` 可使用远端评测。本地负责研究与编排，具体 backend 提供任务执行、
+Verifier 和候选构建。EnvArena 是当前内置实现（`envarena`，默认值），位于
+`modules/remote/envarena/`；其候选通过远端 API 创建能力配置并继承远端 Runtime。
+
+本地研究沿用 `RSI_RUNTIME_CONFIG` 选择 Runtime package 的 Harness，并在恢复时核对配置。
+最小 LCB 测试的配置、启动和恢复命令见 [Remote 示例](examples/remote/README.md)。
+
 ## Web UI
 
 另开一个终端，在项目目录加载同一份配置，使用与 TUI 相同的数据目录：

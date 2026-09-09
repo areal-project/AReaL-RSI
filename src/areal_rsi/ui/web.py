@@ -11,7 +11,8 @@ from typing import Any
 from urllib.parse import unquote, urlsplit
 
 from areal_rsi.api.base import ExperimentRun, SolutionVersion
-from areal_rsi.base.storage import decode, now, safe_name
+from areal_rsi.base.storage import decode, encode, now, safe_name
+from areal_rsi.modules.remote.registry import read_remote_jobs
 
 
 class RunReader:
@@ -141,6 +142,7 @@ class RunReader:
                 }
             )
         # 显式投影：不返回 plan.config、ContentRef、Memory、gateway 或原始轨迹。
+        remote_jobs = [encode(job) for job in read_remote_jobs(self.root, run.run_id)]
         return {
             "run_id": run.run_id,
             "goal": run.plan.goal,
@@ -173,6 +175,7 @@ class RunReader:
             "error": run.error,
             "worker_alive": self.worker_alive(run.run_id),
             "observed_at": now(),
+            "remote_jobs": remote_jobs,
         }
 
 

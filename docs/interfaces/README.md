@@ -4,6 +4,15 @@
 
 ## 1. 文件结构
 
+`HarnessRuntime.run` 保留单题接口。支持批量的平台可实现可选的
+`BatchHarnessRuntime.run_many(solution, tasks, *, config=None) -> Mapping[str, TaskResult]`。
+返回值必须精确覆盖输入 Task ID；同一 `execution_key` 的重复调用恢复已提交工作。
+批量实现负责取消时的远端停止与恢复，Workflow 继续使用原有逐题结果和评测检查点。
+
+`modules/remote/base.py` 定义后端装配契约：`RemoteProvider.create` 提供基线、上述现有模块
+和 ResearchAgent 工厂；`read_jobs` 提供只读的 `RemoteJob` 投影。EnvArena 的 API、配置、
+媒体格式和研究适配均位于 `modules/remote/envarena/`，通用 App 不导入这些实现。
+
 ```text
 src/areal_rsi/api/
 ├── base.py      基础数据对象
@@ -47,7 +56,7 @@ class HarnessVersion:
     parent_version_id: str | None
 ```
 
-HarnessVersion 的 `content` 指向完整 Harness 目录快照。Prompt、Skill、Tool、MCP 都是这个目录中的文件，不再定义 HarnessResource 或 HarnessManifest。
+HarnessVersion 的 `content` 指向可复现的配置快照。Local mode 使用完整目录，Prompt、Skill、Tool、MCP 是目录内文件；remote mode 使用远端 Harness 配置及固定资源引用，media type 为 `application/vnd.areal-rsi.arena-harness+json`。运行时由远端提供，本地只调用远端能力配置 API。
 
 ContentRef 是底层文件或目录的内容地址；ArtifactVersion 是用户产物的版本。比如一个游戏目录的位置和摘要由 ContentRef 表示，而 `game_v3` 由 ArtifactVersion 表示：
 
@@ -90,7 +99,7 @@ class HarnessChange:
     reason: str
 ```
 
-patch 可以修改多个相互依赖的文件，但整体只产生一个新 HarnessVersion，因此不再拆成 HarnessEdit 和 HarnessChange 两层。
+Local patch 可以修改多个相互依赖的文件，但整体只产生一个新 HarnessVersion。Remote 的 `patch` 使用 `application/vnd.areal-rsi.arena-change+json`，内容为声明式配置变更，允许字段由远端适配器校验；签名不变。
 
 ModelChange 是一次训练请求：
 
@@ -409,7 +418,11 @@ AgentRuntime.open(agent, workspace_root=None) -> AgentSession
 
 AgentSpec 显式描述 Agent 的依赖：runtime 使用 `name@version` 形式选择 Runtime Framework，例如 `deepseek-harness@v1`；model 是实际使用的 ModelVersion；Prompt Template 和 Skill 使用带 digest 的 ContentRef；Tool 和 MCP Server 也使用注册表中的 `name@version` 标识，例如 `memory@v1`、`trajectory-store@v1`、`browser@v1`。不再提供一个可隐藏任意字段的通用 config。
 
-这些是注册表键的示例，不意味着所有 Runtime 自动实现它们。当前 DSH Adapter 通过 Python SDK 调用与前台共用的固定版本 CLI，后台使用 `sdk-minimal` profile 和独立工作区。内置 `bash@v1`、`editor@v1`；其他工具通过构造参数 `tool_registry` 显式绑定到 DSH 插件，MCP 使用 `mcp_registry`。未注册的键会报错，不会静默忽略。ResearchAgent 当前通过工作区内的有界检索脚本读取 Memory，而不是假装存在未装配的 Memory 插件。
+这些是注册表键的示例，不意味着所有 Runtime 自动实现它们。当前 `PackageAgentRuntime`
+按 `RSI_RUNTIME_CONFIG` 选择 Harness，通过公开 Application API 执行，绑定键为
+`areal-agent-runtime@v1`。`bash@v1`、`editor@v1` 映射到已配置 Harness 的工具，MCP
+使用 `mcp_registry`；未支持或未注册的键会报错。DSH 使用包含 Runtime bundle 的
+`agent-runtime` profile。详细能力边界见 [Runtime package](../runtime-package.md)。
 
 AgentRuntime 使用 Session 表达多轮 Agent。每次 `send()` 只返回当前轮回复；`finish()` 结束 Session，Runtime 自动保存完整多轮轨迹并返回 TrajectoryRef。Runtime 必须将 `workspace_root` 作为隔离根目录，不能让文件/Shell 工具向上读取 VALIDATE、expected 或其他 Agent 的目录。
 

@@ -10,18 +10,19 @@ import signal
 from pathlib import Path
 
 from areal_rsi.api.base import ExperimentPlan, ExperimentRun, RunState
-from areal_rsi.app import LocalApp
+from areal_rsi.app import create_app
 from areal_rsi.base.storage import FileRecords, decode, encode
 from areal_rsi.config import ModelConfigurationError
 
 
 def data_root() -> Path:
-    return Path(os.environ.get("RSI_DATA_ROOT", ".rsi/local")).resolve()
+    default = ".rsi/remote" if os.environ.get("RSI_MODE") == "remote" else ".rsi/local"
+    return Path(os.environ.get("RSI_DATA_ROOT", default)).resolve()
 
 
 async def run_experiment(plan_file: str | None, resume: str | None) -> int:
     root = data_root()
-    app = await LocalApp.create(root, lambda text: print(text, flush=True))
+    app = await create_app(root, lambda text: print(text, flush=True))
     try:
         if resume:
             previous = await app.service.status(resume)
@@ -48,7 +49,7 @@ async def run_experiment(plan_file: str | None, resume: str | None) -> int:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="RSI 本地研发入口")
+    parser = argparse.ArgumentParser(description="RSI 研发入口（local / remote）")
     commands = parser.add_subparsers(dest="command")
     tui = commands.add_parser("tui", help="打开 DSH 原生 TUI")
     tui.add_argument("--resume", dest="session_id", help="恢复 DSH 对话 Session")

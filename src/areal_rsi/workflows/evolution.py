@@ -26,6 +26,7 @@ from areal_rsi.api.base import (
     VerificationRequest,
     VerificationResult,
 )
+from areal_rsi.api.modules import BatchHarnessRuntime
 from areal_rsi.api.workflow import ResearchAgent, WorkflowContext
 from areal_rsi.base.storage import FileRecords, decode, encode, now, safe_name, write_json
 from areal_rsi.framework.verifier import VerifierExecutor
@@ -113,6 +114,28 @@ class HarnessEvolutionWorkflow:
             return report, decode(ContentRef, cached["trajectories"])
         results: list[VerificationResult] = []
         refs: list[TrajectoryRef] = []
+        batch_results = None
+        if isinstance(ctx.harness_runtime, BatchHarnessRuntime) and any(
+            not (folder / f"task-{index}.json").exists() for index in range(1, len(tasks) + 1)
+        ):
+            self.update_progress(
+                agent_id,
+                phase=f"evaluate_{split.value}",
+                task=0,
+                task_count=len(tasks),
+                solution_id=solution.solution_id,
+            )
+            batch_results = await ctx.harness_runtime.run_many(
+                solution,
+                tasks,
+                config={
+                    "execution_key": f"{self.state.run_id}/{folder.relative_to(self.folder)}",
+                    "run_id": self.state.run_id,
+                    "split": split.value,
+                },
+            )
+            if set(batch_results) != {task.task_id for task in tasks}:
+                raise ValueError("批量执行必须返回完整且无额外题目的结果")
         for index, task in enumerate(tasks, 1):
             self.update_progress(
                 agent_id,
@@ -138,14 +161,18 @@ class HarnessEvolutionWorkflow:
                     raise ValueError("任务缓存轨迹身份不匹配")
             else:
                 # 给远端实现稳定的幂等键，进程重启不重新提交同一次任务。
-                task_result = await ctx.harness_runtime.run(
-                    solution,
-                    task,
-                    config={
-                        "execution_key": (
-                            f"{self.state.run_id}/{folder.relative_to(self.folder)}/{task.task_id}"
-                        ),
-                    },
+                task_result = (
+                    batch_results[task.task_id]
+                    if batch_results is not None
+                    else await ctx.harness_runtime.run(
+                        solution,
+                        task,
+                        config={
+                            "execution_key": (
+                                f"{self.state.run_id}/{folder.relative_to(self.folder)}/{task.task_id}"
+                            ),
+                        },
+                    )
                 )
                 verification = await VerifierExecutor().verify(
                     ctx.verifier,

@@ -36,10 +36,10 @@ class ExperimentApp(Protocol):
 AppFactory: TypeAlias = Callable[[Path, Callable[[str], None]], Awaitable[ExperimentApp]]
 
 
-async def _local_app(root: Path, emit: Callable[[str], None]) -> ExperimentApp:
-    from areal_rsi.app import LocalApp
+async def _configured_app(root: Path, emit: Callable[[str], None]) -> ExperimentApp:
+    from areal_rsi.app import create_app
 
-    return await LocalApp.create(root, emit)
+    return await create_app(root, emit)
 
 
 @contextmanager
@@ -108,7 +108,7 @@ class ExperimentController:
         self,
         root: Path,
         *,
-        app_factory: AppFactory = _local_app,
+        app_factory: AppFactory = _configured_app,
         worker_command: Sequence[str] | None = None,
     ):
         self.root = root.resolve()
@@ -337,7 +337,7 @@ async def run_worker(
     token: str,
     lock_fd: int,
     *,
-    app_factory: AppFactory = _local_app,
+    app_factory: AppFactory = _configured_app,
 ) -> int:
     """内部 CLI 入口；调用方必须传入控制层启动时继承的专属锁 FD。"""
     controller = ExperimentController(root, app_factory=app_factory)

@@ -1,6 +1,7 @@
 "use strict";
 const colors=["#64d9c3","#91b8ff","#ffc984","#d5a1f6","#ee91b0","#b5d78d","#72c7ec","#deb687"];
 const states={planned:"待启动",running:"运行中",succeeded:"已完成",failed:"失败",cancelled:"已停止"};
+const remoteStates={prepared:"准备中",submitting:"提交中",submitted:"已提交",unknown:"提交待核对",rejected:"提交被拒绝",stop_requested:"正在停止",collected:"结果已回收",RUNNING:"运行中",PENDING:"等待中",AGGREGATING:"汇总中",DONE:"已完成",STOPPING:"停止中",STOPPED:"已停止",FAILED:"失败",CANCELLED:"已取消",TIMEOUT:"超时"};
 const phases={waiting:"等待首轮",research:"分析当前版本",evaluate_train:"执行 TRAIN 评测",evaluate_validate:"执行 VALIDATE 评测",propose:"提出修改",build:"构建候选版本",select:"选择下一轮版本",iteration_completed:"本轮完成",completed:"研究完成",failed:"执行失败",cancelled:"已停止",pruned:"已剪枝"};
 const esc=value=>String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const percent=value=>typeof value==="number"&&Number.isFinite(value)?`${(value*100).toFixed(1)}%`:"—";
@@ -47,6 +48,7 @@ function render(run){
     <p class="meta">${esc(run.workflow)} · ${esc(run.benchmark)} · Interaction Agent ${esc(run.interaction_model||"未记录")} · RSI Agent ${esc(run.rsi_model||run.teacher_model||"未记录")} · 目标模型 ${esc(run.target_model||run.model||"未记录")}</p>
     ${run.state==="running"&&!run.worker_alive?'<div class="notice">记录显示运行中，但未发现持有此 Run 执行锁的进程。请通过 CLI 核对或恢复；页面不会重新启动实验。</div>':""}
     ${run.error?`<div class="notice">${esc(run.error)}</div>`:""}
+    ${run.remote_jobs?.length?`<details class="goal" data-key="remote-jobs"><summary>远端评测任务（${run.remote_jobs.length}）</summary>${run.remote_jobs.map(job=>`<p>${job.url?`<a href="${esc(job.url)}" target="_blank" rel="noopener noreferrer">${esc(job.job_id)}</a>`:esc(job.job_id||"提交待核对")} · ${esc(remoteStates[job.state]||job.state)} · 成功 ${Number(job.task_counts?.done||0)}，失败 ${Number(job.task_counts?.failed||0)}，取消 ${Number(job.task_counts?.cancelled||0)} / 共 ${Number(job.task_counts?.total||0)} 题</p>`).join("")}</details>`:""}
     <section class="stats" aria-label="实验概览"><div class="stat"><div class="label">基线验证得分</div><div class="value">${percent(run.baseline_score)}</div><div class="meta">${run.baseline_score===null?(run.state==="running"&&run.worker_alive&&run.baseline_progress?.task_count?`正在评测 ${run.baseline_progress.task}/${run.baseline_progress.task_count} 题`:"尚无有效基线结果"):"固定数据分区"}</div></div>
     <div class="stat"><div class="label">历史最佳验证得分</div><div class="value">${percent(run.best_score)}</div><div class="meta">允许持平或退化，不保证提升</div></div>
     <div class="stat"><div class="label">已完成研究轮次</div><div class="value">${completed} <span class="meta">/ ${run.max_iterations*run.research_agent_count}</span></div><div class="meta">${run.research_agent_count} 条独立研究线</div></div>

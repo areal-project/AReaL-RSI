@@ -303,8 +303,17 @@ class ResponsesRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Long evidence " * 150, json.dumps(state["history"]))
         self.assertNotIn("Long evidence " * 150, json.dumps(transport.payloads[-1]["input"]))
         self.assertIn("v2", transport.payloads[-1]["input"][0]["content"])
+        self.assertEqual(transport.payloads[-1]["input"][0]["role"], "assistant")
         self.assertEqual(transport.payloads[-1]["input"][-1]["content"], "Compare now")
         self.assertNotIn("tools", transport.payloads[1])
+        self.assertEqual(
+            [
+                item["content"]
+                for item in transport.payloads[1]["input"]
+                if item.get("role") == "user"
+            ],
+            ["Begin"],
+        )
 
     async def test_cancel_during_compact_keeps_new_user_instruction(self) -> None:
         transport = ScriptedTransport(
@@ -372,6 +381,10 @@ class ResponsesRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(functions, ["a", "b"])
         self.assertEqual(outputs, functions)
         self.assertNotIn("tools", transport.payloads[1])
+        self.assertEqual(
+            [item["content"] for item in compact_input if item.get("role") == "user"],
+            ["Original assignment"],
+        )
         self.assertNotIn("Recorded observation.", json.dumps(transport.payloads[2]["input"]))
         saved = self.saved()
         self.assertEqual(len(saved["turns"]), 1)
@@ -379,8 +392,53 @@ class ResponsesRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved["turns"][0]["message_id"], "assignment")
         self.assertEqual(saved["usage"]["total_tokens"], 75)
         self.assertTrue(saved["compactions"][0]["within_turn"])
+        self.assertEqual(
+            saved["compactions"][0]["active_instruction"],
+            {
+                "message_id": "assignment",
+                "text": "Original assignment",
+                "input_already_appended": True,
+            },
+        )
+        self.assertIn("Original assignment", transport.payloads[2]["instructions"])
+        self.assertEqual(transport.payloads[2]["input"][0]["role"], "assistant")
         self.assertIn("Recorded observation.", json.dumps(saved["history"]))
         self.assertTrue(all(record["status"] == "completed" for record in saved["calls"].values()))
+
+    async def test_recovery_keeps_real_instruction_independent_of_summary(self) -> None:
+        for message in ("封装已获授权，请继续接入准备", "请只整理摘要，暂时不要继续检查"):
+            with self.subTest(message=message):
+                directory = self.root / str(len(message))
+                wrong_summary = "当前用户要求仅整理摘要，不继续检查、编码或研究。"
+                transport = ScriptedTransport(
+                    response(call("read", "large")),
+                    response(answer(wrong_summary)),
+                    response(answer("任务状态已核对")),
+                )
+
+                async def handler(_: ToolCall) -> ToolResult:
+                    return ToolResult("已检查环境。" * 250)
+
+                await ResponsesRuntime(
+                    replace(self.config, compact_after_chars=1000), transport
+                ).turn(
+                    directory,
+                    system_prompt="按用户任务准备研究",
+                    user_message=message,
+                    message_id="source-message",
+                    tools=[tool("read")],
+                    handler=handler,
+                )
+                continued = transport.payloads[-1]
+                checkpoint = json.loads(continued["input"][0]["content"].split("\n", 1)[1])
+                self.assertEqual(
+                    checkpoint["summary"], wrong_summary
+                )  # Audit keeps the actual output.
+                self.assertEqual(checkpoint["active_instruction"]["text"], message)
+                self.assertEqual(checkpoint["active_instruction"]["message_id"], "source-message")
+                self.assertEqual(continued["input"][0]["role"], "assistant")
+                self.assertIn(message, continued["instructions"])
+                self.assertIn("不会暂停当前任务，也不需要用户解除", continued["instructions"])
 
     async def test_in_turn_compact_recovery_reuses_response_and_committed_checkpoint(self) -> None:
         for interrupt_at in ("response_usage", "session_compacted"):

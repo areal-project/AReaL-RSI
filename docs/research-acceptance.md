@@ -1,5 +1,13 @@
 # Research 工作台验收记录
 
+## Compact 指令来源修复（2026-09-09）
+
+实际 Interaction 会话暴露了归因错误：运行时把“本次只做摘要”追加为 user 消息，摘要将其写成用户的等待要求，恢复后又写进 brief，导致反复询问是否解除等待。现将压缩指令保留在该次请求的 instructions 中，检查点以 assistant 记忆传入，并从持久回合直接保留原始任务 ID 和原文。恢复规则明确摘要不能新增授权或暂停要求。
+
+全量 **415 项测试、64 个 subtests** 通过，Ruff、mypy 通过。真实 `gpt-6-astra / xhigh` 在两个独立验收场景中经过压缩和恢复后，分别正确选择：已有授权继续准备；真实用户要求暂停则等待。只记录下一步选择，没有执行外部实验，记录位于 `.rsi/compact-provenance/acceptance.json`。
+
+受影响的当前 run 已备份后修复：新建 brief 修订，移除误写的等待段落，撤销对应待回答问题，纠正供模型使用的 context；原始消息、history、旧检查点、工具结果、会话 ID 与已有预算保留。恢复消息明确标为 runtime 维护消息，沿用既有授权继续接入准备，不伪造用户确认启动研究。修复记录为 `.rsi/compact-provenance/repair.json`。
+
 ## DSH 基础工具与原会话兼容（2026-09-09）
 
 Interaction、RSI 和 Research 共有 DSH 终端、文件读写/编辑、文件搜索及联网工具。全量回归 **414 项测试、62 个 subtests** 通过，包含 10 项新增测试；Ruff、mypy 和 Node 语法检查通过，wheel 包含固定的 Node 依赖清单、lockfile、worker 及 schemas。

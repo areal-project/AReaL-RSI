@@ -62,7 +62,9 @@ result = await runtime.turn(
 
 compact 请求与后续继续请求都计入当前回合和整个 run 的预算。若剩余额度不足以完成这两次请求，会保留完整边界并停止；不会另起回合或增加额度。检查点保存对应的 history 边界和请求 ID；压缩响应已保存时直接恢复它，检查点已提交时直接继续，避免重启后对同一边界重复 compact。摘要要求保留可恢复的事实、记录引用和未完成步骤，并控制在 12,000 字符以内。
 
-恢复 prompt 要求保留目标、硬限制、当前任务、决策理由、具体事实与反例、记录引用、等待中的消息和作业，并区分已测结果与推测。上层的 `recovery_state` 用于提供当前可信状态，防止摘要中的陈旧结论覆盖 run 的真实状态。
+压缩指令只放在该次请求的 instructions 中，不伪装成用户消息。检查点以 assistant 记忆记录提供给后续请求，摘要不能产生新的用户授权、暂停或再次确认要求。检查点中的 `active_instruction` 直接复制当前持久回合的消息 ID、原文和是否已加入上下文，不能由摘要模型改写。每次压缩后的正常请求（含旧检查点恢复）都获得恢复规则及当前原始任务，继续尚未完成的工作；真实用户要求暂停或仅总结时仍须遵守。
+
+恢复 prompt 要求保留目标、硬限制、当前任务、决策理由、具体事实与反例、记录引用、等待中的消息和作业，并区分已测结果与推测。上层的 `recovery_state` 提供当前保存的状态；摘要与派生的 brief 如果和真实用户或负责人的消息矛盾，应核对消息来源，不能把压缩指令写回用户需求。原始 history 和旧检查点保留以便审计。
 
 `event_sink` 接收结构化事件：`model_request`、`response_usage`、`model_stream`、`tool_started`、`tool_completed`、`turn_completed`、`turn_stopped`、`turn_budget_exhausted`、`turn_retry_granted`、`session_compacted`。事件包含 session / turn ID 和时间；模型请求与 usage 带 request ID。上层可据此统计预算、呈现流式文本、更新 Agent 状态。事件订阅者应按 ID 去重；恢复时以归档状态为准。
 

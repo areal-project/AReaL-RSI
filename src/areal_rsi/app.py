@@ -35,7 +35,7 @@ from areal_rsi.config import (
 )
 from areal_rsi.modules.gateway import GatewayProxy
 from areal_rsi.modules.harness import LocalHarnessBuilder, LocalHarnessRuntime
-from areal_rsi.modules.runtime import DshAgentRuntime
+from areal_rsi.modules.runtime_package import PackageAgentRuntime, RuntimeSettings
 from areal_rsi.workflows.service import LocalExperimentService, WorkflowFactory
 
 
@@ -49,7 +49,8 @@ class LocalApp:
     target_model: ModelVersion
     agent_models: dict[str, ModelVersion]
     agent_proxies: dict[str, GatewayProxy]
-    agent_runtimes: dict[str, DshAgentRuntime]
+    agent_runtimes: dict[str, PackageAgentRuntime]
+    runtime_settings: RuntimeSettings
     interaction_model_name: str | None
     rsi: DefaultRsiAgent
     service: LocalExperimentService
@@ -67,6 +68,7 @@ class LocalApp:
             workflows if workflows is not None else {"harness-evolution": None}
         ):
             raise ValueError("选中的 Python Workflow 尚未注册")
+        runtime_settings = RuntimeSettings.from_environment()
         model_settings = AgentModelSettings.from_environment()
         research_agent_count = research_agent_count_from_environment()
         agent_ids = [
@@ -86,7 +88,10 @@ class LocalApp:
         }
         target_connection = ModelConfig.from_environment("target")
         runtime_connections = {**connections, "task-agent": target_connection}
+        for role in runtime_connections:
+            runtime_settings.select(role)
         self = cls()
+        self.runtime_settings = runtime_settings
         self.interaction_model_name = model_settings.interaction_name()
         self.root = root.resolve()
         self.content = FileContentStore(self.root / "content")
@@ -118,21 +123,26 @@ class LocalApp:
         )
         self.agent_proxies, self.agent_runtimes = {}, {}
         proxies: dict[ModelConfig, GatewayProxy] = {}
-        runtimes: dict[tuple[ModelConfig, int], DshAgentRuntime] = {}
+        runtimes: dict[tuple[ModelConfig, int, str], PackageAgentRuntime] = {}
         for agent_id, connection in runtime_connections.items():
             if connection not in proxies:
                 proxies[connection] = GatewayProxy(connection.base_url, connection.api_key)
             proxy = proxies[connection]
             budget = 4096 if agent_id == "task-agent" else 12288
-            key = (connection, budget)
+            selection = runtime_settings.select(agent_id)
+            import json
+
+            key = (connection, budget, json.dumps(selection, sort_keys=True))
             if key not in runtimes:
-                runtimes[key] = DshAgentRuntime(
+                runtimes[key] = PackageAgentRuntime(
                     self.root / "sessions",
                     self.content,
                     self.trajectories,
+                    settings=runtime_settings,
+                    role=agent_id,
                     base_url=proxy.url,
                     api_key="local-proxy",
-                    timeout=float(os.environ.get("RSI_TURN_TIMEOUT", "240")),
+                    timeout=float(os.environ.get("RSI_TURN_TIMEOUT", "1200")),
                     max_tokens=budget,
                     dsh_root=self.root,
                     credential_env_names=model_settings.credential_env_names,
@@ -192,6 +202,7 @@ class LocalApp:
             for agent_id, model in self.agent_models.items()
         }
         return {
+            "runtime_config_digest": self.runtime_settings.identity,
             "agent_models": models,
             "interaction_model_name": self.interaction_model_name,
             "target_model_name": self.target_model.name,
@@ -200,6 +211,11 @@ class LocalApp:
 
     async def bind_plan(self, plan: ExperimentPlan) -> None:
         """按 Run 校验配置并恢复它的基线；目录本身不绑定模型。"""
+        recorded_runtime = plan.config.get("runtime_config_digest")
+        if recorded_runtime != self.runtime_settings.identity:
+            raise ModelConfigurationError(
+                "Run 的 Runtime 配置与当前配置不一致；旧 DSH 实验请使用原版本恢复。"
+            )
         baseline = await self.versions.get_solution(plan.baseline_solution_id)
         if baseline is None:
             raise ModelConfigurationError("计划引用的目标基线不存在，请检查实验数据目录。")
@@ -279,10 +295,18 @@ class LocalApp:
         finally:
             unique = list(dict.fromkeys(self.agent_proxies.values()))
             try:
-                for index, proxy in enumerate(unique):
-                    write_json(
-                        self.root / "gateway" / f"{new_id('process')}-connection-{index}.json",
-                        proxy.requests,
-                    )
+                await asyncio.gather(
+                    *(runtime.close() for runtime in set(self.agent_runtimes.values()))
+                )
             finally:
-                await asyncio.gather(*(asyncio.to_thread(proxy.close) for proxy in unique))
+                await self._close_proxies(unique)
+
+    async def _close_proxies(self, unique: list[GatewayProxy]) -> None:
+        try:
+            for index, proxy in enumerate(unique):
+                write_json(
+                    self.root / "gateway" / f"{new_id('process')}-connection-{index}.json",
+                    proxy.requests,
+                )
+        finally:
+            await asyncio.gather(*(asyncio.to_thread(proxy.close) for proxy in unique))

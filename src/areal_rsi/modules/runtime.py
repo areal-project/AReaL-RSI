@@ -58,6 +58,13 @@ def sandbox_wrapper(directory: Path, workspace: Path, cli: Path) -> Path:
         '(literal "/dev/ptmx") '
         '(regex #"^/dev/ttys[0-9]+$"))'
     )
+    if Path(sys.executable).is_symlink():
+        alias = Path(os.readlink(sys.executable))
+        if not alias.is_absolute():
+            alias = Path(sys.executable).parent / alias
+        profile.append(
+            f"(allow file-read-metadata (subpath {json.dumps(str(alias.parent.parent))}))"
+        )
     profile_path = directory / "sandbox.sb"
     profile_path.write_text("\n".join(profile))
     wrapper = directory / "dsh"
@@ -159,7 +166,7 @@ class DshAgentRuntime:
         *,
         base_url: str,
         api_key: str,
-        timeout: float = 240,
+        timeout: float = 1200,
         max_tokens: int = 4096,
         mcp_registry: dict[str, dict[str, Any]] | None = None,
         tool_registry: dict[str, list[dict[str, Any]]] | None = None,

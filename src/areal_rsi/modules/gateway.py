@@ -123,20 +123,42 @@ class GatewayProxy:
     def __init__(self, base_url: str, api_key: str):
         self.requests: list[dict[str, Any]] = []
         owner = self
-        upstream = base_url.rstrip("/") + "/chat/completions"
+        upstream_root = base_url.rstrip("/")
 
         class Handler(BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"
 
             def do_POST(self) -> None:
+                route = self.path.removeprefix("/v1")
+                route = "/chat/completions" if route in {"", "/"} else route
+                if route not in {"/chat/completions", "/responses", "/messages"}:
+                    self.send_error(404)
+                    return
+                upstream = upstream_root + route
                 original = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 # 兼容标准 chat 服务，移除 DSH 专有字段。
                 # 不改变 model/messages/tools、token 上限或模型返回内容。
-                removed = ("thinking", "reasoning_effort", "dsh_plugin_packages", "dsh_session_log")
+                removed: tuple[str, ...] = (
+                    "thinking",
+                    "reasoning_effort",
+                    "dsh_plugin_packages",
+                    "dsh_session_log",
+                )
+                if route != "/chat/completions":
+                    removed = ()
                 forwarded = {k: v for k, v in original.items() if k not in removed}
-                forwarded["store"] = False
+                if route != "/messages":
+                    forwarded["store"] = False
                 payload = json.dumps(forwarded).encode()
                 headers = {"Content-Type": "application/json"}
+                if route == "/messages":
+                    headers["anthropic-version"] = self.headers.get(
+                        "anthropic-version", "2023-06-01"
+                    )
+                    if self.headers.get("anthropic-beta"):
+                        headers["anthropic-beta"] = self.headers["anthropic-beta"]
+                    if api_key:
+                        headers["x-api-key"] = api_key
                 if api_key:
                     headers["Authorization"] = f"Bearer {api_key}"
                 request = urllib.request.Request(
@@ -165,7 +187,11 @@ class GatewayProxy:
                             self.close_connection = headers_sent = True
 
                             def send_event(data: bytes) -> None:
-                                chunk = normalize_tool_deltas(data)
+                                chunk = (
+                                    normalize_tool_deltas(data)
+                                    if route == "/chat/completions"
+                                    else data
+                                )
                                 self.wfile.write(f"{len(chunk):x}\r\n".encode())
                                 self.wfile.write(chunk + b"\r\n")
                                 self.wfile.flush()

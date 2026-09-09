@@ -17,6 +17,7 @@ PERSONA = files("areal_rsi").joinpath("resources/dsh/persona.md").read_text()
 
 MCP_ENVIRONMENT = (
     "RSI_AGENT_MODELS",
+    "RSI_RUNTIME_CONFIG",
     "RSI_TEACHER_MODEL",
     "RSI_TEACHER_BASE_URL",
     "RSI_TEACHER_API_KEY",
@@ -79,6 +80,33 @@ def write_profile_patch(root: Path, workspace: Path, model: str) -> Path:
             "models": [{"id": model}],
         }
     )
+    api = os.environ.get("RSI_TUI_MODEL_API", "chat-completions")
+    if api not in {"chat-completions", "responses"}:
+        raise ValueError("RSI_TUI_MODEL_API must be chat-completions or responses")
+    if api == "responses":
+        agent["provider"] = "rsi-responses"
+        tree.append(
+            {
+                "id": "llm-pi-ai",
+                "config": {
+                    "providers": {
+                        "rsi-responses": {
+                            "api": "openai-responses",
+                            "apiKeyEnv": "DEEPSEEK_API_KEY",
+                            "baseURL": _EnvironmentExpression(
+                                "process.env.DEEPSEEK_BASE_URL + '/v1'"
+                            ),
+                            "defaultContextWindow": int(
+                                os.environ.get("RSI_CONTEXT_WINDOW", "32768")
+                            ),
+                            "defaultMaxTokens": 8192,
+                            "retryPolicy": {"mode": "normal", "maxRetries": 0},
+                            "models": [{"id": model}],
+                        }
+                    }
+                },
+            }
+        )
     environment_names = [
         *MCP_ENVIRONMENT,
         *sorted(AgentModelSettings.from_environment().credential_env_names),

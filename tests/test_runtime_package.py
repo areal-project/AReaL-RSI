@@ -1,0 +1,214 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from areal_rsi.api.base import AgentSpec, ModelVersion
+from areal_rsi.base.storage import FileContentStore, FileTrajectoryStore, now
+from areal_rsi.modules.runtime_package import PackageAgentRuntime, RuntimeSettings, sandbox_command
+
+
+class PackageRuntimeTest(unittest.IsolatedAsyncioTestCase):
+    async def _check_composition(self, selection: dict[str, str]) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            content = FileContentStore(root / "content")
+            trajectories = FileTrajectoryStore(root / "trajectories", content)
+            runtime = PackageAgentRuntime(
+                root / "sessions",
+                content,
+                trajectories,
+                settings=RuntimeSettings({"default": selection}),
+                role="task-agent",
+                base_url="http://127.0.0.1:1",
+                api_key="local-proxy",
+            )
+            model = ModelVersion("model-test", "test", await content.put_text("model"), now())
+            session = await runtime.open(AgentSpec("task-agent", "deepseek-harness@v1", model))
+            try:
+                first = await session.send("first message")
+                second = await session.send("second message")
+                self.assertEqual(first, "fake runtime handled 1 content block(s)")
+                self.assertEqual(second, "fake runtime handled 1 content block(s)")
+                self.assertEqual(len(session.run_ids), 2)
+                ids = {e["sessionId"] for e in session.events}
+                self.assertEqual(len(ids), 1)
+            finally:
+                ref = await session.finish()
+            self.assertEqual(await session.finish(), ref)
+            trajectory = await trajectories.get(ref.trajectory_id)
+            assert trajectory is not None
+            trace = await content.read_json(trajectory.content)
+            assert isinstance(trace, dict)
+            turns = trace["turns"]
+            assert isinstance(turns, list)
+            self.assertEqual(len(turns), 4)
+            self.assertIsNotNone(session.process.returncode)
+            with self.assertRaisesRegex(RuntimeError, "已结束"):
+                await session.send("late")
+
+    async def test_installed_composition_multiturn_and_trajectory(self) -> None:
+        await self._check_composition({"kind": "fake"})
+
+    async def test_installed_entrypoint_plugin(self) -> None:
+        await self._check_composition(
+            {
+                "kind": "entrypoint",
+                "pluginEntrypoint": "areal_agent_runtime.adapters.fake.plugin:create_plugin",
+            }
+        )
+
+    async def test_sandbox_denies_sibling_experiment_data(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            directory, workspace = root / "session", root / "workspace"
+            directory.mkdir()
+            workspace.mkdir()
+            hidden = root / "hidden-validation.txt"
+            hidden.write_text("hidden-answer")
+            prefix = sandbox_command(directory, workspace, ())[:3]
+            script = "import pathlib,sys; pathlib.Path(sys.argv[1]).read_text()"
+            import sys
+
+            process = await asyncio.create_subprocess_exec(
+                *prefix,
+                sys.executable,
+                "-c",
+                script,
+                str(hidden),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            out, err = await process.communicate()
+            self.assertNotEqual(process.returncode, 0)
+            self.assertNotIn(b"hidden-answer", out)
+            self.assertIn(b"PermissionError", err)
+            import areal_rsi
+
+            evaluator = Path(areal_rsi.__file__).parent / "modules/benchmark.py"
+            process = await asyncio.create_subprocess_exec(
+                *prefix,
+                sys.executable,
+                "-c",
+                script,
+                str(evaluator),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=workspace,
+            )
+            out, err = await process.communicate()
+            self.assertNotEqual(process.returncode, 0)
+            self.assertIn(b"PermissionError", err)
+
+    def test_all_bootstrap_kinds_are_selectable(self) -> None:
+        for kind in (
+            "fake",
+            "dsh",
+            "codex-cli",
+            "claude-code",
+            "claude-agent-sdk",
+            "anthropic",
+            "hermes",
+            "remote",
+            "entrypoint",
+        ):
+            value = {"kind": kind}
+            if kind == "entrypoint":
+                value["pluginEntrypoint"] = "example:create_plugin"
+            selected = RuntimeSettings({"default": value}).select("task-agent")
+            self.assertEqual(selected["kind"], kind)
+
+    async def test_remote_wire_with_explicit_auth_reference(self) -> None:
+        import os
+        import socket
+        import sys
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            with socket.socket() as sock:
+                sock.bind(("127.0.0.1", 0))
+                port = sock.getsockname()[1]
+            config = root / "remote.json"
+            config.write_text(
+                json.dumps(
+                    {
+                        "dataRoot": str(root / "remote-data"),
+                        "runtime": {"kind": "fake"},
+                        "wire": {
+                            "host": "127.0.0.1",
+                            "port": port,
+                            "allowInsecure": True,
+                            "authTokenEnv": "RSI_WIRE_TEST_TOKEN",
+                        },
+                    }
+                )
+            )
+            with patch.dict(os.environ, {"RSI_WIRE_TEST_TOKEN": "local-wire-fixture"}):
+                with (root / "server.log").open("wb") as log:
+                    server = await asyncio.create_subprocess_exec(
+                        sys.executable,
+                        "-I",
+                        str(Path(sys.executable).with_name("areal-agent-runtime")),
+                        "serve-runtime",
+                        "--config",
+                        str(config),
+                        stdout=log,
+                        stderr=log,
+                    )
+                try:
+                    async with asyncio.timeout(15):
+                        while True:
+                            if server.returncode is not None:
+                                self.fail((root / "server.log").read_text())
+                            try:
+                                _reader, writer = await asyncio.open_connection("127.0.0.1", port)
+                                writer.close()
+                                await writer.wait_closed()
+                                break
+                            except OSError:
+                                await asyncio.sleep(0.05)
+                    content = FileContentStore(root / "content")
+                    runtime = PackageAgentRuntime(
+                        root / "sessions",
+                        content,
+                        FileTrajectoryStore(root / "trajectories", content),
+                        settings=RuntimeSettings(
+                            {
+                                "default": {
+                                    "kind": "remote",
+                                    "config": {
+                                        "host": "127.0.0.1",
+                                        "port": port,
+                                        "tls": False,
+                                        "allowInsecure": True,
+                                        "authTokenEnv": "RSI_WIRE_TEST_TOKEN",
+                                    },
+                                }
+                            }
+                        ),
+                        role="task-agent",
+                        base_url="http://127.0.0.1:1",
+                        api_key="local",
+                    )
+                    model = ModelVersion("m", "fixture", await content.put_text("model"), now())
+                    session = await runtime.open(
+                        AgentSpec("task-agent", "areal-agent-runtime@v1", model)
+                    )
+                    try:
+                        self.assertEqual(
+                            await session.send("remote proof"),
+                            "fake runtime handled 1 content block(s)",
+                        )
+                    finally:
+                        await session.finish()
+                    self.assertNotIn(
+                        "local-wire-fixture", (session.directory / "request.json").read_text()
+                    )
+                finally:
+                    if server.returncode is None:
+                        server.terminate()
+                    await server.wait()

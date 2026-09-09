@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from areal_rsi.modules.runtime import DshSession
+from areal_rsi.api.modules import AgentSession
 
 
 def parse_object(text: str) -> dict[str, Any]:
@@ -19,7 +19,7 @@ def parse_object(text: str) -> dict[str, Any]:
     return value
 
 
-async def ask_json(session: DshSession, prompt: str) -> dict[str, Any]:
+async def ask_json(session: AgentSession, prompt: str) -> dict[str, Any]:
     reply = await session.send(prompt)
     try:
         return parse_object(reply)

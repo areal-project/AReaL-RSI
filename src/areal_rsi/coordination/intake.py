@@ -1,4 +1,4 @@
-"""Conversation-led preparation; only Interaction can change execution before start."""
+"""Conversation intake and RSI-owned execution setup before configuration freezes."""
 
 from __future__ import annotations
 

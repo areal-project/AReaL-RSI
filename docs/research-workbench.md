@@ -46,6 +46,8 @@ uv run --env-file .env --locked rsi workbench
 
 Interaction、RSI 和 Research 都可以使用 DSH 的 `bash / read / write / edit / glob / grep`，以及 `search_web / fetch_url`。例如可以直接告诉 Interaction：“阅读这份环境说明，用 `ssh et15` 检查远端环境。”SSH 使用本机已有配置和认证，不需要专用 SSH 工具。
 
+已授权的既有程序可以正常读取自己的认证配置和任务令牌；不要因此要求重新授权或重写认证机制。凭证值不能公开输出、写入候选或公开归档。基础工具过滤模型凭证，不代表正式执行进程缺少其已配置的认证环境。
+
 基础工具需要 Node.js 22.19+（或 24+）和 npm。首次调用自动按仓库中的 lockfile 安装固定版本 DSH 插件，后续离线复用 `RSI_DATA_ROOT/dsh-tools/<lock摘要>/`。这个目录只缓存依赖，不保存不同 run 的公共记忆。
 
 | 角色 | 共有基础工具之外的职责与工具 |

@@ -33,6 +33,12 @@ from areal_rsi.base.storage import DIRECTORY_TYPE, encode, now, safe_name, safe_
 from areal_rsi.coordination.store import ResearchStore
 from areal_rsi.execution import JobRecord
 
+IDENTITY_FIELDS = {
+    "kernelbench": {"protocol_id", "manifest_id", "target_model", "split"},
+    "cuhkx": {"protocol_id", "prepared_protocol_id", "manifest_id", "split"},
+    "content": {"protocol_id", "manifest_id"},
+}
+
 
 def _sha_file(path: Path) -> str:
     digest = hashlib.sha256()
@@ -200,11 +206,7 @@ def read_trusted_result(
     if result.get("phase") != phase or result.get("metric") != contract.metric:
         raise ValueError("Verifier reported a different phase or metric")
     adapter = identity.get("adapter")
-    required = {
-        "kernelbench": {"protocol_id", "manifest_id", "target_model", "split"},
-        "cuhkx": {"protocol_id", "prepared_protocol_id", "manifest_id", "split"},
-        "content": {"protocol_id", "manifest_id"},
-    }
+    required = IDENTITY_FIELDS
     if adapter not in required:
         raise ValueError("Configure an explicit verification identity adapter")
     phases = identity.get("phases", {})

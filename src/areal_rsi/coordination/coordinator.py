@@ -157,6 +157,8 @@ class Coordinator:
     def start(self) -> None:
         if self.state["status"] != "planned":
             raise ValueError("Run has already started")
+        if "intake" in self.state and self.state["intake"].get("status") != "ready":
+            raise ValueError("请先与 Interaction 确认研究目标和执行条件")
         self.state["status"] = "running"
         self.state["started_at"] = now()
         run = self.store.run()
@@ -551,4 +553,5 @@ class Coordinator:
             },
             "waiting_for_user": self.state["waiting_for_user"],
             "budget_stop_reason": self.state.get("budget_stop_reason"),
+            "intake": self.state.get("intake"),
         }

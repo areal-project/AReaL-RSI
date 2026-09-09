@@ -21,11 +21,10 @@ REFERENCES = {
     "type": "array",
     "items": {
         "type": "string",
-        "description": "Exact run:// record URI returned by a tool; never a file path or web URL.",
+        "description": "工具返回的精确 run:// 记录 URI，不接受文件路径或网页地址。",
     },
-    "description": "Use tool-returned run:// record URIs. Put workspace paths and web URLs "
-    "in instruction text, or first archive the source with fetch_url/save_evidence. "
-    "Use [] when there is no archived reference.",
+    "description": "填写工具返回的 run:// 记录 URI。文件路径和网页地址写在正文中，"
+    "或先用 fetch_url/save_evidence 归档后引用。没有记录引用时使用 []。",
 }
 
 
@@ -47,28 +46,26 @@ def definition(name: str, tool_description: str, **properties: Any) -> dict[str,
 COMMON = [
     definition(
         "get_state",
-        "Read current authoritative run state, budget and evidence previews. "
-        "Use read_record with a returned URI when full evidence is needed.",
+        "查看已保存的研究状态、预算与证据摘要；需要完整记录时，用返回的 URI 调用read_record。",
     ),
-    definition("read_record", "Read an accessible research record by its run URI.", uri=STRING),
+    definition("read_record", "用 run:// URI 读取你有权限查看的研究记录。", uri=STRING),
     definition(
         "read_candidate_file",
-        "Read a text file from an immutable candidate without changing "
-        "your workspace. Use the candidate_id and the relative file path.",
+        "读取已保存候选中的文本文件，不切换工作区。提供 candidate_id 和相对文件路径。",
         candidate_id=STRING,
         path=STRING,
     ),
-    definition("list_files", "List files in your own persistent workspace."),
-    definition("read_file", "Read a UTF-8 file in your own workspace.", path=STRING),
+    definition("list_files", "列出当前工作区中的文件。"),
+    definition("read_file", "读取工作区中的 UTF-8 文本文件。", path=STRING),
     definition(
         "write_file",
-        "Create or replace a UTF-8 file in your own workspace.",
+        "在工作区中新建或替换 UTF-8 文本文件。",
         path=STRING,
         content=STRING,
     ),
     definition(
         "save_evidence",
-        "Archive an observation or finding, with real sources and limitations.",
+        "归档具体观察或发现，保留真实来源与局限。",
         title=STRING,
         summary=STRING,
         references=REFERENCES,
@@ -76,26 +73,25 @@ COMMON = [
     ),
     definition(
         "save_candidate",
-        "Freeze your current workspace as an optional product version, preserving its parent.",
+        "将当前工作区保存为不可变的候选版本，记录父版本。仅在需要保留产物时使用。",
         description=STRING,
     ),
     definition(
         "checkout_candidate",
-        "Continue from a saved candidate in your own workspace. Refuses to overwrite "
-        "unsaved changes: save them first. RSI can specify this candidate in an assignment.",
+        "从已保存的候选继续工作。若工作区还有未保存的修改，先保存快照；工具不会覆盖这些修改。",
         candidate_id=STRING,
     ),
 ]
 RSI = [
     definition(
         "update_plan",
-        "Save a concise current research plan and reason for its changes.",
+        "保存简明的当前研究计划，并说明调整原因。",
         plan=STRING,
         reason=STRING,
     ),
     definition(
         "spawn_researcher",
-        "Create a direction and issue its first concrete assignment.",
+        "新建一个研究方向，向研究员下发第一项具体任务。",
         direction=STRING,
         instruction=STRING,
         completion_criteria=STRING,
@@ -103,7 +99,7 @@ RSI = [
     ),
     definition(
         "assign",
-        "Reply to a researcher's latest report and issue its next assignment.",
+        "针对研究员的最新报告作出回复，并下发下一项任务。",
         agent_id=STRING,
         instruction=STRING,
         completion_criteria=STRING,
@@ -112,34 +108,30 @@ RSI = [
     ),
     definition(
         "stop_researcher",
-        "Stop a direction. Active execution is cancelled by the engine.",
+        "停止这个研究方向，系统会取消该研究员正在进行的执行。",
         agent_id=STRING,
         reason=STRING,
     ),
     definition(
         "stop_run",
-        "End this run when further research is not worthwhile or the goal cannot be reached. "
-        "Explain the evidence and unmet goal to the user. Stops work without claiming success.",
+        "根据现有证据结束研究，说明最佳结果、未达目标和停止原因；不能把停止记作成功。",
         reason=STRING,
     ),
     definition(
         "share_evidence",
-        "Publish evidence for all directions, preserving provenance.",
+        "将有用证据共享给本次研究中的其他方向，保留来源。",
         evidence_id=STRING,
         limitations=STRING,
     ),
-    definition(
-        "wait", "End inference until a new message arrives; give the event you need.", reason=STRING
-    ),
+    definition("wait", "结束本回合，等新消息到来后继续。说明需要等待的具体事件。", reason=STRING),
     definition(
         "ask_user",
-        "Ask Interaction to clarify an unresolved user requirement, then wait.",
+        "将尚不清楚的用户要求交给 Interaction 澄清，然后等待回复。",
         question=STRING,
     ),
     definition(
         "finish",
-        "Conclude after checking the selected deliverable and its required "
-        "final confirmation. candidate_id may be empty to select the final/best result.",
+        "核对交付物和所需最终验证后结束研究。candidate_id 为空时采用当前final/best 对应的候选。",
         summary=STRING,
         candidate_id=STRING,
     ),
@@ -147,7 +139,7 @@ RSI = [
 RESEARCH = [
     definition(
         "submit_report",
-        "Submit the assignment report and immediately stop until RSI replies.",
+        "提交当前任务报告并立即停止，等待 RSI 回复。",
         task_status=STRING,
         work=STRING,
         problems=STRING,
@@ -161,16 +153,15 @@ RESEARCH = [
 INTERACTION = [
     definition(
         "send_to_rsi",
-        "Forward user instructions or answers as a natural-language message.",
+        "用自然语言将用户指令、建议或回答及必要背景转交 RSI。",
         message=STRING,
     ),
-    definition(
-        "ask_user", "Present a concise question to the user, then end this turn.", question=STRING
-    ),
+    definition("ask_user", "向用户提出简短的问题，然后结束本回合。", question=STRING),
     definition(
         "update_brief",
-        "Before start, save a revised brief. Fields are JSON as text; preserve "
-        "objective, instructions, limits and optional verification. Read get_state first.",
+        "启动前更新需求。先读取 get_state；brief_json 包含"
+        "objective、instructions、limits 和可为空的"
+        "verification，保留未修改字段。",
         brief_json=STRING,
     ),
 ]
@@ -312,6 +303,8 @@ class ResearchActions:
         c = self.c
         if name == "get_state":
             summary = c.summary()
+            if agent_id == "interaction":
+                summary["current_message_id"] = c.state["active"].get(agent_id)
             if self.role(agent_id) == "research":
                 summary["agents"] = [encode(c.actor(agent_id))]
                 summary.pop("waiting_for_user", None)
@@ -435,6 +428,13 @@ class ResearchActions:
             run.plan.max_iterations = brief.limits.max_nodes
             run.plan.research_agent_count = brief.limits.max_agents
             c.store.save_run(run)
+            if "intake" in c.state:
+                config_path = c.store.root / "coordination" / "config.json"
+                config = json.loads(config_path.read_text())
+                config["brief"] = encode(brief)
+                write_json(config_path, config)
+                c.state["intake"].update(status="discussing", prepared_at=None)
+                c.save()
             c.store.event("brief_updated", brief=encode(brief))
             return ToolResult({"brief": encode(brief)})
         if name == "save_evidence":

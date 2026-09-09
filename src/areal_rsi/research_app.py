@@ -16,6 +16,7 @@ from areal_rsi.api.research import (
     CandidateSnapshot,
     EvidenceRecord,
     ResearchMessage,
+    TaskBrief,
     VerifiedResult,
 )
 from areal_rsi.base.runs import FileRunStore
@@ -24,6 +25,7 @@ from areal_rsi.coordination.actions import ResearchActions
 from areal_rsi.coordination.config import ResearchConfig
 from areal_rsi.coordination.coordinator import Coordinator
 from areal_rsi.coordination.engine import ResearchEngine, ToolSet
+from areal_rsi.coordination.intake import ResearchIntake, validate_execution
 from areal_rsi.coordination.jobs import ResearchExecution
 from areal_rsi.coordination.presets import example_config
 from areal_rsi.coordination.sources import register_sources
@@ -87,14 +89,22 @@ class ResearchApp:
         return config
 
     async def create(self, params: dict[str, Any]) -> dict[str, Any]:
-        simulated = bool(params.get("simulated", self.allow_simulation))
+        conversation = bool(
+            params.get("conversation", self.default_config is None and not self.allow_simulation)
+        )
+        simulated = False if conversation else bool(params.get("simulated", self.allow_simulation))
+        message = str(params.get("message", "")).strip()
+        if len(message) > 12000:
+            raise ValueError("消息不能超过 12000 字")
         if simulated and not self.allow_simulation:
             raise ValueError("Restart with simulation enabled to create simulated runs")
         if self.default_config is None:
-            if not simulated:
-                raise ValueError("Provide an operator configuration for real execution")
-            config = example_config(
-                params.get("template", "kernelbench"), repository=self.repository
+            config = (
+                ResearchConfig(TaskBrief("新的研究", ""))
+                if conversation
+                else example_config(
+                    params.get("template", "kernelbench"), repository=self.repository
+                )
             )
         else:
             config = decode(ResearchConfig, encode(self.default_config))
@@ -109,23 +119,22 @@ class ResearchApp:
             raise ValueError(
                 "This template is for workflow simulation; configure real runners first"
             )
-        if config.seed_dir and not Path(config.seed_dir).is_dir():
+        if not conversation and config.seed_dir and not Path(config.seed_dir).is_dir():
             raise FileNotFoundError(f"Seed directory does not exist: {config.seed_dir}")
-        if not simulated and config.verifier and not config.metadata.get("verification_identity"):
+        if (
+            not conversation
+            and not simulated
+            and config.verifier
+            and not config.metadata.get("verification_identity")
+        ):
             raise ValueError("Real verification requires a frozen verification_identity")
         c = Coordinator.create(self.root, config.brief, simulated=simulated)
         write_json(c.store.root / "coordination" / "config.json", config.public(), immutable=True)
-        if config.seed_dir:
-            seed = Path(config.seed_dir)
-            if not seed.is_dir():
-                raise FileNotFoundError(f"Seed directory does not exist: {seed}")
-            candidate = await c.store.snapshot(
-                seed, agent_id="operator", description="Initial files"
-            )
-            c.state["seed_candidate_id"] = candidate.candidate_id
-            if config.metadata.get("evaluate_seed_as_baseline"):
-                c.state["baseline_candidate_id"] = candidate.candidate_id
+        if conversation:
+            c.state["intake"] = {"status": "discussing", "summary": "", "environment": ""}
             c.save()
+        else:
+            await self._seed(c, config)
         if simulated and config.metadata.get("template") == "kernelbench":
             ref = c.store.put(
                 "materials",
@@ -161,7 +170,58 @@ class ResearchApp:
                     limitations="Simulated task traces; no real task-model performance measured",
                 ),
             )
+        if message:
+            await self.call(
+                "chat",
+                {
+                    "run_id": c.store.run_id,
+                    "text": message,
+                    "message_id": params.get("message_id") or new_id("user"),
+                },
+            )
         return await self.detail(c.store.run_id)
+
+    async def _seed(self, c: Coordinator, config: ResearchConfig) -> None:
+        if config.seed_dir and not c.state.get("seed_candidate_id"):
+            candidate = await c.store.snapshot(
+                Path(config.seed_dir), agent_id="operator", description="研究起点"
+            )
+            c.state["seed_candidate_id"] = candidate.candidate_id
+            if config.metadata.get("evaluate_seed_as_baseline"):
+                c.state["baseline_candidate_id"] = candidate.candidate_id
+            c.save()
+
+    async def start(self, c: Coordinator, confirmation_message_id: str | None = None) -> None:
+        if c.state["status"] != "planned":
+            raise ValueError("研究已经开始")
+        if "intake" in c.state and c.state["intake"].get("status") != "ready":
+            raise ValueError("请先与 Interaction 确认研究目标和执行条件")
+        config = self.config(c)
+        config.brief = c.store.brief()
+        if "intake" in c.state:
+            issues = validate_execution(config)
+            if issues:
+                raise ValueError("；".join(issues))
+        active = await self.attach(c)
+        # Configuration may have changed over several Interaction turns. Bind its
+        # final revision before RSI can submit any jobs.
+        active.config = config
+        active.execution.commands = {item.name: item for item in config.commands}
+        active.execution.verifier = config.verifier
+        active.execution.execution_env = config.execution_env
+        active.execution.read_verification = self._verification_reader(c, config)
+        active.execution.instructions = str(config.metadata.get("execution_instructions", ""))
+        active.engine.max_concurrent_turns = config.brief.limits.max_agents + 2
+        await self._seed(c, config)
+        await active.actions.initialize_workspace("rsi")
+        write_json(
+            c.store.root / "coordination" / "started-config.json", config.public(), immutable=True
+        )
+        if "intake" in c.state:
+            c.state["intake"]["confirmation_message_id"] = confirmation_message_id
+            c.save()
+        c.start()
+        active.engine.wake()
 
     def _verification_reader(
         self, c: Coordinator, config: ResearchConfig
@@ -223,6 +283,11 @@ class ResearchApp:
             read_verification=self._verification_reader(c, config),
             simulated=c.state["simulated"],
             mock_duration=0.2,
+            execution_env=config.execution_env,
+        )
+        execution.instructions = str(config.metadata.get("execution_instructions", ""))
+        ResearchIntake(
+            actions, repository=self.repository, start=lambda message: self.start(c, message)
         )
 
         async def poll() -> bool:
@@ -377,11 +442,14 @@ class ResearchApp:
                     }
                     for r in runs
                     if r.plan.workflow == "research"
+                    and (self.allow_simulation or not self.coordinator(r.run_id).state["simulated"])
                 ]
             }
         if action == "create":
             return await self.create(params)
         c = self.coordinator(params["run_id"])
+        if c.state["simulated"] and not self.allow_simulation:
+            raise ValueError("该记录属于开发测试，请在独立的测试工作台查看")
         if action == "detail":
             return await self.detail(c.store.run_id, int(params.get("after", 0)))
         if action != "export" and self.worker_elsewhere(c):
@@ -399,9 +467,7 @@ class ResearchApp:
             active = await self.attach(c)
             active.engine.wake()
         elif action == "start":
-            active = await self.attach(c)
-            c.start()
-            active.engine.wake()
+            await self.start(c)
         elif action == "pause":
             c.pause()
             if c.store.run_id in self.active:

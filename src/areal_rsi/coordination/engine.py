@@ -14,7 +14,7 @@ import os
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import IO, Any
@@ -24,7 +24,7 @@ from areal_rsi.agents.research.prompt import PROMPT as RESEARCH_PROMPT
 from areal_rsi.agents.rsi.prompt import PROMPT as RSI_PROMPT
 from areal_rsi.api.base import AgentState
 from areal_rsi.api.research import ResearchMessage
-from areal_rsi.base.storage import encode, write_json
+from areal_rsi.base.storage import encode, now, write_json
 from areal_rsi.coordination.coordinator import Coordinator
 from areal_rsi.modules.responses import ResponsesError, ResponsesRuntime, ToolHandler
 
@@ -57,6 +57,9 @@ class ResearchEngine:
     ):
         self.coordinator = coordinator
         self.runtime = runtime
+        self.interaction_runtime = ResponsesRuntime(
+            replace(runtime.config, max_model_calls_per_turn=None), runtime.transport
+        )
         self.tools_factory = tools_factory
         self.max_concurrent_turns = (
             coordinator.store.brief().limits.max_agents + 2
@@ -147,6 +150,15 @@ class ResearchEngine:
 
     async def _event(self, agent_id: str, session: Path, event: Json) -> None:
         kind = event["type"]
+        if kind in {"model_request", "tool_started", "tool_completed"}:
+            self.coordinator.state.setdefault("agent_activity", {})[agent_id] = {
+                "type": kind,
+                "tool": event.get("name"),
+                "updated_at": now(),
+            }
+            self.coordinator.save()
+        if kind == "message_injected":
+            self.coordinator.receive_during_turn(agent_id, event["message_id"])
         if kind == "model_stream":
             # Full provider events remain in the private session archive. Public
             # run events must not expose reasoning items or tool argument streams.
@@ -240,6 +252,7 @@ class ResearchEngine:
             }
             if message
             else None,
+            "followup_message_ids": c.state.get("turn_followups", {}).get(agent_id, []),
             "waiting_for_user": c.user_questions() if agent_id in {"rsi", "interaction"} else [],
             "direction": actor.direction,
             "current_node": encode(current),
@@ -285,7 +298,8 @@ class ResearchEngine:
             )
             prompt_id = hashlib.sha256(prompt.encode()).hexdigest()
             write_json(session / "prompts" / f"{prompt_id}.json", {"prompt": prompt})
-            config = self.runtime.config
+            runtime = self.interaction_runtime if agent_id == "interaction" else self.runtime
+            config = runtime.config
             write_json(
                 session / "configuration.json",
                 {
@@ -303,7 +317,7 @@ class ResearchEngine:
 
             async def event_sink(event: Json) -> None:
                 await self._event(agent_id, session, event)
-                if event["type"] in {"tool_completed", "response_usage"}:
+                if event["type"] in {"tool_completed", "response_usage", "message_injected"}:
                     # Keep the object passed to runtime current throughout a long
                     # turn; checkpoint creation takes its own immutable copy.
                     latest = self._recovery_state(agent_id)
@@ -311,7 +325,7 @@ class ResearchEngine:
                     state.update(latest)
 
             retry = c.state.get("turn_retries", {}).get(agent_id, {})
-            result = await self.runtime.turn(
+            result = await runtime.turn(
                 session,
                 system_prompt=prompt,
                 user_message=None
@@ -325,9 +339,24 @@ class ResearchEngine:
                 retry_id=retry.get("retry_id")
                 if retry.get("mode") != "report" and retry.get("message_id") == message.message_id
                 else None,
+                incoming_messages=lambda: [
+                    encode(c.store.get("messages", identifier, ResearchMessage))
+                    for identifier in c.state["inboxes"].get(agent_id, [])
+                    if identifier != message.message_id
+                    and c.store.get("messages", identifier, ResearchMessage).sender == "user"
+                ],
             )
             if (
-                (agent_id == "interaction" or (agent_id == "rsi" and message.sender == "user"))
+                (
+                    agent_id == "interaction"
+                    or (
+                        agent_id == "rsi"
+                        and (
+                            message.sender == "user"
+                            or c.state.get("turn_followups", {}).get(agent_id)
+                        )
+                    )
+                )
                 and result.stop_reason == "completed"
                 and result.text.strip()
             ):
@@ -336,7 +365,7 @@ class ResearchEngine:
                     "user",
                     result.text.strip(),
                     key=agent_id + "-response:" + message.message_id,
-                    reply_to=message.message_id,
+                    reply_to=c.current_message_ids(agent_id)[-1],
                 )
             if result.stop_reason == "budget_exhausted":
                 c.end_turn(

@@ -802,3 +802,51 @@ class EngineTest(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_busy_interaction_receives_user_steering_and_new_message_retries_failure(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        c = Coordinator.create(tmp_path, TaskBrief("研究", "运行时消息续接"))
+        first = c.user_message("检查一下", key="first")
+        seen: list[str] = []
+
+        async def respond(agent: str, index: int, payload: Json) -> Json:
+            if index == 0:
+                c.user_message("直接开始", key="steering")
+                return packet(call("read", "read"))
+            seen.append(json.dumps(payload["input"], ensure_ascii=False))
+            raise ResponsesError("Connection temporarily unavailable")
+
+        async def handle(item: ToolCall) -> ToolResult:
+            return ToolResult("ok")
+
+        transport = RoutedTransport(respond)
+        runtime = ResponsesRuntime(
+            ResponsesConfig(
+                base_url="https://example.test", api_key="test", max_model_calls_per_turn=1
+            ),
+            transport,
+        )
+        engine = ResearchEngine(c, runtime, lambda _: ToolSet(definitions("read"), handle))
+        try:
+            await engine._drive("interaction")
+            assert "直接开始" in seen[0]  # Also crossed a one-call non-Interaction budget.
+            assert c.actor("interaction").state == AgentState.FAILED
+            from areal_rsi.api.research import ResearchMessage
+
+            notices = [
+                m for m in c.store.records("messages", ResearchMessage) if m.sender == "runtime"
+            ]
+            assert len(notices) == 1 and "已停止" in notices[0].text
+            c.user_message("连接修好了，继续", key="resume")
+            assert c.actor("interaction").state == AgentState.WAITING
+            assert c.state["active"]["interaction"] == first
+            retry = c.state["turn_retries"]["interaction"]["retry_id"]
+            c.user_message("连接修好了，继续", key="resume")
+            assert c.state["turn_retries"]["interaction"]["retry_id"] == retry
+        finally:
+            await engine.close()
+
+    asyncio.run(scenario())

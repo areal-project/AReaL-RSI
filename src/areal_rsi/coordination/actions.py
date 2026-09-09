@@ -305,7 +305,9 @@ class ResearchActions:
         if name == "get_state":
             summary = c.summary()
             if agent_id == "interaction":
-                summary["current_message_id"] = c.state["active"].get(agent_id)
+                ids = c.current_message_ids(agent_id)
+                summary["current_message_id"] = ids[-1] if ids else None
+                summary["current_message_ids"] = ids
             if self.role(agent_id) == "research":
                 summary["agents"] = [encode(c.actor(agent_id))]
                 summary.pop("waiting_for_user", None)

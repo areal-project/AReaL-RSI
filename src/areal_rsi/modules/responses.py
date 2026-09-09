@@ -68,7 +68,7 @@ class ResponsesConfig:
     reasoning_effort: str = "xhigh"
     max_output_tokens: int = 16384
     timeout: float = 600
-    max_model_calls_per_turn: int = 32
+    max_model_calls_per_turn: int | None = 32
     compact_after_chars: int = 180_000
     stream: bool = True
 
@@ -87,7 +87,9 @@ class ResponsesConfig:
             raise ValueError("base_url must be an HTTP(S) URL without credentials or query")
         if not self.model.strip() or not self.reasoning_effort.strip():
             raise ValueError("model and reasoning_effort must be explicit nonempty values")
-        if min(self.max_output_tokens, self.timeout, self.max_model_calls_per_turn) <= 0:
+        if min(self.max_output_tokens, self.timeout) <= 0 or (
+            self.max_model_calls_per_turn is not None and self.max_model_calls_per_turn <= 0
+        ):
             raise ValueError("token, timeout and model-call limits must be positive")
         if self.compact_after_chars < 0:
             raise ValueError("compact_after_chars must be nonnegative (0 disables compact)")
@@ -283,6 +285,7 @@ class ResponsesRuntime:
         event_sink: EventSink | None = None,
         recovery_state: Json | None = None,
         retry_id: str | None = None,
+        incoming_messages: Callable[[], list[Json]] | None = None,
     ) -> TurnResult:
         """Run until a final answer, explicit stop tool, budget boundary or cancellation.
 
@@ -307,6 +310,7 @@ class ResponsesRuntime:
                     message_id,
                     recovery_state,
                     retry_id,
+                    incoming_messages,
                 )
 
 
@@ -367,6 +371,7 @@ class _Conversation:
         message_id: str | None,
         recovery_state: Json | None,
         retry_id: str | None,
+        incoming_messages: Callable[[], list[Json]] | None,
     ) -> TurnResult:
         existing = next(
             (
@@ -414,6 +419,8 @@ class _Conversation:
             self.state["turns"].append(self.turn)
         self.requests = len(self.turn["requests"])
         self.turn.setdefault("request_limit", self.config.max_model_calls_per_turn)
+        if self.config.max_model_calls_per_turn is None:
+            self.turn["request_limit"] = None
         grants = self.turn.setdefault("retry_grants", {})
         grant_event = None
         if retry_id is not None:
@@ -421,7 +428,10 @@ class _Conversation:
                 raise ResponsesError("retry_id must contain 1–256 characters")
             if retry_id not in grants:
                 previous_limit = self.turn["request_limit"]
-                if self.turn["status"] == "budget_exhausted" or self.requests >= previous_limit:
+                if previous_limit is not None and (
+                    self.turn["status"] == "budget_exhausted" or self.requests >= previous_limit
+                ):
+                    assert self.config.max_model_calls_per_turn is not None
                     self.turn["request_limit"] = (
                         self.requests + self.config.max_model_calls_per_turn
                     )
@@ -454,6 +464,8 @@ class _Conversation:
                     return self.result()
                 response = self.unconsumed_response("turn")
                 if response is None:
+                    if incoming_messages is not None:
+                        await self.receive_messages(incoming_messages())
                     await self.maybe_compact(prompt, recovery_state, within_turn=True)
                     response = await self.request(prompt, self.state["context"], tools, "turn")
                 output = response["output"]
@@ -531,8 +543,9 @@ class _Conversation:
     async def request(
         self, prompt: str, context: list[Json], tools: Sequence[Json], kind: str
     ) -> Json:
-        remaining = self.turn["request_limit"] - self.requests
-        if remaining <= 0:
+        limit = self.turn["request_limit"]
+        remaining = limit - self.requests if limit is not None else None
+        if remaining is not None and remaining <= 0:
             raise _TurnBudgetExhausted
         if kind == "turn" and self.state["compactions"]:
             # Preserve provenance even for old checkpoints. This is copied from
@@ -543,12 +556,14 @@ class _Conversation:
                 + "\n当前正在处理的原始消息（继续其未完成部分，不重做已完成操作）：\n"
                 + json.dumps(self.active_instruction(), ensure_ascii=False)
             )
-        budget_prompt = (
-            f"\n\n运行时调用预算：本逻辑回合剩余 {remaining} 次模型调用，包含本次响应。"
-            f"本次响应后最多还有 {remaining - 1} 次调用。run 的全局限制可能提前停止执行。"
-            "这一计数是执行上限，不能据此编造结果或把未完成研究说成已完成。"
-        )
-        if kind == "turn" and remaining <= 4:
+        budget_prompt = "\n\n本角色不设单回合模型调用上限。没有可推进的工作时结束回合等待消息。"
+        if remaining is not None:
+            budget_prompt = (
+                f"\n\n运行时调用预算：本逻辑回合剩余 {remaining} 次模型调用，包含本次响应。"
+                f"本次响应后最多还有 {remaining - 1} 次调用。run 的全局限制可能提前停止执行。"
+                "这一计数是执行上限，不能据此编造结果或把未完成研究说成已完成。"
+            )
+        if kind == "turn" and remaining is not None and remaining <= 4:
             budget_prompt += (
                 " 当前额度即将耗尽，请收尾本项工作：按角色使用报告、明确等待或向用户提问的工具。"
                 "写清具体完成的工作、证据和未完成步骤，不再开启新方向或继续广泛浏览论文。"
@@ -703,7 +718,10 @@ class _Conversation:
         if response is None:
             # Compact and its continuation both consume this same finite turn.
             # Preserve the complete boundary if only one request remains.
-            if self.turn["request_limit"] - self.requests < 2:
+            if (
+                self.turn["request_limit"] is not None
+                and self.turn["request_limit"] - self.requests < 2
+            ):
                 raise _TurnBudgetExhausted
             compact_prompt = prompt + "\n\n" + COMPACT_PROMPT
             if recovery_state is not None:
@@ -750,7 +768,20 @@ class _Conversation:
             "message_id": self.turn["message_id"],
             "text": self.turn["user_message"],
             "input_already_appended": self.turn["input_appended"],
+            **({"followups": self.turn["followups"]} if self.turn.get("followups") else {}),
         }
+
+    async def receive_messages(self, messages: list[Json]) -> None:
+        """Insert steering at a resolved tool boundary; replay acknowledges without duplicates."""
+        saved = self.turn.setdefault("followups", [])
+        seen = {item["message_id"] for item in saved}
+        for message in messages:
+            if message["message_id"] not in seen:
+                self.append([{"role": "user", "content": json.dumps(message, ensure_ascii=False)}])
+                saved.append(message)
+                seen.add(message["message_id"])
+                self.save()
+            await self.emit({"type": "message_injected", "message_id": message["message_id"]})
 
     def result(self) -> TurnResult:
         return TurnResult(

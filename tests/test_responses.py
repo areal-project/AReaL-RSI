@@ -819,3 +819,62 @@ class HttpResponsesTransportTest(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_unlimited_turn_receives_steering_and_recovers_injection_ack(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        transport = ScriptedTransport(
+            *(response(call("read", str(i))) for i in range(34)), response(answer("完成"))
+        )
+        config = ResponsesConfig(
+            base_url="https://example.test",
+            api_key="test",
+            max_model_calls_per_turn=None,
+            compact_after_chars=0,
+        )
+        queue: list[Json] = []
+        effects: list[str] = []
+        crashed = False
+
+        async def handler(item: ToolCall) -> ToolResult:
+            effects.append(item.call_id)
+            if item.call_id == "0":
+                queue.append({"message_id": "steering", "sender": "user", "text": "现在开始"})
+            return ToolResult("read completed")
+
+        async def events(event: Json) -> None:
+            nonlocal crashed
+            if event["type"] == "message_injected":
+                if not crashed:
+                    crashed = True
+                    raise RuntimeError("crash before coordinator acknowledgement")
+                queue.clear()
+
+        runtime = ResponsesRuntime(config, transport)
+        kwargs: Any = dict(
+            system_prompt="研究",
+            tools=[tool("read")],
+            handler=handler,
+            message_id="original",
+            event_sink=events,
+            incoming_messages=lambda: queue,
+        )
+        try:
+            await runtime.turn(tmp_path, user_message="读取环境", **kwargs)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("Expected acknowledgement crash")
+        result = await runtime.turn(tmp_path, user_message=None, **kwargs)
+        assert result.stop_reason == "completed" and len(transport.payloads) == 35
+        assert len(effects) == len(set(effects)) == 34
+        saved = json.loads((tmp_path / "session.json").read_text())
+        assert saved["turns"][0]["request_limit"] is None
+        assert len(saved["turns"][0]["followups"]) == 1 and not queue
+        injected = [
+            x for x in saved["history"] if x.get("role") == "user" and "steering" in x["content"]
+        ]
+        assert len(injected) == 1
+        assert "现在开始" in json.dumps(transport.payloads[1]["input"], ensure_ascii=False)
+
+    asyncio.run(scenario())

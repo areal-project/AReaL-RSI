@@ -249,6 +249,10 @@ class Coordinator:
         if recipient == "rsi" and self.state["started_at"] is None:
             raise ValueError("研究尚未开始，请先与 Interaction 确认需求")
         message_id = self.enqueue("user", recipient, text, key=key, reply_to=reply_to)
+        if previous is None and self.actor(recipient).state == AgentState.FAILED:
+            # A new user instruction is an explicit request to continue, not a
+            # background retry loop. Preserve the interrupted delivery and tools.
+            self.retry_agent(recipient)
         # The archived reply is authoritative if a process stopped between these writes.
         self.state["waiting_for_user"] = self.user_questions()
         self.save()
@@ -320,9 +324,17 @@ class Coordinator:
             actor.state, actor.error = AgentState.FAILED, error
             self.save_actor(actor)
             self.store.event("agent_failed", agent_id=agent_id, error=error)
+            self.enqueue(
+                "runtime",
+                "user",
+                f"{agent_id} 已停止：{error}。已有进度和对话已保存。"
+                "你可以发送补充消息继续，或点击重试。",
+                key="failure:" + effect_id(agent_id, error + str(self.state.get("model_calls"))),
+            )
             # Preserve the active delivery for explicit recovery of the same turn.
             return
         identifier = self.state["active"].pop(agent_id, None)
+        self.state.get("turn_followups", {}).pop(agent_id, None)
         self.state.get("turn_retries", {}).pop(agent_id, None)
         self.state.get("turn_failures", {}).pop(agent_id, None)
         if identifier:
@@ -335,6 +347,28 @@ class Coordinator:
             actor.state, actor.wait_reason = AgentState.WAITING, "message"
         self.save_actor(actor)
         self.save()
+
+    def receive_during_turn(self, agent_id: str, message_id: str) -> None:
+        """Acknowledge a user message only after the runtime has durably saved it."""
+        message = self.store.get("messages", message_id, ResearchMessage)
+        if message.sender != "user" or message.recipient != agent_id:
+            raise ValueError("Only user steering may interrupt an active delivery")
+        followups = self.state.setdefault("turn_followups", {}).setdefault(agent_id, [])
+        if message_id not in followups:
+            followups.append(message_id)
+        if message_id not in self.state["delivered"]:
+            self.state["delivered"].append(message_id)
+        self.state["inboxes"][agent_id] = [
+            item for item in self.state["inboxes"].get(agent_id, []) if item != message_id
+        ]
+        self.save()
+
+    def current_message_ids(self, agent_id: str) -> list[str]:
+        active = self.state["active"].get(agent_id)
+        result: list[str] = ([active] if active else []) + self.state.get("turn_followups", {}).get(
+            agent_id, []
+        )
+        return result
 
     def retry_agent(self, agent_id: str) -> None:
         actor = self.actor(agent_id)

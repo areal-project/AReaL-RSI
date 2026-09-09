@@ -72,8 +72,11 @@ class RoutedTransport:
         self.payloads: list[Json] = []
 
     async def request(self, config: ResponsesConfig, payload: Json, event_sink: EventSink) -> Json:
-        raw = payload["instructions"].split("当前 run 的系统状态：\n", 1)[1]
-        state = json.JSONDecoder().raw_decode(raw)[0]
+        if "当前 run 的系统状态：\n" in payload["instructions"]:
+            raw = payload["instructions"].split("当前 run 的系统状态：\n", 1)[1]
+            state = json.JSONDecoder().raw_decode(raw)[0]
+        else:
+            state = json.loads(payload["input"][0]["content"])["authoritative_state"]
         agent_id = state["agent_id"]
         index = self.counts.get(agent_id, 0)
         self.counts[agent_id] = index + 1
@@ -396,16 +399,13 @@ class EngineTest(unittest.IsolatedAsyncioTestCase):
 
         async def respond(agent_id: str, index: int, payload: Json) -> Json:
             self.assertEqual(agent_id, "rsi")
-            self.assertIn("本次模型回合开始时的状态快照", payload["instructions"])
+            if index != 1:
+                self.assertIn("本次模型回合开始时的状态快照", payload["instructions"])
             if index == 0:
                 return packet(call("plan", "make_plan"))
             if index == 1:
                 self.assertNotIn("tools", payload)
-                raw = payload["instructions"].split(
-                    "最新系统状态（优先于回合开始时的快照）：\n",
-                    1,
-                )[1]
-                latest = json.JSONDecoder().raw_decode(raw)[0]
+                latest = json.loads(payload["input"][0]["content"])["authoritative_state"]
                 self.assertEqual(latest["plan"], "Compare the memory layout direction")
                 self.assertEqual(latest["directions"][0]["direction"], "Memory layout")
                 self.assertEqual(latest["budget"]["model_calls"], 1)

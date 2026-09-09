@@ -163,7 +163,7 @@ class ResearchEngine:
             # Full provider events remain in the private session archive. Public
             # run events must not expose reasoning items or tool argument streams.
             stream = event.get("event", {})
-            if stream.get("type") == "response.output_text.done":
+            if event.get("kind") != "compact" and stream.get("type") == "response.output_text.done":
                 self.coordinator.store.event(
                     "assistant_output", agent_id=agent_id, text=stream.get("text", "")
                 )

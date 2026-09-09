@@ -281,8 +281,17 @@ class ResponsesRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         transport = ScriptedTransport(
-            response(answer("Long evidence " * 150)),
-            response(answer("Objective: optimize. Evidence: record_12. Next: compare.")),
+            response(
+                {"type": "reasoning", "encrypted_content": "opaque-state-not-source-evidence"},
+                answer("Long evidence " * 150),
+            ),
+            response(
+                {**answer("Temporary summary drafting"), "phase": "commentary"},
+                {
+                    **answer("Objective: optimize. Evidence: record_12. Next: compare."),
+                    "phase": "final_answer",
+                },
+            ),
             response(answer("Continued")),
         )
         runtime = ResponsesRuntime(replace(self.config, compact_after_chars=1000), transport)
@@ -306,14 +315,15 @@ class ResponsesRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(transport.payloads[-1]["input"][0]["role"], "assistant")
         self.assertEqual(transport.payloads[-1]["input"][-1]["content"], "Compare now")
         self.assertNotIn("tools", transport.payloads[1])
-        self.assertEqual(
-            [
-                item["content"]
-                for item in transport.payloads[1]["input"]
-                if item.get("role") == "user"
-            ],
-            ["Begin"],
-        )
+        compact_payload = transport.payloads[1]
+        archive = json.loads(compact_payload["input"][0]["content"])
+        self.assertEqual(len(compact_payload["input"]), 1)
+        self.assertEqual(archive["conversation"][0]["content"], "Begin")
+        self.assertNotIn("Research", compact_payload["instructions"])
+        self.assertEqual(archive["authoritative_state"]["best_version"], "v2")
+        self.assertNotIn("opaque-state-not-source-evidence", json.dumps(compact_payload))
+        self.assertIn("opaque-state-not-source-evidence", json.dumps(state["history"]))
+        self.assertNotIn("Temporary summary drafting", state["compactions"][0]["summary"])
 
     async def test_cancel_during_compact_keeps_new_user_instruction(self) -> None:
         transport = ScriptedTransport(
@@ -371,7 +381,7 @@ class ResponsesRuntimeTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(result.text, "Completed the original task")
         self.assertEqual(effects, ["a", "b"])
-        compact_input = transport.payloads[1]["input"]
+        compact_input = json.loads(transport.payloads[1]["input"][0]["content"])["conversation"]
         functions = [
             item["call_id"] for item in compact_input if item.get("type") == "function_call"
         ]
@@ -505,7 +515,7 @@ class ResponsesRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(transport.payloads), 1)
         await ResponsesRuntime(config, transport).turn(self.root, user_message=None, **kwargs)
         self.assertEqual(effects, ["a", "b"])
-        compact_input = transport.payloads[1]["input"]
+        compact_input = json.loads(transport.payloads[1]["input"][0]["content"])["conversation"]
         self.assertEqual(
             [
                 item["call_id"]

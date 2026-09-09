@@ -130,6 +130,8 @@ uv run --env-file .env --locked rsi research --resume <run_id>
 
 Interaction、RSI、Research 的角色指令、工具说明、compact 与恢复指令默认使用中文。原始记录保留原语言；任务代码、标识符和必要原文保持原样。被优化的 Task Agent harness 是独立产物，其初始 prompt 不随研究角色的语言设置改变。
 
+压缩使用独立的摘要指令，将归档对话作为 JSON 资料输入，不继承研究员的执行角色，也不执行或模拟工具。检查点保留原任务、实际工具回执与最新系统状态；压缩输出不作为用户消息或实时研究进展展示。完整原文和原始响应仍可追溯。
+
 每次 run 的记录集中在 `RSI_DATA_ROOT/runs/<run_id>/`：
 
 ```text

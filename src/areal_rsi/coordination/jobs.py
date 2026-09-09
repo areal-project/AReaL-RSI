@@ -34,12 +34,15 @@ class ResearchExecution:
         commands: dict[str, ApprovedCommand] | None = None,
         verifier: ApprovedCommand | None = None,
         read_verification: VerificationReader | None = None,
+        execution_env: dict[str, str] | None = None,
         simulated: bool = False,
         mock_duration: float = 0.1,
     ):
         self.actions, self.c = actions, actions.c
         self.commands = commands or {}
         self.verifier, self.read_verification = verifier, read_verification
+        self.execution_env = execution_env or {}
+        self.instructions = ""
         self.simulated, self.mock_duration = simulated, mock_duration
         limits = self.c.store.brief().limits
         self.manager = JobManager(
@@ -54,50 +57,40 @@ class ResearchExecution:
         for tool in (
             definition(
                 "run_job",
-                "Run an operator-configured command on a frozen copy of your "
-                "workspace. Candidate ID may be empty. Read get_commands first.",
+                "按已配置命令运行工作区的固定副本。candidate_id 可以为空。先查看get_commands。",
                 command_name=STRING,
                 candidate_id=STRING,
                 parameters_json=STRING,
             ),
-            definition(
-                "get_commands", "List configured execution commands and their data arguments."
-            ),
-            definition(
-                "job_status", "Read a job's public status and released result.", job_id=STRING
-            ),
+            definition("get_commands", "查看可用执行命令、参数、输出位置及环境用法。"),
+            definition("job_status", "查看作业的公开状态与已发布结果。", job_id=STRING),
             definition(
                 "read_job_log",
-                "Read recent output from your execution job. Private verifier "
-                "logs are not released.",
+                "读取普通执行作业的最近日志。私有验证日志不公开。",
                 job_id=STRING,
             ),
             definition(
                 "collect_job_output",
-                "Copy a completed execution job's files into your "
-                "workspace for inspection or snapshotting. Destination is relative.",
+                "将已完成作业的输出复制到工作区，以便检查或保存版本。destination 为相对路径。",
                 job_id=STRING,
                 destination=STRING,
             ),
             definition(
                 "read_job_output_file",
-                "Inspect published output from a completed execution job without "
-                "copying it into the candidate workspace. Empty path lists files. "
-                "Text is paged and archived as a usable run reference; offset starts at 0.",
+                "直接查看已完成作业的公开输出，不复制到工作区。path 为空时列出文件；offset 从 0"
+                "开始，分页文本会归档并返回记录引用。",
                 job_id=STRING,
                 path=STRING,
                 offset={"type": "integer", "minimum": 0},
             ),
             definition(
                 "wait_for_job",
-                "End inference until this job completes, within the current "
-                "assignment. A completed job returns immediately.",
+                "结束本回合，等作业完成后在同一任务中继续。作业已经完成时直接返回结果。",
                 job_id=STRING,
             ),
             definition(
                 "verify_candidate",
-                "Request trusted comparison of a frozen candidate. "
-                "phase is search, final or diagnostic.",
+                "使用可信验证器测量固定候选。phase 为 search、final 或 diagnostic。",
                 candidate_id=STRING,
                 phase=STRING,
             ),
@@ -130,6 +123,7 @@ class ResearchExecution:
                             for cmd in self.commands.values()
                         ],
                         "verification_available": self.verifier is not None,
+                        "instructions": self.instructions,
                         "simulated": self.simulated,
                     }
                 )
@@ -282,6 +276,10 @@ class ResearchExecution:
         spec = command.bind(
             values, cwd=str(workspace), agent_id=agent_id, verification=str(verification).lower()
         )
+        if self.execution_env:
+            from dataclasses import replace
+
+            spec = replace(spec, env=dict(self.execution_env))
         if verification:
             from dataclasses import replace
 

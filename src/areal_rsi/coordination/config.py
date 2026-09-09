@@ -26,6 +26,7 @@ class ResearchConfig:
     max_model_calls_per_turn: int = 32
     commands: tuple[ApprovedCommand, ...] = ()
     verifier: ApprovedCommand | None = None
+    execution_env: dict[str, str] = field(default_factory=dict)
     simulation_scores: tuple[float, ...] = (0.3, 0.5, 0.7)
     metadata: dict[str, Any] = field(default_factory=dict)
 

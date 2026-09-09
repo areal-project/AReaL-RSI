@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import signal
 import sys
 from pathlib import Path
 from typing import Any
@@ -94,12 +96,19 @@ async def prepare_example(
         cwd=repository,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,
     )
     try:
         _, error = await asyncio.wait_for(process.communicate(), timeout=600)
     except (asyncio.CancelledError, TimeoutError):
         if process.returncode is None:
-            process.kill()
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+                await asyncio.wait_for(process.wait(), timeout=5)
+            except TimeoutError:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         await process.wait()
         raise
     if process.returncode:

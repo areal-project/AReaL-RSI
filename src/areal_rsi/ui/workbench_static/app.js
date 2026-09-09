@@ -254,7 +254,8 @@ function render() {
   $("resume").hidden = run.status !== "paused" && !needsResume;
   $("resume").textContent = needsResume
     ? (run.status === "planned" ? "继续对话" : "恢复执行") : "继续";
-  $("stop").hidden = !["running", "paused"].includes(run.status);
+  $("stop").hidden = !["planned", "running", "paused"].includes(run.status);
+  $("stop").textContent = run.status === "planned" ? "结束对话" : "停止";
   $("best-score").textContent = score(run.best?.score);
   $("best-caption").textContent = run.best
     ? `${run.brief?.verification?.metric || "验证分数"} · 同一验证条件`
@@ -385,9 +386,13 @@ function renderGraph(run) {
   canvas.replaceChildren();
   canvas.hidden = !nodes.length;
   $("graph-empty").hidden = !!nodes.length;
-  if (!nodes.length) return;
+  if (!nodes.length) {
+    viewport.style.height = "210px";
+    return;
+  }
   const byId = new Map(nodes.map((node) => [node.iteration_id, node]));
   const agents = [...new Set(nodes.map((node) => node.agent_id))];
+  viewport.style.height = `${Math.min(520, Math.max(210, agents.length * 153 + 25))}px`;
   const positions = new Map();
   function depth(node, visited = new Set()) {
     if (!node?.parent_iteration_id || visited.has(node.iteration_id)) return 0;
@@ -580,7 +585,7 @@ function renderNode(run) {
       section(
         "本轮报告",
         ["pending", "running"].includes(node.state)
-          ? "研究仍在进行，尚未提交报告。此节点不一定产生候选版本或验证分数。"
+          ? "尚未提交报告。"
           : "此节点未产生报告。",
       ),
     );
@@ -730,7 +735,7 @@ function renderJobs(run) {
           element(
             "p",
             "muted",
-            "当前没有作业。长时间执行的任务将在这里显示状态。",
+            "暂无作业。",
           ),
         ]),
   );

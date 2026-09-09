@@ -114,7 +114,9 @@ def public_detail(value: Json) -> Json:
     result["pending_agents"] = [a for a in value.get("pending_agents", []) if isinstance(a, str)]
     result["execution_blocker"] = _fields(value.get("execution_blocker"), "job_id error created_at")
     result["agent_activity"] = {
-        name: _fields(activity, "type tool updated_at")
+        name: _fields(
+            activity, "type tool updated_at attempt error_code delay_seconds next_retry_at"
+        )
         for name, activity in value.get("agent_activity", {}).items()
         if isinstance(name, str) and isinstance(activity, dict)
     }
@@ -129,7 +131,7 @@ def public_detail(value: Json) -> Json:
         result[name] = _score(value.get(name))
     result["budget"] = _fields(
         value.get("budget"),
-        "model_calls total_tokens verify_calls reserved_tokens elapsed_seconds",
+        "model_calls api_attempts total_tokens verify_calls reserved_tokens elapsed_seconds",
     )
     result["agents"] = [
         _fields(agent, "agent_id direction state current_iteration_id wait_reason error")
@@ -191,7 +193,8 @@ def public_detail(value: Json) -> Json:
             event.get("data"),
             "reason direction title instruction completion_criteria parent_iteration_id "
             "report_id evidence_id candidate_id job_id status text message_id sender recipient "
-            "reply_to resumed simulated request_id model reasoning_effort",
+            "reply_to resumed simulated request_id model reasoning_effort "
+            "attempt error_code delay_seconds next_retry_at",
         )
         result["events"].append(entry)
     return result

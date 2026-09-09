@@ -109,14 +109,26 @@ class ResearchEngine:
     def _reconcile_usage(self) -> None:
         """Recover response usage persisted just before a worker/event-sink crash."""
         for record in self._request_records().values():
-            if record.get("settled"):
-                continue
             path = self.coordinator.store.root / record["response_path"]
-            if path.exists():
+            for failed_path in path.parent.glob(path.stem + ".attempt-*.json"):
+                attempt = failed_path.stem.rsplit("-", 1)[-1]
+                response = json.loads(failed_path.read_text())
+                self._settle_retry(record, attempt, response.get("usage") or {})
+            if not record.get("settled") and path.exists():
                 response = json.loads(path.read_text())
                 usage = response.get("usage")
                 if isinstance(usage, dict):
                     self._settle(record, usage)
+
+    def _settle_retry(self, record: Json, attempt: str, usage: Json) -> None:
+        attempts = record.setdefault("retry_usage", {})
+        if attempt in attempts:
+            return
+        tokens = usage.get("total_tokens")
+        if isinstance(tokens, (int, float)) and not isinstance(tokens, bool) and tokens >= 0:
+            attempts[attempt] = usage
+            self.coordinator.state["total_tokens"] += tokens
+            self.coordinator.save()
 
     def _settle(self, record: Json, usage: Json) -> None:
         if record.get("settled"):
@@ -125,7 +137,7 @@ class ResearchEngine:
         if not isinstance(tokens, (int, float)) or isinstance(tokens, bool) or tokens < 0:
             # Without reliable usage retain the reservation; never silently count it as zero.
             return
-        record.update(settled=True, usage=usage, reserved_tokens=0)
+        record.update(settled=True, usage=usage, reserved_tokens=record.get("unresolved_tokens", 0))
         self.coordinator.state["total_tokens"] += tokens
         self.coordinator.save()
 
@@ -150,25 +162,89 @@ class ResearchEngine:
 
     async def _event(self, agent_id: str, session: Path, event: Json) -> None:
         kind = event["type"]
-        if kind in {"model_request", "tool_started", "tool_completed"}:
-            self.coordinator.state.setdefault("agent_activity", {})[agent_id] = {
+        if kind in {
+            "model_request",
+            "model_attempt",
+            "model_retry",
+            "model_recovered",
+            "tool_started",
+            "tool_completed",
+        }:
+            activity: Json = {
                 "type": kind,
                 "tool": event.get("name"),
                 "updated_at": now(),
+                **{
+                    name: event[name]
+                    for name in ("attempt", "error_code", "delay_seconds", "next_retry_at")
+                    if name in event
+                },
             }
+            self.coordinator.state.setdefault("agent_activity", {})[agent_id] = activity
             self.coordinator.save()
         if kind == "message_injected":
             self.coordinator.receive_during_turn(agent_id, event["message_id"])
         if kind == "model_stream":
             # Full provider events remain in the private session archive. Public
-            # run events must not expose reasoning items or tool argument streams.
-            stream = event.get("event", {})
-            if event.get("kind") != "compact" and stream.get("type") == "response.output_text.done":
-                self.coordinator.store.event(
-                    "assistant_output", agent_id=agent_id, text=stream.get("text", "")
-                )
-                self.wake()
+            # output is published only after a successful terminal response, so
+            # abandoned retry fragments cannot masquerade as completed work.
             return
+        if kind == "model_output":
+            self.coordinator.store.event(
+                "assistant_output", agent_id=agent_id, text=event.get("text", "")
+            )
+            self.wake()
+            return
+        if kind == "model_attempt":
+            actor = self.coordinator.actor(agent_id)
+            if not self._actor_allowed(agent_id) or actor.state in {
+                AgentState.STOPPED,
+                AgentState.PAUSED,
+            }:
+                raise asyncio.CancelledError
+            record = self._request_records()[event["request_id"]]
+            previous = record.get("api_attempts", 0)
+            if (
+                event["attempt"] > previous
+                and previous
+                and not record.get("known_failed_attempts", {}).get(str(previous))
+            ):
+                # A cancelled/broken stream may still incur provider usage. Keep
+                # its reservation even when a later attempt succeeds.
+                reserve = record.get("reservation_per_attempt", record["reserved_tokens"])
+                record["unresolved_tokens"] = record.get("unresolved_tokens", 0) + reserve
+                record["reserved_tokens"] += reserve
+            record["api_attempts"] = max(previous, event["attempt"])
+            self.coordinator.save()
+            reason = self._wall_reason()
+            reserved = sum(r["reserved_tokens"] for r in self._request_records().values())
+            if self.coordinator.state["total_tokens"] + reserved > (
+                self.coordinator.store.brief().limits.max_total_tokens
+            ):
+                reason = "Run token budget exhausted during API retries"
+            if reason is not None:
+                self._pause_for_budget(reason)
+                raise BudgetExceeded(reason)
+        if kind == "model_retry":
+            record = self._request_records().get(event["request_id"])
+            if record is not None:
+                ambiguous = event["error_code"] in {
+                    "ReadError",
+                    "ReadTimeout",
+                    "WriteError",
+                    "WriteTimeout",
+                    "RemoteProtocolError",
+                    "stream_interrupted",
+                    "invalid_json",
+                }
+                record.setdefault("known_failed_attempts", {})[
+                    str(event["attempt"])
+                ] = not ambiguous
+                self.coordinator.save()
+        if kind == "response_retry_usage":
+            record = self._request_records().get(event["request_id"])
+            if record is not None:
+                self._settle_retry(record, str(event["attempt"]), event["usage"])
         if kind == "model_request":
             if not self._actor_allowed(agent_id):
                 raise asyncio.CancelledError
@@ -202,6 +278,7 @@ class ResearchEngine:
                 records[request_id] = {
                     "agent_id": agent_id,
                     "reserved_tokens": reserve,
+                    "reservation_per_attempt": reserve,
                     "settled": False,
                     "response_path": str(
                         (session / "responses" / f"{request_id}.json").relative_to(
@@ -311,6 +388,8 @@ class ResearchEngine:
                     "max_model_calls_per_turn": config.max_model_calls_per_turn,
                     "compact_after_chars": config.compact_after_chars,
                     "timeout": config.timeout,
+                    "retry_initial_seconds": config.retry_initial_seconds,
+                    "retry_max_seconds": config.retry_max_seconds,
                     "prompt_id": prompt_id,
                 },
             )

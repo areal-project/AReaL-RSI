@@ -24,6 +24,8 @@ class ResearchConfig:
     api_key_env: str = "RSI_API_KEY"
     max_output_tokens: int = 16384
     max_model_calls_per_turn: int = 32
+    retry_initial_seconds: float = 2
+    retry_max_seconds: float = 60
     commands: tuple[ApprovedCommand, ...] = ()
     verifier: ApprovedCommand | None = None
     execution_env: dict[str, str] = field(default_factory=dict)
@@ -41,6 +43,8 @@ class ResearchConfig:
             reasoning_effort=os.environ.get("RSI_REASONING_EFFORT", self.reasoning_effort),
             max_output_tokens=self.max_output_tokens,
             max_model_calls_per_turn=self.max_model_calls_per_turn,
+            retry_initial_seconds=self.retry_initial_seconds,
+            retry_max_seconds=self.retry_max_seconds,
         )
 
     def public(self) -> dict[str, Any]:

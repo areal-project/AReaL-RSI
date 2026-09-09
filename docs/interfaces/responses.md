@@ -2,9 +2,14 @@
 
 `modules/responses.py` 负责一次模型回合、工具调用和会话持久化。Agent 职责、消息投递、任务推进、GPU 作业和共享经验由上层模块管理。
 
-HTTP 连接建立失败（ConnectError / ConnectTimeout）最多尝试三次，间隔 0.5、1 秒，
-保持相同模型、推理强度和请求内容。读取响应失败、HTTP 错误、流中断不自动重放，
-因为请求可能已经到达服务端。最终失败会保留会话并向用户报告；显式恢复也会显示确认消息。
+临时 API 故障自动持续重试，不设次数上限，适用于 Interaction、RSI、Research Agent 和
+会话 compact。包括连接失败、超时、流中断、无效 JSON、HTTP 408/409/425/429/5xx，以及
+`response.failed` / SSE error 中的服务端过载等错误。默认指数退避从约 2 秒逐步增加到
+60 秒，并带随机抖动；服务端 `Retry-After` 指定更长等待时优先遵守。
+
+HTTP 400/401/403/404、明确的鉴权/参数/额度配置错误、输出长度不足导致的 incomplete、
+工具协议与会话损坏等错误仍保留进度并报告，需要修正原因。重试不改变模型或推理强度，
+不重新开始研究、不重复已完成工具，也不会自动重跑整个验证作业或修改其任务模型策略。
 
 ```python
 from pathlib import Path
@@ -37,7 +42,7 @@ result = await runtime.turn(
 
 ## 接口与边界
 
-- `ResponsesConfig` 默认 `gpt-6-astra / xhigh`，支持输出 token、HTTP timeout、每回合模型请求次数、自动 compact 阈值。配置不会隐式切换模型、降低 effort 或重放可能已提交的请求。
+- `ResponsesConfig` 默认 `gpt-6-astra / xhigh`，支持输出 token、HTTP timeout、每回合模型请求次数、自动 compact 阈值，以及 `retry_initial_seconds` / `retry_max_seconds`（默认 2 / 60）。后两个字段也可在 `ResearchConfig` 中配置。
 - `turn()` 返回 `TurnResult(session_id, turn_id, text, stop_reason, usage)`。`stop_reason` 为 `completed`、`budget_exhausted` 或停止工具提供的原因（默认 `waiting`）。累计 usage 包含 compact 和 reasoning tokens；请求原始 usage 也单独归档。
 - `ToolCall(name, arguments, call_id, recovered)` 交给异步 handler，返回 `ToolResult(output, stop=False, reason="waiting")`。output 必须可 JSON 序列化或为字符串。
 - `stop=True` 在工具完成后立即结束回合。同一模型响应中尚未执行的工具会收到明确的 skipped 记录，不执行副作用。等待期间没有后台模型调用；调度器只能用新的 user 消息唤醒。
@@ -54,7 +59,13 @@ result = await runtime.turn(
 
 完成的工具不再执行。若进程在副作用生效后、结果保存前退出，运行时无法单独保证外部系统的 exactly-once：恢复时会用**相同的 call_id** 和 `recovered=True` 调用 handler。handler 必须通过该 ID 查询已经创建的消息、作业或记录并返回原结果；无法判断结果时应报告未决状态，不能盲目重新执行。不同 call_id 的工具仍可具有相同参数，不应按参数粗暴去重。
 
-完整 Responses output 会回放，包括 encrypted reasoning 和 assistant `phase`，不依赖远端 conversation 或 `previous_response_id` 的保留期。`response.incomplete`、协议错误与 HTTP 错误会归档并报错，未完整结束的响应不会执行其中的工具。
+完整 Responses output 会回放，包括 encrypted reasoning 和 assistant `phase`，不依赖远端 conversation 或 `previous_response_id` 的保留期。失败或未完整结束的响应不会执行其中的工具；失败流中的文本也不作为完成输出发布到工作台。
+
+每个逻辑请求保存 `attempt` 与 `retry`（失败类型、退避秒数、下次时间）。等待中取消、暂停或关闭服务会立即退出本地等待；恢复时沿用相同请求 ID、请求内容和退避截止时间。临时失败响应单独存为 `responses/<request_id>.attempt-<N>.json`，成功响应仍使用原有文件名。HTTP 传输层每次只发一次请求，重试调度由持久会话管理。
+
+重试等待不调用模型。模型调用次数预算按逻辑请求计算，失败重试不会不断耗尽同一回合的调用额度；`budget.api_attempts` 单独累计 HTTP 尝试数。失败响应若提供 usage，也计入 token 消耗。读取中断或取消后的服务端执行、计费可能仍继续，恢复时保留相应未知用量预留；无法观测的用量不能视为零。run 的时间和 token 预算、用户暂停/停止仍有效，持续重试不绕过这些边界。
+
+工作台通过 `model_retry` / `model_attempt` / `model_recovered` 和 `agent_activity` 展示失败原因、失败次数、预计下次尝试时间及恢复。网络恢复后自动继续，无需用户点击重试；等待期间不会反复发送聊天消息，也不会把 Agent 标记成失败。确定性错误仍走已有的显式修复/重试入口。
 
 显式重试使用 `turn(..., user_message=None, retry_id="持久重试ID")`。Coordinator 只在用户重试失败 Agent 时生成 ID，并绑定当前 active message；engine 恢复时重复传递同一 ID。runtime 在耗尽的回合上为每个新 ID 增加一份 `max_model_calls_per_turn` 额度，保留同一 turn、完整请求计数和已完成工具账本。ID 的消费和新额度先持久化；取消或进程重启不会重复增加。未耗尽的失败回合继续使用剩余额度。新 ID 不重置整个 run 的模型、Token 或时间预算；全局不足时仍会停止。
 

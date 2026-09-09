@@ -799,6 +799,90 @@ class EngineTest(unittest.IsolatedAsyncioTestCase):
             sum(item["reserved_tokens"] for item in c.state["model_requests"].values()), 30000
         )
 
+    async def test_all_roles_retry_overload_and_keep_usage_without_failure_messages(self) -> None:
+        from areal_rsi.ui.workbench import public_detail
+
+        c = self.coordinator()
+        researcher = c.spawn(
+            key="retry-branch",
+            direction="Reliability",
+            instruction="Inspect",
+            completion_criteria="Report",
+        )["agent_id"]
+        c.enqueue("user", "interaction", "Describe progress", key="user-progress")
+        roles = {"rsi", "interaction", researcher}
+
+        async def respond(agent_id: str, index: int, payload: Json) -> Json:
+            if index < 5:
+                return {
+                    "status": "failed",
+                    "error": {"code": "server_error"},
+                    "output": [],
+                    "usage": {"total_tokens": 2},
+                }
+            return packet(
+                call("report" if agent_id == researcher else "wait", f"{agent_id}_{index}")
+            )
+
+        config = replace(self.config, retry_initial_seconds=0.001, retry_max_seconds=0.002)
+        transport = RoutedTransport(respond)
+        engine = ResearchEngine(c, ResponsesRuntime(config, transport), lambda a: self.tools(c, a))
+        await engine.run_until_idle(timeout=5)
+        self.assertTrue(all(c.actor(a).state == AgentState.WAITING for a in roles))
+        self.assertTrue(all(transport.counts[a] >= 6 for a in roles))
+        self.assertFalse(any(event.kind == "agent_failed" for event in c.store.events()))
+        retries = [event for event in c.store.events() if event.kind == "model_retry"]
+        self.assertEqual(len(retries), 15)
+        self.assertEqual(c.state["total_tokens"], c.state["model_calls"] * 30 + 30)
+        self.assertEqual(sum(r["reserved_tokens"] for r in c.state["model_requests"].values()), 0)
+        self.assertGreater(c.summary()["budget"]["api_attempts"], c.state["model_calls"])
+        # Restart reconciles saved retry usage without counting it twice.
+        tokens = c.state["total_tokens"]
+        restored = ResearchEngine(
+            Coordinator(c.store), ResponsesRuntime(config, transport), lambda a: self.tools(c, a)
+        )
+        await restored.tick()
+        self.assertEqual(restored.coordinator.state["total_tokens"], tokens)
+        await restored.close()
+        public = public_detail(
+            {
+                "agent_activity": {
+                    "rsi": {
+                        "type": "model_retry",
+                        "attempt": 5,
+                        "error_code": "server_error",
+                        "next_retry_at": 1234,
+                        "private_payload": "secret",
+                    }
+                }
+            }
+        )
+        self.assertEqual(public["agent_activity"]["rsi"]["next_retry_at"], 1234)
+        self.assertNotIn("secret", json.dumps(public))
+
+    async def test_pause_during_infinite_retry_preserves_delivery(self) -> None:
+        c = self.coordinator()
+
+        async def respond(agent_id: str, index: int, payload: Json) -> Json:
+            return {"status": "failed", "error": {"code": "server_error"}, "output": []}
+
+        config = replace(self.config, retry_initial_seconds=60, retry_max_seconds=60)
+        transport = RoutedTransport(respond)
+        engine = ResearchEngine(c, ResponsesRuntime(config, transport), lambda a: self.tools(c, a))
+        await engine.tick()
+        for _ in range(100):
+            if c.state.get("agent_activity", {}).get("rsi", {}).get("type") == "model_retry":
+                break
+            await asyncio.sleep(0.001)
+        self.assertEqual(c.state["agent_activity"]["rsi"]["type"], "model_retry")
+        active = c.state["active"]["rsi"]
+        c.pause()
+        await asyncio.wait_for(engine.tick(), 0.5)
+        self.assertEqual(c.actor("rsi").state, AgentState.PAUSED)
+        self.assertEqual(c.state["active"]["rsi"], active)
+        self.assertEqual(transport.counts["rsi"], 1)
+        await engine.close()
+
 
 if __name__ == "__main__":
     unittest.main()

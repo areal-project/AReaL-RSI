@@ -12,12 +12,15 @@ import asyncio
 import copy
 import fcntl
 import json
+import math
 import os
+import random
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import urlsplit
@@ -60,6 +63,52 @@ class ResponsesError(RuntimeError):
     """Actionable API/protocol/session error without request credentials."""
 
 
+class RetryableResponsesError(ResponsesError):
+    """Temporary provider failure; never contains raw gateway text or credentials."""
+
+    def __init__(self, code: str, *, retry_after: float = 0):
+        self.code = code if code.isidentifier() and len(code) <= 80 else "api_error"
+        self.retry_after = retry_after
+        super().__init__(f"Responses API temporarily unavailable ({self.code})")
+
+
+_PERMANENT_API_ERRORS = {
+    "invalid_api_key",
+    "invalid_request_error",
+    "authentication_error",
+    "permission_denied",
+    "model_not_found",
+    "unsupported_model",
+    "context_length_exceeded",
+    "insufficient_quota",
+    "billing_hard_limit_reached",
+    "content_policy_violation",
+    "invalid_prompt",
+}
+
+
+def _provider_error(value: Any) -> ResponsesError:
+    code = (
+        str(value.get("code") or value.get("type") or "server_error")
+        if isinstance(value, dict)
+        else "server_error"
+    )
+    if code in _PERMANENT_API_ERRORS:
+        return ResponsesError(f"Responses API rejected the request ({code}); check configuration")
+    return RetryableResponsesError(code)
+
+
+def _retry_after(value: str | None) -> float:
+    try:
+        seconds = float(value or "0")
+    except ValueError:
+        try:
+            seconds = parsedate_to_datetime(value or "").timestamp() - time.time()
+        except (TypeError, ValueError, OverflowError):
+            return 0
+    return max(0, seconds) if math.isfinite(seconds) else 0
+
+
 class _TurnBudgetExhausted(Exception):
     """Internal control signal; callers receive a durable TurnResult."""
 
@@ -75,6 +124,8 @@ class ResponsesConfig:
     max_model_calls_per_turn: int | None = 32
     compact_after_chars: int = 180_000
     stream: bool = True
+    retry_initial_seconds: float = 2
+    retry_max_seconds: float = 60
 
     def __post_init__(self) -> None:
         try:
@@ -97,6 +148,12 @@ class ResponsesConfig:
             raise ValueError("token, timeout and model-call limits must be positive")
         if self.compact_after_chars < 0:
             raise ValueError("compact_after_chars must be nonnegative (0 disables compact)")
+        if not (
+            math.isfinite(self.retry_initial_seconds)
+            and math.isfinite(self.retry_max_seconds)
+            and 0 < self.retry_initial_seconds <= self.retry_max_seconds
+        ):
+            raise ValueError("retry delays must be finite and 0 < initial <= maximum")
 
     @property
     def endpoint(self) -> str:
@@ -143,31 +200,14 @@ class HttpResponsesTransport:
     """Stream via an async socket so task cancellation closes the active request.
 
     Closing the socket cancels local work immediately; a third-party provider may
-    still finish/bill server-side work. Only connection-establishment failures
-    retry (three attempts); requests/streams that may have reached the provider
-    are never replayed implicitly. Model and effort stay fixed.
+    still finish/bill server-side work. One call makes one attempt; the durable
+    conversation owns retry scheduling, accounting and cancellation.
     """
 
     def __init__(self, transport: httpx.AsyncBaseTransport | None = None):
         self.transport = transport
 
     async def request(self, config: ResponsesConfig, payload: Json, event_sink: EventSink) -> Json:
-        for attempt in range(3):
-            try:
-                return await self._request_once(config, payload, event_sink)
-            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-                if attempt == 2:
-                    raise ResponsesError(
-                        f"Responses transport failed ({type(exc).__name__}) "
-                        "after 3 connection attempts"
-                    ) from None
-                await event_sink({"type": "transport.connection_retry", "attempt": attempt + 2})
-                await asyncio.sleep(0.5 * (attempt + 1))
-        raise AssertionError("Unreachable connection retry state")
-
-    async def _request_once(
-        self, config: ResponsesConfig, payload: Json, event_sink: EventSink
-    ) -> Json:
         headers = {"Content-Type": "application/json"}
         if config.api_key:
             headers["Authorization"] = "Bearer " + config.api_key
@@ -179,6 +219,20 @@ class HttpResponsesTransport:
                 client.stream("POST", config.endpoint, json=payload, headers=headers) as response,
             ):
                 if response.status_code >= 300:
+                    if response.status_code in {408, 409, 425, 429} or response.status_code >= 500:
+                        if response.status_code == 429:
+                            try:
+                                body_json = json.loads(await response.aread())
+                            except (json.JSONDecodeError, UnicodeDecodeError):
+                                body_json = {}
+                            if isinstance(body_json, dict):
+                                error = _provider_error(body_json.get("error"))
+                                if not isinstance(error, RetryableResponsesError):
+                                    raise error
+                        raise RetryableResponsesError(
+                            f"http_{response.status_code}",
+                            retry_after=_retry_after(response.headers.get("retry-after")),
+                        )
                     body = (await response.aread()).decode("utf-8", errors="replace")[:2000]
                     if config.api_key:
                         body = body.replace(config.api_key, "[redacted]")
@@ -204,21 +258,25 @@ class HttpResponsesTransport:
                         if event is not None:
                             await event_sink(event)
                             final = self._final_response(event) or final
+                            if final is not None:
+                                return final
                 if data:
                     event = self._decode_event(data)
                     if event is not None:
                         await event_sink(event)
                         final = self._final_response(event) or final
                 if final is None:
-                    raise ResponsesError("Responses stream ended without a terminal response")
+                    raise RetryableResponsesError("stream_interrupted")
                 return final
-        except (httpx.ConnectError, httpx.ConnectTimeout):
-            raise
-        except httpx.HTTPError as exc:
+        except (httpx.LocalProtocolError, httpx.UnsupportedProtocol):
+            raise ResponsesError(
+                "Invalid HTTP request configuration; check endpoint and headers"
+            ) from None
+        except httpx.RequestError as exc:
             # URLs/proxy exceptions can contain credentials: do not expose exception text.
-            raise ResponsesError(f"Responses transport failed ({type(exc).__name__})") from None
+            raise RetryableResponsesError(type(exc).__name__) from None
         except (json.JSONDecodeError, UnicodeDecodeError):
-            raise ResponsesError("Responses API returned invalid JSON") from None
+            raise RetryableResponsesError("invalid_json") from None
 
     @staticmethod
     def _decode_event(data: list[str]) -> Json | None:
@@ -238,13 +296,7 @@ class HttpResponsesTransport:
                 raise ResponsesError("Responses terminal event has no response object")
             return response
         if event.get("type") == "error":
-            detail = event.get("error")
-            code = str(detail.get("code", "unknown")) if isinstance(detail, dict) else "unknown"
-            if not code.isidentifier() or len(code) > 80:
-                code = "unknown"
-            raise ResponsesError(
-                f"Responses stream reported an error ({code}); inspect saved event"
-            )
+            raise _provider_error(event.get("error", event))
         return None
 
 
@@ -572,6 +624,17 @@ class _Conversation:
     async def request(
         self, prompt: str, context: list[Json], tools: Sequence[Json], kind: str
     ) -> Json:
+        previous = self.turn["requests"][-1] if self.turn["requests"] else {}
+        if (
+            previous.get("kind") == kind
+            and previous.get("status") in {"running", "retrying"}
+            and not previous.get("consumed")
+        ):
+            path = self.directory / "requests" / (previous["request_id"] + ".json")
+            if path.exists():
+                # Resume the exact logical request, including its backoff, without
+                # charging a new turn allowance or repeating completed tool calls.
+                return await self.exchange(previous, json.loads(path.read_text()))
         limit = self.turn["request_limit"]
         remaining = limit - self.requests if limit is not None else None
         if remaining is not None and remaining <= 0:
@@ -618,6 +681,11 @@ class _Conversation:
         self.save()
         _atomic_json(self.directory / "requests" / (request_id + ".json"), payload)
         self.requests += 1
+        return await self.exchange(record, payload)
+
+    async def exchange(self, record: Json, payload: Json) -> Json:
+        request_id, kind = record["request_id"], record["kind"]
+        # Re-delivery after a restart also reconciles the run-level reservation.
         await self.emit(
             {
                 "type": "model_request",
@@ -633,7 +701,55 @@ class _Conversation:
                 {"type": "model_stream", "request_id": request_id, "kind": kind, "event": event}
             )
 
-        response = await self.transport.request(self.config, payload, on_stream)
+        while True:
+            retry = record.get("retry")
+            if retry is not None:
+                await self.emit({"type": "model_retry", "request_id": request_id, **retry})
+                await asyncio.sleep(max(0, retry["next_retry_at"] - time.time()))
+            attempt = record.get("attempt", 0) + 1
+            record.update(attempt=attempt, status="running")
+            record.pop("retry", None)
+            self.save()
+            await self.emit({"type": "model_attempt", "request_id": request_id, "attempt": attempt})
+            try:
+                response = await self.transport.request(self.config, payload, on_stream)
+                if response.get("status") == "failed":
+                    error = _provider_error(response.get("error"))
+                    if isinstance(error, RetryableResponsesError):
+                        _atomic_json(
+                            self.directory / "responses" / f"{request_id}.attempt-{attempt}.json",
+                            response,
+                        )
+                        failed = record.setdefault("failed_attempts", {}).setdefault(
+                            str(attempt), {}
+                        )
+                        self.account_usage(failed, response)
+                        await self.emit(
+                            {
+                                "type": "response_retry_usage",
+                                "request_id": request_id,
+                                "attempt": attempt,
+                                "usage": response.get("usage") or {},
+                            }
+                        )
+                        raise error
+                break
+            except RetryableResponsesError as exc:
+                base = min(
+                    self.config.retry_max_seconds,
+                    self.config.retry_initial_seconds * 2 ** min(attempt - 1, 16),
+                )
+                delay = max(exc.retry_after, base * random.uniform(0.8, 1.0))
+                record.update(
+                    status="retrying",
+                    retry={
+                        "attempt": attempt,
+                        "error_code": exc.code,
+                        "delay_seconds": delay,
+                        "next_retry_at": time.time() + delay,
+                    },
+                )
+                self.save()
         _atomic_json(self.directory / "responses" / (request_id + ".json"), response)
         self.account_usage(record, response)
         await self.emit(
@@ -644,10 +760,18 @@ class _Conversation:
             }
         )
         self.validate_response(response)
+        if record.get("attempt", 0) > 1:
+            await self.emit(
+                {"type": "model_recovered", "request_id": request_id, "attempt": record["attempt"]}
+            )
+        if kind != "compact" and (text := _text(response["output"])):
+            await self.emit({"type": "model_output", "text": text})
         return response
 
     @staticmethod
     def validate_response(response: Json) -> None:
+        if response.get("status") == "failed":
+            raise _provider_error(response.get("error"))
         if response.get("status") != "completed":
             raise ResponsesError(
                 f"Responses API status={response.get('status')!r}; "
@@ -751,9 +875,14 @@ class _Conversation:
         if response is None:
             # Compact and its continuation both consume this same finite turn.
             # Preserve the complete boundary if only one request remains.
-            if (
-                self.turn["request_limit"] is not None
-                and self.turn["request_limit"] - self.requests < 2
+            if self.turn["request_limit"] is not None and self.turn[
+                "request_limit"
+            ] - self.requests < (
+                1
+                if latest
+                and latest["kind"] == "compact"
+                and latest.get("status") in {"running", "retrying"}
+                else 2
             ):
                 raise _TurnBudgetExhausted
             # A summarizer must not inherit the executing agent's persona or live

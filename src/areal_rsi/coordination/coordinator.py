@@ -804,6 +804,10 @@ class Coordinator:
                     for record in self.state.get("model_requests", {}).values()
                 ),
                 "elapsed_seconds": elapsed,
+                "api_attempts": sum(
+                    record.get("api_attempts", 1)
+                    for record in self.state.get("model_requests", {}).values()
+                ),
             },
             "waiting_for_user": self.user_questions(),
             "budget_stop_reason": self.state.get("budget_stop_reason"),

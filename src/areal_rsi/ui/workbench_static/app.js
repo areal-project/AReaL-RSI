@@ -74,6 +74,8 @@ const eventNames = {
   budget_exhausted: "达到预算边界",
   session_compacted: "保存会话检查点",
   agent_retry_requested: "恢复 Agent",
+  model_retry: "API 暂不可用，自动重试",
+  model_recovered: "API 已恢复，继续任务",
   brief_updated: "更新研究需求",
   environment_updated: "更新执行环境",
   research_ready: "研究准备完成",
@@ -157,6 +159,12 @@ function progressFreshness(job) {
 }
 function agentAction(run, agent) {
   const activity = run.agent_activity?.[agent.agent_id];
+  if (activity?.type === "model_retry") {
+    const at = time(activity.next_retry_at * 1000);
+    return `API 暂不可用（${activity.error_code}），已失败 ${activity.attempt} 次；预计 ${at} 自动重试，当前进度已保存`;
+  }
+  if (activity?.type === "model_attempt" && activity.attempt > 1)
+    return `正在第 ${activity.attempt} 次尝试连接 API，等待模型响应`;
   const names = {read: "读取文件", grep: "检索代码", glob: "查找文件", bash: "执行命令",
     write: "写入文件", edit: "修改文件", spawn_researcher: "安排研究任务",
     verify: "提交验证", wait: "等待后续消息", submit_report: "提交本轮报告"};
@@ -955,13 +963,7 @@ function renderMessages(run) {
   });
   for (const agent of busy) {
     const activity = run.agent_activity?.[agent.agent_id];
-    const toolNames = {read: "读取文件", grep: "检索代码", glob: "查找文件", bash: "执行命令",
-      write: "写入文件", edit: "修改文件", spawn_researcher: "安排研究任务"};
-    const action = activity?.type === "tool_started"
-      ? (toolNames[activity.tool] || `执行 ${activity.tool}`)
-      : activity?.type === "tool_completed"
-      ? `已完成${toolNames[activity.tool] || activity.tool}，继续处理`
-      : "模型正在处理任务";
+    const action = agentAction(run, agent);
     const progress = element("article", "message assistant progress-message");
     progress.setAttribute("role", "status");
     const name = agent.direction || agentName(agent.agent_id);
@@ -1070,6 +1072,7 @@ function renderEvents() {
       ? events.map((event) => {
           const row = element("div", "event-row");
           const detail =
+            (event.kind === "model_retry" ? `${event.data?.error_code} · 已失败 ${event.data?.attempt} 次` : "") ||
             event.data?.title ||
             event.data?.direction ||
             event.data?.reason ||

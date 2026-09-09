@@ -890,12 +890,12 @@ def test_unlimited_turn_receives_steering_and_recovers_injection_ack(tmp_path: P
     asyncio.run(scenario())
 
 
-def test_connection_retry_is_bounded_and_does_not_replay_read_failures() -> None:
+def test_connection_and_read_failures_retry_beyond_old_limit(tmp_path: Path) -> None:
     async def scenario() -> None:
         for failure, fail_count, expected_attempts in (
-            (httpx.ConnectError, 2, 3),
-            (httpx.ConnectTimeout, 4, 3),
-            (httpx.ReadError, 1, 1),
+            (httpx.ConnectError, 8, 9),
+            (httpx.ConnectTimeout, 8, 9),
+            (httpx.ReadError, 8, 9),
         ):
             attempts = 0
 
@@ -914,14 +914,22 @@ def test_connection_retry_is_bounded_and_does_not_replay_read_failures() -> None
                 assert "private-credential" not in json.dumps(event)
 
             transport = HttpResponsesTransport(httpx.MockTransport(handle))
-            config = ResponsesConfig(base_url="https://example.test", api_key="private-credential")
-            try:
-                result = await transport.request(config, {}, emit)
-            except ResponsesError as exc:
-                assert failure != httpx.ConnectError
-                assert "private-credential" not in str(exc)
-            else:
-                assert failure == httpx.ConnectError and result["status"] == "completed"
+            config = ResponsesConfig(
+                base_url="https://example.test",
+                api_key="private-credential",
+                retry_initial_seconds=0.001,
+                retry_max_seconds=0.002,
+                max_model_calls_per_turn=1,
+            )
+            result = await ResponsesRuntime(config, transport).turn(
+                tmp_path / failure.__name__,
+                system_prompt="Continue",
+                user_message="Go",
+                tools=[],
+                handler=reject_call,
+                event_sink=emit,
+            )
+            assert result.text == "ok"
             assert attempts == expected_attempts
 
     asyncio.run(scenario())

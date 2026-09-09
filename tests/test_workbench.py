@@ -235,6 +235,10 @@ class FixtureBackend:
             {
                 "job_id": "verify_2",
                 "agent_id": "research_a",
+                "agent_name": "内存访问与任务分解",
+                "iteration_id": "n2",
+                "verification": True,
+                "phase": "search",
                 "status": "queued",
                 "description": "验证更新后的 kernel skills",
                 "progress_message": "等待 GPU 分配 · 当前为模拟作业",
@@ -451,6 +455,32 @@ class WorkbenchHttpTest(unittest.TestCase):
         self.assertEqual(subsequent["events"], [])
         self.assertEqual(len(subsequent["nodes"]), 3)
         self.assertNotIn(PRIVATE, self.request("GET", "/api/runs")[2].decode())
+
+    def test_progress_is_public_metadata_and_never_a_verified_score(self) -> None:
+        run_id = self.create()
+        self.request("POST", f"/api/runs/{run_id}/start", {})
+        self.backend.runs[run_id]["jobs"][0]["progress"] = {
+            "stage": "逐项验证",
+            "completed": 2,
+            "total": 8,
+            "score": 0.99,
+            "private": PRIVATE,
+            "items": [{"id": "one", "status": "running", "raw_log": PRIVATE}],
+        }
+        status, _, raw = self.request("GET", f"/api/runs/{run_id}")
+        self.assertEqual(status, 200)
+        self.assertNotIn(PRIVATE, raw.decode())
+        job = json.loads(raw)["jobs"][0]
+        self.assertEqual(
+            job["progress"],
+            {
+                "stage": "逐项验证",
+                "completed": 2,
+                "total": 8,
+                "items": [{"id": "one", "status": "running"}],
+            },
+        )
+        self.assertIsNone(job["result"])
 
     def test_question_identity_and_reply_routing_cross_the_http_boundary(self) -> None:
         run_id = self.create()

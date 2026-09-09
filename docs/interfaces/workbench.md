@@ -52,7 +52,9 @@ nodes: [{ iteration_id, agent_id, state, parent_iteration_id?, title?,
 edges: [{ source: iteration_id, target: iteration_id, kind: parent|reference|merge, label? }]
 baseline, best, final: VerifiedResult|null
 budget: { model_calls, total_tokens, verify_calls, reserved_tokens?, elapsed_seconds? }
-jobs: [{ job_id, agent_id, status, title?, description?, gpu_ids?, progress_message?, error? }]
+jobs: [{ job_id, agent_id, agent_name, status, title, iteration_id?, candidate_id?,
+         verification, is_baseline, phase?, created_at, started_at?, finished_at?,
+         gpu_ids, progress?, progress_message?, error?, result? }]
 messages: [{ message_id, sender, recipient, text, created_at, reply_to? }]
 waiting_for_user: [{ message_id, agent_id, question, created_at }]
 events: [{ sequence, kind, created_at, agent_id?, iteration_id?, data }]
@@ -61,6 +63,34 @@ budget_stop_reason?: string
 ```
 
 父节点连线可由前端根据 `parent_iteration_id` 推导。额外 `edges` 表达有实际证据的引用或合并关系，不得仅为视觉效果虚构。`messages` 只呈现发给用户或来自用户的消息；Research Agent 给 RSI 的报告在节点详情中展示。分数必须来自正式验证记录；不存在的起点、最佳版本和最终确认返回 `null`，不能补零或复用旧分数。
+
+## 执行进度
+
+研究图同时展示未完成的 ResearchIteration 和独立执行作业。作业使用 `job:<job_id>` 作为前端选择标识，不创建额外的 ResearchIteration；有 `iteration_id` 时连接其所属研究节点。RSI 直接提交的作业显示在「RSI 执行」一行。节点、作业和当前进展卡都可打开对应详情，「定位进行中」在未完成任务之间切换。
+
+`rsi` 是提交者 ID，界面显示为 RSI Agent；`search` 是迭代验证阶段，不是联网搜索。起点候选的 `search` 验证显示「起点评测」，其他候选显示「迭代验证」，`final` 显示「最终验证」，`diagnostic` 显示「诊断检查」。起点仍然可为空。
+
+执行器可在配置传入的 `{output}/progress.json` 原子写入以下公共元数据，无须调用模型：
+
+```json
+{
+  "stage": "逐项验证",
+  "message": "2 项已结束，6 项仍在执行。",
+  "completed": 2,
+  "total": 8,
+  "unit": "项",
+  "updated_at": "2026-09-09T10:00:00Z",
+  "items": [
+    {"id": "case-1", "label": "子任务 1", "status": "running", "message": "正在调试"}
+  ]
+}
+```
+
+字段均可省略。`completed` 表示执行结束的数量，可以包含失败项；它与通过数、正式分数无关。只有合法的 completed/total 才显示进度条。`updated_at` 使用带时区的 ISO 时间；执行中的进度超过 45 秒未更新会标出时间，不能据此认定作业停止。没有进度文件时显示真实生命周期和耗时，不推算百分比或剩余时间。
+
+文件最大 128 KB，最多展示 100 个分项，文本字段有长度上限。解析失败、半写入、超限或符号链接均忽略，不中断页面刷新。公共接口只保留规定字段，执行器不得在这些字段中写入凭证或原始日志。进度文件不参与评分、候选选择或调度决策；正式结果仍由可信验证器产生。
+
+「当前进展」汇总运行中的作业、Agent 最近的工具活动、待回复问题和调度连接状态。正在运行的研究节点展示当前任务；Agent 休眠等待作业时明确显示「等待作业结果」，不显示成仍在调用模型。
 
 ## 安全与交互
 

@@ -236,3 +236,61 @@ def test_real_verification_requires_identity_and_failed_create_leaves_no_run(
         }
 
     asyncio.run(scenario())
+
+
+def test_standalone_baseline_job_exposes_live_progress_without_creating_a_node(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        from areal_rsi.base.storage import write_json
+        from areal_rsi.execution.models import JobRecord, JobSpec
+
+        app = ResearchApp(tmp_path, config=ResearchConfig(TaskBrief("Research", "Run work")))
+        run_id = (await app.create({"simulated": False}))["run_id"]
+        c = app.coordinator(run_id)
+        c.state["baseline_candidate_id"] = "seed"
+        c.save()
+        output = c.store.root / "execution-outputs" / "baseline"
+        output.mkdir(parents=True)
+        write_json(output / "progress.json", {"completed": 1, "total": 8, "stage": "评测中"})
+        info = {
+            "agent_id": "rsi",
+            "candidate_id": "seed",
+            "iteration_id": None,
+            "verification": True,
+            "phase": "search",
+            "output": str(output),
+        }
+        write_json(c.store.root / "coordination" / "jobs.json", {"baseline": info})
+        write_json(
+            c.store.root / "jobs" / "baseline" / "job.json",
+            JobRecord(
+                "baseline",
+                JobSpec(),
+                "running",
+                100.0,
+                101.0,
+                started_at=101.0,
+            ),
+        )
+        detail = await app.detail(run_id)
+        job = detail["jobs"][0]
+        assert job["title"] == "起点评测" and job["is_baseline"] is True
+        assert job["agent_name"] == "RSI Agent" and job["iteration_id"] is None
+        assert job["progress"] == {"completed": 1, "total": 8, "stage": "评测中"}
+        assert detail["nodes"] == [] and detail["best"] is None
+        for phase, candidate, title in [
+            ("final", "seed", "最终验证"),
+            ("search", "next", "迭代验证"),
+            ("diagnostic", "seed", "诊断检查"),
+        ]:
+            write_json(
+                c.store.root / "coordination" / "jobs.json",
+                {
+                    "baseline": {**info, "phase": phase, "candidate_id": candidate},
+                },
+            )
+            assert (await app.detail(run_id))["jobs"][0]["title"] == title
+        await app.close()
+
+    asyncio.run(scenario())

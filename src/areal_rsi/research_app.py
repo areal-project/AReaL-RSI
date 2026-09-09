@@ -409,29 +409,53 @@ class ResearchApp:
         messages = [
             encode(m)
             for m in c.store.records("messages", ResearchMessage)
-            if (m.sender == "user" or m.recipient == "user")
-            and m.message_id not in archived_chat
+            if (m.sender == "user" or m.recipient == "user") and m.message_id not in archived_chat
         ]
         messages.sort(key=lambda m: m["created_at"])
         jobs_path = c.store.root / "coordination" / "jobs.json"
         jobs = []
         if jobs_path.exists():
+            from areal_rsi.execution.progress import read_progress
+
             intents = json.loads(jobs_path.read_text())
             for job_id, info in intents.items():
                 path = c.store.root / "jobs" / job_id / "job.json"
                 if not path.exists():
                     continue
                 record = json.loads(path.read_text())
+                baseline = bool(
+                    info.get("verification")
+                    and info.get("candidate_id")
+                    and info["candidate_id"] == c.state.get("baseline_candidate_id")
+                    and info.get("phase") == "search"
+                )
+                phase = info.get("phase")
+                title = (
+                    "起点评测"
+                    if baseline
+                    else {"search": "迭代验证", "final": "最终验证", "diagnostic": "诊断检查"}.get(
+                        phase, "验证作业"
+                    )
+                    if info.get("verification")
+                    else "研究执行"
+                )
+                actor = c.actor(info["agent_id"])
                 jobs.append(
                     {
                         "job_id": job_id,
-                        "title": (
-                            "验证 · " + info["phase"]
-                            if info["verification"]
-                            else "执行作业 · " + info["agent_id"]
-                        ),
+                        "title": title,
+                        "phase": phase,
+                        "verification": bool(info.get("verification")),
+                        "is_baseline": baseline,
+                        "iteration_id": info.get("iteration_id"),
+                        "candidate_id": info.get("candidate_id"),
                         "agent_id": info["agent_id"],
+                        "agent_name": actor.direction
+                        or {"rsi": "RSI Agent", "interaction": "Interaction Agent"}.get(
+                            info["agent_id"], "Research Agent"
+                        ),
                         "status": record["state"],
+                        "created_at": record["created_at"],
                         "gpu_ids": record["assigned_gpu_ids"],
                         "started_at": record["started_at"],
                         "finished_at": record["finished_at"],
@@ -439,6 +463,7 @@ class ResearchApp:
                         "error": record["error"],
                         "simulated": c.state["simulated"],
                         "result": info.get("result"),
+                        "progress": read_progress(Path(info["output"])),
                     }
                 )
                 if info.get("verification") and info.get("result"):

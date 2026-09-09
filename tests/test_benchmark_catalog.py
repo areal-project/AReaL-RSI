@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from collections.abc import Mapping
 from pathlib import Path
 
 from areal_rsi.api.base import (
@@ -26,7 +27,12 @@ class BenchmarkCatalogTest(unittest.IsolatedAsyncioTestCase):
         )
 
         class ExternalAdapter:
-            def create(self, descriptor, config, content):
+            def create(
+                self,
+                descriptor: BenchmarkDescriptor,
+                config: Mapping[str, str | int],
+                content: FileContentStore,
+            ) -> BenchmarkBundle:
                 return BenchmarkBundle(
                     descriptor, "external-fixture", ArithmeticBenchmark(),
                     ArithmeticVerifier(content), AccuracyEvaluation(),

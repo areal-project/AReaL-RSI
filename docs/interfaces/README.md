@@ -481,6 +481,8 @@ Workflow 在研究轮次之间把最新 ExperimentRun 交给 `RsiAgent.prune(run
 
 RsiWorkflow.run 直接返回 ExperimentRun，不再用 WorkflowResult 再包装一层。WorkflowContext 中三种候选生成后端都是可选项；Workflow 根据 `ExperimentPlan.target` 检查并使用对应实现：HARNESS 需要 HarnessBuilder，MODEL 需要 TrainingBackend，ARTIFACT 需要 ArtifactBuilder。
 
+`WorkflowContext.evaluation_concurrency` 控制一次评测内同时执行的任务数，默认是 1；这与 Research Agent 的数量相互独立。生成产物和完整验证结果分别保存检查点，验证器故障恢复时可以复用已生成产物。某个任务出现执行故障时，其他任务仍可完成并保存结果，但本次评测不会把故障计作模型零分后继续汇总。验证器正常完成并拒绝模型输出则属于有效评测结果。
+
 ## 5. 证据文件与访问权限
 
 `EvidenceFile(path, content, kind, metadata)` 描述一个文件；`EvidenceBundle(files, metadata)` 保存文件清单。路径、用途和元数据由生产者决定，不包含 Benchmark 特定含义。`EvidenceStore` 提供 `put`、`get`、`materialize`，本地实现为 `FileEvidenceStore`，复用 ContentStore 而不是另建内容仓库。
@@ -511,6 +513,8 @@ workspace/train/
 ```
 
 初始提案消息只给目标、可编辑目录、证据目录及读取规则，不自动注入报告、错误或代码。Agent 用工具分段读取；原始文件不截断，工具显示仍有长度上限，超过时必须继续小段读取。实际读取行为保存于模型工具调用轨迹，授权清单保存在工作区外的宿主审计文件。
+
+`DefaultResearchAgent(file_tools_only=True)` 可把提案工具限制为只读文件工具，不提供 Shell 或执行证据代码的工具。通用 `FileReader` 只接收工作目录和显式文件清单，提供 `list_files`、`read_file`、`read_json`、`inspect_json`、`search_file`；它不理解任务、分数或 Benchmark。每次响应最多 6000 字节，文本页最多 4000 个字符，通过 `next_offset` 继续读取；JSON 子树用 JSON Pointer 选择。当前默认仍保留 Shell 工具模式，具体研究方法自行选择。
 
 文件导出本身不是沙箱。AgentRuntime 还必须禁止访问底层 ContentStore、其他 Agent 工作区和宿主隐藏数据。当前 DSH Runtime 在 macOS 上用 sandbox-exec 执行这个边界；导出副本可写，原始证据不可变。其他 Runtime 需实现等效隔离，不能把提示词当作访问控制。
 

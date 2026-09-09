@@ -85,6 +85,8 @@ class WorkflowContext:
     training_backend: TrainingBackend | None = None
     artifact_builder: ArtifactBuilder | None = None
     evidence_store: EvidenceStore | None = None
+    # 每次评测的并发上限；默认串行，具体装配按资源和模型服务容量设置。
+    evaluation_concurrency: int = 1
 
 
 class RsiWorkflow(Protocol):

@@ -100,6 +100,7 @@ HarnessChange 和 ArtifactChange 都是一个 patch；ModelChange 是一次训�
 - Verifier 不直接依赖 TrajectoryStore，TaskResult 中的 TrajectoryRef 由 Workflow 和 Runtime 管理；
 - 证据以 EvidenceBundle 引用独立文件，EvidenceStore 只导出显式授权的文件并校验摘要；内容存储不理解特定 Benchmark；
 - 具体 Agent 决定导出哪些证据以及读取规则，具体 Workflow 决定收集什么；标准研究流程只给提案阶段 TRAIN 证据；
+- Research Agent 可选择只读分页文件工具，禁止 Shell 执行；工具只认识授权路径和内容，不包含 Benchmark 规则；
 - VALIDATE 只向 ResearchAgent 暴露 score 和 metrics；
 - AgentRuntime.open 必须把 `workspace_root` 作为文件系统隔离边界，不能让 Agent 向上读取其他目录。
 

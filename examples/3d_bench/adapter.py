@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -40,6 +42,32 @@ class ThreeModelBenchmark:
         if split is not BenchmarkSplit.TRAIN:
             return ()
         return (Task(self.task_id, self.target_path.read_text(encoding="utf-8")),)
+
+
+def load_tasks(tasks_path: Path) -> tuple[Task, ...]:
+    """Read all 100 public targets in numeric order; reject gaps and ambiguous IDs."""
+    tasks = {}
+    for path in tasks_path.glob("*/TARGET.md"):
+        match = re.fullmatch(r"(\d{3})-.+", path.parent.name)
+        if match is None:
+            raise ValueError(f"Unexpected task directory: {path.parent.name}")
+        number = int(match[1])
+        if number in tasks or not 1 <= number <= 100:
+            raise ValueError(f"Duplicate or out-of-range task number: {number}")
+        text = path.read_text(encoding="utf-8")
+        if not text.strip():
+            raise ValueError(f"Empty target: {path}")
+        tasks[number] = Task(
+            f"MODEL-{number:03d}",
+            text,
+            {
+                "target_sha256": hashlib.sha256(text.encode()).hexdigest(),
+                "source_directory": path.parent.name,
+            },
+        )
+    if set(tasks) != set(range(1, 101)):
+        raise ValueError(f"Expected exactly MODEL-001..MODEL-100, found {len(tasks)} tasks")
+    return tuple(tasks[number] for number in sorted(tasks))
 
 
 class ThreeModelVerifier:
@@ -94,12 +122,23 @@ class ThreeModelEvaluation:
         *,
         baseline: EvaluationReport | None = None,
     ) -> EvaluationReport:
-        if len(results) != 1 or results[0].status is not VerificationStatus.SUCCEEDED:
-            raise ValueError("MODEL-001 评测必须包含一个成功完成的验证结果")
-        score = float(results[0].score or 0.0)
+        if not results or any(item.status is not VerificationStatus.SUCCEEDED for item in results):
+            raise ValueError("评测必须包含完整的验证结果；基础设施错误不能作为模型失败计分")
+        if len({item.task_id for item in results}) != len(results):
+            raise ValueError("评测不能重复包含同一个任务")
+        score = sum(float(item.score or 0.0) for item in results) / len(results)
         return EvaluationReport(
-            solution.solution_id, split, score == 1.0, score,
-            {"contract_v2": score, "task_count": 1.0}, now(),
+            solution.solution_id,
+            split,
+            score == 1.0,
+            score,
+            {
+                "contract_v2": sum(float(item.metrics.get("contract_v2", 0)) for item in results)
+                / len(results),
+                "task_count": float(len(results)),
+                "pass_count": float(sum(item.passed is True for item in results)),
+            },
+            now(),
         )
 
 
@@ -113,6 +152,9 @@ class ThreeModelAdapter:
             raise ValueError("3D Benchmark 的 tasks_path/runtime_path 必须是目录")
         benchmark = ThreeModelBenchmark(tasks_path)
         return BenchmarkBundle(
-            descriptor, benchmark.name, benchmark,
-            ThreeModelVerifier(content, runtime_path), ThreeModelEvaluation(),
+            descriptor,
+            benchmark.name,
+            benchmark,
+            ThreeModelVerifier(content, runtime_path),
+            ThreeModelEvaluation(),
         )

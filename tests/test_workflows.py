@@ -10,6 +10,7 @@ import tempfile
 import unittest
 from collections.abc import Callable, Sequence
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 from areal_rsi.api.base import (
     BenchmarkSplit,
@@ -25,6 +26,8 @@ from areal_rsi.api.base import (
     Task,
     TaskResult,
     Trajectory,
+    VerificationRequest,
+    VerificationResult,
     VerifierSpec,
 )
 from areal_rsi.api.workflow import WorkflowContext
@@ -219,6 +222,37 @@ class WorkflowTest(unittest.IsolatedAsyncioTestCase):
     async def execute(self) -> ExperimentRun:
         run = await self.service.start(self.plan)
         return await self.service.tasks[run.run_id]
+
+    async def test_bounded_tasks_and_verifier_resume_reuse_generated_outputs(self) -> None:
+        self.plan.research_agent_count = 1
+        self.plan.max_iterations = 1
+        self.context.research_agents = self.researchers[:1]
+        self.context.evaluation_concurrency = 2
+        original = self.context.verifier.verify
+        calls = 0
+
+        async def flaky(request: VerificationRequest) -> VerificationResult:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("temporary verifier outage")
+            return await original(request)
+
+        with patch.object(self.context.verifier, "verify", AsyncMock(side_effect=flaky)):
+            run = await self.execute()
+        self.assertEqual(run.state, RunState.FAILED)
+        self.assertEqual(self.runtime.calls, 3)
+        self.assertEqual(calls, 3)
+        self.assertEqual(self.runtime.peak, 2)
+        folder = self.root / "runs" / run.run_id / "baseline/validate"
+        self.assertEqual(len(list(folder.glob("generation-*.json"))), 3)
+        self.assertEqual(len(list(folder.glob("task-*.json"))), 2)
+        resumed = await self.service.resume(run.run_id)
+        finished = await self.service.tasks[resumed.run_id]
+        self.assertEqual(finished.state, RunState.SUCCEEDED, finished.error)
+        # Three initial generations plus TRAIN and candidate VALIDATE, no regenerated baseline.
+        self.assertEqual(self.runtime.calls, 9)
+        self.assertEqual(len(list(folder.glob("task-*.json"))), 3)
 
     async def test_parallel_independent_lines_and_honest_flat_scores(self) -> None:
         run = await self.execute()

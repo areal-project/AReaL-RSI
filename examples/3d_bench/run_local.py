@@ -1,4 +1,4 @@
-"""One real, same-task diagnostic using the standard RSI evolution workflow."""
+"""One real RSI round over a selected 3D task suite, with explicit sample reuse."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from adapter import ThreeModelBenchmark, ThreeModelEvaluation
-from run_baseline import DATASET, EXAMPLE, GENERATION_ENVIRONMENT, prepare_public_workspace
+from adapter import ThreeModelBenchmark, ThreeModelEvaluation, load_tasks
+from environment import ENVIRONMENT_VERSION, PUBLIC_FILES, ModelEnvironment, ValidationService
 
 from areal_rsi.agents.research.default import DefaultResearchAgent
 from areal_rsi.agents.rsi.default import DefaultRsiAgent
@@ -44,36 +44,115 @@ from areal_rsi.base.storage import (
 from areal_rsi.config import AgentModelSettings, ModelConfig
 from areal_rsi.modules.gateway import GatewayProxy
 from areal_rsi.modules.harness import LocalHarnessBuilder
-from areal_rsi.modules.runtime import DshAgentRuntime, sandbox_wrapper
+from areal_rsi.modules.runtime import sandbox_wrapper
+from areal_rsi.modules.runtime_package import PackageAgentRuntime, RuntimeSettings
 from areal_rsi.workflows.service import LocalExperimentService
 
-TASK_MESSAGE = "Read TARGET.md and implement src/model.js."
-SCOPE = "MODEL-001 shared train/validate diagnostic; Contract V2 only, no visual or held-out score"
+TASK_MESSAGE = "Read TARGET.md and CAPABILITIES.md, then implement src/model.js."
+SCOPE = "shared train/validate diagnostic; Contract V2 and build, no visual or held-out score"
+GENERATION_ENVIRONMENT = ENVIRONMENT_VERSION
+EXAMPLE = Path(__file__).resolve().parent
+DATASET = EXAMPLE.parents[1] / ".rsi/datasets/3d-model-v2"
+CASE = EXAMPLE / "cases"
+BASELINE_PROMPT = """Complete TARGET.md using the supplied Three.js framework.
+Only edit the body of createModel in src/model.js and preserve the framework helpers.
+Use CONTRACT_V2.md as the authoritative interface. Run the available build and
+validation commands before reporting completion. Deliver src/model.js as a file.
+"""
+
+
+def prepare_public_workspace(template: Path, workspace: Path) -> None:
+    """Copy only the public model inputs into a fresh Task Agent workspace."""
+    package = json.loads((template / "package.json").read_text())
+    if package.get("type") != "module":
+        raise ValueError("Contract V2 template must explicitly declare type=module")
+    for name in ("src/model.js", "CONTRACT_V2.md", "package.json"):
+        destination = workspace / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(template / name, destination)
 
 
 class DiagnosticBenchmark:
-    """Explicit overlap for wiring ONE task, never a held-out benchmark result."""
+    """Explicit TRAIN/VALIDATE overlap, never a held-out benchmark result."""
 
-    def __init__(self, task, snapshot):
-        self.task = task
+    def __init__(self, task, snapshot, *, scope=None):
+        self.tasks = (task,) if isinstance(task, Task) else tuple(task)
+        if not self.tasks:
+            raise ValueError("The benchmark task list cannot be empty")
+        label = self.tasks[0].task_id if len(self.tasks) == 1 else f"{len(self.tasks)} tasks"
+        scope = scope if scope is not None else f"{label} {SCOPE}"
         identity = json.dumps(
-            {"task": encode(task), "snapshot": snapshot, "scope": SCOPE}, sort_keys=True
+            {"task": encode(task), "snapshot": snapshot, "scope": scope}, sort_keys=True
         ).encode()
-        self.name = "3d-model001-diagnostic-" + hashlib.sha256(identity).hexdigest()[:16]
+        prefix = (
+            f"3d-{label.lower().replace('-', '')}-diagnostic-"
+            if len(self.tasks) == 1
+            else "3d-suite-diagnostic-"
+        )
+        self.name = prefix + hashlib.sha256(identity).hexdigest()[:16]
 
     async def list_tasks(self, split):
         if split not in (BenchmarkSplit.TRAIN, BenchmarkSplit.VALIDATE):
             raise ValueError("Unsupported split")
-        return (decode(type(self.task), encode(self.task)),)
+        return tuple(decode(Task, encode(task)) for task in self.tasks)
 
 
 class FileTaskRuntime:
-    def __init__(self, root, content, runtime, template, emit, *, retry_incomplete=False):
+    def __init__(
+        self,
+        root,
+        content,
+        runtime,
+        template,
+        emit,
+        *,
+        retry_incomplete=False,
+        environment=None,
+        reuse_outputs=False,
+    ):
         self.root, self.content, self.runtime = root, content, runtime
         self.template, self.emit = template, emit
         self.retry_incomplete = retry_incomplete
+        self.environment = environment
+        self.reuse_outputs = reuse_outputs
+        self.reuse_locks = {}
 
     async def run(self, solution, task, *, config=None):
+        if not self.reuse_outputs:
+            return await self._generate(solution, task, config=config)
+        identity = {"solution": encode(solution), "task": encode(task)}
+        key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+        # TRAIN deliberately uses the recorded baseline samples in same-suite experiments.
+        # A per-sample lock also prevents duplicate paid calls from concurrent consumers.
+        async with self.reuse_locks.setdefault(key, asyncio.Lock()):
+            cache = self.root / "shared-samples" / f"{key}.json"
+            if cache.exists():
+                saved = json.loads(cache.read_text())
+                if saved["identity"] != identity:
+                    raise ValueError("Shared sample identity mismatch")
+                execution_key = config["execution_key"]
+                write_json(
+                    self.root
+                    / "reused"
+                    / (hashlib.sha256(execution_key.encode()).hexdigest() + ".json"),
+                    {
+                        "execution_key": execution_key,
+                        "origin": saved["execution_key"],
+                        "result": saved["result"],
+                    },
+                    immutable=True,
+                )
+                self.emit(f"Reuse recorded Task sample: {execution_key}")
+                return decode(TaskResult, saved["result"])
+            result = await self._generate(solution, task, config=config)
+            write_json(
+                cache,
+                {"identity": identity, "execution_key": config["execution_key"], "result": result},
+                immutable=True,
+            )
+            return result
+
+    async def _generate(self, solution, task, *, config=None):
         execution_key = (config or {})["execution_key"]
         folder = self.root / hashlib.sha256(execution_key.encode()).hexdigest()[:16]
         folder.mkdir(parents=True, exist_ok=True)
@@ -99,30 +178,63 @@ class FileTaskRuntime:
             )
             self.emit(f"Retry incomplete Task Agent; previous files retained at {archived}")
         workspace = folder / "workspace"
-        prepare_public_workspace(self.template, workspace)
+        service = None
+        if self.environment is None:
+            # Kept for small offline fixtures; real runs always use the complete environment.
+            prepare_public_workspace(self.template, workspace)
+        else:
+            await asyncio.to_thread(self.environment.prepare_workspace, workspace)
         (workspace / "TARGET.md").write_text(str(task.input))
         await self.content.materialize(solution.harness.content, folder / "harness")
         prompt = await self.content.put_text((folder / "harness/prompt.md").read_text())
         self.emit(f"Task Agent start: {execution_key}")
-        session = await self.runtime.open(
-            AgentSpec(
-                "task-agent", "deepseek-harness@v1", solution.model, (prompt,), tools=("bash@v1",)
-            ),
-            workspace_root=str(workspace),
-        )
+        # Start the service only after fallible preparation; always close it below.
         try:
+            if self.environment is not None:
+                service = ValidationService(self.environment, folder / "self-checks")
+                service.install_client(workspace)
+            return await self._execute(solution, task, folder, workspace, prompt, service)
+        finally:
+            if service is not None:
+                await asyncio.to_thread(service.close)
+
+    async def _execute(self, solution, task, folder, workspace, prompt, service):
+        """Run one generation while the caller owns the validation service lifetime."""
+        fixed = (
+            ("package.json", "CONTRACT_V2.md", "TARGET.md")
+            if service is None
+            else (
+                *(name for name in PUBLIC_FILES if name != "src/model.js"),
+                "TARGET.md",
+                "CAPABILITIES.md",
+                "scripts/check-model.mjs",
+                "scripts/validate-model.sh",
+            )
+        )
+        hashes = {
+            name: hashlib.sha256((workspace / name).read_bytes()).hexdigest() for name in fixed
+        }
+        write_json(folder / "public-inputs.json", hashes, immutable=True)
+        session = None
+        try:
+            session = await self.runtime.open(
+                AgentSpec(
+                    "task-agent",
+                    "deepseek-harness@v1",
+                    solution.model,
+                    (prompt,),
+                    tools=("bash@v1",),
+                ),
+                workspace_root=str(workspace),
+            )
             response = await session.send(TASK_MESSAGE)
             (folder / "response.txt").write_text(response)
         finally:
-            trace = await session.finish()
-        for name in ("package.json", "CONTRACT_V2.md", "TARGET.md"):
+            if session is not None:
+                trace = await session.finish()
+        for name, digest in hashes.items():
             path = workspace / name
-            expected = (
-                str(task.input).encode()
-                if name == "TARGET.md"
-                else (self.template / name).read_bytes()
-            )
-            if path.is_symlink() or path.read_bytes() != expected:
+            if path.is_symlink() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
                 raise ValueError(f"Task Agent modified fixed input: {name}")
         source = workspace / "src/model.js"
         if source.is_symlink() or source.parent.is_symlink() or not source.is_file():
@@ -131,13 +243,14 @@ class FileTaskRuntime:
             await self.content.put_bytes(source.read_bytes(), media_type="text/javascript"), trace
         )
         write_json(folder / "task-result.json", result, immutable=True)
-        self.emit(f"Task Agent finished: {execution_key}; output={folder}")
+        self.emit(f"Task Agent finished: {task.task_id}; output={folder}")
         return result
 
 
 class IsolatedVerifier:
-    def __init__(self, root, content, emit):
+    def __init__(self, root, content, emit, *, environment=None):
         self.root, self.content, self.emit = root, content, emit
+        self.environment = environment
 
     async def verify(self, request):
         result = request.result
@@ -145,6 +258,40 @@ class IsolatedVerifier:
         if result.output.media_type != "text/javascript":
             raise ValueError("Expected model.js file contents")
         folder = self.root / result.trajectory.trajectory_id
+        if self.environment is not None:
+            # One source may serve both TRAIN and VALIDATE; retain their receipts separately.
+            key = hashlib.sha256(json.dumps(request.metadata, sort_keys=True).encode()).hexdigest()
+            folder = folder / key[:16]
+            # Final evaluation never trusts the agent's local check result or project files.
+            folder.mkdir(parents=True, exist_ok=True)
+            checked = await asyncio.to_thread(
+                self.environment.validate, source, folder / new_id("check")
+            )
+            passed = checked["passed"]
+            feedback = "\n".join(
+                f"{name}: {'passed' if item['returncode'] == 0 else 'failed'}\n{item['stderr']}"
+                for name, item in checked["checks"].items()
+            )
+            if "receipt_error" in checked:
+                feedback += "\n" + checked["receipt_error"]
+            verification = VerificationResult(
+                request.task.task_id,
+                result.trajectory.trajectory_id,
+                passed,
+                float(passed),
+                {
+                    "contract_v2": float(
+                        checked["checks"]["contract"]["returncode"] == 0
+                        and "receipt_error" not in checked
+                    ),
+                    "build": float(checked["checks"]["build"]["returncode"] == 0),
+                },
+                feedback,
+                attachments=(await self.content.put_json(checked),),
+            )
+            write_json(folder / "verification.json", verification)
+            self.emit(f"Verifier: passed={passed}; trajectory={result.trajectory.trajectory_id}")
+            return verification
         folder.mkdir(parents=True)
         evaluation = folder / "evaluation"
         prepared = await asyncio.to_thread(
@@ -189,7 +336,7 @@ class IsolatedVerifier:
                     {
                         "source_sha256": hashlib.sha256(source).hexdigest(),
                         "returncode": checked.returncode,
-                        "scope": SCOPE,
+                        "scope": f"{request.task.task_id} {SCOPE}",
                     }
                 ),
             ),
@@ -201,7 +348,7 @@ class IsolatedVerifier:
 
 def check_plan(plan, baseline_id, benchmark_name):
     if not isinstance(plan, ExperimentPlan) or (
-        plan.max_iterations != 1
+        plan.max_iterations != 3
         or plan.research_agent_count != 1
         or plan.target != EvolutionTarget.HARNESS
         or plan.baseline_solution_id != baseline_id
@@ -211,7 +358,9 @@ def check_plan(plan, baseline_id, benchmark_name):
         raise ValueError("RSI plan exceeds the authorized one-round prompt experiment")
 
 
-async def main(tasks, *, resume=None, retry_incomplete=False):
+async def main(
+    tasks, *, resume=None, retry_incomplete=False, all_tasks=False, task_ids=None, concurrency=None
+):
     if retry_incomplete and resume is None:
         raise ValueError("Incomplete retry requires an explicit resume directory")
     settings = AgentModelSettings.from_environment()
@@ -226,6 +375,16 @@ async def main(tasks, *, resume=None, retry_incomplete=False):
     for name, digest in snapshot["files"].items():
         if hashlib.sha256((template / name).read_bytes()).hexdigest() != digest:
             raise ValueError(f"Fixed template changed: {name}")
+    prepared = DATASET / "runtime" / ENVIRONMENT_VERSION
+    if not prepared.exists():
+        prepared.parent.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(
+            subprocess.run, ["bash", str(EXAMPLE / "run.sh"), "prepare", str(prepared)], check=True
+        )
+    environment = ModelEnvironment(template, prepared)
+    environment.check()
+    # The prepared runtime is checked before any model call; generated files are
+    # validated independently after each Task Agent run.
     saved = None
     if resume is not None:
         root = resume.resolve()
@@ -233,7 +392,6 @@ async def main(tasks, *, resume=None, retry_incomplete=False):
         saved = json.loads((root / "inputs.json").read_text())
         expected = {
             "snapshot": snapshot,
-            "scope": SCOPE,
             "generation_environment": GENERATION_ENVIRONMENT,
             "research_feedback_delivery": "evidence-files-v1",
             "task_max_tokens_per_request": 4096,
@@ -242,12 +400,39 @@ async def main(tasks, *, resume=None, retry_incomplete=False):
         }
         if any(saved.get(key) != value for key, value in expected.items()):
             raise ValueError("Resume configuration differs from recorded experiment")
-        task = decode(Task, saved["task"])
+        selected = tuple(decode(Task, item) for item in saved.get("tasks", [saved.get("task")]))
+        concurrency = saved.get("concurrency", 1)
+        reuse_outputs = saved.get("reuse_baseline_samples", False)
+        scope = saved["scope"]
     else:
-        task = (await ThreeModelBenchmark(tasks).list_tasks(BenchmarkSplit.TRAIN))[0]
-        root = DATASET / "outputs" / new_id("model001_full")
+        if all_tasks or task_ids:
+            selected = load_tasks(tasks)
+            if task_ids:
+                requested = set(task_ids)
+                if len(requested) != len(task_ids) or not requested <= {
+                    t.task_id for t in selected
+                }:
+                    raise ValueError("Unknown or duplicate selected task IDs")
+                selected = tuple(task for task in selected if task.task_id in requested)
+        else:
+            selected = tuple(await ThreeModelBenchmark(tasks).list_tasks(BenchmarkSplit.TRAIN))
+        concurrency = concurrency if concurrency is not None else (4 if len(selected) > 1 else 1)
+        if type(concurrency) is not int or not 1 <= concurrency <= 8:
+            raise ValueError("Concurrency must be between 1 and 8")
+        reuse_outputs = len(selected) > 1
+        scope = (
+            f"{selected[0].task_id} {SCOPE}"
+            if len(selected) == 1
+            else (
+                f"{len(selected)} tasks; shared TRAIN/VALIDATE with reused baseline samples; "
+                "Contract V2 and build; no visual or held-out score"
+            )
+        )
+        root = DATASET / "outputs" / new_id("model001_full" if len(selected) == 1 else "suite_full")
         root.mkdir(parents=True)
-    benchmark = DiagnosticBenchmark(task, snapshot)
+    benchmark = DiagnosticBenchmark(
+        selected[0] if len(selected) == 1 else selected, snapshot, scope=scope
+    )
 
     def emit(message):
         print(f"{now()} {message}", flush=True)
@@ -268,7 +453,7 @@ async def main(tasks, *, resume=None, retry_incomplete=False):
     else:
         harness_dir = root / "baseline-harness"
         harness_dir.mkdir()
-        shutil.copy2(EXAMPLE / "baseline.md", harness_dir / "prompt.md")
+        (harness_dir / "prompt.md").write_text(BASELINE_PROMPT)
         (harness_dir / "mcp.json").write_text('{"servers": []}\n')
         harness = await versions.create_harness(
             "3d-minimal-v1", await content.snapshot(harness_dir)
@@ -282,11 +467,14 @@ async def main(tasks, *, resume=None, retry_incomplete=False):
         baseline = await versions.create_solution(models["task-agent"], harness)
     write_json(
         root / "inputs.json",
-        {
-            "task": task,
+        saved
+        or {
+            "tasks": selected,
             "baseline": baseline,
             "snapshot": snapshot,
-            "scope": SCOPE,
+            "scope": scope,
+            "concurrency": concurrency,
+            "reuse_baseline_samples": reuse_outputs,
             "models": models,
             "generation_environment": GENERATION_ENVIRONMENT,
             "research_feedback_delivery": "evidence-files-v1",
@@ -297,15 +485,18 @@ async def main(tasks, *, resume=None, retry_incomplete=False):
         immutable=True,
     )
     proxies, runtimes = [], {}
+    runtime_settings = RuntimeSettings.from_environment()
     rsi = None
     try:
         for name, connection in connections.items():
             proxy = GatewayProxy(connection.base_url, connection.api_key)
             proxies.append(proxy)
-            runtimes[name] = DshAgentRuntime(
+            runtimes[name] = PackageAgentRuntime(
                 root / "sessions" / name,
                 content,
                 traces,
+                settings=runtime_settings,
+                role=name,
                 base_url=proxy.url,
                 api_key="local-proxy",
                 timeout=600,
@@ -319,17 +510,20 @@ async def main(tasks, *, resume=None, retry_incomplete=False):
             models["rsi-agent"],
             baseline.solution_id,
             benchmark.name,
-            benchmark_description=SCOPE + "; only prompt.md may change; no new tools/dependencies",
+            benchmark_description=scope + "; only prompt.md may change; no new tools/dependencies",
             target_model_name=models["task-agent"].name,
         )
         message = (
-            "Start exactly one iteration with one Research Agent to improve the reusable Harness "
-            "for MODEL-001. Only change prompt.md; preserve framework helpers, file output, "
+            "Start exactly three iterations with one Research Agent to improve the reusable "
+            "Harness "
+            f"for the selected {len(selected)} 3D modeling tasks. "
+            "Only change prompt.md; preserve framework helpers, file output, "
             "Contract V2 precedence, tools, model and generation limits. "
             "Do not embed task-specific "
             "answers or node names. Use training evidence to improve general construction and "
-            "self-check instructions. No Qwen-VL, visual scoring or additional iterations. "
-            "This is a same-task diagnostic, not held-out evaluation."
+            "self-check instructions. No Qwen-VL or visual scoring. "
+            "This is a same-suite diagnostic, not held-out evaluation. "
+            "For multi-task runs, TRAIN reuses baseline samples without another generation."
         )
         if saved:
             plan = decode(ExperimentPlan, json.loads((root / "rsi-plan.json").read_text()))
@@ -341,7 +535,7 @@ async def main(tasks, *, resume=None, retry_incomplete=False):
             write_json(root / "rsi-plan.json", plan)
         check_plan(plan, baseline.solution_id, benchmark.name)
         await rsi.close()
-        verifier = IsolatedVerifier(root / "verification", content, emit)
+        verifier = IsolatedVerifier(root / "verification", content, emit, environment=environment)
         researcher = DefaultResearchAgent(
             "research-agent-1",
             runtimes["research-agent"],
@@ -351,6 +545,7 @@ async def main(tasks, *, resume=None, retry_incomplete=False):
             versions,
             root / "research-workspaces",
             editable_path=lambda name: name == "prompt.md",
+            file_tools_only=True,
             evidence_access=lambda entry: (
                 entry.kind
                 in {"report", "task", "input", "output", "verification", "trajectory", "attachment"}
@@ -358,10 +553,14 @@ async def main(tasks, *, resume=None, retry_incomplete=False):
             evidence_instructions="Read train/index.json, then report.json and each "
             "tasks/*/verification.json separately. After identifying the diagnostic, read "
             "relevant line ranges of tasks/*/output (the original model.js) and only necessary "
-            "trajectory excerpts. Keep each tool response below 6000 bytes; if truncated, "
-            "continue with smaller ranges. Never dump the entire source or trajectory. "
+            "trajectory excerpts. Use inspect_json, read_json pointers and search_file. "
+            "Continue paginated responses using next_offset. Never read the entire trajectory. "
             "Do not run or import evidence code.",
             harness_description="Only prompt.md is editable; no new tools or dependencies. "
+            "Task Agent has an installed Three.js/Vite project and CAPABILITIES.md. "
+            "It can run npm run build and npm run validate:model -- .validation/result.json; "
+            "the latter calls the host's isolated Contract V2 checker and build. "
+            "It cannot inspect verifier source; there is no /output mount. "
             "Evidence is provided as separate files. Preserve Contract V2 precedence "
             "and file output. No benchmark-specific answer or node names in the prompt.",
         )
@@ -377,6 +576,8 @@ async def main(tasks, *, resume=None, retry_incomplete=False):
                 template,
                 emit,
                 retry_incomplete=retry_incomplete,
+                environment=environment,
+                reuse_outputs=reuse_outputs,
             ),
             rsi,
             (researcher,),
@@ -385,6 +586,7 @@ async def main(tasks, *, resume=None, retry_incomplete=False):
             VerifierSpec("contract-v2", "external-3d-sandbox", timeout_seconds=360),
             ThreeModelEvaluation(),
             LocalHarnessBuilder(content, root / "builds"),
+            evaluation_concurrency=concurrency,
         )
         service = LocalExperimentService(root / "experiment", context, emit)
         if saved:
@@ -419,9 +621,13 @@ async def main(tasks, *, resume=None, retry_incomplete=False):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--tasks", type=Path)
-    group.add_argument("--resume", type=Path)
+    parser.add_argument("--resume", type=Path)
     parser.add_argument("--retry-incomplete-task", action="store_true")
     args = parser.parse_args()
-    asyncio.run(main(args.tasks, resume=args.resume, retry_incomplete=args.retry_incomplete_task))
+    asyncio.run(
+        main(
+            CASE,
+            resume=args.resume,
+            retry_incomplete=args.retry_incomplete_task,
+        )
+    )

@@ -23,13 +23,15 @@ from areal_rsi.api.base import (
     ResearchIteration,
     RunState,
     SolutionVersion,
+    Task,
     TaskResult,
     VerificationRequest,
     VerificationResult,
+    VerificationStatus,
 )
 from areal_rsi.api.workflow import ResearchAgent, WorkflowContext
 from areal_rsi.base.evidence import FileEvidenceStore
-from areal_rsi.base.storage import FileRecords, decode, encode, now, safe_name, write_json
+from areal_rsi.base.storage import FileRecords, decode, encode, new_id, now, safe_name, write_json
 from areal_rsi.framework.verifier import VerifierExecutor
 
 PRUNED = "RSI Agent 已停止此研究线"
@@ -84,6 +86,70 @@ class HarnessEvolutionWorkflow:
         if candidate.model != baseline.model or candidate.parent_solution_id != current.solution_id:
             raise ValueError("Harness 实验禁止改变模型或丢失父版本关系")
 
+    async def _evaluate_task(
+        self, ctx: WorkflowContext, solution: SolutionVersion, task: Task, index: int, folder: Path
+    ) -> tuple[TaskResult, VerificationResult]:
+        """生成和验证分别保存检查点；验证故障恢复时不重新调用模型。"""
+        checkpoint = folder / f"task-{index}.json"
+        if checkpoint.exists():
+            cached = json.loads(checkpoint.read_text())
+            if cached["task"] != encode(task):
+                raise ValueError("任务缓存身份不匹配")
+            result = decode(TaskResult, cached["result"])
+            verification = decode(VerificationResult, cached["verification"])
+        else:
+            generated = folder / f"generation-{index}.json"
+            if generated.exists():
+                cached = json.loads(generated.read_text())
+                if cached["task"] != encode(task):
+                    raise ValueError("任务生成缓存身份不匹配")
+                result = decode(TaskResult, cached["result"])
+            else:
+                result = await ctx.harness_runtime.run(
+                    solution,
+                    task,
+                    config={
+                        "execution_key": (
+                            f"{self.state.run_id}/{folder.relative_to(self.folder)}/{task.task_id}"
+                        ),
+                    },
+                )
+                write_json(generated, {"task": task, "result": result}, immutable=True)
+            verification = await VerifierExecutor().verify(
+                ctx.verifier,
+                VerificationRequest(
+                    task=task,
+                    solution=solution,
+                    result=result,
+                    verifier=ctx.verifier_spec,
+                    metadata={
+                        "evaluation_key": f"{self.state.run_id}/{folder.relative_to(self.folder)}"
+                    },
+                ),
+            )
+            if verification.status != VerificationStatus.SUCCEEDED:
+                write_json(
+                    folder / "errors" / f"{new_id('verification')}.json",
+                    verification,
+                    immutable=True,
+                )
+                raise RuntimeError(
+                    f"Verifier did not complete for {task.task_id}: "
+                    f"{verification.status.value}: {verification.error}"
+                )
+            write_json(
+                checkpoint,
+                {"task": task, "result": result, "verification": verification},
+                immutable=True,
+            )
+        if verification.task_id != task.task_id or (
+            verification.trajectory_id != result.trajectory.trajectory_id
+        ):
+            raise ValueError("任务缓存轨迹身份不匹配")
+        if verification.status != VerificationStatus.SUCCEEDED:
+            raise ValueError("Cached verification did not complete")
+        return result, verification
+
     async def evaluate(
         self,
         ctx: WorkflowContext,
@@ -115,56 +181,58 @@ class HarnessEvolutionWorkflow:
             if "evidence" not in cached:
                 raise ValueError("Legacy trajectory-only evaluation; start a new experiment")
             return report, decode(ContentRef, cached["evidence"])
+        concurrency = ctx.evaluation_concurrency
+        if type(concurrency) is not int or concurrency < 1:
+            raise ValueError("evaluation_concurrency must be a positive integer")
+        semaphore = asyncio.Semaphore(concurrency)
+        finished = 0
+
+        async def execute(index: int, task: Task) -> tuple[TaskResult, VerificationResult]:
+            nonlocal finished
+            async with semaphore:
+                self.emit(f"[{agent_id}] 评测 {split.value} {index}/{len(tasks)} · {task.task_id}")
+                try:
+                    return await self._evaluate_task(ctx, solution, task, index, folder)
+                except Exception as error:
+                    write_json(
+                        folder / "errors" / f"{new_id('task')}.json",
+                        {
+                            "task_id": task.task_id,
+                            "index": index,
+                            "created_at": now(),
+                            "error_type": type(error).__name__,
+                            "message": str(error),
+                        },
+                        immutable=True,
+                    )
+                    raise
+                finally:
+                    finished += 1
+                    self.update_progress(
+                        agent_id,
+                        phase=f"evaluate_{split.value}",
+                        task_count=len(tasks),
+                        completed_tasks=finished,
+                        solution_id=solution.solution_id,
+                    )
+
+        # Collect every task's checkpoint even when a sibling fails; never average
+        # infrastructure failures into a model score or discard successful work.
+        outcomes = await asyncio.gather(
+            *(execute(index, task) for index, task in enumerate(tasks, 1)),
+            return_exceptions=True,
+        )
+        failures = [item for item in outcomes if isinstance(item, BaseException)]
+        if failures:
+            raise RuntimeError(
+                f"{len(failures)}/{len(tasks)} task executions failed: "
+                + "; ".join(str(error) for error in failures[:3])
+            )
         results: list[VerificationResult] = []
         files: list[EvidenceFile] = []
-        for index, task in enumerate(tasks, 1):
-            self.update_progress(
-                agent_id,
-                phase=f"evaluate_{split.value}",
-                task=index,
-                task_count=len(tasks),
-                solution_id=solution.solution_id,
-            )
-            self.emit(
-                f"[{agent_id}] 评测 {split.value} {index}/{len(tasks)} · {solution.solution_id}"
-            )
-            checkpoint = folder / f"task-{index}.json"
-            if checkpoint.exists():
-                cached_task = json.loads(checkpoint.read_text())
-                if cached_task["task"] != encode(task):
-                    raise ValueError("任务缓存身份不匹配")
-                task_result = decode(TaskResult, cached_task["result"])
-                verification = decode(VerificationResult, cached_task["verification"])
-                if (
-                    verification.task_id != task.task_id
-                    or verification.trajectory_id != task_result.trajectory.trajectory_id
-                ):
-                    raise ValueError("任务缓存轨迹身份不匹配")
-            else:
-                # 给远端实现稳定的幂等键，进程重启不重新提交同一次任务。
-                task_result = await ctx.harness_runtime.run(
-                    solution,
-                    task,
-                    config={
-                        "execution_key": (
-                            f"{self.state.run_id}/{folder.relative_to(self.folder)}/{task.task_id}"
-                        ),
-                    },
-                )
-                verification = await VerifierExecutor().verify(
-                    ctx.verifier,
-                    VerificationRequest(
-                        task=task,
-                        solution=solution,
-                        result=task_result,
-                        verifier=ctx.verifier_spec,
-                    ),
-                )
-                write_json(
-                    checkpoint,
-                    {"task": task, "result": task_result, "verification": verification},
-                    immutable=True,
-                )
+        for index, (task, outcome) in enumerate(zip(tasks, outcomes, strict=True), 1):
+            assert not isinstance(outcome, BaseException)
+            task_result, verification = outcome
             results.append(verification)
             trace = await ctx.trajectories.get(task_result.trajectory.trajectory_id)
             if trace is None:

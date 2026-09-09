@@ -62,15 +62,15 @@ wheels = [
 
 [[package]]
 name = "areal-agent-runtime"
-version = "0.3.0"
-source = { path = "vendor/areal_agent_runtime-0.3.0-py3-none-any.whl" }
+version = "0.4.0.dev1"
+source = { path = "vendor/areal_agent_runtime-0.4.0.dev1-py3-none-any.whl" }
 dependencies = [
     { name = "jsonschema" },
     { name = "pydantic" },
     { name = "pyyaml" },
 ]
 wheels = [
-    { filename = "areal_agent_runtime-0.3.0-py3-none-any.whl", hash = "sha256:d4c3c399374a99cb0189fbabd33461693c5ff1aea499c3d61cbc16e949af9044" },
+    { filename = "areal_agent_runtime-0.4.0.dev1-py3-none-any.whl", hash = "sha256:0e17a071768286d0cbe4f37f6bef44c8bd5e1e1c2413ab2c107a5d94531ede54" },
 ]
 
 [package.optional-dependencies]
@@ -150,10 +150,10 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "areal-agent-runtime", extras = ["anthropic"], marker = "extra == 'anthropic'", path = "vendor/areal_agent_runtime-0.3.0-py3-none-any.whl" },
-    { name = "areal-agent-runtime", extras = ["api", "dsh"], path = "vendor/areal_agent_runtime-0.3.0-py3-none-any.whl" },
-    { name = "areal-agent-runtime", extras = ["claude"], marker = "extra == 'claude'", path = "vendor/areal_agent_runtime-0.3.0-py3-none-any.whl" },
-    { name = "areal-agent-runtime", extras = ["codex"], marker = "extra == 'codex'", path = "vendor/areal_agent_runtime-0.3.0-py3-none-any.whl" },
+    { name = "areal-agent-runtime", extras = ["anthropic"], marker = "extra == 'anthropic'", path = "vendor/areal_agent_runtime-0.4.0.dev1-py3-none-any.whl" },
+    { name = "areal-agent-runtime", extras = ["api", "dsh"], path = "vendor/areal_agent_runtime-0.4.0.dev1-py3-none-any.whl" },
+    { name = "areal-agent-runtime", extras = ["claude"], marker = "extra == 'claude'", path = "vendor/areal_agent_runtime-0.4.0.dev1-py3-none-any.whl" },
+    { name = "areal-agent-runtime", extras = ["codex"], marker = "extra == 'codex'", path = "vendor/areal_agent_runtime-0.4.0.dev1-py3-none-any.whl" },
     { name = "deepseek-harness-sdk", specifier = "==0.1.2rc1" },
     { name = "mcp", specifier = ">=2.1,<3" },
     { name = "pyyaml", specifier = ">=6,<7" },

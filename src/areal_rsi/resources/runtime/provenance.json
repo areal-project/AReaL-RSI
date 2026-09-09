@@ -1,8 +1,11 @@
 {
-  "source_commit": "971ad809f4dee80e605597b4500cc4494eab27b5",
+  "source_commit": "223af018a1e1e3d1cd3ed8303da47553f16e929e",
+  "artifact_source_commits": {
+    "src/areal_rsi/resources/runtime/areal-agent-runtime-dsh-0.3.0.tgz": "971ad809f4dee80e605597b4500cc4494eab27b5"
+  },
   "source_repository": "git@code.alipay.com:AReaL/ARealAgentRuntime.git",
   "artifacts": {
-    "vendor/areal_agent_runtime-0.3.0-py3-none-any.whl": "d4c3c399374a99cb0189fbabd33461693c5ff1aea499c3d61cbc16e949af9044",
+    "vendor/areal_agent_runtime-0.4.0.dev1-py3-none-any.whl": "0e17a071768286d0cbe4f37f6bef44c8bd5e1e1c2413ab2c107a5d94531ede54",
     "src/areal_rsi/resources/runtime/areal-agent-runtime-dsh-0.3.0.tgz": "5d9ac270e9c0de9ec1b52ef0fe03edae69db0279ee346565f2fca0bc3e8d257f"
   }
 }

@@ -30,8 +30,11 @@ class ThreeModelBenchmark:
     def __init__(self, tasks_path: Path, task_id: str = "MODEL-001") -> None:
         self.tasks_path = tasks_path
         self.task_id = task_id
-        self.target_path = tasks_path / task_id.removeprefix("MODEL-")
+        # Accept the short public example name and legacy task directories.
         matches = list(tasks_path.glob(f"{task_id[6:]}-*"))
+        public_directory = tasks_path / task_id.lower()
+        if public_directory.is_dir():
+            matches.append(public_directory)
         if len(matches) != 1:
             raise ValueError(f"无法唯一定位 {task_id} TARGET.md: {tasks_path}")
         self.target_path = matches[0] / "TARGET.md"

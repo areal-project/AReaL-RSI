@@ -56,8 +56,10 @@ DATASET = EXAMPLE.parents[1] / ".rsi/datasets/3d-model-v2"
 CASE = EXAMPLE / "cases"
 BASELINE_PROMPT = """Complete TARGET.md using the supplied Three.js framework.
 Only edit the body of createModel in src/model.js and preserve the framework helpers.
-Use CONTRACT_V2.md as the authoritative interface. Run the available build and
-validation commands before reporting completion. Deliver src/model.js as a file.
+Use the editor tool to write src/model.js directly; do not embed the full source in
+python -c, shell heredocs, or workspace.run arguments. Use bash only to run the
+available build and validation commands. Use CONTRACT_V2.md as the authoritative
+interface and deliver src/model.js as a file.
 """
 
 
@@ -223,7 +225,7 @@ class FileTaskRuntime:
                     "deepseek-harness@v1",
                     solution.model,
                     (prompt,),
-                    tools=("bash@v1",),
+                    tools=("bash@v1", "editor@v1"),
                 ),
                 workspace_root=str(workspace),
             )
@@ -530,7 +532,7 @@ async def main(
             emit("Resume existing RSI plan and completed workflow checkpoints")
         else:
             (root / "rsi-request.txt").write_text(message)
-            emit("RSI Agent: request one-round plan")
+            emit("RSI Agent: request three-iteration plan")
             plan = await rsi.chat(message)
             write_json(root / "rsi-plan.json", plan)
         check_plan(plan, baseline.solution_id, benchmark.name)
@@ -604,8 +606,9 @@ async def main(
         write_json(root / "result.json", result)
         if result.state != RunState.SUCCEEDED:
             raise RuntimeError(f"Full workflow did not finish: {result.error}")
+        # Export the final iteration, not the first intermediate prompt.
         candidate = await versions.get_solution(
-            result.research_agents[0].iterations[0].candidate_solution_id
+            result.research_agents[0].iterations[-1].candidate_solution_id
         )
         await content.materialize(candidate.harness.content, root / "candidate-harness")
         emit(f"Finished. Result: {root / 'result.json'}")

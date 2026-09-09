@@ -13,7 +13,7 @@ uv run --env-file .env --locked python examples/3d_bench/run_local.py
 ```
 
 The script reads the checked-in target at
-`examples/3d_bench/cases/001-动物赛跑-赤狐竞跑者/TARGET.md`, starts one local RSI
+`examples/3d_bench/cases/model-001/TARGET.md`, starts one local RSI
 round, lets the Task Agent produce `model.js`, lets the Research Agent inspect
 the saved evidence, and records the run under the ignored `.rsi/datasets/`
 directory. The configured local model connections come from `.env`.
@@ -28,7 +28,7 @@ visual-quality score.
 
 ```text
 examples/3d_bench/
-  cases/001-动物赛跑-赤狐竞跑者/TARGET.md
+  cases/model-001/TARGET.md
   run_local.py
 ```
 

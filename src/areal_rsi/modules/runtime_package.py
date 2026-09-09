@@ -234,12 +234,18 @@ class PackageSession:
         if self.ref is None:
             # Rebuild the compatibility export from committed facts, including
             # cancellation events emitted while the parent was stopping the worker.
-            from areal_agent_runtime.adapters.storage import FileSystemStateStore
+            from areal_agent_runtime.adapters.storage import FileSystemStateStore, SQLiteStateStore
 
             bindings = self.directory / "run-bindings.json"
             if bindings.exists():
                 self.run_ids = json.loads(bindings.read_text())
-            state = FileSystemStateStore(self.directory / "data/state")
+            # New workers use SQLite; preserve exports from pre-upgrade file stores.
+            data_root = self.directory / "data"
+            state = (
+                SQLiteStateStore(data_root)
+                if (data_root / "state.sqlite3").is_file()
+                else FileSystemStateStore(data_root / "state")
+            )
             self.events = [
                 event.model_dump(mode="json", by_alias=True)
                 for run_id in self.run_ids

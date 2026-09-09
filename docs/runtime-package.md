@@ -37,9 +37,23 @@ uv sync --locked --extra codex --extra anthropic
 uv sync --locked --extra claude
 ```
 
-Runtime wheel 固定在 `vendor/`，来自 Runtime 提交 `971ad809f4dee80e605597b4500cc4494eab27b5`。
+Runtime wheel 固定在 `vendor/`，版本为 `0.4.0.dev1`，来自 Runtime 提交 `223af018a1e1e3d1cd3ed8303da47553f16e929e`。
 `vendor/PROVENANCE.json` 记录 wheel 与 DSH npm bundle 的摘要。它是从确定源码构建的制品，不表示已发布到 PyPI。
+DSH npm bundle 仍使用原来的 `0.3.0` 制品，其来源提交单独记录在 `artifact_source_commits` 中。
 消费代码只导入公开 Python API，不需要相邻 Runtime checkout 或手工修改 PYTHONPATH。
+
+新会话的运行事件存入 `data/state.sqlite3`，避免每个流式片段反复重写历史文件。
+事件仍持久化，轨迹仍可导出；RSI 导出同时识别旧的 `data/state/` 文件存储。
+不会自动迁移或删除旧数据。本次升级改变 Runtime 制品摘要，应创建新实验，不要换包后续跑旧实验。
+
+本地流式回归测试不调用付费模型：
+
+```sh
+RSI_TEST_NATIVE_HARNESSES=1 uv run --locked --extra anthropic python -m unittest discover \
+  -s tests -p test_runtime_package_execution.py -k dsh -v
+```
+
+其中长流测试经过真实 DSH worker 和工具调用，逐项检查 2000 个文本片段在会话结束后仍完整、有序。
 
 MCP 已迁移到 2.x，RSI TUI 控制桥改用 `MCPServer`，JSON-RPC 工具名和确认流程保持兼容。
 DSH 额外需要 Node.js 22.19+ / 24+、pnpm 和官方 CLI。后台首次使用时自动准备共享 CLI，以及随 RSI 包分发的

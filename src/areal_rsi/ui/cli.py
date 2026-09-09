@@ -64,6 +64,12 @@ async def _execute(root: Path, plan: ExperimentPlan, resume: str | None) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser(description="RSI 研发入口（local / remote）")
     commands = parser.add_subparsers(dest="command")
+    local_app = commands.add_parser("local-app", help="管理当前项目的可信本地应用")
+    app_commands = local_app.add_subparsers(dest="app_command", required=True)
+    register = app_commands.add_parser("register", help="一次性注册本地应用入口（会导入可信代码）")
+    register.add_argument("name")
+    register.add_argument("factory", help="可导入的 module:factory")
+    register.add_argument("--replace", action="store_true", help="替换已有名称的入口")
     tui = commands.add_parser("tui", help="打开 DSH 原生 TUI")
     tui.add_argument("--resume", dest="session_id", help="恢复 DSH 对话 Session")
     tui.add_argument("--setup-only", action="store_true", help="安装并准备本地 DSH profile")
@@ -116,7 +122,13 @@ def main() -> None:
         )
         return
     try:
-        if args.command == "run":
+        if args.command == "local-app":
+            from areal_rsi.modules.local.registry import register_local_app
+
+            path = register_local_app(args.name, args.factory, replace=args.replace)
+            print(f"已注册 {args.name}：{path}")
+            code = 0
+        elif args.command == "run":
             code = asyncio.run(run_experiment(args.plan, None))
         elif args.command == "resume":
             code = asyncio.run(run_experiment(None, args.run_id))

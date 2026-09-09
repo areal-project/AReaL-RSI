@@ -7,6 +7,10 @@ import json
 import os
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from areal_rsi.ui.experiments import ExperimentApp
 
 from areal_rsi.agents.research import DefaultResearchAgent
 from areal_rsi.agents.rsi import DefaultRsiAgent
@@ -334,9 +338,18 @@ class LocalApp:
             await asyncio.gather(*(asyncio.to_thread(proxy.close) for proxy in unique))
 
 
-async def create_app(root: Path, emit: Callable[[str], None]) -> LocalApp:
+async def create_app(root: Path, emit: Callable[[str], None]) -> ExperimentApp:
     mode = os.environ.get("RSI_MODE", "local")
     if mode == "local":
+        from areal_rsi.experiment_config import configured_path, read_config
+        from areal_rsi.modules.local.registry import local_factory
+
+        path = configured_path("local")
+        backend = read_config(path).get("backend") if path else None
+        if backend is not None:
+            if not isinstance(backend, str) or not backend:
+                raise ModelConfigurationError("local backend 必须是已注册的应用名称。")
+            return await local_factory(backend)(root, emit)
         return await LocalApp.create(root, emit)
     if mode == "remote":
         from areal_rsi.remote_app import RemoteApp

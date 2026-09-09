@@ -560,6 +560,26 @@ MCP 不提供完整轨迹、隐藏评测明细或凭证。启动和恢复的 `co
 
 `rsi tui --resume DSH_SESSION_ID` 恢复对话；`rsi resume RUN_ID` 在当前终端恢复实验。两种标识不能互换。MCP、DSH profile 和 worker 管理属于 `ui/` 的实现，不增加公共角色协议。
 
+### 外部本地应用
+
+本地实验 YAML 可用 `backend` 选择外部应用。开发者在项目根目录执行一次
+`rsi local-app register custom your_package.entry:create_app`，将映射保存到
+忽略提交的 `.rsi/local-apps.json`。注册会导入可信代码，但不调用工厂或模型。
+用户随后在同一项目根目录启动 `rsi tui` 并指定 YAML，无需设置专属环境变量。
+注册独立于 `RSI_DATA_ROOT`；换 checkout 需重新注册，更换已有入口需 `--replace`。
+部署方仍可用 `RSI_LOCAL_APPS` 提供完整替代映射（包括空映射），优先于注册文件。
+YAML 只能选择已注册名称，不能直接指定 Python 代码；注册项属于可信部署配置。
+
+异步工厂接收 `(root: Path, emit: Callable[[str], None])`，返回实现
+`ui.experiments.ExperimentApp` 的对象：提供 `baseline`、`rsi`、`service`，以及
+`model_plan_config()`、`bind_plan(plan)`、`close()`。规划时不得启动实验或调用任务模型；
+后台 worker 重新装配后必须核验计划绑定，关闭时释放自有资源。实现模块须能被
+TUI MCP 与 worker 的 Python 环境导入。
+
+注册映射随计划写入启动快照，确认后更改终端环境不会改变该计划的入口。
+Python 实现代码并不被此快照冻结；升级实现应创建新计划并自行维护兼容性。
+未指定 `backend` 的本地 YAML 继续使用内置应用。
+
 ## 7. 当前范围
 
 - 第一阶段实现 Harness evolution；

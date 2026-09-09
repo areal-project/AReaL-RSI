@@ -19,7 +19,7 @@ server.serve_forever()
 | --- | --- | --- |
 | GET `/api/bootstrap` | `bootstrap` | `{}` → `{allow_simulation, default_simulated, has_config}`；HTTP 层追加 `csrf_token` |
 | GET `/api/runs` | `list` | `{}` → `{"runs": [...]}` |
-| POST `/api/runs` | `create` | `{template, objective, instructions, max_agents, simulated}` → `{run_id}` |
+| POST `/api/runs` | `create` | `{message?, message_id?}` → `{run_id}` |
 | GET `/api/runs/{id}?after=N` | `detail` | `{run_id, after}` → 下方快照 |
 | POST `/api/runs/{id}/chat` | `chat` | `{run_id, text, message_id}` → `{run_id, message_id?}` |
 | POST `/api/runs/{id}/start` | `start` | `{run_id}` → `{status}` |
@@ -27,15 +27,18 @@ server.serve_forever()
 | POST `/api/runs/{id}/resume` | `resume` | `{run_id}` → `{status}` |
 | POST `/api/runs/{id}/stop` | `stop` | `{run_id, reason?}` → `{status}` |
 | POST `/api/runs/{id}/retry` | `retry` | `{run_id, agent_id}` → `{status}` |
-| POST `/api/runs/{id}/export` | `export` | `{run_id, candidate_id?}` → `WorkbenchDownload` |
 
-`template` 为 `kernelbench`、`cuhkx` 或 `research`，只用于创建时选择起步配置。业务工作流仍由 RSI 规划。chat/start/control 应在持久写入消息或控制状态后返回，不要等待模型完整回合。空 `candidate_id` 表示导出当前最佳产物，backend 应根据候选 ID 构建归档并返回 `WorkbenchDownload(path, filename, media_type="application/zip")`；HTTP 层流式下载，宿主路径不会返回前端。
+创建请求只接受首条消息和消息 ID，也可以用 `{}` 新建空对话。HTTP 层固定传入 `conversation=true`，不接受模板选择或模拟模式。Interaction 在准备阶段逐步保存 brief 与执行配置，用 `prepare_research` 发布总结；用户后续明确要求开始，才调用 `start_research`。按钮 `start` 使用相同的准备状态检查。
+
+chat/control 在消息或状态持久化后返回，不等待模型完整回合。Web 不提供通用产物导出入口；候选快照与研究结论按 run 保存。内部应用的旧归档操作不属于 Web API。
 
 `detail` 在每次读取时返回完整公共快照；只有 `events` 按 `after` 增量返回：
 
 ```text
 run_id, objective, status, simulated, started_at?, finished_at?, worker_alive?
 brief: { objective, instructions, limits: ResearchLimits, verification: contract|null }
+intake: { status: discussing|ready, summary?, environment?, execution_required? }
+pending_agents: [agent_id]
 plan: string
 agents: [{ agent_id, direction?, state, current_iteration_id?, wait_reason?, error? }]
 nodes: [{ iteration_id, agent_id, state, parent_iteration_id?, title?,
@@ -59,8 +62,8 @@ budget_stop_reason?: string
 
 所有写入请求需要 `GET /api/bootstrap` 返回的 `csrf_token`，放入 `X-RSI-Token` 请求头。服务器验证 Host、Origin、Sec-Fetch-Site，拒绝跨站请求和预检，不使用跨域许可。JSON 请求上限为 128 KiB。静态文件为显式白名单；API 不提供任意路径下载。返回快照再次按公共字段投影，排除 config、原始 session、内部对话和私有验证材料。
 
-创建弹窗根据 bootstrap 的能力字段设置模拟开关。真实配置默认不选模拟；未启用模拟时禁止勾选；既无配置也不允许模拟时，说明启动方法并禁用创建。开放式研究选项需要已有执行配置。
+准备阶段显示对话和需求摘要，研究开始后展示计划、搜索图和执行记录。没有验证协议时隐藏成绩卡。`agents[].direction` 是 RSI 为当前方向起的名称，不由前端填写固定场景标题。配置、环境变量和密钥不进入 intake 公共投影。
 
-浏览器每 1.5 秒获取公共状态，不会触发模型。事件游标断开后继续获取，节点选择和图的滚动位置按 run 保存在浏览器；刷新不会变成新的模型任务。对话输入和节点详情独立更新，后台刷新不会重置正在输入的消息或当前详情滚动位置。模型和 GPU 作业的真实状态由 backend 提供，模拟 run 始终显示明确标记。
+浏览器每 1.5 秒获取公共状态，不会触发模型。事件游标断开后继续获取，节点选择和图的滚动位置按 run 保存在浏览器；刷新不会变成新的模型任务。对话输入和节点详情独立更新，后台刷新不会重置正在输入的消息或当前详情滚动位置。模型和作业状态由 backend 提供。正式 ResearchApp 默认过滤模拟记录并拒绝访问其详情；原始数据的来源标记不被改写。
 
-验收 fixture：`.venv/bin/python tests/test_workbench.py --serve`，在 `http://127.0.0.1:8877` 展示模拟研究和完整创建/聊天/开始/控制/下载交互。fixture 只用于界面验收；真实应用需连接 Coordinator 和 ResearchEngine。HTTP 测试覆盖这些操作、事件游标、空分数/零分数、字段投影和跨站防护。
+验收 fixture：`.venv/bin/python tests/test_workbench.py --serve`，在 `http://127.0.0.1:8877` 展示模拟研究和创建/聊天/开始/控制交互。fixture 只用于界面验收；真实应用需连接 Coordinator 和 ResearchEngine。HTTP 测试覆盖这些操作、事件游标、空分数/零分数、字段投影和跨站防护。

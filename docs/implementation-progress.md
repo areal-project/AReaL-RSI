@@ -71,3 +71,33 @@ Simulation scores are only workflow fixtures and never benchmark claims.
 - [Concise design](rsi-research-design.md)
 - [Detailed implementation reference](rsi-research-implementation.md)
 - [Acceptance evidence and remaining limitations](research-acceptance.md)
+
+## Conversation-first formal workbench (2026-09-09)
+
+The normal workbench now starts from a generic conversation. Interaction saves
+user intent, inspects supplied environment information, prepares real commands or
+imports trusted execution configuration, and hands the confirmed task to RSI.
+The same orchestration supports tasks with no seed, score or verification budget.
+KernelBench and CUHK-X are optional execution adapters. Configuration revisions,
+setup evidence and the started configuration remain owned by the run.
+
+The UI removes the template form, export action and simulation labels. Preparation
+emphasizes chat and the current brief; active research shows dynamic directions,
+nodes and jobs, with score cards only when a verification contract exists. Normal
+mode separates historical simulated records without rewriting their provenance.
+
+Local commit groups for review:
+
+| Group | Commits |
+| --- | --- |
+| Execution environment and conversation setup | `683908d`, `28649b1`, `4db015b` |
+| Chinese instructions and delivery checks | `3a2c79e`, `f9eea67` |
+| Workbench and setup cancellation | `c25db0a`, `02cb4b4` |
+| Python runtime alias isolation fix | `cdb5af0` |
+
+Real Astra conversation plus a complete CPU experiment passed; the final full
+suite has 400 passing tests. The earlier macOS Python sandbox failure is resolved
+with metadata-only access to runtime aliases. Run IDs, the unsuccessful first
+CPU setup attempt, successful replay and browser artifacts are documented in
+[the acceptance report](research-acceptance.md). Actual KernelBench GPU and CUHK-X
+competition evaluation still require the user's environment.

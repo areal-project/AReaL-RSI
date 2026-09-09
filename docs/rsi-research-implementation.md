@@ -560,3 +560,17 @@ CUHK-X 默认固定 Docker 镜像、受限挂载、无网络、非 root 和资�
 两个例子用真实研究模型运行，GPU 可模拟；另有 CUHK-X 真实 CPU 合成训练→预测→search/final 检查。真实 GPU、目标 Task 模型与比赛数据需要接入后再验收，不能从模拟分数推断提升。工作台使用真实浏览器测试，样式截图与交互证据归档在本地。
 
 验证记录和观察见 [验收说明](research-acceptance.md)，提交边界见 [交付记录](implementation-progress.md)。所有模块先本地提交，不自动推送或创建一个包含全部内容的大 PR。
+
+## 正式工作台：对话式准备与环境交接（2026-09-09）
+
+正式 Web 入口创建通用研究对话，默认不选择场景、不启动 RSI，也不要求 baseline 或验证器。Interaction 通过连续对话保存两类需求：`TaskBrief.limits / verification` 中的约束，与 `TaskBrief.instructions` 中给 RSI 的具体说明。用户原始消息独立保留。
+
+`coordination/intake.py` 为 Interaction 提供环境查看、普通命令配置、既有配置导入、内置适配器准备、需求总结和启动工具。RSI 与 Research Agents 没有这些准备权限。内置 KernelBench/CUHK-X 只是执行接入工具；通用命令与 `content` 验证协议可以承接其他任务，不增加节点类型。
+
+准备状态与用户可见摘要保存在 `coordination/state.json` 的 `intake` 中；Web 只投影 `status / summary / environment / execution_required`，详细配置不直接公开。执行配置修订保存在 `coordination/configurations/`，当前版本在 `coordination/config.json`。任何需求或环境修改会取消此前的就绪状态。
+
+`prepare_research` 检查所需执行程序、资源、命令参数和验证身份，发布简明总结并停止当前回合。用户后续明确开始时，Interaction 调用 `start_research`，关联当前用户消息；开始按钮使用同一就绪检查。启动时保存 `started-config.json`，绑定最终命令、环境与并发上限，再创建可选起点快照并向 RSI 交接。没有起点就直接开展研究。启动后的 Research Agents 不能修改执行或验证配置。
+
+普通命令采用固定 argv 模板，系统绑定 `{workspace}`、`{output}`，占位符须在 `parameters` 中声明。KernelBench 适配器可根据用户指定仓库与选题文件，在 run 的 `setup/` 中准备题池，再执行可信 `describe` 预检并固定协议。预检不运行候选、不产生分数。目标模型名称与地址可保存为本 run 的非敏感 `execution_env`，密钥仍由进程环境继承。
+
+前端按阶段展示：准备阶段突出对话与需求摘要，开始后显示 RSI 计划、动态研究方向、节点、报告、证据和作业；只有定义验证协议的任务显示成绩卡。移除通用下载按钮与场景选择表单。正式模式不加载历史模拟 run，其原始数据和来源标记仍保留。终态研究只读，避免接受不会被处理的新消息。

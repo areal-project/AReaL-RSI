@@ -82,3 +82,23 @@ Ruff 对 `src/tests/scripts` 的检查、mypy 对 113 个文件的检查以及 `
 上述完整演练使用的是此前的英文角色 prompt。根据用户的中文偏好，随后将 Interaction、RSI、Research 角色指令、compact/恢复/预算提示、系统消息和两个模拟示例任务说明改为中文，默认用简体中文生成计划、任务、报告和证据摘要。历史档案保持原样。
 
 本次调整通过会话、调度、协作、应用和 CLI 的 64 项回归测试及 2 个 subtests，Ruff 和 mypy 通过；没有重新运行完整的真实模型演练，不能将此前的行为结论视为中文版 prompt 的新增实测。
+
+## 正式对话入口与实际执行验收（2026-09-09）
+
+这轮验收使用中文指令与真实 `gpt-6-astra / xhigh`，测试数据保存在独立的 `.rsi/formal-acceptance/`，不加载到正式工作台。
+
+| 检查 | 实际结果 |
+| --- | --- |
+| KernelBench 需求对话，经真实浏览器和 Web API | `research_51ae610d99f8404b`；4 次模型调用、12,793 tokens。用户只说明目标、只改 skills、一个研究员，并表示稍后提供 GPU 与题池；Interaction 追问缺少条件后等待，没有启动 RSI 或作业，也不再询问已配置的研究模型。 |
+| 通用 CPU 研究，经对话准备与自然语言开始指令 | `research_f5cba6d3c29b4b85`；36 次模型调用、287,393 tokens。1 个 Research Agent、1 个节点、1 次真实本机作业，最终 `succeeded`。没有 baseline、Task Agent、正式 verifier 或数值 target。 |
+| CPU 实验交付 | 比较列表查找与 set 辅助的稳定去重：先核对输出一致，再各计时三遍。已读取最终候选的实际内容，包含 `experiment.py`、`results/results.json`、`results/report.md` 和脚本副本。最终候选为 `candidate_fc7776660460fd4dc16556fb`，不是最后工作区的临时状态。 |
+| 浏览器 | 1440×1000 桌面与 390×844 手机；覆盖无模板的新对话、首条消息、真实 Interaction 回复、开始前拦截、刷新保留草稿、动态方向、节点详情和无分数研究。没有 JS 错误或页面横向溢出；图高度按研究方向数量调整。 |
+| 自动化检查 | 最终完整回归 **400 passed**；Ruff 通过，mypy 检查 116 个源码与测试文件通过，前端 JS 语法检查通过。 |
+
+首次 CPU 接入测试保留为 `research_55180493e26b4758`，没有改写成成功：Interaction 将输出参数写成未声明的 `{output_dir}`，并假定输出子目录为 `results`。实际作业运行了，但输出工具不能收集所要求的文件，研究最终 `stopped`。据此补上未声明占位符检查、系统输出参数示例和公开输出目录说明；第二次测试中，Interaction 根据工具错误修正配置，再进入上述成功链路。无验证任务现在可以设置零次验证预算，不再为无关字段额外提问。
+
+此前记录的 macOS 沙箱失败也已修复。uv 的 Python 可执行文件经过一个中间目录符号链接，原 profile 只包含最终安装路径，缺少该别名的元数据权限。修复只允许遍历运行时链接的元数据，没有开放其父目录中的文件内容；回归同时验证 Python 可运行、私有兄弟文件仍不可读取，共享运行时仍不可写。
+
+具体证据：`pytest-final.txt`、`intake-result.json`、`browser-intake.json`、`cpu-result-v2.json`、`cpu-verified-artifacts.json`、`browser-welcome.json`、`browser-live.json` 以及同目录截图。初次失败记录位于 `cpu-result.json`，完整 run 与会话在对应 `data / cpu-data / cpu-data-v2 / web-data-v2` 子目录中保留。
+
+这次真实执行验证的是通用编排与本机 CPU 实验链路。KernelBench 的目标模型、用户 GPU、实际题池和性能提升仍需用户在正式对话中提供环境后运行；CUHK-X 的真实比赛训练与成绩也没有在这轮测试中执行。既有模拟成绩仍只是过去的流程验收数据。

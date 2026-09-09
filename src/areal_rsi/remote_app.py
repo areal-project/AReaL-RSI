@@ -159,7 +159,11 @@ class RemoteApp(LocalApp):
         return self
 
     def model_plan_config(self) -> JsonObject:
-        return {**super().model_plan_config(), "remote_backend": self.remote_backend_name}
+        return {
+            **super().model_plan_config(),
+            "mode": "remote",
+            "remote_backend": self.remote_backend_name,
+        }
 
     async def bind_plan(self, plan: ExperimentPlan) -> None:
         if plan.config.get("remote_backend", self.remote_backend_name) != self.remote_backend_name:

@@ -12,6 +12,7 @@ from pathlib import Path
 from areal_rsi.api.base import EvolutionTarget, ExperimentPlan, RunState
 from areal_rsi.app import create_app
 from areal_rsi.base.storage import encode, write_json
+from areal_rsi.experiment_config import experiment_mode, read_config
 
 
 async def main() -> int:
@@ -19,7 +20,7 @@ async def main() -> int:
         description="Prepare or launch a real remote Harness experiment"
     )
     parser.add_argument("--config", type=Path, required=True)
-    parser.add_argument("--backend", default=os.environ.get("RSI_REMOTE_BACKEND", "envarena"))
+    parser.add_argument("--backend", help="覆盖 YAML 中的 remote backend")
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--iterations", type=int, default=1)
     parser.add_argument(
@@ -29,8 +30,11 @@ async def main() -> int:
         "--launch", action="store_true", help="Create remote resources and execute jobs"
     )
     args = parser.parse_args()
-    os.environ["RSI_MODE"] = "remote"
-    os.environ["RSI_REMOTE_BACKEND"] = args.backend
+    config = read_config(args.config)
+    if experiment_mode(config) != "remote":
+        parser.error("该示例脚本需要 mode: remote 的实验 YAML")
+    os.environ["RSI_MODE"] = config["mode"]
+    os.environ["RSI_REMOTE_BACKEND"] = args.backend or config.get("backend", "envarena")
     os.environ["RSI_REMOTE_CONFIG"] = str(args.config.resolve())
     os.environ["RSI_DATA_ROOT"] = str(args.root.resolve())
     app = await create_app(args.root, lambda text: print(text, flush=True))

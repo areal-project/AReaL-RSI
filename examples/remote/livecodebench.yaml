@@ -1,7 +1,11 @@
 # The Benchmark pins rsi-lcb-claude-code-reward@1.0.5.
+mode: remote
+backend: envarena
 benchmark: rsi-lcb-claude-code-smoke@1.0.5
 harness: rsi-lcb-claude-code@1.0.5
 model: qwen-3-8-vlm-judge@1.0.1-gameagent-system-normalize
+# Local RSI Agent / ResearchAgent use ARealAgentRuntime's DSH adapter.
+research_harness: dsh
 namespace: lcb-remote
 train_cases:
   - rsi-lcb-claude-code-lcb-2727

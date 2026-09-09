@@ -39,6 +39,7 @@ from areal_rsi.modules.benchmark import AccuracyEvaluation, ArithmeticBenchmark,
 from areal_rsi.modules.gateway import GatewayProxy
 from areal_rsi.modules.gsm8k import Gsm8kBenchmark, Gsm8kVerifier
 from areal_rsi.modules.harness import LocalHarnessBuilder, LocalHarnessRuntime
+from areal_rsi.modules.local.config import LocalConfig
 from areal_rsi.modules.runtime_package import PackageAgentRuntime, RuntimeSettings
 from areal_rsi.workflows.service import LocalExperimentService, WorkflowFactory
 
@@ -77,10 +78,7 @@ class LocalApp:
         baseline_file = root / "baseline.json"
         if baseline_file.exists():
             baseline = json.loads(baseline_file.read_text())
-            if (
-                baseline["harness"]["content"].get("media_type")
-                != DIRECTORY_TYPE
-            ):
+            if baseline["harness"]["content"].get("media_type") != DIRECTORY_TYPE:
                 raise ValueError("数据目录属于 remote mode，请设置独立的 RSI_DATA_ROOT")
         runtime_settings = RuntimeSettings.from_environment()
         model_settings = AgentModelSettings.from_environment()
@@ -100,7 +98,8 @@ class LocalApp:
                 if agent_id.startswith("research-agent-")
             },
         }
-        target_connection = ModelConfig.from_environment("target")
+        local_config = LocalConfig.from_environment()
+        target_connection = local_config.target_connection()
         runtime_connections = {**connections, "task-agent": target_connection}
         for role in runtime_connections:
             runtime_settings.select(role)
@@ -114,12 +113,12 @@ class LocalApp:
         self.memory = FileMemory(self.root / "memory")
         benchmark: Benchmark
         verifier: Verifier
-        benchmark_kind = os.environ.get("RSI_BENCHMARK", "arithmetic-v1")
+        benchmark_kind = local_config.benchmark
         if benchmark_kind == "gsm8k":
             benchmark = Gsm8kBenchmark(
-                Path(os.environ.get("RSI_GSM8K_DATA", ".rsi/datasets/gsm8k")),
-                train_limit=int(os.environ.get("RSI_TRAIN_LIMIT", "16")),
-                validate_limit=int(os.environ.get("RSI_VALIDATE_LIMIT", "16")),
+                local_config.dataset,
+                train_limit=local_config.train_limit,
+                validate_limit=local_config.validate_limit,
             )
             verifier = Gsm8kVerifier(self.content, benchmark)
             description = "GSM8K 官方 train 的固定训练/留出验证分区，不是官方 test 成绩。"
@@ -142,7 +141,7 @@ class LocalApp:
         )
         self.baseline = await catalog.baseline(
             self.target_model,
-            await self.content.snapshot(Path(__file__).parent / "default_harness"),
+            await self.content.snapshot(local_config.harness),
         )
         self.agent_proxies, self.agent_runtimes = {}, {}
         proxies: dict[ModelConfig, GatewayProxy] = {}
@@ -224,7 +223,9 @@ class LocalApp:
             for agent_id, model in self.agent_models.items()
         }
         return {
+            "mode": "local",
             "runtime_config_digest": self.runtime_settings.identity,
+            "research_harness": self.runtime_settings.select("research-agent")["kind"],
             "agent_models": models,
             "interaction_model_name": self.interaction_model_name,
             "target_model_name": self.target_model.name,
@@ -233,6 +234,9 @@ class LocalApp:
 
     async def bind_plan(self, plan: ExperimentPlan) -> None:
         """按 Run 校验配置并恢复它的基线；目录本身不绑定模型。"""
+        mode = self.model_plan_config()["mode"]
+        if plan.config.get("mode", mode) != mode:
+            raise ModelConfigurationError("实验模式与已确认计划不一致。")
         recorded_runtime = plan.config.get("runtime_config_digest")
         if recorded_runtime != self.runtime_settings.identity:
             raise ModelConfigurationError(

@@ -8,8 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import yaml  # type: ignore[import-untyped]
-
+from areal_rsi.experiment_config import read_config
 from areal_rsi.modules.remote.envarena.client import ArenaClient, reference
 
 EDITABLE = frozenset({"system_prompt", "skills", "tools", "mcp"})
@@ -33,9 +32,7 @@ class ArenaConfig:
 
     @classmethod
     async def load(cls, path: Path, client: ArenaClient) -> ArenaConfig:
-        raw = yaml.safe_load(path.read_text())
-        if not isinstance(raw, dict):
-            raise ValueError("remote 配置必须是 YAML 对象")
+        raw = read_config(path)
         supported = {
             "benchmark",
             "harness",
@@ -51,9 +48,14 @@ class ArenaConfig:
             "timeout_seconds",
             "target_score",
             "sample_numbers",
+            "research_harness",
+            "mode",
+            "backend",
         }
         if set(raw) - supported:
             raise ValueError("remote 配置包含未知字段；凭证请通过环境变量设置")
+        if raw.get("mode", "remote") != "remote" or raw.get("backend", "envarena") != "envarena":
+            raise ValueError("EnvArena 配置需要 mode: remote 和 backend: envarena")
         if type(raw.get("sample_numbers", 1)) is not int or raw.get("sample_numbers", 1) != 1:
             raise ValueError("remote 首期只支持 sample_numbers=1")
         source = raw.get("source_job")

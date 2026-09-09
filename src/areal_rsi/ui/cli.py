@@ -13,27 +13,40 @@ from areal_rsi.api.base import ExperimentPlan, ExperimentRun, RunState
 from areal_rsi.app import create_app
 from areal_rsi.base.storage import FileRecords, decode, encode
 from areal_rsi.config import ModelConfigurationError
+from areal_rsi.experiment_config import environment_scope, experiment_roots, plan_environment
 
 
 def data_root() -> Path:
-    default = ".rsi/remote" if os.environ.get("RSI_MODE") == "remote" else ".rsi/local"
-    return Path(os.environ.get("RSI_DATA_ROOT", default)).resolve()
+    return Path(os.environ.get("RSI_DATA_ROOT") or ".rsi").resolve()
 
 
 async def run_experiment(plan_file: str | None, resume: str | None) -> int:
     root = data_root()
+    if resume:
+        from areal_rsi.ui.workspace import ExperimentWorkspace
+
+        controller = ExperimentWorkspace(root).locate(resume)
+        root = controller.root
+        plan = controller._run(resume).plan
+    else:
+        assert plan_file is not None
+        path = Path(plan_file).resolve()
+        value = json.loads(path.read_text())
+        plan = decode(ExperimentPlan, value.get("plan", value))
+        candidate = path.parent.parent if path.parent.name == "experiment-plans" else path.parent
+        if (candidate / "launch.json").exists():
+            root = candidate
+    with environment_scope(plan_environment(root, plan.config)):
+        return await _execute(root, plan, resume)
+
+
+async def _execute(root: Path, plan: ExperimentPlan, resume: str | None) -> int:
     app = await create_app(root, lambda text: print(text, flush=True))
     try:
+        await app.bind_plan(plan)
         if resume:
-            previous = await app.service.status(resume)
-            if previous is None:
-                raise KeyError(resume)
-            await app.bind_plan(previous.plan)
             run = await app.service.resume(resume)
         else:
-            assert plan_file is not None
-            plan = decode(ExperimentPlan, json.loads(Path(plan_file).read_text()))
-            await app.bind_plan(plan)
             run = await app.service.start(plan)
         print(f"实验已启动 run={run.run_id}", flush=True)
         if run.run_id in app.service.tasks:
@@ -87,7 +100,13 @@ def main() -> None:
     if args.command == "status":
         print(
             json.dumps(
-                encode(FileRecords(data_root() / "run-states").list(ExperimentRun)),
+                encode(
+                    [
+                        run
+                        for root in experiment_roots(data_root())
+                        for run in FileRecords(root / "run-states").list(ExperimentRun)
+                    ]
+                ),
                 ensure_ascii=False,
                 indent=2,
             )

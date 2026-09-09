@@ -17,6 +17,14 @@ uv run --env-file .env --locked rsi tui
 
 macOS 本地执行需要 Node.js 22.19+（或 24+）和 pnpm。默认后台选择 DSH，首次启动自动安装固定版本 CLI/profile。
 
+在对话里问“怎么启动 RSI 实验？给我一个 demo”即可获得最小示例。
+local / remote 都使用实验 YAML，分别见 `examples/local/arithmetic.yaml` 和
+`examples/remote/livecodebench.yaml`，文件内分别声明 `mode: local` 和 `mode: remote`。
+在同一会话说“用 local 算术 demo 生成一轮计划”或“用 remote LCB demo 生成一轮计划”，
+也可指定 YAML 路径，不需要重启。每份计划有独立目录和配置快照，确认时按 plan_id 执行。
+两份 demo 都明确指定 `research_harness: dsh`，通过 ARealAgentRuntime 的 DSH 执行研究角色。
+该字段优先于旧 Runtime JSON 的研究角色配置；Task Runtime 仍独立配置。
+
 ## 切换模型和 Harness
 
 - `RSI_TEACHER_*`：前台、RSI Agent、ResearchAgent 的默认模型连接。
@@ -28,7 +36,8 @@ macOS 本地执行需要 Node.js 22.19+（或 24+）和 pnpm。默认后台选�
   支持 DSH、Codex、Claude Code/SDK、Anthropic、Hermes、Remote、Entrypoint、Fake；能力以各适配器为准。
 
 Codex、Anthropic、Claude 分别需要对应 Python extra；原生 CLI 和远端服务需要按样例准备。
-修改模型或 Harness 后，重启 TUI 并重新生成计划。旧 DSH 版本实验使用原版本恢复。
+修改模型连接环境后需重新加载环境；切换实验模式或 YAML 只需生成新计划。
+旧 DSH 版本实验使用原版本恢复。
 
 ## 数据与验证
 

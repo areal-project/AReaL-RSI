@@ -12,6 +12,7 @@ from urllib.parse import unquote, urlsplit
 
 from areal_rsi.api.base import ExperimentRun, SolutionVersion
 from areal_rsi.base.storage import decode, encode, now, safe_name
+from areal_rsi.experiment_config import experiment_roots
 from areal_rsi.modules.remote.registry import read_remote_jobs
 
 
@@ -30,6 +31,9 @@ class RunReader:
         return run
 
     def worker_alive(self, run_id: str) -> bool:
+        for root in experiment_roots(self.root)[1:]:
+            if (root / "run-states" / f"{safe_name(run_id)}.json").is_file():
+                return RunReader(root, self.run_id).worker_alive(run_id)
         path = self.root / "locks" / f"{safe_name(run_id)}.lock"
         if not path.exists():
             return False
@@ -48,6 +52,8 @@ class RunReader:
             else list((self.root / "run-states").glob("*.json"))
         )
         runs = []
+        for root in experiment_roots(self.root)[1:]:
+            runs.extend(RunReader(root, self.run_id).list())
         for path in paths:
             if not path.exists():
                 continue
@@ -55,6 +61,7 @@ class RunReader:
             runs.append(
                 {
                     "run_id": run.run_id,
+                    "mode": run.plan.config.get("mode"),
                     "goal": run.plan.goal,
                     "state": run.state.value,
                     "started_at": run.started_at,
@@ -64,6 +71,9 @@ class RunReader:
         return sorted(runs, key=lambda run: run["started_at"] or "", reverse=True)
 
     def detail(self, run_id: str) -> dict[str, Any]:
+        for root in experiment_roots(self.root)[1:]:
+            if (root / "run-states" / f"{safe_name(run_id)}.json").is_file():
+                return RunReader(root, self.run_id).detail(run_id)
         run = self._load(run_id)
         folder = self.root / "runs" / run.run_id
         progress_path = folder / "progress.json"
@@ -145,6 +155,7 @@ class RunReader:
         remote_jobs = [encode(job) for job in read_remote_jobs(self.root, run.run_id)]
         return {
             "run_id": run.run_id,
+            "mode": run.plan.config.get("mode"),
             "goal": run.plan.goal,
             "state": run.state.value,
             "workflow": run.plan.workflow,

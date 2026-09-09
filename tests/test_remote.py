@@ -215,7 +215,8 @@ class RemoteProviderTest(unittest.IsolatedAsyncioTestCase):
         text = path.read_text()
         self.assertIn("DUMMY_REMOTE_TOKEN", text)
         self.assertNotIn("dummy-private-token", text)
-        self.assertNotIn("ARENA_OPENAPI_TOKEN", text)
+        # A generic TUI can select EnvArena later in the same conversation.
+        self.assertIn("ARENA_OPENAPI_TOKEN", text)
         with patch.dict("os.environ", {"RSI_MODE": "local", "RSI_REMOTE_BACKEND": "unknown"}):
             self.assertEqual(remote_environment_names(), ())
 

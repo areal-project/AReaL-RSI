@@ -19,6 +19,7 @@ from mcp.types import CallToolResult, TextContent
 from areal_rsi.config import ModelConfigurationError
 from areal_rsi.ui.experiments import ExperimentController
 from areal_rsi.ui.mcp import create_server
+from areal_rsi.ui.workspace import ExperimentWorkspace
 
 
 class FixtureController(ExperimentController):
@@ -129,10 +130,14 @@ class RsiMcpTest(unittest.IsolatedAsyncioTestCase):
         self.root = Path(self.temporary.name)
 
     @asynccontextmanager
-    async def client(self) -> AsyncIterator[ClientSession]:
+    async def client(self, *, workspace: bool = False) -> AsyncIterator[ClientSession]:
         parameters = StdioServerParameters(
             command=sys.executable,
-            args=[str(Path(__file__).resolve()), "--mcp-fixture", str(self.root)],
+            args=[
+                str(Path(__file__).resolve()),
+                "--mcp-workspace-fixture" if workspace else "--mcp-fixture",
+                str(self.root),
+            ],
         )
         with (self.root / "stderr.log").open("w") as errors:
             async with stdio_client(parameters, errlog=errors) as (read, write):
@@ -277,9 +282,47 @@ class RsiMcpTest(unittest.IsolatedAsyncioTestCase):
                 with suppress(ProcessLookupError):
                     os.kill(pid, signal.SIGTERM)
 
+    async def test_same_mcp_session_selects_local_remote_and_yaml(self) -> None:
+        config = self.root / "custom.yaml"
+        config.write_text(
+            "mode: local\nbenchmark: arithmetic-v1\nharness: default\nmodel: target\n"
+        )
+        async with self.client(workspace=True) as session:
+            modes = []
+            for selection in (
+                {"preset": "arithmetic"},
+                {"preset": "lcb"},
+                {"config_path": str(config)},
+            ):
+                result = self.body(
+                    await session.call_tool(
+                        "rsi_plan", {"goal": "fixture", "max_iterations": 1, **selection}
+                    )
+                )
+                modes.append(result["plan"]["config"]["mode"])
+                self.assertTrue(result["confirmation_required"])
+            self.assertEqual(modes, ["local", "remote", "local"])
+            self.assertEqual(self.body(await session.call_tool("rsi_status", {})), {"runs": []})
+            invalid = await session.call_tool(
+                "rsi_plan",
+                {
+                    "goal": "fixture",
+                    "max_iterations": 1,
+                    "preset": "lcb",
+                    "config_path": str(config),
+                },
+            )
+            self.assertTrue(invalid.is_error)
+
 
 if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "--mcp-fixture":
         create_server(FixtureController(Path(sys.argv[2]))).run(transport="stdio")
+    elif len(sys.argv) == 3 and sys.argv[1] == "--mcp-workspace-fixture":
+        from test_experiment_workers import fixture_app
+
+        create_server(ExperimentWorkspace(Path(sys.argv[2]), app_factory=fixture_app)).run(
+            transport="stdio"
+        )
     else:
         unittest.main()

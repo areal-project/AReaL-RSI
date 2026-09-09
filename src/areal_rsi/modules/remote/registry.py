@@ -59,3 +59,10 @@ def remote_environment_names() -> tuple[str, ...]:
     if os.environ.get("RSI_MODE", "local") != "remote":
         return ()
     return get_provider(os.environ.get("RSI_REMOTE_BACKEND", "envarena")).environment_names
+
+
+def all_remote_environment_names() -> tuple[str, ...]:
+    """The unbound TUI may select any registered backend when planning."""
+    return tuple(
+        sorted({name for provider in PROVIDERS.values() for name in provider.environment_names})
+    )

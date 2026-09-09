@@ -133,7 +133,12 @@ class Coordinator:
         message_id = effect_id("message", key)
         try:
             message = self.store.get("messages", message_id, ResearchMessage)
-            if (message.sender, message.recipient, message.text) != (sender, recipient, text):
+            if (message.sender, message.recipient, message.text, message.reply_to) != (
+                sender,
+                recipient,
+                text,
+                reply_to,
+            ):
                 raise ValueError("Message idempotency key reused for different content")
         except FileNotFoundError:
             message = ResearchMessage(
@@ -145,12 +150,107 @@ class Coordinator:
                 sender=sender,
                 recipient=recipient,
                 message_id=message_id,
+                reply_to=reply_to,
                 text=text if recipient == "user" or sender == "user" else None,
             )
         if recipient != "user":
             inbox = self.state["inboxes"].setdefault(recipient, [])
             if message_id not in self.state["delivered"] and message_id not in inbox:
                 inbox.append(message_id)
+        self.save()
+        return message_id
+
+    def user_questions(self) -> list[dict[str, Any]]:
+        """Project outstanding questions, including records written before direct RSI replies."""
+        pending = self.state["waiting_for_user"]
+        if not pending:
+            return []
+        answered = {
+            message.reply_to
+            for message in self.store.records("messages", ResearchMessage)
+            if message.sender == "user" and message.reply_to
+        }
+        questions = []
+        for item in pending:
+            message_id = item["message_id"]
+            if message_id in answered:
+                continue
+            message = self.store.get("messages", message_id, ResearchMessage)
+            questions.append(
+                {
+                    "message_id": message_id,
+                    "agent_id": message.sender,
+                    "question": message.text,
+                    "created_at": message.created_at,
+                }
+            )
+        return questions
+
+    def ask_user(self, agent_id: str, question: str, *, key: str) -> str:
+        if agent_id not in {"rsi", "interaction"}:
+            raise ValueError("Only RSI and Interaction can ask the user")
+        if self.state["status"] not in {"planned", "running", "paused"}:
+            raise ValueError("研究已结束，不能再创建待回复问题")
+        if not question.strip():
+            raise ValueError("请说明需要用户回答的问题")
+        message_id = self.enqueue(agent_id, "user", question, key=key)
+        if not any(q["message_id"] == message_id for q in self.state["waiting_for_user"]):
+            self.state["waiting_for_user"].append({"message_id": message_id})
+        # Replaying an interrupted tool must not reopen an already answered question.
+        self.state["waiting_for_user"] = self.user_questions()
+        self.save()
+        self.wait(agent_id, "user")
+        return message_id
+
+    def user_message(
+        self,
+        text: str,
+        *,
+        key: str,
+        reply_to: str | None = None,
+        recipient: str | None = None,
+    ) -> str:
+        """Deliver a user reply to its question's author, or send an independent message."""
+        if self.state["status"] not in {"planned", "running", "paused"}:
+            raise ValueError("研究已结束，记录仍可查看；新的研究请另建对话")
+        if not isinstance(text, str) or not 1 <= len(text.strip()) <= 12000:
+            raise ValueError("Message must contain 1–12000 characters")
+        text = text.strip()
+        if recipient is not None and recipient not in {"rsi", "interaction"}:
+            raise ValueError("用户消息只能发给 RSI 或 Interaction")
+        if reply_to is not None and (not isinstance(reply_to, str) or not reply_to):
+            raise ValueError("reply_to 必须是问题的 message_id")
+        try:
+            previous = self.store.get("messages", effect_id("message", key), ResearchMessage)
+        except FileNotFoundError:
+            previous = None
+        if previous:
+            if (
+                previous.sender != "user"
+                or previous.text != text
+                or (reply_to is not None and previous.reply_to != reply_to)
+                or (recipient is not None and previous.recipient != recipient)
+            ):
+                raise ValueError("Message idempotency key reused for different content")
+            # Preserve routing on HTTP retries, even after the question was answered.
+            recipient, reply_to = previous.recipient, previous.reply_to
+        else:
+            questions = self.user_questions()
+            if reply_to is None and recipient is None and len(questions) == 1:
+                reply_to = questions[0]["message_id"]
+            if reply_to is not None:
+                question = next((q for q in questions if q["message_id"] == reply_to), None)
+                if question is None:
+                    raise ValueError("该问题不存在或已回复，请刷新后再发送")
+                if recipient is not None and recipient != question["agent_id"]:
+                    raise ValueError("回复必须发送给原提问者")
+                recipient = question["agent_id"]
+        recipient = recipient or "interaction"
+        if recipient == "rsi" and self.state["started_at"] is None:
+            raise ValueError("研究尚未开始，请先与 Interaction 确认需求")
+        message_id = self.enqueue("user", recipient, text, key=key, reply_to=reply_to)
+        # The archived reply is authoritative if a process stopped between these writes.
+        self.state["waiting_for_user"] = self.user_questions()
         self.save()
         return message_id
 
@@ -503,6 +603,7 @@ class Coordinator:
 
     def stop(self, reason: str) -> None:
         self.state["status"] = "stopped"
+        self.state["waiting_for_user"] = []
         for actor in self.actors():
             if actor.agent_id not in {"rsi", "interaction"}:
                 self.stop_agent(actor.agent_id, reason)
@@ -551,7 +652,7 @@ class Coordinator:
                 ),
                 "elapsed_seconds": elapsed,
             },
-            "waiting_for_user": self.state["waiting_for_user"],
+            "waiting_for_user": self.user_questions(),
             "budget_stop_reason": self.state.get("budget_stop_reason"),
             "intake": self.state.get("intake"),
         }

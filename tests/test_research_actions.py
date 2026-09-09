@@ -314,24 +314,36 @@ def test_new_failed_final_cannot_reuse_an_old_success(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
-def test_interaction_can_answer_rsi_without_leaving_a_user_question(tmp_path: Path) -> None:
+def test_rsi_asks_user_directly_and_interaction_does_not_consume_the_question(
+    tmp_path: Path,
+) -> None:
     async def scenario() -> None:
         c = Coordinator.create(tmp_path, TaskBrief("Improve", "User already specified two GPUs"))
         c.start()
         actions = ResearchActions(c)
-        question = await actions.handler("rsi")(
-            ToolCall("ask_user", {"question": "Which resources are available?"}, "ask")
+        call = ToolCall(
+            "ask_user", {"question": "GPU access was denied; please restore access"}, "ask"
         )
-        assert question.stop and c.state["waiting_for_user"] == []
-        assert c.actor("rsi").wait_reason == "interaction"
+        question = await actions.handler("rsi")(call)
+        assert question.stop and question.reason == "user"
+        assert c.actor("rsi").wait_reason == "user"
+        assert not c.state["inboxes"].get("interaction")
+        assert c.user_questions()[0]["agent_id"] == "rsi"
+        assert c.user_questions()[0]["message_id"] == question.output["message_id"]
         await actions.handler("interaction")(
             ToolCall("send_to_rsi", {"message": "The brief already states two GPUs"}, "reply")
         )
-        assert c.state["waiting_for_user"] == []
+        assert len(c.user_questions()) == 1
         await actions.handler("interaction")(
             ToolCall("ask_user", {"question": "What is the target score?"}, "ask-user")
         )
-        assert len(c.state["waiting_for_user"]) == 1
+        assert len(c.user_questions()) == 2
+        c.user_message(
+            "GPU access restored", key="user-reply", reply_to=question.output["message_id"]
+        )
+        assert [q["agent_id"] for q in c.user_questions()] == ["interaction"]
+        await actions.handler("rsi")(call)
+        assert [q["agent_id"] for q in c.user_questions()] == ["interaction"]
 
     asyncio.run(scenario())
 

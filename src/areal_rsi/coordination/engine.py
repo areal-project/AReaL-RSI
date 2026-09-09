@@ -23,6 +23,7 @@ from areal_rsi.agents.interaction.prompt import PROMPT as INTERACTION_PROMPT
 from areal_rsi.agents.research.prompt import PROMPT as RESEARCH_PROMPT
 from areal_rsi.agents.rsi.prompt import PROMPT as RSI_PROMPT
 from areal_rsi.api.base import AgentState
+from areal_rsi.api.research import ResearchMessage
 from areal_rsi.base.storage import encode, write_json
 from areal_rsi.coordination.coordinator import Coordinator
 from areal_rsi.modules.responses import ResponsesError, ResponsesRuntime, ToolHandler
@@ -222,6 +223,8 @@ class ResearchEngine:
             (node for node in actor.iterations if node.iteration_id == actor.current_iteration_id),
             None,
         )
+        message_id = c.state["active"].get(agent_id)
+        message = c.store.get("messages", message_id, ResearchMessage) if message_id else None
         return {
             "run_id": c.store.run_id,
             "status": c.state["status"],
@@ -229,6 +232,14 @@ class ResearchEngine:
             "brief": encode(c.store.brief()),
             "plan": c.state["plan"],
             "agent_id": agent_id,
+            "current_message": {
+                "message_id": message.message_id,
+                "sender": message.sender,
+                "reply_to": message.reply_to,
+            }
+            if message
+            else None,
+            "waiting_for_user": c.user_questions() if agent_id in {"rsi", "interaction"} else [],
             "direction": actor.direction,
             "current_node": encode(current),
             "budget": {
@@ -261,8 +272,7 @@ class ResearchEngine:
                 agent_id, RESEARCH_PROMPT
             )
             prompt = (
-                role_prompt
-                + "\n\n以下是本次模型回合开始时的状态快照。"
+                role_prompt + "\n\n以下是本次模型回合开始时的状态快照。"
                 "事实变化后，以后续工具结果和更新的会话检查点为准。"
                 "不要用这份初始快照覆盖较新的计划、方向或预算记录。"
                 + "\n\n当前 run 的系统状态：\n"
@@ -313,15 +323,15 @@ class ResearchEngine:
                 else None,
             )
             if (
-                agent_id == "interaction"
+                (agent_id == "interaction" or (agent_id == "rsi" and message.sender == "user"))
                 and result.stop_reason == "completed"
                 and result.text.strip()
             ):
                 c.enqueue(
-                    "interaction",
+                    agent_id,
                     "user",
                     result.text.strip(),
-                    key="interaction-response:" + message.message_id,
+                    key=agent_id + "-response:" + message.message_id,
                     reply_to=message.message_id,
                 )
             if result.stop_reason == "budget_exhausted":

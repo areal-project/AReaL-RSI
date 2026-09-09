@@ -126,7 +126,8 @@ RSI = [
     definition("wait", "结束本回合，等新消息到来后继续。说明需要等待的具体事件。", reason=STRING),
     definition(
         "ask_user",
-        "将尚不清楚的用户要求交给 Interaction 澄清，然后等待回复。",
+        "直接向用户提问并结束本回合。说明问题、已做检查、影响和需要用户处理的事项；"
+        "用户回答会直接回到你的同一会话。",
         question=STRING,
     ),
     definition(
@@ -392,7 +393,6 @@ class ResearchActions:
                 )
             if c.state["status"] not in {"planned", "running", "paused", "stopped"}:
                 raise ValueError("This run has already concluded")
-            c.state["waiting_for_user"] = []
             c.stop(reason)
             message_id = c.enqueue("rsi", "user", reason, key=key)
             return ToolResult(
@@ -404,17 +404,10 @@ class ResearchActions:
             c.wait(agent_id, args["reason"])
             return ToolResult({"waiting_for": args["reason"]}, stop=True, reason="message")
         if name == "ask_user":
-            recipient = "user" if agent_id == "interaction" else "interaction"
-            message_id = c.enqueue(agent_id, recipient, args["question"], key=key)
-            if recipient == "user" and not any(
-                q["message_id"] == message_id for q in c.state["waiting_for_user"]
-            ):
-                c.state["waiting_for_user"].append(
-                    {"message_id": message_id, "question": args["question"]}
-                )
-            c.save()
-            c.wait(agent_id, recipient)
-            return ToolResult({"question_sent": True}, stop=True, reason="user")
+            message_id = c.ask_user(agent_id, args["question"], key=key)
+            return ToolResult(
+                {"question_sent": True, "message_id": message_id}, stop=True, reason="user"
+            )
         if name == "send_to_rsi":
             c.enqueue("interaction", "rsi", args["message"], key=key)
             return ToolResult({"sent": True})
@@ -540,6 +533,7 @@ class ResearchActions:
                     )
             c.state["selected_candidate_id"] = selected
             c.state["status"] = "succeeded"
+            c.state["waiting_for_user"] = []
             c.save()
             run.state, run.finished_at = RunState.SUCCEEDED, now()
             c.store.save_run(run)

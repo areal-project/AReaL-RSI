@@ -19,7 +19,7 @@ uv run --env-file .env --locked rsi workbench
 
 ## 启动
 
-需要 macOS、Python 3.11+、uv，以及 Node.js 22.19+（或 24+）和 pnpm。前台 TUI 和后台研究 worker 共用当前数据目录内的 DSH CLI `0.1.2-rc.1`。Python SDK 负责调用这份 CLI，后台通过 macOS 的 `sandbox-exec` 隔离工作目录。
+旧入口和 Task runtime 需要 macOS、Python 3.11+、uv，以及 Node.js 22.19+（或 24+）和 pnpm；它们使用数据目录内的 DSH CLI `0.1.2-rc.1`，后台通过 `sandbox-exec` 隔离工作目录。新工作台的三个研究角色使用 Responses 连续会话，共享 DSH 基础执行工具和联网工具；工具插件通过 npm 按 lockfile 安装，不需要全局 DSH CLI。详情见[基础工具说明](docs/interfaces/dsh-tools.md)。
 
 先准备本机配置文件：
 

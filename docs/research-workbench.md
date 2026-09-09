@@ -40,6 +40,23 @@ uv run --env-file .env --locked rsi workbench
 
 研究视图展示 RSI 当前计划、研究方向、节点任务与具体报告、共享证据、作业及调用预算。方向标题由 RSI 创建研究员时填写，随任务而变。有验证协议的研究显示可比较的最佳成绩；没有分数的任务不会补零或伪造最佳版本。产物按 run 归档，不要求所有成果都能打包下载。
 
+## 各 Agent 的基础工具
+
+Interaction、RSI 和 Research 都可以使用 DSH 的 `bash / read / write / edit / glob / grep`，以及 `search_web / fetch_url`。例如可以直接告诉 Interaction：“阅读这份环境说明，用 `ssh et15` 检查远端环境。”SSH 使用本机已有配置和认证，不需要专用 SSH 工具。
+
+基础工具需要 Node.js 22.19+（或 24+）和 npm。首次调用自动按仓库中的 lockfile 安装固定版本 DSH 插件，后续离线复用 `RSI_DATA_ROOT/dsh-tools/<lock摘要>/`。这个目录只缓存依赖，不保存不同 run 的公共记忆。
+
+| 角色 | 共有基础工具之外的职责与工具 |
+| --- | --- |
+| Interaction | 对话、环境检查、准备执行配置、确认启动、向 RSI 转交需求 |
+| RSI | 调研与计划、创建和停止研究员、分配任务、共享证据、直接向用户提问、管理结果 |
+| Research | 当前方向内的实现与实验、保存候选、验证、提交报告并等待 RSI 回复 |
+| Task | 由任务适配器运行被优化的 harness；沿用其 DSH runtime 和 harness 自身配置的工具 |
+
+工作台的模型调用和连续会话由 Responses runtime 管理，基础执行工具复用 DSH 插件；没有额外启动 DSH 模型循环。添加工具不需要迁移、清空或重建已有会话，重启服务后下一条消息即可使用。
+
+每个 Agent 的默认目录是自己的 `agents/<agent_id>/workspace/`；也支持用户指定的绝对路径。每次 `bash` 是独立 shell，目录和变量不跨调用保留。命令默认超时 30 秒、最多 60 秒；长时间实验继续使用受管理的 `run_job / wait_for_job`，正式成绩仍只能由可信验证记录产生。基础终端以工作台进程的本机用户权限运行，工作区是默认目录，不是文件权限沙箱；私有评测应放在独立的验证环境中。
+
 ## 环境如何接入
 
 先描述实际环境，提供已有目录、环境说明或执行配置的路径。Interaction 可以查看这些资料，再用工具完成配置；参考文件中的占位路径不会成为可执行环境。
@@ -92,7 +109,7 @@ RSI 和 Interaction 都可以直接向你提问。例如目标模型返回权限
 
 「暂停」保留研究状态；「继续」恢复推进；「停止」取消研究及相关工作，不能自动改称成功。`Ctrl+C` 或关闭工作台服务只关闭当前 worker，保留恢复所需记录；重启后通过「恢复执行」或「继续对话」接续。同一 run 同时只允许一个 worker，其他进程可以查看。
 
-Agent 失败可通过「重试」接续未完成回合，已经完成的工具操作不会重做，全局预算不重置。达到硬预算后不会自动增加额度。
+Agent 失败可通过「重试」接续未完成回合，已经完成的工具操作不会重做，全局预算不重置。DSH 命令在执行前保存回执，完成后保存结果；若进程异常退出而结果不明，返回 `OUTCOME_UNKNOWN`，要求先检查实际状态，不会自动重复执行。暂停、停止或关闭 worker 会取消正在执行的前台命令；已通过作业系统提交的实验沿用原有生命周期。达到硬预算后不会自动增加额度。
 
 需要纯终端执行时：
 
@@ -113,6 +130,7 @@ briefs/ assignments/ reports/ evidence/
 candidates/ verifications/ iterations/
 agents/<agent_id>/
   agent.json  workspace/  sessions/
+  tools/                       # DSH 调用回执、进程日志和临时输出
 coordination/
   config.json                  # 准备阶段当前配置
   configurations/              # 已保存的执行配置修订

@@ -1,5 +1,17 @@
 # Research 工作台验收记录
 
+## DSH 基础工具与原会话兼容（2026-09-09）
+
+Interaction、RSI 和 Research 共有 DSH 终端、文件读写/编辑、文件搜索及联网工具。全量回归 **414 项测试、62 个 subtests** 通过，包含 10 项新增测试；Ruff、mypy 和 Node 语法检查通过，wheel 包含固定的 Node 依赖清单、lockfile、worker 及 schemas。
+
+真实 DSH 测试覆盖文件操作与搜索、默认工作区区分、读取后修改保护、超时/取消后的进程清理、已完成调用的重放，以及结果不明时拒绝再次执行。角色权限测试确认只有 RSI 可以创建研究员，只有 Research 提交报告；新增终端不改变这些业务接口。
+
+在正在使用的 Interaction 对话的**独立副本**中，使用真实 `gpt-6-astra / xhigh` 完成兼容性检查：原 session ID 不变，42 条历史记录完整保留，新增 3 次模型调用；Agent 实际调用 DSH `read` 阅读用户指定的 KernelBench 指南，再调用 DSH `bash` 经 SSH 读取远端主机名，均成功。完成后等待，重新附着 worker 不增加模型调用。没有启动 KernelBench 实验或进行 GPU、正确性与性能验证。
+
+验收驱动最初使用了不存在的空闲查询方法，在模型完成后报错；随后直接核对持久记录，并独立检查等待状态，没有重复运行模型。结果及调用记录在本地 `.rsi/dsh-acceptance/copied-chat/acceptance.json`，直接工具检查在 `.rsi/dsh-acceptance/`。
+
+正式服务更新前已备份 run 数据并核对文件摘要。重启时原消息、会话、需求、待回答问题及所有已有 run 文件与备份一致；随后恢复空闲 worker，正式对话仍为 planned，模型调用保持 15 次，没有混入验收消息。部署核对记录为 `.rsi/dsh-acceptance/deployment.json`。
+
 ## RSI 直接向用户提问（2026-09-09）
 
 RSI / Interaction 的提问直接展示给用户，回答按问题 ID 回到原提问者的会话。全量回归为 404 项测试和 62 个 subtests；Ruff、mypy 与前端语法检查通过。新增覆盖直接投递、重复提交、旧记录恢复、多问题并存、暂停期间归档、重启接续和等待期间无模型调用。

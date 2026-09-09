@@ -390,6 +390,12 @@ class Coordinator:
         actor.state, actor.error = AgentState.WAITING, None
         self.save_actor(actor)
         self.store.event("agent_retry_requested", agent_id=agent_id, retry_id=retry_id)
+        self.enqueue(
+            "runtime",
+            "user",
+            f"已恢复 {agent_id}，将从保存的对话和进度继续。",
+            key="retry-notice:" + retry_id,
+        )
 
     def _retry_missing_report(self, actor: ResearchAgentState, failure: dict[str, Any]) -> str:
         """Correct a completed model reply without creating another research node."""

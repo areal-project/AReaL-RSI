@@ -2,6 +2,10 @@
 
 `modules/responses.py` 负责一次模型回合、工具调用和会话持久化。Agent 职责、消息投递、任务推进、GPU 作业和共享经验由上层模块管理。
 
+HTTP 连接建立失败（ConnectError / ConnectTimeout）最多尝试三次，间隔 0.5、1 秒，
+保持相同模型、推理强度和请求内容。读取响应失败、HTTP 错误、流中断不自动重放，
+因为请求可能已经到达服务端。最终失败会保留会话并向用户报告；显式恢复也会显示确认消息。
+
 ```python
 from pathlib import Path
 from areal_rsi.modules.responses import (
@@ -33,7 +37,7 @@ result = await runtime.turn(
 
 ## 接口与边界
 
-- `ResponsesConfig` 默认 `gpt-6-astra / xhigh`，支持输出 token、HTTP timeout、每回合模型请求次数、自动 compact 阈值。配置不会隐式切换模型、降低 effort 或重试请求。
+- `ResponsesConfig` 默认 `gpt-6-astra / xhigh`，支持输出 token、HTTP timeout、每回合模型请求次数、自动 compact 阈值。配置不会隐式切换模型、降低 effort 或重放可能已提交的请求。
 - `turn()` 返回 `TurnResult(session_id, turn_id, text, stop_reason, usage)`。`stop_reason` 为 `completed`、`budget_exhausted` 或停止工具提供的原因（默认 `waiting`）。累计 usage 包含 compact 和 reasoning tokens；请求原始 usage 也单独归档。
 - `ToolCall(name, arguments, call_id, recovered)` 交给异步 handler，返回 `ToolResult(output, stop=False, reason="waiting")`。output 必须可 JSON 序列化或为字符串。
 - `stop=True` 在工具完成后立即结束回合。同一模型响应中尚未执行的工具会收到明确的 skipped 记录，不执行副作用。等待期间没有后台模型调用；调度器只能用新的 user 消息唤醒。

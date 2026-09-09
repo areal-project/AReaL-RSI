@@ -878,3 +878,40 @@ def test_unlimited_turn_receives_steering_and_recovers_injection_ack(tmp_path: P
         assert "现在开始" in json.dumps(transport.payloads[1]["input"], ensure_ascii=False)
 
     asyncio.run(scenario())
+
+
+def test_connection_retry_is_bounded_and_does_not_replay_read_failures() -> None:
+    async def scenario() -> None:
+        for failure, fail_count, expected_attempts in (
+            (httpx.ConnectError, 2, 3),
+            (httpx.ConnectTimeout, 4, 3),
+            (httpx.ReadError, 1, 1),
+        ):
+            attempts = 0
+
+            async def handle(
+                request: httpx.Request,
+                fail_count: int = fail_count,
+                failure: type[httpx.RequestError] = failure,
+            ) -> httpx.Response:
+                nonlocal attempts
+                attempts += 1
+                if attempts <= fail_count:
+                    raise failure("private-credential", request=request)
+                return httpx.Response(200, json=response(answer("ok")))
+
+            async def emit(event: Json) -> None:
+                assert "private-credential" not in json.dumps(event)
+
+            transport = HttpResponsesTransport(httpx.MockTransport(handle))
+            config = ResponsesConfig(base_url="https://example.test", api_key="private-credential")
+            try:
+                result = await transport.request(config, {}, emit)
+            except ResponsesError as exc:
+                assert failure != httpx.ConnectError
+                assert "private-credential" not in str(exc)
+            else:
+                assert failure == httpx.ConnectError and result["status"] == "completed"
+            assert attempts == expected_attempts
+
+    asyncio.run(scenario())

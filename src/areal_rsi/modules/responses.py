@@ -139,14 +139,31 @@ class HttpResponsesTransport:
     """Stream via an async socket so task cancellation closes the active request.
 
     Closing the socket cancels local work immediately; a third-party provider may
-    still finish/bill server-side work. No retry, model fallback or effort downgrade
-    is performed implicitly. Both JSON and SSE responses are accepted.
+    still finish/bill server-side work. Only connection-establishment failures
+    retry (three attempts); requests/streams that may have reached the provider
+    are never replayed implicitly. Model and effort stay fixed.
     """
 
     def __init__(self, transport: httpx.AsyncBaseTransport | None = None):
         self.transport = transport
 
     async def request(self, config: ResponsesConfig, payload: Json, event_sink: EventSink) -> Json:
+        for attempt in range(3):
+            try:
+                return await self._request_once(config, payload, event_sink)
+            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                if attempt == 2:
+                    raise ResponsesError(
+                        f"Responses transport failed ({type(exc).__name__}) "
+                        "after 3 connection attempts"
+                    ) from None
+                await event_sink({"type": "transport.connection_retry", "attempt": attempt + 2})
+                await asyncio.sleep(0.5 * (attempt + 1))
+        raise AssertionError("Unreachable connection retry state")
+
+    async def _request_once(
+        self, config: ResponsesConfig, payload: Json, event_sink: EventSink
+    ) -> Json:
         headers = {"Content-Type": "application/json"}
         if config.api_key:
             headers["Authorization"] = "Bearer " + config.api_key
@@ -191,6 +208,8 @@ class HttpResponsesTransport:
                 if final is None:
                     raise ResponsesError("Responses stream ended without a terminal response")
                 return final
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            raise
         except httpx.HTTPError as exc:
             # URLs/proxy exceptions can contain credentials: do not expose exception text.
             raise ResponsesError(f"Responses transport failed ({type(exc).__name__})") from None

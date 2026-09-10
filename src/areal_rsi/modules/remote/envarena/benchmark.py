@@ -21,6 +21,8 @@ class ArenaBenchmark:
         self.spec: dict[str, Any] = {}
         self.tasks: dict[BenchmarkSplit, list[Task]] = {}
         self.entries: dict[str, dict[str, Any]] = {}
+        self.entry_collection = ""
+        self.reference_field = ""
         self.name = (
             "envarena:"
             + fingerprint(
@@ -36,8 +38,11 @@ class ArenaBenchmark:
     async def load(self) -> None:
         version = await self.client.version("benchmarks", self.config.benchmark)
         self.spec = copy.deepcopy(version["spec"])
-        if not self.spec.get("case_refs") or self.spec.get("variants"):
-            raise ValueError("remote 首期要求 Case Benchmark，且不包含 variants")
+        collections = [name for name in ("case_refs", "env_refs") if self.spec.get(name)]
+        if len(collections) != 1 or self.spec.get("variants"):
+            raise ValueError("remote 要求单一 case_refs 或 env_refs Benchmark，且不包含 variants")
+        self.entry_collection = collections[0]
+        self.reference_field = "case_ref" if self.entry_collection == "case_refs" else "env_ref"
         # Persist the same defaults that validation accepts for subset publication.
         aggregation = self.spec.setdefault("aggregation", {})
         if not isinstance(aggregation, dict):
@@ -50,8 +55,8 @@ class ArenaBenchmark:
         ):
             raise ValueError("remote 首期支持 mean + failed_as_zero，不能静默改变评分语义")
         await self.client.version("rewards", self.spec["reward_ref"])
-        for entry in self.spec["case_refs"]:
-            key = reference(entry["case_ref"])["key"]
+        for entry in self.spec[self.entry_collection]:
+            key = reference(entry[self.reference_field])["key"]
             if key in self.entries:
                 raise ValueError("Benchmark 包含重复 Case")
             self.entries[key] = entry
@@ -68,8 +73,9 @@ class ArenaBenchmark:
                     raise ValueError(
                         "Case 自带 Harness override，会覆盖候选；请使用统一 Harness 的 Benchmark"
                     )
-                case = await self.client.version("cases", entry["case_ref"])
-                spec = case["spec"]
+                kind = "cases" if self.reference_field == "case_ref" else "envs"
+                source = await self.client.version(kind, entry[self.reference_field])
+                spec = source["spec"]
                 query = spec.get("query", {})
                 uri = str(query.get("uri", ""))
                 # Some Cases expose a query containing sandbox-relative input paths.
@@ -83,22 +89,20 @@ class ArenaBenchmark:
                 weight = entry.get("weight", 1)
                 if type(weight) not in (int, float) or not math.isfinite(weight) or weight <= 0:
                     raise ValueError("Case weight 必须为有限正数")
-                tasks.append(
-                    Task(
-                        key,
-                        public,
-                        {
-                            "backend": "envarena",
-                            "split": split.value,
-                            "case_ref": encode(reference(entry["case_ref"])),
-                            "env_ref": encode(reference(spec["env_ref"])),
-                            "case_content_hash": case.get("content_hash", ""),
-                            "benchmark_ref": encode(self.config.benchmark),
-                            "reward_ref": encode(reference(self.spec["reward_ref"])),
-                            "weight": float(weight),
-                        },
-                    )
-                )
+                metadata = {
+                    "backend": "envarena",
+                    "split": split.value,
+                    "arena_reference_field": self.reference_field,
+                    self.reference_field: encode(reference(entry[self.reference_field])),
+                    "source_content_hash": source.get("content_hash", ""),
+                    "benchmark_ref": encode(self.config.benchmark),
+                    "reward_ref": encode(reference(self.spec["reward_ref"])),
+                    "weight": float(weight),
+                }
+                if self.reference_field == "case_ref":
+                    metadata["env_ref"] = encode(reference(spec["env_ref"]))
+                    metadata["case_content_hash"] = source.get("content_hash", "")
+                tasks.append(Task(key, public, metadata))
             self.tasks[split] = tasks
 
     async def list_tasks(self, split: BenchmarkSplit) -> Sequence[Task]:
@@ -111,7 +115,7 @@ class ArenaBenchmark:
         if any(known.get(t.task_id) != t for t in tasks):
             raise ValueError("Task 与已固定的 Arena 数据集不一致")
         spec = {
-            "case_refs": [self.entries[t.task_id] for t in tasks],
+            self.entry_collection: [self.entries[t.task_id] for t in tasks],
             "reward_ref": self.spec["reward_ref"],
             "aggregation": self.spec["aggregation"],
         }

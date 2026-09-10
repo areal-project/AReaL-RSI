@@ -54,6 +54,21 @@ def redact(value: Any) -> Any:
         }
     if isinstance(value, list):
         return [redact(v) for v in value]
+    if isinstance(value, str):
+        # Tool observations may contain shell-expanded credentials as plain text,
+        # where key-name-only recursive redaction is insufficient.
+        value = re.sub(
+            r"(?i)\b((?:OPENAI|ANTHROPIC|LLM|MODEL|ARENA|ENVARENA)[A-Z0-9_]*"
+            r"(?:API_KEY|TOKEN|PASSWORD|SECRET))([ \t]*[=:][ \t]*)([^\s,;}\]]+)",
+            r"\1\2[redacted]",
+            value,
+        )
+        value = re.sub(
+            r"(?i)\b(authorization[ \t]*[=:][ \t]*bearer[ \t]+)[A-Za-z0-9._~+/=-]+",
+            r"\1[redacted]",
+            value,
+        )
+        return re.sub(r"\bsk-[A-Za-z0-9_-]{8,}\b", "[redacted]", value)
     return value
 
 

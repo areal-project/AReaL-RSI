@@ -58,3 +58,25 @@ uv run --env-file .env --locked rsi resume RUN_ID
 `research_harness` 选择与 Runtime JSON 相同的后端时，保留该角色已有的配置
 （没有角色配置时保留 default 配置）；切换后端时不继承不兼容的选项。
 发布或复用 RSI 创建的远端版本前，会比较完整 spec，而不只信任摘要标签。
+
+## Terminal-Bench 2.1
+
+[`tb21.yaml`](tb21.yaml) 演示 `env_refs` 类型的 TB2.1 Benchmark。它固定
+`tb21-terminus2-full@2.1.1`、`tb2-reward@4.0.16` 和
+`gpt-5-6-sol-4ipic@1.0.0`，从 `terminus-2-tb21@1.0.12` 开始演化。
+TRAIN 与 VALIDATE 明确隔离；允许 ResearchAgent 修改通用 system prompt 以及 Terminus
+白名单推理参数，但 ModelVersion 和模型权重始终不变。
+
+四条独立研究线、每线五轮可并行完成 20 个框架迭代：
+
+```bash
+export RSI_RUNTIME_CONFIG="$PWD/examples/runtime/dsh.json"
+export RSI_REMOTE_BACKEND=envarena
+export RSI_RESEARCH_AGENT_COUNT=4
+uv run --env-file .env --locked python examples/remote/run.py \
+  --config examples/remote/tb21.yaml --root .rsi/areal-tb21 \
+  --iterations 5 --launch
+```
+
+这个筛选实验的 VALIDATE 分数不等于完整 TB2.1 分数；最佳候选必须再跑原始 89 题
+Benchmark，才能声明相对完整 baseline 的提升。

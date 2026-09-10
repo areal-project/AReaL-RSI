@@ -47,6 +47,7 @@ from areal_rsi.modules.remote.envarena.config import ArenaConfig
 from areal_rsi.modules.remote.envarena.harness import (
     REMOTE_CHANGE_TYPE,
     ArenaHarnessBuilder,
+    normalize_model_parameters,
     snapshot,
     validate_change,
 )
@@ -189,7 +190,8 @@ class FakeArena(ArenaClient):
                     spec = self.versions[
                         f"/benchmarks/{job['benchmark_ref']['key']}/versions/1.0.0"
                     ]["spec"]
-                    weights = [e.get("weight", 1) for e in spec["case_refs"]]
+                    collection = "case_refs" if "case_refs" in spec else "env_refs"
+                    weights = [e.get("weight", 1) for e in spec[collection]]
                     return {
                         "aggregate_score": sum(s * w for s, w in zip(scores, weights, strict=True))
                         / sum(weights)
@@ -239,21 +241,23 @@ class FakeArena(ArenaClient):
                 benchmark = self.versions[
                     f"/benchmarks/{body['benchmark_ref']['key']}/versions/1.0.0"
                 ]["spec"]
+                collection = "case_refs" if "case_refs" in benchmark else "env_refs"
+                ref_field = "case_ref" if collection == "case_refs" else "env_ref"
                 tasks = [
                     {
-                        "task_id": f"{job_id}:{e['case_ref']['key']}:0",
-                        "case_ref": e["case_ref"],
+                        "task_id": f"{job_id}:{e[ref_field]['key']}:0",
+                        ref_field: e[ref_field],
                         "harness_ref": body["harness_ref"],
                         "model_ref": body["model_ref"],
                         "reward_ref": benchmark["reward_ref"],
                         "sample_index": 0,
                         "attempts": 1,
                         "status": "HARNESS_FAILED"
-                        if e["case_ref"]["key"] == self.fail_case
+                        if e[ref_field]["key"] == self.fail_case
                         else "DONE",
                         "updated_at": "2026-09-08T00:00:00Z",
                     }
-                    for e in benchmark["case_refs"]
+                    for e in benchmark[collection]
                 ]
                 self.jobs[job_id] = {
                     **copy.deepcopy(body),
@@ -299,7 +303,7 @@ class RemoteTest(unittest.IsolatedAsyncioTestCase):
             REF,
             ("train-a", "train-b"),
             ("validate",),
-            ("system_prompt", "skills", "tools", "mcp"),
+            ("system_prompt", "skills", "tools", "mcp", "model_parameters"),
             poll_seconds=0.01,
         )
         self.content = FileContentStore(self.root / "content")
@@ -363,6 +367,69 @@ class RemoteTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("actual answer", text)
             self.assertNotIn("oracle.py", text)
         self.assertNotIn("DO-NOT-LEAK-ORACLE", json.dumps([t.metadata for t in tasks]))
+
+    async def test_env_ref_benchmark_round_trip_preserves_env_identity(self) -> None:
+        env_ref = {"key": "tb2-task", "version": "1.0.0"}
+        self.client.seed(
+            "benchmarks",
+            "tb21",
+            {
+                "env_refs": [{"env_ref": env_ref, "weight": 2}],
+                "reward_ref": REF,
+                "aggregation": {"method": "mean", "failed_task_policy": "failed_as_zero"},
+            },
+        )
+        self.client.seed(
+            "envs",
+            "tb2-task",
+            {"query": {"uri": "remote/instruction.md"}, "oracle": {"uri": "private"}},
+        )
+        config = replace(
+            self.config,
+            benchmark={"key": "tb21", "version": "1.0.0"},
+            train_cases=("tb2-task",),
+            validate_cases=("tb2-task-validation",),
+        )
+        # Keep the split contract disjoint while exercising only the TRAIN side.
+        self.client.versions["/benchmarks/tb21/versions/1.0.0"]["spec"]["env_refs"].append(
+            {
+                "env_ref": {"key": "tb2-task-validation", "version": "1.0.0"},
+                "weight": 1,
+            }
+        )
+        self.client.seed(
+            "envs",
+            "tb2-task-validation",
+            {"query": {"uri": "remote/validation.md"}},
+        )
+        benchmark = ArenaBenchmark(self.client, config)
+        await benchmark.load()
+        tasks = await benchmark.list_tasks(BenchmarkSplit.TRAIN)
+        self.assertEqual(tasks[0].metadata["env_ref"], env_ref)
+        self.assertNotIn("case_ref", tasks[0].metadata)
+        runtime = ArenaHarnessRuntime(
+            self.client,
+            self.content,
+            self.traces,
+            benchmark,
+            config,
+            self.root / "env-remote",
+        )
+        results = await runtime.run_many(
+            self.solution, tasks, config={"execution_key": "env-ref/train"}
+        )
+        verified = await self.verifier.verify(
+            VerificationRequest(
+                tasks[0],
+                self.solution,
+                results[tasks[0].task_id],
+                VerifierSpec("arena", "injected"),
+            )
+        )
+        self.assertEqual(verified.score, self.client.score)
+        submitted = next(value for method, path, value in self.client.calls if path == "/jobs")
+        subset = await self.client.version("benchmarks", submitted["benchmark_ref"])
+        self.assertEqual(subset["spec"]["env_refs"][0]["env_ref"], env_ref)
 
     async def test_lost_submission_response_is_reconciled_without_duplicate(self) -> None:
         self.client.lost_response = True
@@ -552,6 +619,48 @@ class RemoteTest(unittest.IsolatedAsyncioTestCase):
         for bad in invalid:
             with self.assertRaises(ValueError):
                 validate_change({"system_prompt": bad}, self.config.allowed_changes)
+
+    async def test_model_parameters_update_only_whitelisted_agent_environment(self) -> None:
+        value = {
+            "model_parameters": {
+                "temperature": 0.6,
+                "top_p": 0.9,
+                "reasoning_effort": "high",
+                "separate_reasoning": False,
+                "model_context_limit": 131072,
+                "proactive_summarization_threshold": 32768,
+            }
+        }
+        change = HarnessChange(
+            await self.content.put_bytes(json.dumps(value).encode(), media_type=REMOTE_CHANGE_TYPE),
+            "test",
+        )
+        candidate = await self.builder.build(self.solution.harness, change)
+        spec = json.loads(await self.content.read_text(candidate))["spec"]
+        self.assertEqual(spec["runtime"]["uri"], "remote/runtime")
+        self.assertEqual(spec["agent"]["env"]["FIXED"], "yes")
+        self.assertEqual(spec["agent"]["env"]["TERMINUS_TEMPERATURE"], "0.6")
+        self.assertEqual(spec["agent"]["env"]["TERMINUS_REASONING_EFFORT"], "high")
+        self.assertEqual(spec["agent"]["env"]["TERMINUS_SEPARATE_REASONING"], "false")
+        self.assertEqual(
+            normalize_model_parameters({"gateway_retry_attempts": 0}),
+            {"TERMINUS_GATEWAY_RETRY_ATTEMPTS": "0"},
+        )
+        for invalid in ({}, {"temperature": 3}, {"top_p": 0}, {"weights": "changed"}):
+            with self.assertRaises(ValueError):
+                normalize_model_parameters(invalid)
+
+    def test_redact_scrubs_plain_text_credentials(self) -> None:
+        value = redact(
+            {
+                "message": "OPENAI_API_KEY=sk-abcdefghijkl and Authorization: Bearer token.value",
+                "nested": ["unlabeled sk-abcdefghijkl"],
+            }
+        )
+        text = json.dumps(value)
+        self.assertNotIn("sk-abcdefghijkl", text)
+        self.assertNotIn("token.value", text)
+        self.assertIn("[redacted]", text)
 
     async def test_skill_tool_and_mcp_candidates_use_remote_apis_and_reuse_uploads(self) -> None:
         value = {

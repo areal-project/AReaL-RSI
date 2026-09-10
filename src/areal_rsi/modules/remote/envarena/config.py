@@ -11,7 +11,7 @@ from typing import Any
 from areal_rsi.experiment_config import read_config
 from areal_rsi.modules.remote.envarena.client import ArenaClient, reference
 
-EDITABLE = frozenset({"system_prompt", "skills", "tools", "mcp"})
+EDITABLE = frozenset({"system_prompt", "skills", "tools", "mcp", "model_parameters"})
 DEFAULT_ARTIFACT_GLOBS = ("*.py", "*.js", "response.txt", "runner_result.json")
 
 
@@ -91,7 +91,9 @@ class ArenaConfig:
         if not isinstance(allowed, list) or any(
             not isinstance(v, str) or v not in EDITABLE for v in allowed
         ):
-            raise ValueError("allowed_changes 只允许 system_prompt/skills/tools/mcp")
+            raise ValueError(
+                "allowed_changes 只允许 system_prompt/skills/tools/mcp/model_parameters"
+            )
         namespace = raw.get("namespace", "remote")
         if not isinstance(namespace, str) or not re.fullmatch(
             r"[a-z0-9][a-z0-9-]{0,31}", namespace

@@ -220,19 +220,20 @@ class ArenaHarnessRuntime:
             remote_tasks = await self.client.items(
                 f"/jobs/{segment(job_id)}/tasks", "tasks", status="ALL"
             )
-            by_case: dict[str, dict[str, Any]] = {}
+            ref_field = self.benchmark.reference_field
+            by_item: dict[str, dict[str, Any]] = {}
             for row in remote_tasks:
-                ref = reference(row.get("case_ref"))
-                if ref["key"] in by_case or row.get("sample_index", 0) != 0:
-                    raise ValueError("Arena 返回重复 Case 或多样本，不能映射单个 TaskResult")
-                by_case[ref["key"]] = row
-            if set(by_case) != {t.task_id for t in tasks}:
-                raise ValueError("Arena 返回的 Case 集合与提交集合不一致")
+                ref = reference(row.get(ref_field))
+                if ref["key"] in by_item or row.get("sample_index", 0) != 0:
+                    raise ValueError("Arena 返回重复评测项或多样本，不能映射单个 TaskResult")
+                by_item[ref["key"]] = row
+            if set(by_item) != {t.task_id for t in tasks}:
+                raise ValueError("Arena 返回的评测项集合与提交集合不一致")
             results = {}
             for task in tasks:
-                row = by_case[task.task_id]
+                row = by_item[task.task_id]
                 for field, expected in (
-                    ("case_ref", task.metadata["case_ref"]),
+                    (ref_field, task.metadata[ref_field]),
                     ("harness_ref", harness["ref"]),
                     ("model_ref", model["ref"]),
                     ("reward_ref", task.metadata["reward_ref"]),
@@ -252,9 +253,7 @@ class ArenaHarnessRuntime:
                     )
                 results[task.task_id] = result
             aggregate = await self.client.get(f"/jobs/{segment(job_id)}/result")
-            weights = [
-                float(self.benchmark.entries[t.task_id].get("weight", 1)) for t in tasks
-            ]
+            weights = [float(self.benchmark.entries[t.task_id].get("weight", 1)) for t in tasks]
             scores = []
             for task in tasks:
                 output = json.loads(await self.content.read_text(results[task.task_id].output))
@@ -353,10 +352,11 @@ class ArenaHarnessRuntime:
             or result.get("raw", {}).get("runner_status")
             or result.get("status", "")
         )
+        ref_field = self.benchmark.reference_field
         evidence = {
             "job_id": job_id,
             "task_id": remote_id,
-            "case_ref": row["case_ref"],
+            ref_field: row[ref_field],
             "harness_ref": row["harness_ref"],
             "reward_ref": row["reward_ref"],
             "model_ref": row["model_ref"],
@@ -425,9 +425,11 @@ class ArenaVerifier:
         ):
             raise ValueError("远端结果与本地 Task/Solution/轨迹不匹配")
         arena = output["arena"]
-        if (
-            arena["case_ref"] != task.metadata["case_ref"]
-            or arena["reward_ref"] != task.metadata["reward_ref"]
+        ref_field = task.metadata.get("arena_reference_field")
+        if ref_field not in {"case_ref", "env_ref"} or ref_field not in task.metadata:
+            raise ValueError("Task 必须绑定一个 Arena Case 或 Env 引用")
+        if arena[ref_field] != task.metadata[ref_field] or (
+            arena["reward_ref"] != task.metadata["reward_ref"]
         ):
             raise ValueError("远端评分身份与 Task 不匹配")
         score = float(arena["score"])

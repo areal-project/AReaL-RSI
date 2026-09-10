@@ -69,15 +69,15 @@ result = await runtime.turn(
 
 显式重试使用 `turn(..., user_message=None, retry_id="持久重试ID")`。Coordinator 只在用户重试失败 Agent 时生成 ID，并绑定当前 active message；engine 恢复时重复传递同一 ID。runtime 在耗尽的回合上为每个新 ID 增加一份 `max_model_calls_per_turn` 额度，保留同一 turn、完整请求计数和已完成工具账本。ID 的消费和新额度先持久化；取消或进程重启不会重复增加。未耗尽的失败回合继续使用剩余额度。新 ID 不重置整个 run 的模型、Token 或时间预算；全局不足时仍会停止。
 
-有一种不同的恢复情况：Research Agent 已输出普通最终回复，却未提交 report。此时模型回合确已完成，调度器将它标为明确的报告协议错误，等待用户重试。重试会结束旧消息投递，并用持久重试 ID 投递一条补报告的 user 消息：保持同一个 session、原任务和原节点，只补齐原任务的报告或明确等待，不授权下一项研究。原始轨迹与工具结果继续保留。普通传输错误或取消仍恢复原回合，不走这个纠正流程。
+Research Agent 的普通最终回复现在由调度器自动归档为报告，并等待 RSI 下发下一项任务，不再作为报告协议错误。既有档案中的 `missing_report` 失败仍保留原恢复路径，避免升级时丢失未完成任务。
 
-每次模型请求的 instructions 都带有本回合剩余调用数（包括当前调用），剩余不超过四次时明确要求收束工作，提交有事实依据的 report 或进入明确 wait。这个提示帮助模型安排收尾，硬边界仍由运行时和调度器执行。
+显式设置单回合上限时，模型请求的 instructions 带有本回合剩余调用数（包括当前调用），剩余不超过四次时明确要求收束工作，提交有事实依据的 report 或进入明确 wait。这个提示帮助模型安排收尾，硬边界仍由运行时和调度器执行。
 
 ## Compact 与事件
 
 默认在新回合开始前检查 context，也在同一长回合的完整工具 batch 结束后、下一次模型请求前检查；context JSON 超过 180,000 个字符时，使用同一模型生成继续工作所需的摘要。字符数是可配置的估算阈值，不是 token 上限，单次超大返回仍可能超过模型限制。压缩前必须清空 pending 并完成每个 function call/output 配对；已有未消费响应先恢复，不能被 compact 越过。原始历史、工具账本和 turn/message/call ID 始终保留，不依赖第三方 native compact API。
 
-compact 请求与后续继续请求都计入当前回合和整个 run 的预算。若剩余额度不足以完成这两次请求，会保留完整边界并停止；不会另起回合或增加额度。检查点保存对应的 history 边界和请求 ID；压缩响应已保存时直接恢复它，检查点已提交时直接继续，避免重启后对同一边界重复 compact。摘要要求保留可恢复的事实、记录引用和未完成步骤，并控制在 12,000 字符以内。
+compact 请求与后续继续请求都计入当前回合和整个 run 的预算。若剩余额度不足以完成这两次请求，会保留完整边界并停止；不会另起回合或增加额度。检查点保存对应的 history 边界和请求 ID；压缩响应已保存时直接恢复它，检查点已提交时直接继续，避免重启后对同一边界重复 compact。摘要要求保留可恢复的事实、记录引用和未完成步骤，目标约 1,500–3,000 字符，按下一步需要保留信息。
 
 压缩指令只放在该次请求的 instructions 中，不伪装成用户消息。检查点以 assistant 记忆记录提供给后续请求，摘要不能产生新的用户授权、暂停或再次确认要求。检查点中的 `active_instruction` 直接复制当前持久回合的消息 ID、原文和是否已加入上下文，不能由摘要模型改写。每次压缩后的正常请求（含旧检查点恢复）都获得恢复规则及当前原始任务，继续尚未完成的工作；真实用户要求暂停或仅总结时仍须遵守。
 
@@ -86,3 +86,5 @@ compact 请求与后续继续请求都计入当前回合和整个 run 的预算�
 `event_sink` 接收结构化事件：`model_request`、`response_usage`、`model_stream`、`tool_started`、`tool_completed`、`turn_completed`、`turn_stopped`、`turn_budget_exhausted`、`turn_retry_granted`、`session_compacted`。事件包含 session / turn ID 和时间；模型请求与 usage 带 request ID。上层可据此统计预算、呈现流式文本、更新 Agent 状态。事件订阅者应按 ID 去重；恢复时以归档状态为准。
 
 协议依据：[OpenAI Function calling](https://developers.openai.com/api/docs/guides/function-calling)、[Conversation state](https://developers.openai.com/api/docs/guides/conversation-state)。测试使用可注入 transport 和真实 Responses 数据形状，覆盖等待零请求、连续上下文、取消、工具幂等恢复、compact、预算、SSE 和协议错误。
+
+`tools` 是该角色可执行的完整注册表；可选 `advertised_tools` 只决定新请求中展示哪些工具。旧调用仍按完整注册表与 handler 权限恢复。工具 JSON 使用 `ensure_ascii=False` 保留中文。ResearchConfig 默认不设单回合上限，run 预算独立生效。

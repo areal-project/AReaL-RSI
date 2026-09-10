@@ -20,11 +20,12 @@ continuous model sessions. Execution and web research tools are separate adapter
   summary identifies this condition. An explicit user stop remains available.
 - Every assignment becomes a generic `ResearchIteration`. Completion requires a
   concrete `ResearchReport`; products and verification are optional.
-- A report immediately stops the model turn. Only an explicit reply to that exact
-  report can issue the next assignment. The session and workspace are reused.
+- A report immediately stops the model turn. A normal final reply also becomes a
+  report. RSI's next assignment resumes the same session and workspace; the
+  coordinator links the latest report without requiring the model to copy its ID.
 - A background job can wake the same assignment without creating another node;
   this is separate from the report-to-RSI barrier. `wait_for_job` durably subscribes
-  its caller (including RSI observing another agent's job). Later messages and
+  its caller, including a researcher observing RSI's verification job. Later messages and
   free-form `wait_reason` changes do not cancel that subscription. Completion is
   delivered once per subscriber; a processed result with a missing notification
   is reconciled on restart. Finished assignments and stopped directions are not
@@ -44,10 +45,14 @@ continuous model sessions. Execution and web research tools are separate adapter
 All messages, effects, plans, events and session data live below their run. Raw
 session content and private verifier files are not public research records.
 Research tools validate references against the actor's own or explicitly shared
-evidence. Workspace file tools cannot escape into another agent or host directory.
-These access checks do not replace process/container isolation for executed code.
+evidence. Legacy workspace file tools enforce their workspace boundary; native DSH
+file/shell tools use the host account's permissions. These checks do not replace
+process/container isolation for executed code.
 
 Role prompts live in `agents/interaction/prompt.py`, `agents/rsi/prompt.py` and
 `agents/research/prompt.py`. They preserve the autonomy to choose research order
 and methods, while requiring concrete assignments, bounded reports and evidence
 for claimed results. They do not prescribe research task categories.
+
+Model-facing state, tool visibility and published verifier feedback are described in
+[the simplification design](../research-simplification.md).

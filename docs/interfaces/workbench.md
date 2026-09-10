@@ -48,7 +48,7 @@ pending_agents: [agent_id]
 plan: string
 agents: [{ agent_id, direction?, state, current_iteration_id?, wait_reason?, error? }]
 nodes: [{ iteration_id, agent_id, state, parent_iteration_id?, title?,
-          assignment: { assignment_id, instruction, completion_criteria, references },
+          assignment: { assignment_id, instruction, completion_criteria?, references },
           report: ResearchReport|null, evidence: [EvidenceRecord],
           references: [{uri}], verification: VerifiedResult|null }]
 edges: [{ source: iteration_id, target: iteration_id, kind: parent|reference|merge, label? }]
@@ -65,6 +65,8 @@ budget_stop_reason?: string
 ```
 
 父节点连线可由前端根据 `parent_iteration_id` 推导。额外 `edges` 表达有实际证据的引用或合并关系，不得仅为视觉效果虚构。`messages` 只呈现发给用户或来自用户的消息；Research Agent 给 RSI 的报告在节点详情中展示。分数必须来自正式验证记录；不存在的起点、最佳版本和最终确认返回 `null`，不能补零或复用旧分数。
+
+新报告通过 `report.message` 展示自然语言正文；旧七字段报告仍按原栏目呈现。没有独立完成条件时不展示空栏目。
 
 ## 执行进度
 

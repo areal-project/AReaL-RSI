@@ -13,7 +13,7 @@ uv sync --locked
 uv run --env-file .env --locked rsi workbench
 ```
 
-打开 [本地工作台](http://127.0.0.1:8766)，直接向 Interaction 描述研究目标和环境。它会逐步整理需求与执行条件，确认后交给 RSI；无需选模板或填写参数表。任务可以没有起点、GPU 或分数，已有 KernelBench、CUHK-X 适配器是可选的接入便利工具。环境接入、终端运行和恢复方法见[工作台使用说明](docs/research-workbench.md)，角色与流程见[设计说明](docs/rsi-research-design.md)，已跑通的链路与实际限制见[验收记录](docs/research-acceptance.md)。
+打开 [本地工作台](http://127.0.0.1:8766)，直接向 Interaction 描述研究目标和环境。它会逐步整理需求与执行条件，确认后交给 RSI；无需选模板或填写参数表。任务可以没有起点、GPU 或分数，已有 KernelBench、CUHK-X 适配器是可选的接入便利工具。环境接入、终端运行和恢复方法见[工作台使用说明](docs/research-workbench.md)，角色与流程见[设计说明](docs/rsi-research-design.md)，当前实现取舍见[精简设计](docs/research-simplification.md)，已跑通的链路与实际限制见[验收记录](docs/research-acceptance.md)。
 
 新入口通过 Responses API 运行研究模型，默认 `gpt-6-astra / xhigh`；下面的 teacher/target、TUI 与固定 evolution 命令属于原有入口，其配置继续兼容。
 

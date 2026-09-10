@@ -5,10 +5,12 @@ Harness / Artifact evolution records remain supported.
 
 - `TaskBrief` stores the objective, full natural-language instructions, hard limits
   and an optional verification contract. These are complementary representations.
-- `Assignment` records RSI's concrete instruction and completion criteria.
-- `ResearchReport` records task completion, actual work, problems, actual results,
-  interpretation, next steps and shared findings. Details are linked as evidence;
-  a report need not contain a candidate, score or `EvolutionResult`.
+- `Assignment` records RSI's natural-language instruction and references. The runtime
+  links the previous report; legacy completion criteria remain readable.
+- `ResearchReport` stores the researcher's natural-language `message`, timestamp,
+  task identity and references. Normal final replies are archived automatically.
+  Old seven-field reports remain readable; new reports have no mandatory sections.
+  A report need not contain a candidate, score or `EvolutionResult`.
 - `ResearchIteration` still links the assignment, report and arbitrary evidence.
 - `CandidateSnapshot` is an optional immutable file snapshot. It does not require
   a Task Agent, a model/harness combination or a `SolutionVersion`.

@@ -486,8 +486,11 @@ class ResearchExecution:
         limits = self.c.store.brief().limits
         self.manager.gpu_ids, self.manager.max_jobs = limits.gpu_ids, limits.max_jobs
         self.manager.scheduling_enabled = False
+        # This loop does not yield: one fresh actor snapshot is sufficient. Reading
+        # each job's owner separately reloads every archived research node per job.
+        actors = {actor.agent_id: actor for actor in self.c.actors()} if self.jobs else {}
         for key, info in self.jobs.items():
-            actor_stopped = self.c.actor(info["agent_id"]).state == AgentState.STOPPED
+            actor_stopped = actors[info["agent_id"]].state == AgentState.STOPPED
             if self.find_job(key) is None:
                 self.manager.submit(decode(JobSpec, info["spec"]), job_id=key)
             must_cancel = (

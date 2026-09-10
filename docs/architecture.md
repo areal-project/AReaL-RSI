@@ -81,7 +81,7 @@ VerificationResult
     ↓ Evaluation
 EvaluationReport
     ↓
-ResearchAgent 通过 ContentRef 读取轨迹，提出一个 Change
+Workflow 收集独立证据文件，ResearchAgent 按授权路径用工具读取，提出一个 Change
     ├── HarnessChange → HarnessBuilder
     ├── ModelChange   → TrainingBackend
     └── ArtifactChange → ArtifactBuilder
@@ -101,7 +101,9 @@ Local HarnessChange 和 ArtifactChange 是文件 patch；remote HarnessChange �
 - Verifier 是用户提供的 Protocol 实现，可以在实现内部加载隐藏 expected；
 - Framework 通过 VerifierSpec 加载实现，并只传入显式的 VerificationRequest；
 - Verifier 不直接依赖 TrajectoryStore，TaskResult 中的 TrajectoryRef 由 Workflow 和 Runtime 管理；
-- TRAIN 轨迹通过 ContentRef 传递；本地内容由 FileContentStore 校验并复制到隔离工作区，远程内容由对应 Runtime Adapter 解析；
+- 证据以 EvidenceBundle 引用独立文件，EvidenceStore 只导出显式授权的文件并校验摘要；内容存储不理解特定 Benchmark；
+- 具体 Agent 决定导出哪些证据以及读取规则，具体 Workflow 决定收集什么；标准研究流程只给提案阶段 TRAIN 证据；
+- Research Agent 可选择只读分页文件工具，禁止 Shell 执行；工具只认识授权路径和内容，不包含 Benchmark 规则；
 - VALIDATE 只向 ResearchAgent 暴露 score 和 metrics；
 - AgentRuntime.open 必须把 `workspace_root` 作为文件系统隔离边界，不能让 Agent 向上读取其他目录。
 

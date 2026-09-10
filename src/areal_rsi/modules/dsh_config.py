@@ -17,6 +17,7 @@ from areal_rsi.modules.remote.registry import all_remote_environment_names
 PERSONA = files("areal_rsi").joinpath("resources/dsh/persona.md").read_text()
 
 MCP_ENVIRONMENT = (
+    "RSI_LOCAL_APPS",
     "RSI_MODE",
     "RSI_LOCAL_CONFIG",
     "RSI_REMOTE_BACKEND",

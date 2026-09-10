@@ -13,7 +13,7 @@ authors = [{ name = "AReaL Team" }]
 dependencies = [
   "deepseek-harness-sdk==0.1.2rc1",
   "mcp>=2.1,<3",
-  "areal-agent-runtime[api,dsh]==0.3.0",
+  "areal-agent-runtime[api,dsh]==0.4.0.dev1",
   "pyyaml>=6,<7",
 ]
 
@@ -48,9 +48,9 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 ignore = ["RUF001", "RUF002", "RUF003"] # 中文注释和 TUI 文本使用全角标点。
 
 [project.optional-dependencies]
-codex = ["areal-agent-runtime[codex]==0.3.0"]
-claude = ["areal-agent-runtime[claude]==0.3.0"]
-anthropic = ["areal-agent-runtime[anthropic]==0.3.0"]
+codex = ["areal-agent-runtime[codex]==0.4.0.dev1"]
+claude = ["areal-agent-runtime[claude]==0.4.0.dev1"]
+anthropic = ["areal-agent-runtime[anthropic]==0.4.0.dev1"]
 
 [tool.uv.sources]
-areal-agent-runtime = { path = "vendor/areal_agent_runtime-0.3.0-py3-none-any.whl" }
+areal-agent-runtime = { path = "vendor/areal_agent_runtime-0.4.0.dev1-py3-none-any.whl" }

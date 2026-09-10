@@ -12,6 +12,7 @@ JsonValue: TypeAlias = JsonPrimitive | list["JsonValue"] | dict[str, "JsonValue"
 JsonObject: TypeAlias = dict[str, JsonValue]
 
 TRAJECTORY_BUNDLE_MEDIA_TYPE = "application/vnd.areal-rsi.trajectories+json"
+EVIDENCE_BUNDLE_MEDIA_TYPE = "application/vnd.areal-rsi.evidence+json"
 
 
 class EvolutionTarget(StrEnum):
@@ -59,11 +60,46 @@ class VerificationStatus(StrEnum):
 
 @dataclass(slots=True)
 class ContentRef:
-    """Stable reference to a file or directory owned by ContentStore."""
+    """引用 ContentStore 中的内容：uri 用于定位，digest 用于校验。
+
+    media_type 描述内容格式，不描述它在某次实验中的用途。此对象不包含
+    导出文件名、所属任务或访问权限；同一份内容可以被不同场景复用。
+    """
 
     uri: str
     digest: str
     media_type: str | None = None
+
+
+@dataclass(slots=True)
+class EvidenceFile:
+    """描述一份内容在本次证据交接中的身份，不另存一份文件内容。
+
+    ContentRef 只回答“内容在哪里、如何校验”；此对象补充“导出叫什么、
+    用来做什么、属于哪个任务”。同一 ContentRef 可以出现在不同证据清单中，
+    使用不同路径或用途。路径、用途和元数据由生产者定义，不绑定 Benchmark。
+    """
+
+    # 导出到 Agent 工作目录时的相对文件路径，不是底层存储地址。
+    path: str
+    # 引用已有内容；文件字节仍由 ContentStore 保存。
+    content: ContentRef
+    # 例如 output、trajectory、verification；供访问策略筛选，本身不授予权限。
+    kind: str
+    # 例如 task_id、trajectory_id；被授权文件的这些信息也会出现在导出清单中。
+    metadata: JsonObject = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class EvidenceBundle:
+    """一组证据文件的清单，只关联内容引用，不拼接各文件的正文。
+
+    metadata 描述整组证据，例如所属 solution_id 和 split；具体研究方法
+    负责解释这些字段。清单不等于授权，导出时还需显式选择允许访问的路径。
+    """
+
+    files: tuple[EvidenceFile, ...]
+    metadata: JsonObject = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -363,7 +399,7 @@ class ResearchIteration:
     iteration: int
     input_solution_id: str
     train_report: EvaluationReport
-    trajectories: ContentRef
+    evidence: ContentRef
     change: ResearchChange
     candidate_solution_id: str
     validation_report: EvaluationReport

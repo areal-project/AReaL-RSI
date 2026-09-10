@@ -21,6 +21,7 @@ from areal_rsi.experiment_config import (
     read_config,
     select_config,
 )
+from areal_rsi.modules.local.registry import local_apps
 from areal_rsi.modules.runtime_package import RuntimeSettings
 from areal_rsi.ui.experiments import AppFactory, ExperimentController, _configured_app
 
@@ -78,6 +79,7 @@ class ExperimentWorkspace:
         RuntimeSettings(runtime_value)  # Reject literal Runtime credentials before persisting.
         write_json(root / "runtime.json", runtime_value, immutable=True)
         values = {
+            "RSI_LOCAL_APPS": json.dumps(local_apps()),
             "RSI_MODE": mode,
             "RSI_LOCAL_CONFIG": str(config_path) if mode == "local" else "",
             "RSI_REMOTE_CONFIG": str(config_path) if mode == "remote" else "",

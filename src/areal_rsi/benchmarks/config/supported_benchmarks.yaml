@@ -1,0 +1,42 @@
+schema_version: 1
+
+benchmarks:
+  - id: arithmetic-v1
+    version: v1
+    display_name: Arithmetic
+    description: 原创固定小型算术题，用于验收闭环，不是 GSM8K 正式结果。
+    adapter: arithmetic-v1
+    data:
+      provider: embedded
+    verifier:
+      adapter: arithmetic-v1
+    evaluation:
+      adapter: accuracy-v1
+    parameters: {}
+
+  - id: gsm8k
+    version: v1
+    display_name: GSM8K
+    description: GSM8K 官方 train 的固定训练/留出验证分区，不是官方 test 成绩。
+    adapter: gsm8k-v1
+    data:
+      provider: local
+    verifier:
+      adapter: gsm8k-v1
+    evaluation:
+      adapter: accuracy-v1
+    parameters:
+      data_path:
+        type: path
+        env: RSI_GSM8K_DATA
+        default: .rsi/datasets/gsm8k
+      train_limit:
+        type: integer
+        env: RSI_TRAIN_LIMIT
+        default: 16
+        minimum: 1
+      validate_limit:
+        type: integer
+        env: RSI_VALIDATE_LIMIT
+        default: 16
+        minimum: 1

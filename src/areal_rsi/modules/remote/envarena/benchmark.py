@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import json
 import math
 from collections.abc import Sequence
@@ -34,10 +35,15 @@ class ArenaBenchmark:
 
     async def load(self) -> None:
         version = await self.client.version("benchmarks", self.config.benchmark)
-        self.spec = version["spec"]
+        self.spec = copy.deepcopy(version["spec"])
         if not self.spec.get("case_refs") or self.spec.get("variants"):
             raise ValueError("remote 首期要求 Case Benchmark，且不包含 variants")
-        aggregation = self.spec.get("aggregation", {})
+        # Persist the same defaults that validation accepts for subset publication.
+        aggregation = self.spec.setdefault("aggregation", {})
+        if not isinstance(aggregation, dict):
+            raise ValueError("aggregation 必须是对象")
+        aggregation.setdefault("method", "mean")
+        aggregation.setdefault("failed_task_policy", "failed_as_zero")
         if (
             aggregation.get("method", "mean") != "mean"
             or aggregation.get("failed_task_policy", "failed_as_zero") != "failed_as_zero"

@@ -20,6 +20,11 @@ def compile_config(request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
     runtime = copy.deepcopy(request["runtime"])
     kind = runtime["kind"]
     native = kind in {"codex-cli", "hermes"} or runtime.get("profileBinding") == "runtime-owned"
+    if native and request["mcp"] and "bash@v1" not in request["tools"]:
+        raise ValueError(
+            "Native MCP access requires explicit bash@v1 authorization; "
+            "use a portable Runtime for MCP-only or read-only sessions"
+        )
     runtime.setdefault("selector", "primary")
     runtime.setdefault("profileBinding", "runtime-owned" if native else "portable")
     vendor = runtime.setdefault("config", {})
@@ -70,8 +75,10 @@ def compile_config(request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
         vendor.setdefault("cwd", str(workspace))
     tools = []
     if not native:
-        if request["tools"] or request["mcp"]:
-            tools = ["workspace.list", "workspace.read", "workspace.search", "workspace.run"]
+        if request["tools"]:
+            tools = ["workspace.list", "workspace.read", "workspace.search"]
+        if "bash@v1" in request["tools"]:
+            tools.append("workspace.run")
         if "editor@v1" in request["tools"]:
             tools.extend(["workspace.write", "workspace.edit"])
     plugins = []
@@ -94,6 +101,12 @@ def compile_config(request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
         )
     configuration = {
         "dataRoot": str(directory / "data"),
+        "storage": {
+            "entrypoint": "areal_rsi.modules.runtime_storage:create_plugin",
+        },
+        # RSI exports StateStore events directly. The default trajectory sink
+        # would add a second projection with its own SQLite index.
+        "eventSinks": [],
         "runtime": runtime,
         "host": {"kind": "native", "defaultWorkspaceMount": str(workspace)},
         "environment": {
@@ -102,6 +115,7 @@ def compile_config(request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
         },
         "workspaceTools": {
             "entrypoint": "areal_agent_runtime.adapters.workspace.plugin:create_plugin",
+            "enabled": bool(request["tools"]),
             "config": {
                 "allowedCommands": ["sh", "python", "python3", "git"],
                 "commandTimeoutSeconds": 60,

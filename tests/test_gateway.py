@@ -5,10 +5,118 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from io import BytesIO
 
 import pytest
 
-from areal_rsi.modules.gateway import GatewayProxy, normalize_tool_deltas
+from areal_rsi.modules.gateway import GatewayProxy, _relay_stream, normalize_tool_deltas
+
+
+@pytest.fixture(autouse=True)
+def bypass_local_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NO_PROXY", "localhost,127.0.0.1")
+    monkeypatch.setenv("no_proxy", "localhost,127.0.0.1")
+
+
+@pytest.mark.parametrize(
+    ("route", "first", "last"),
+    [
+        (
+            "/responses",
+            b'event: response.output_text.delta\ndata: '
+            b'{"type":"response.output_text.delta","delta":"hello"}\n\n',
+            b'event: response.completed\ndata: {"type":"response.completed"}\n\n',
+        ),
+        (
+            "/messages",
+            b'event: content_block_delta\ndata: {"type":"content_block_delta",'
+            b'"delta":{"type":"text_delta","text":"hello"}}\n\n',
+            b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+        ),
+    ],
+)
+def test_other_protocols_stream_immediately_and_finish_without_eof(
+    route: str, first: bytes, last: bytes
+) -> None:
+    release = threading.Event()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers["Content-Length"]))
+            assert self.path == route
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            self.wfile.write(first)
+            self.wfile.flush()
+            if release.wait(timeout=3):
+                self.wfile.write(last)
+                self.wfile.flush()
+                # Keep the connection open until the client has seen completion.
+                finished.wait(timeout=3)
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    finished = threading.Event()
+    with local_upstream(Handler) as upstream:
+        proxy = GatewayProxy(upstream, "offline-fixture")
+        try:
+            request = urllib.request.Request(
+                proxy.url + route,
+                data=b'{"model":"fixture","stream":true}',
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(request, timeout=2) as response:
+                assert response.read(len(first)) == first
+                release.set()
+                assert response.read() == last
+            assert proxy.requests[0]["response"] == (first + last).decode()
+        finally:
+            release.set()
+            finished.set()
+            proxy.close()
+
+
+@pytest.mark.parametrize("failure", ["upstream", "downstream"])
+def test_stream_audit_survives_io_failure(failure: str) -> None:
+    event = b'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'
+    partial = b'data: {"choices":'
+
+    class InterruptedStream(BytesIO):
+        def readline(self, size: int | None = -1) -> bytes:
+            line = super().readline(size)
+            if not line:
+                raise TimeoutError("upstream stalled")
+            return line
+
+    sent = []
+
+    def send(data: bytes) -> None:
+        if failure == "downstream":
+            raise BrokenPipeError("client disconnected")
+        sent.append(data)
+
+    raw = bytearray()
+    with pytest.raises((TimeoutError, BrokenPipeError)):
+        _relay_stream(
+            InterruptedStream(event + partial), send, route="/chat/completions", raw=raw
+        )
+    assert raw == (event + partial if failure == "upstream" else event)
+    assert sent == ([event] if failure == "upstream" else [])
+
+
+def test_non_retryable_error_is_forwarded_and_role_only_eof_is_preserved() -> None:
+    role = b'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n'
+    error = b'data: {"error":{"type":"invalid_request_error","message":"bad request"}}\n\n'
+    for source, done in ((role, False), (role + error, True)):
+        sent: list[bytes] = []
+        raw = bytearray()
+        assert _relay_stream(
+            BytesIO(source), sent.append, route="/chat/completions", raw=raw
+        ) == (done, False)
+        assert b"".join(sent) == source
+        assert raw == source
 
 
 @contextmanager
@@ -184,6 +292,108 @@ def test_sse_first_event_arrives_before_upstream_finishes_with_split_utf8() -> N
             assert "error" not in proxy.requests[0]
         finally:
             release.set()
+            proxy.close()
+
+
+def test_stream_retries_overload_before_meaningful_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    attempts = 0
+    role = b'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n'
+    overloaded = (
+        b'data: {"error":{"message":"Our servers are currently overloaded. '
+        b'Please try again later.","type":"upstream_error"}}\n\n'
+    )
+    completed = (
+        role
+        + b'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":null}]}\n\n'
+        + b'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'
+        + b"data: [DONE]\n\n"
+    )
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            nonlocal attempts
+            attempts += 1
+            self.rfile.read(int(self.headers["Content-Length"]))
+            body = role + overloaded if attempts < 6 else completed
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            self.wfile.write(body)
+            self.wfile.flush()
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    monkeypatch.setattr("areal_rsi.modules.gateway.time.sleep", lambda _: None)
+    with local_upstream(Handler) as upstream:
+        proxy = GatewayProxy(upstream, "offline-fixture")
+        try:
+            request = urllib.request.Request(
+                proxy.url,
+                data=b'{"model":"gateway-fixture-model","messages":[],"stream":true}',
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                body = response.read()
+            assert attempts == 6
+            events = body.decode().splitlines()
+            chunks = [json.loads(line[6:]) for line in events if line.startswith("data: {")]
+            assert (
+                sum(
+                    choice.get("delta", {}).get("role") == "assistant"
+                    for chunk in chunks
+                    for choice in chunk.get("choices", [])
+                )
+                == 1
+            )
+            assert chunks[1]["choices"][0]["delta"]["content"] == "ok"
+            assert "data: [DONE]" in events
+            assert not any("error" in chunk for chunk in chunks)
+            assert proxy.requests[0]["stream_retries"] == 5
+            assert overloaded.decode() in proxy.requests[0]["response"]
+        finally:
+            proxy.close()
+
+
+def test_stream_does_not_retry_after_meaningful_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    attempts = 0
+    partial = (
+        b'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n'
+        + b'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'
+        + b'data: {"error":{"message":"temporarily overloaded","type":"upstream_error"}}\n\n'
+    )
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            nonlocal attempts
+            attempts += 1
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            self.wfile.write(partial)
+            self.wfile.flush()
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    monkeypatch.setattr("areal_rsi.modules.gateway.time.sleep", lambda _: None)
+    with local_upstream(Handler) as upstream:
+        proxy = GatewayProxy(upstream, "offline-fixture")
+        try:
+            request = urllib.request.Request(
+                proxy.url,
+                data=b'{"model":"gateway-fixture-model","messages":[],"stream":true}',
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                body = response.read()
+            assert attempts == 1
+            assert b'"content": "partial"' in body
+            assert b'"type": "upstream_error"' in body
+            assert b"data: [DONE]" not in body
+            assert "stream_retries" not in proxy.requests[0]
+        finally:
             proxy.close()
 
 

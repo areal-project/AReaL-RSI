@@ -94,6 +94,7 @@ class EnvArenaProvider:
                 context.memory,
                 context.versions,
                 context.root / "research-workspaces",
+                file_tools_only=True,
             )
             agent.allowed_changes = config.allowed_changes
             return agent

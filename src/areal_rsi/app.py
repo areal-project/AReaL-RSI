@@ -7,6 +7,10 @@ import json
 import os
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from areal_rsi.ui.experiments import ExperimentApp
 
 from areal_rsi.agents.research import DefaultResearchAgent
 from areal_rsi.agents.rsi import DefaultRsiAgent
@@ -17,7 +21,6 @@ from areal_rsi.api.base import (
     SolutionVersion,
     VerifierSpec,
 )
-from areal_rsi.api.modules import Benchmark, Verifier
 from areal_rsi.api.workflow import WorkflowContext
 from areal_rsi.base.catalog import LocalModelCatalog
 from areal_rsi.base.storage import (
@@ -29,15 +32,14 @@ from areal_rsi.base.storage import (
     new_id,
     write_json,
 )
+from areal_rsi.benchmarks import create_builtin_registry
 from areal_rsi.config import (
     AgentModelSettings,
     ModelConfig,
     ModelConfigurationError,
     research_agent_count_from_environment,
 )
-from areal_rsi.modules.benchmark import AccuracyEvaluation, ArithmeticBenchmark, ArithmeticVerifier
 from areal_rsi.modules.gateway import GatewayProxy
-from areal_rsi.modules.gsm8k import Gsm8kBenchmark, Gsm8kVerifier
 from areal_rsi.modules.harness import LocalHarnessBuilder, LocalHarnessRuntime
 from areal_rsi.modules.local.config import LocalConfig
 from areal_rsi.modules.runtime_package import PackageAgentRuntime, RuntimeSettings
@@ -111,23 +113,22 @@ class LocalApp:
         self.versions = FileVersionManager(self.root / "versions")
         self.trajectories = FileTrajectoryStore(self.root / "trajectories", self.content)
         self.memory = FileMemory(self.root / "memory")
-        benchmark: Benchmark
-        verifier: Verifier
         benchmark_kind = local_config.benchmark
-        if benchmark_kind == "gsm8k":
-            benchmark = Gsm8kBenchmark(
-                local_config.dataset,
-                train_limit=local_config.train_limit,
-                validate_limit=local_config.validate_limit,
-            )
-            verifier = Gsm8kVerifier(self.content, benchmark)
-            description = "GSM8K 官方 train 的固定训练/留出验证分区，不是官方 test 成绩。"
-        elif benchmark_kind == "arithmetic-v1":
-            benchmark = ArithmeticBenchmark()
-            verifier = ArithmeticVerifier(self.content)
-            description = "原创固定小型算术题，用于验收闭环，不是 GSM8K 正式结果。"
-        else:
-            raise ValueError(f"未知 Benchmark：{benchmark_kind}")
+        bundle = create_builtin_registry(self.content).create(
+            benchmark_kind,
+            {
+                "data_path": str(local_config.dataset),
+                "train_limit": local_config.train_limit,
+                "validate_limit": local_config.validate_limit,
+            }
+            if benchmark_kind == "gsm8k"
+            else {},
+            environment=os.environ,
+        )
+        benchmark = bundle.benchmark
+        verifier = bundle.verifier
+        evaluation = bundle.evaluation
+        description = bundle.descriptor.description
         catalog = LocalModelCatalog(self.root, self.versions)
         self.agent_models = {
             agent_id: await catalog.model(
@@ -196,7 +197,6 @@ class LocalApp:
             self.agent_runtimes["task-agent"], self.content, self.root / "task-workspaces"
         )
         builder = LocalHarnessBuilder(self.content, self.root / "builds")
-        evaluation = AccuracyEvaluation()
         context = WorkflowContext(
             self.content,
             self.memory,
@@ -338,9 +338,18 @@ class LocalApp:
             await asyncio.gather(*(asyncio.to_thread(proxy.close) for proxy in unique))
 
 
-async def create_app(root: Path, emit: Callable[[str], None]) -> LocalApp:
+async def create_app(root: Path, emit: Callable[[str], None]) -> ExperimentApp:
     mode = os.environ.get("RSI_MODE", "local")
     if mode == "local":
+        from areal_rsi.experiment_config import configured_path, read_config
+        from areal_rsi.modules.local.registry import local_factory
+
+        path = configured_path("local")
+        backend = read_config(path).get("backend") if path else None
+        if backend is not None:
+            if not isinstance(backend, str) or not backend:
+                raise ModelConfigurationError("local backend 必须是已注册的应用名称。")
+            return await local_factory(backend)(root, emit)
         return await LocalApp.create(root, emit)
     if mode == "remote":
         from areal_rsi.remote_app import RemoteApp

@@ -7,9 +7,10 @@ import copy
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from areal_rsi.api.base import (
@@ -19,6 +20,7 @@ from areal_rsi.api.base import (
     ExperimentPlan,
     HarnessChange,
     RunState,
+    TrajectoryRef,
     VerificationRequest,
     VerificationResult,
     VerificationStatus,
@@ -48,6 +50,7 @@ from areal_rsi.modules.remote.envarena.harness import (
     snapshot,
     validate_change,
 )
+from areal_rsi.modules.remote.envarena.research import ArenaResearchAgent
 from areal_rsi.modules.remote.envarena.runtime import (
     AmbiguousSubmission,
     ArenaEvaluation,
@@ -397,6 +400,45 @@ class RemoteTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "产物列表"):
             await self.execute()
 
+    async def test_configurable_artifacts_become_verifier_attachments(self) -> None:
+        self.config = replace(self.config, artifact_globs=("*.js", "*.txt"))
+        self.runtime = self.new_runtime()
+        self.client.artifact_listing["items"].extend(
+            [
+                {"name": "model.js", "role": "harness", "attempt": 1, "size_bytes": 16},
+                {"name": "old.js", "role": "harness", "attempt": 0, "size_bytes": 16},
+                {"name": "private.js", "role": "reward", "attempt": 1, "size_bytes": 16},
+                {"name": "huge.txt", "role": "harness", "attempt": 1, "size_bytes": 3_000_000},
+            ]
+        )
+        with patch.object(
+            self.client, "artifact", AsyncMock(return_value=b"generated source")
+        ) as get:
+            results = await self.execute()
+        self.assertEqual([call.args[1:] for call in get.call_args_list], [("model.js", 1)] * 2)
+        for task in await self.benchmark.list_tasks(BenchmarkSplit.TRAIN):
+            verified = await self.verifier.verify(
+                VerificationRequest(
+                    task, self.solution, results[task.task_id], VerifierSpec("arena", "injected")
+                )
+            )
+            self.assertEqual(len(verified.attachments), 1)
+            self.assertEqual(
+                await self.content.read_bytes(verified.attachments[0]), b"generated source"
+            )
+
+    async def test_artifact_path_and_actual_size_are_checked(self) -> None:
+        for name, size, data in (("../escape.py", 16, b"source"), ("ok.py", 16, b"x" * 3_000_000)):
+            with self.subTest(name=name):
+                self.client.artifact_listing = [
+                    {"name": name, "role": "harness", "attempt": 1, "size_bytes": size}
+                ]
+                with (
+                    patch.object(self.client, "artifact", AsyncMock(return_value=data)),
+                    self.assertRaises(ValueError),
+                ):
+                    await self.execute(name)
+
     async def test_unknown_submission_with_no_job_is_not_reposted(self) -> None:
         self.client.unaccepted = True
         with self.assertRaises(ArenaError):
@@ -547,6 +589,77 @@ class RemoteTest(unittest.IsolatedAsyncioTestCase):
         saved["spec"]["metadata"]["rsi_spec_sha256"] = "different"
         with self.assertRaisesRegex(ValueError, "草稿内容"):
             await self.client.ensure_version("harnesses", "test", spec)
+
+    async def test_draft_body_is_verified_even_with_the_original_digest_label(self) -> None:
+        spec = {"runtime": {"type": "runner", "uri": "fixed"}, "ttl_seconds": 600}
+        ref = await self.client.ensure_version("harnesses", "test", spec)
+        self.assertEqual(await self.client.ensure_version("harnesses", "test", spec), ref)
+        saved = self.client.versions[f"/harnesses/{ref['key']}/versions/1.0.0"]
+        saved["spec"]["runtime"]["uri"] = "tampered"
+        saved["status"] = "DRAFT"
+        self.client.calls.clear()
+        with self.assertRaisesRegex(ValueError, "内容与请求不符"):
+            await self.client.ensure_version("harnesses", "test", spec)
+        self.assertFalse(any(method == "POST" for method, _, _ in self.client.calls))
+
+    async def test_published_version_reuse_checks_identity_not_spec_or_tags(self) -> None:
+        spec = {"runtime": {"type": "runner", "uri": "fixed"}, "ttl_seconds": 600}
+        ref = await self.client.ensure_version("harnesses", "test", spec)
+        saved = self.client.versions[f"/harnesses/{ref['key']}/versions/1.0.0"]
+        saved["spec"] = {"server_normalized": True}
+        self.client.entities[f"/harnesses/{ref['key']}"]["tags"] = []
+        self.client.calls.clear()
+        with patch(
+            "areal_rsi.modules.remote.envarena.client.matching_spec",
+            side_effect=AssertionError("Published specs must not be compared"),
+        ):
+            self.assertEqual(await self.client.ensure_version("harnesses", "test", spec), ref)
+        self.assertFalse(any(method == "POST" for method, _, _ in self.client.calls))
+
+    async def test_reuse_rejects_wrong_key_version_and_unpublished_state(self) -> None:
+        spec = {"runtime": {"type": "runner", "uri": "fixed"}}
+        ref = await self.client.ensure_version("harnesses", "test", spec)
+        saved = self.client.versions[f"/harnesses/{ref['key']}/versions/1.0.0"]
+        for field, value in (("key", "wrong"), ("version", "2.0.0"), ("status", "DEPRECATED")):
+            with self.subTest(field=field):
+                original = saved[field]
+                saved[field] = value
+                self.client.calls.clear()
+                with self.assertRaises(ValueError):
+                    await self.client.ensure_version("harnesses", "test", spec)
+                self.assertFalse(any(method == "POST" for method, _, _ in self.client.calls))
+                saved[field] = original
+
+    async def test_missing_aggregation_uses_validated_defaults_in_subset(self) -> None:
+        self.client.versions["/benchmarks/base/versions/1.0.0"]["spec"].pop("aggregation")
+        benchmark = ArenaBenchmark(self.client, self.config)
+        await benchmark.load()
+        ref = await benchmark.ensure_subset(await benchmark.list_tasks(BenchmarkSplit.TRAIN))
+        published = await self.client.version("benchmarks", ref)
+        self.assertEqual(
+            published["spec"]["aggregation"],
+            {"method": "mean", "failed_task_policy": "failed_as_zero"},
+        )
+
+    async def test_case_benchmark_accepts_null_env_refs_but_rejects_content_changes(self) -> None:
+        spec = {"case_refs": [{"case_ref": REF, "weight": 1}], "reward_ref": REF}
+        ref = await self.client.ensure_version("benchmarks", "test", spec)
+        saved = self.client.versions[f"/benchmarks/{ref['key']}/versions/1.0.0"]
+        saved["spec"]["env_refs"] = None
+        for status in ("DRAFT", "PUBLISHED"):
+            saved["status"] = status
+            self.assertEqual(await self.client.ensure_version("benchmarks", "test", spec), ref)
+        original = copy.deepcopy(saved["spec"])
+        for field, value in (
+            ("env_refs", [{"env_ref": REF}]),
+            ("reward_ref", {"key": "different", "version": "1.0.0"}),
+            ("unknown_field", None),
+        ):
+            with self.subTest(field=field):
+                saved["status"] = "DRAFT"
+                saved["spec"] = {**original, field: value}
+                with self.assertRaisesRegex(ValueError, "内容与请求不符"):
+                    await self.client.ensure_version("benchmarks", "test", spec)
 
     async def test_remote_app_separates_research_model_and_never_persists_credentials(self) -> None:
         path = self.root / "app.yaml"
@@ -791,26 +904,47 @@ class RemoteTest(unittest.IsolatedAsyncioTestCase):
             await ArenaBenchmark(self.client, self.config).load()
 
     async def test_complete_workflow_uses_three_batch_jobs_and_no_local_task_runtime(self) -> None:
-        content = self.content
+        session = AsyncMock()
+        session.finish.return_value = TrajectoryRef("research-trace")
+        research_runtime = Mock(mcp_registry={}, open=AsyncMock(return_value=session))
+        researcher = ArenaResearchAgent(
+            "research-agent-1",
+            research_runtime,
+            self.solution.model,
+            self.content,
+            FileMemory(self.root / "memory"),
+            self.versions,
+            self.root / "research",
+            file_tools_only=True,
+            evidence_access=lambda entry: entry.kind != "task",
+        )
+        researcher.allowed_changes = self.config.allowed_changes
 
-        class Research:
-            agent_id = "research-agent-1"
-
-            async def propose(
-                self, goal: Any, target: Any, current: Any, report: Any, trajectories: Any
-            ) -> HarnessChange:
-                assert report.split == BenchmarkSplit.TRAIN
-                return HarnessChange(
-                    await content.put_bytes(
-                        b'{"system_prompt":"candidate from train evidence"}',
-                        media_type=REMOTE_CHANGE_TYPE,
-                    ),
-                    "fixture",
+        async def reply(prompt: str) -> str:
+            workspace = Path(research_runtime.open.call_args.kwargs["workspace_root"])
+            index = json.loads((workspace / "train/index.json").read_text())
+            entries = index["files"]
+            self.assertFalse(any(entry["kind"] == "task" for entry in entries))
+            attachments = [entry for entry in entries if entry["kind"] == "attachment"]
+            self.assertEqual(len(attachments), 2)
+            for entry in attachments:
+                self.assertEqual(
+                    (workspace / "train" / entry["path"]).read_bytes(), b"generated source"
                 )
+            self.assertNotIn("actual answer", prompt)
+            self.assertNotIn("generated source", prompt)
+            self.assertFalse(list(workspace.rglob("task.json")))
+            spec = research_runtime.open.call_args.args[0]
+            self.assertFalse(spec.tools)
+            self.assertEqual(len(spec.mcp_servers), 1)
+            return json.dumps(
+                {
+                    "reason": "inspect evidence",
+                    "changes": {"system_prompt": {"append": "Check results."}},
+                }
+            )
 
-            async def select(self, current: Any, candidates: Any) -> str:
-                assert all(r.split == BenchmarkSplit.VALIDATE for r in candidates)
-                return str(candidates[-1].solution_id)
+        session.send.side_effect = reply
 
         class Rsi:
             async def chat(self, message: str) -> str:
@@ -826,7 +960,7 @@ class RemoteTest(unittest.IsolatedAsyncioTestCase):
             self.versions,
             self.runtime,
             Rsi(),
-            (Research(),),
+            (researcher,),
             self.benchmark,
             self.verifier,
             VerifierSpec("arena", "injected"),
@@ -843,11 +977,16 @@ class RemoteTest(unittest.IsolatedAsyncioTestCase):
             1,
             stop_when_goal_reached=False,
         )
-        run = await service.start(plan)
-        finished = await service.tasks[run.run_id]
+        # Exercise the real remote proposal and common file-reader preparation;
+        # only model inference and candidate selection are replaced offline.
+        with patch.object(researcher, "select", AsyncMock(return_value=self.solution.solution_id)):
+            run = await service.start(plan)
+            finished = await service.tasks[run.run_id]
         self.assertEqual(finished.state, RunState.SUCCEEDED, finished.error)
         self.assertEqual(len(finished.research_agents[0].iterations), 1)
         self.assertEqual(len(self.client.jobs), 3)
+        session.send.assert_awaited_once()
+        self.assertEqual(research_runtime.mcp_registry, {})
         self.assertEqual(await service.resume(run.run_id), finished)
 
     async def test_config_resolves_source_job_envelope_and_disjoint_splits(self) -> None:
@@ -868,3 +1007,20 @@ class RemoteTest(unittest.IsolatedAsyncioTestCase):
         path.write_text("source_job: source\ntrain_cases: [train-a]\nvalidate_cases: [train-a]\n")
         with self.assertRaisesRegex(ValueError, "重叠"):
             await ArenaConfig.load(path, self.client)
+
+    async def test_artifact_globs_are_loaded_and_validated(self) -> None:
+        path = self.root / "artifacts.yaml"
+        base = (
+            "benchmark: base@1.0.0\nharness: base@1.0.0\nmodel: base@1.0.0\n"
+            "train_cases: [train-a]\nvalidate_cases: [validate]\n"
+        )
+        for patterns in ([], ["*.js", "outputs/*.txt"]):
+            with self.subTest(patterns=patterns):
+                path.write_text(base + "artifact_globs: " + json.dumps(patterns))
+                loaded = await ArenaConfig.load(path, self.client)
+                self.assertEqual(loaded.artifact_globs, tuple(patterns))
+        for invalid in ("*.js", [None], [""], ["../*.js"], ["/absolute/*"], ["dir\\*.js"]):
+            with self.subTest(invalid=invalid):
+                path.write_text(base + "artifact_globs: " + json.dumps(invalid))
+                with self.assertRaisesRegex(ValueError, "artifact_globs"):
+                    await ArenaConfig.load(path, self.client)

@@ -66,7 +66,11 @@ class RuntimeSettings:
         )
         provenance = Path(__file__).parents[1] / "resources/runtime/provenance.json"
         self.identity = hashlib.sha256(
-            json.dumps(value, sort_keys=True).encode() + provenance.read_bytes()
+            json.dumps(
+                {"runtime": value, "state_backend": "rsi-runtime-journal-v1", "event_sinks": []},
+                sort_keys=True,
+            ).encode()
+            + provenance.read_bytes()
         ).hexdigest()
 
     @classmethod
@@ -79,10 +83,22 @@ class RuntimeSettings:
         if harness:
             if not isinstance(value, dict):
                 raise ValueError("Runtime config must be an object")
-            config = {"modelProtocol": "responses"} if harness == "codex-cli" else {}
             roles = value.setdefault("roles", {})
+            if not isinstance(roles, dict):
+                raise ValueError("Runtime roles must be an object")
             for role in ("rsi-agent", "research-agent"):
-                roles[role] = {"kind": harness, "config": config}
+                selected = roles.get(role, value.get("default", {}))
+                # Preserve backend-specific settings only when the selected kind matches.
+                if isinstance(selected, dict) and selected.get("kind") == harness:
+                    selected = copy.deepcopy(selected)
+                else:
+                    selected = {"kind": harness, "config": {}}
+                config = selected.setdefault("config", {})
+                if not isinstance(config, dict):
+                    raise ValueError("Runtime backend config must be an object")
+                if harness == "codex-cli":
+                    config.setdefault("modelProtocol", "responses")
+                roles[role] = selected
         return cls(value)
 
     def select(self, role: str) -> dict[str, Any]:
@@ -243,18 +259,19 @@ class PackageSession:
 
     async def _save(self) -> TrajectoryRef:
         if self.ref is None:
-            # Rebuild the compatibility export from committed facts, including
+            # Export committed facts, including
             # cancellation events emitted while the parent was stopping the worker.
-            from areal_agent_runtime.adapters.storage import FileSystemStateStore
+            from areal_rsi.modules.runtime_storage import read_journal
 
             bindings = self.directory / "run-bindings.json"
             if bindings.exists():
                 self.run_ids = json.loads(bindings.read_text())
-            state = FileSystemStateStore(self.directory / "data/state")
+            events, _snapshots = read_journal(self.directory / "data/state")
             self.events = [
                 event.model_dump(mode="json", by_alias=True)
                 for run_id in self.run_ids
-                for event in await state.list_events(run_id)
+                for event in events
+                if event.run_id == run_id
             ]
             content = await self.runtime.content.put_json(
                 {
@@ -267,7 +284,7 @@ class PackageSession:
                     "events": self.events,
                     "run_ids": list(self.run_ids),
                     "runtime_data_root": str(self.directory / "data"),
-                    "projection": "RSI compatibility export; Runtime StateStore is authoritative",
+                    "projection": "RSI trajectory export; Runtime StateStore is authoritative",
                 }
             )
             usage: dict[str, Any] = {}
@@ -326,7 +343,10 @@ class PackageAgentRuntime:
         modules.mkdir(parents=True)
         (modules.parent / "__init__.py").write_text("")
         (modules / "__init__.py").write_text("")
-        for name in ("runtime_worker.py", "runtime_mcp.py", "runtime_mcp.schema.json"):
+        for name in (
+            "runtime_worker.py", "runtime_mcp.py", "runtime_mcp.schema.json",
+            "runtime_storage.py", "runtime_storage.schema.json",
+        ):
             shutil.copyfile(Path(__file__).parent / name, modules / name)
         workspace = Path(workspace_root).resolve() if workspace_root else directory / "workspace"
         workspace.mkdir(parents=True, exist_ok=True)

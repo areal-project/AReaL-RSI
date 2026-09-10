@@ -47,3 +47,15 @@ uv run --env-file .env --locked rsi resume RUN_ID
 ```
 
 `envarena` backend 仍兼容旧的 `RSI_ARENA_CONFIG`；设置 `RSI_REMOTE_CONFIG` 时优先使用新变量。
+
+远端输出按 `artifact_globs` 收集，默认规则为 `*.py`、`*.js`、`response.txt` 和
+`runner_result.json`。可在 YAML 中改为所需的相对文件名规则，例如
+`artifact_globs: ["*.js", "summary.txt"]`；空列表表示不下载产物。
+仅下载当前 attempt、`harness` 来源、不超过 2 MiB 的匹配文件，不下载 Reward 文件。
+这些产物、轨迹和验证结果以独立证据文件交给 ResearchAgent，工具按授权索引分段读取。
+改变收集规则需要使用新的实验数据目录，以免复用不完整的旧证据。
+
+`research_harness` 选择与 Runtime JSON 相同的后端时，保留该角色已有的配置
+（没有角色配置时保留 default 配置）；切换后端时不继承不兼容的选项。
+已有草稿在发布前会校验资源身份和 spec 内容。已发布版本依赖 EnvArena 的不可变版本保证，
+复用时只校验精确的 `key@version` 和 `PUBLISHED` 状态，不再比较 spec 或可变的实体标签。

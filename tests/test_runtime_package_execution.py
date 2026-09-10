@@ -9,6 +9,7 @@ import os
 import shutil
 import tempfile
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -26,6 +27,7 @@ class ScriptedModel:
         self.final_text: Any = lambda request: "RSI_FINAL_OK"
         self.before_reply: Any = lambda: None
         self.force_mcp = False
+        self.stream_fragments: list[str] | None = None
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -129,7 +131,7 @@ class ScriptedModel:
                             ]
                         }
                         if stop == "tool_use"
-                        else {"content": "RSI_FINAL_OK"}
+                        else {"content": owner.final_text(request)}
                     )
                     choices: list[dict[str, Any]] = [
                         {"delta": delta, "finish_reason": None},
@@ -138,6 +140,12 @@ class ScriptedModel:
                             "finish_reason": "tool_calls" if stop == "tool_use" else "stop",
                         },
                     ]
+                    if stop != "tool_use" and owner.stream_fragments is not None:
+                        # Many small deltas expose quadratic event persistence costs.
+                        choices = [
+                            {"delta": {"content": part}, "finish_reason": None}
+                            for part in owner.stream_fragments
+                        ] + [{"delta": {}, "finish_reason": "stop"}]
                     for choice in choices:
                         event = {
                             "id": "completion-proof",
@@ -146,6 +154,9 @@ class ScriptedModel:
                             "choices": [{"index": 0, **choice}],
                         }
                         self.wfile.write(("data: " + json.dumps(event) + "\n\n").encode())
+                        if owner.stream_fragments is not None:
+                            self.wfile.flush()
+                            time.sleep(0.005)
                     self.wfile.write(b"data: [DONE]\n\n")
                     self.wfile.flush()
                     self.close_connection = True
@@ -229,8 +240,13 @@ class ScriptedModel:
     importlib.util.find_spec("anthropic"), "Install the anthropic extra for SDK proof"
 )
 class RealPackageExecutionTest(unittest.IsolatedAsyncioTestCase):
-    async def check_harness(self, kind: str, config: dict[str, Any]) -> None:
+    async def check_harness(
+        self, kind: str, config: dict[str, Any], *, stream_fragments: list[str] | None = None
+    ) -> None:
         model_server = ScriptedModel()
+        model_server.stream_fragments = stream_fragments
+        expected = "".join(stream_fragments) if stream_fragments is not None else "RSI_FINAL_OK"
+        model_server.final_text = lambda request: expected
         try:
             with tempfile.TemporaryDirectory() as temp:
                 root = Path(temp).resolve()
@@ -267,9 +283,7 @@ class RealPackageExecutionTest(unittest.IsolatedAsyncioTestCase):
                     )
                 )
                 try:
-                    self.assertEqual(
-                        await session.send("Execute printf RSI_TOOL_OK"), "RSI_FINAL_OK"
-                    )
+                    self.assertEqual(await session.send("Execute printf RSI_TOOL_OK"), expected)
                     self.assertTrue(any("RSI_TOOL_OK" in result for result in model_server.results))
                     self.assertIn("tool.completed", [e["type"] for e in session.events])
                 except BaseException:
@@ -285,6 +299,19 @@ class RealPackageExecutionTest(unittest.IsolatedAsyncioTestCase):
                     raise
                 finally:
                     await session.finish()
+                # finish() reloads committed events, so also check the durable export.
+                self.assertTrue((session.directory / "data/state").is_dir())
+                self.assertEqual(list((session.directory / "data").rglob("*.sqlite*")), [])
+                self.assertIn("run.completed", [e["type"] for e in session.events])
+                self.assertIn("tool.completed", [e["type"] for e in session.events])
+                if stream_fragments is not None:
+                    chunks = [
+                        e["data"]["delta"]["text"]
+                        for e in session.events
+                        if e["type"] == "message.delta"
+                        and e["data"].get("delta", {}).get("type") == "text"
+                    ]
+                    self.assertEqual(chunks, stream_fragments)
         finally:
             await asyncio.to_thread(model_server.close)
 
@@ -298,6 +325,18 @@ class RealPackageExecutionTest(unittest.IsolatedAsyncioTestCase):
         from deepseek_harness_runtime import bundled_runtime_path  # type: ignore[import-untyped]
 
         await self.check_harness("dsh", {"dshBin": str(bundled_runtime_path()), "profile": "sdk"})
+
+    @unittest.skipUnless(
+        os.environ.get("RSI_TEST_NATIVE_HARNESSES") == "1", "Opt in to native DSH installation"
+    )
+    async def test_dsh_streaming_events_are_complete_and_durable(self) -> None:
+        from deepseek_harness_runtime import bundled_runtime_path
+
+        await self.check_harness(
+            "dsh",
+            {"dshBin": str(bundled_runtime_path()), "profile": "sdk"},
+            stream_fragments=[f"fragment-{index:04d} " for index in range(2000)],
+        )
 
     @unittest.skipUnless(
         os.environ.get("RSI_TEST_NATIVE_HARNESSES") == "1", "Opt in to native Codex execution"
@@ -374,7 +413,7 @@ class RealPackageExecutionTest(unittest.IsolatedAsyncioTestCase):
             await asyncio.to_thread(model_server.close)
 
     async def test_cancel_commits_terminal_and_reaps_worker(self) -> None:
-        from areal_agent_runtime.adapters.storage import FileSystemStateStore
+        from areal_rsi.modules.runtime_storage import read_journal
 
         model_server = ScriptedModel()
         release = threading.Event()
@@ -406,8 +445,10 @@ class RealPackageExecutionTest(unittest.IsolatedAsyncioTestCase):
                     await task
                 await session.finish()
                 self.assertIsNotNone(session.process.returncode)
-                state = FileSystemStateStore(session.directory / "data/state")
-                snapshot = await state.get_run(session.run_ids[-1])
+                self.assertTrue((session.directory / "data/state").is_dir())
+                self.assertEqual(list((session.directory / "data").rglob("*.sqlite*")), [])
+                _events, snapshots = read_journal(session.directory / "data/state")
+                snapshot = snapshots.get(session.run_ids[-1])
                 assert snapshot is not None
                 self.assertEqual(snapshot.status, "cancelled")
                 self.assertIn("run.cancelled", [e["type"] for e in session.events])
@@ -462,6 +503,13 @@ class RealPackageExecutionTest(unittest.IsolatedAsyncioTestCase):
                         await session.send("Use the arithmetic MCP tool"), "RSI_FINAL_OK"
                     )
                     self.assertTrue(any("42" in r for r in model_server.results))
+                    for request in model_server.requests:
+                        names = [
+                            tool.get("function", tool)["name"]
+                            for tool in request.get("tools", [])
+                        ]
+                        self.assertTrue(names)
+                        self.assertTrue(all(name.startswith("rsi_mcp_") for name in names), names)
                     completed = [e for e in session.events if e["type"] == "tool.completed"]
                     self.assertEqual(len(completed), 1)
                     self.assertIn("rsi_mcp_", json.dumps(completed))

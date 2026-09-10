@@ -37,8 +37,8 @@ def test_bundle_scores_only_matching_real_code_and_requires_final_repeat(tmp_pat
         "created_at": 1,
         "evaluation": {"evaluation_policy": "strict-fp32-v1"},
     }
-    manifest = {"tasks": {"L1P1": {}, "L2P14": {}}}
-    status = {"L1P1": {"used": 1, "jobs": [job]}, "L2P14": {"used": 0, "jobs": []}}
+    manifest: dict[str, Any] = {"tasks": {"L1P1": {}, "L2P14": {}}}
+    status: dict[str, Any] = {"L1P1": {"used": 1, "jobs": [job]}, "L2P14": {"used": 0, "jobs": []}}
     assert client.score_bundle(manifest, tmp_path, status, "search")[0] == 0.5
     assert client.score_bundle(manifest, tmp_path, status, "final")[0] == 0
     status["L1P1"]["jobs"].append({**job, "created_at": 2})

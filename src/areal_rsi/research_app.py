@@ -447,22 +447,24 @@ class ResearchApp:
     async def detail(self, run_id: str, after: int = 0) -> dict[str, Any]:
         c = self.coordinator(run_id)
         summary = c.summary()
+        run = c.store.run()
+        actors = {actor["agent_id"]: actor for actor in summary["agents"]}
+        evidence = encode(c.store.records("evidence", EvidenceRecord))
+        evidence_by_iteration: dict[str, list[dict[str, Any]]] = {}
+        for item in evidence:
+            if item["iteration_id"] is not None:
+                evidence_by_iteration.setdefault(item["iteration_id"], []).append(item)
         nodes, edges = [], []
-        for actor in c.store.run().research_agents:
+        for actor in run.research_agents:
             for node in actor.iterations:
                 assignment = c.store.public_record(node.assignment_ref)
                 report = c.store.public_record(node.report_ref) if node.report_ref else None
-                evidence = [
-                    encode(item)
-                    for item in c.store.records("evidence", EvidenceRecord)
-                    if item.iteration_id == node.iteration_id
-                ]
                 nodes.append(
                     {
                         **encode(node),
                         "assignment": assignment,
                         "report": report,
-                        "evidence": evidence,
+                        "evidence": evidence_by_iteration.get(node.iteration_id, []),
                         "verification": None,
                     }
                 )
@@ -522,7 +524,7 @@ class ResearchApp:
                     if info.get("verification")
                     else "研究执行"
                 )
-                actor = c.actor(info["agent_id"])
+                job_actor = actors[info["agent_id"]]
                 jobs.append(
                     {
                         "job_id": job_id,
@@ -533,7 +535,7 @@ class ResearchApp:
                         "iteration_id": info.get("iteration_id"),
                         "candidate_id": info.get("candidate_id"),
                         "agent_id": info["agent_id"],
-                        "agent_name": actor.direction
+                        "agent_name": job_actor["direction"]
                         or {"rsi": "RSI Agent", "interaction": "Interaction Agent"}.get(
                             info["agent_id"], "Research Agent"
                         ),
@@ -553,7 +555,6 @@ class ResearchApp:
                     for public_node in nodes:
                         if public_node["iteration_id"] == info.get("iteration_id"):
                             public_node["verification"] = info["result"]
-        run = c.store.run()
         events = c.store.events(after)
         return {
             **summary,
@@ -565,7 +566,7 @@ class ResearchApp:
             "execution_setup": c.state.get("execution_setup", "ready"),
             "model_settings": self.model_settings(c),
             "jobs": jobs,
-            "evidence": encode(c.store.records("evidence", EvidenceRecord)),
+            "evidence": evidence,
             "final": c.store.public_record(run.final_result_ref) if run.final_result_ref else None,
             "events": encode(events),
             "event_cursor": events[-1].sequence if events else after,

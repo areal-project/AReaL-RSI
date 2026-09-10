@@ -107,7 +107,14 @@ class ResearchStore:
             return event
 
     def events(self, after: int = 0) -> list[ResearchEvent]:
-        return [event for event in self.records("events", ResearchEvent) if event.sequence > after]
+        # Event filenames encode their immutable sequence. Skip acknowledged
+        # files before reading/decoding, rather than reparsing the full archive
+        # on every workbench poll.
+        return [
+            self.decode_record(ResearchEvent, json.loads(path.read_text()))
+            for path in sorted((self.root / "events").glob("*.json"))
+            if int(path.stem) > after
+        ]
 
     def public_record(self, ref: RecordRef) -> Any:
         """Resolve only public run records, never private verifier data or sessions.

@@ -35,6 +35,36 @@ def report_fields() -> dict[str, str]:
     }
 
 
+def test_incremental_events_do_not_reread_acknowledged_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    c = create(tmp_path)
+    cursor = c.store.events()[-1].sequence
+    first = c.store.event("progress", message="新的研究进展")
+    second = c.store.event("progress", message="新的作业反馈")
+    read_text = Path.read_text
+    reads = []
+
+    def read_unseen(path: Path, *args: Any, **kwargs: Any) -> str:
+        if path.parent == c.store.root / "events":
+            assert int(path.stem) > cursor, "Incremental polling reread old event bodies"
+            reads.append(path.name)
+        return read_text(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "read_text", read_unseen)
+        assert c.store.events(cursor) == [first, second]
+        assert len(reads) == 2
+        reads.clear()
+        assert c.store.events(second.sequence) == []
+        assert reads == []
+        third = c.store.event("progress", message="轮询之后产生的事件")
+        assert c.store.events(second.sequence) == [third]
+        assert len(reads) == 1
+    # A full-history request still includes every original event, in order.
+    assert [event.sequence for event in c.store.events()] == list(range(1, third.sequence + 1))
+
+
 def test_report_is_a_hard_barrier_and_session_is_continuous(tmp_path: Path) -> None:
     c = create(tmp_path)
     first = c.spawn(

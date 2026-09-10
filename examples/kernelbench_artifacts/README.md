@@ -16,6 +16,8 @@
 
 将 `evaluate` 配置为 `ApprovedCommand`，声明 `workspace / output / task / candidate` 四个参数，前两者由系统绑定。研究员通过 `run_job` 提交，`wait_for_job` 休眠等待完成，`read_job_output_file` 读取 `feedback.json`。反馈包含 `task` 题号；应结合任务参数和反馈确认评测归属，不能从 Job ID 猜测。远端排队、执行状态和每题额度写入作业的 `progress.json`。
 
+反馈中的 `task_budget_used` / `task_budget_remaining` 是查询时该题的总用量和剩余额度，包含已审计的队列外实验。`queue_budget_used` 是该作业的原队列提交序号，兼容字段 `budget_used` 为该序号加已审计的外部次数，不能作为查询时的题目总数。并行提交时，旧作业回执是 3/11、题目总数已变为 4/11 属于正常情况；作业进度优先显示题目总数。已保存的反馈不会随未来提交自动更新，安排下一次提交前可用 `status` 读取当前用量；最终硬上限仍由提交入口检查。
+
 普通 `bash` 在研究员的本地工作区执行；直接 SSH 登录的主机也不一定是评分环境。需要查看评分环境的 Torch 版本、头文件或做 CPU 检查时，应使用本 run manifest 中的 `host`、`continue_script`、`slurm_job` 进入对应容器，再调用容器的 Python。`client.py` 的 `remote()` 展示了这条入口；不能因为 SSH 主机上没有 Torch 就断定评测容器缺少依赖。明确的 CPU 检查可设置 `CUDA_VISIBLE_DEVICES=""`，并输出实际 Python 与库路径。读取库源码应限定在确认过的库目录，避免搜索其他 run 的研究文件。
 
 上述入口用于只读检查和 CPU 工作；实际 CUDA tensor、kernel 或模型执行仍须通过已注册题目的 `evaluate` / `diagnose` 队列并计入同一额度。恢复环境访问不意味着增加提交次数，也不覆盖 RSI 对当前任务的诊断限制。

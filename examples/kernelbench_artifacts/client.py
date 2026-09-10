@@ -101,10 +101,16 @@ def submit_and_wait(
             else:
                 job = remote(manifest, operation, task=task, key=output.name, **sources)
             write_json(record_path, job)
+            budget_message = (
+                f"本题已用 {job['task_budget_used']}/11 次 GPU 提交，"
+                f"剩余 {job['task_budget_remaining']} 次"
+                if "task_budget_used" in job
+                else f"本次回执计数 {job['budget_used']}/11；最新总数请查 status"
+            )
             write_json(
                 output / "progress.json",
                 {
-                    "message": f"{task}：{job['state']}，已用 {job['budget_used']}/11 次 GPU 提交",
+                    "message": f"{task}：{job['state']}，{budget_message}",
                     "stage": "远端诊断" if operation == "submit_diagnostic" else "远端评测",
                     "completed": int(job["state"] in TERMINAL),
                     "total": 1,

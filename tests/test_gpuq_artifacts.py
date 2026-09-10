@@ -191,6 +191,56 @@ def diagnostic_payload(key: str = "diagnosis") -> dict[str, str]:
     }
 
 
+@pytest.mark.parametrize("external_count", [0, 1])
+def test_old_job_receipt_exposes_current_task_budget_without_resubmitting(
+    diagnostic_queue: Any, external_count: int
+) -> None:
+    q = diagnostic_queue
+    first = q.bridge.handle(q.manifest, diagnostic_payload("first"))
+    q.bridge.handle(q.manifest, diagnostic_payload("second"))
+    if external_count:
+        ledger = q.workspace.parent / "external-submissions"
+        ledger.mkdir()
+        (ledger / "outside.json").write_text(
+            json.dumps({"event_id": "outside", "task_id": "task1", "count": 1})
+        )
+    receipt = q.bridge.handle(
+        q.manifest, {"operation": "job", "task": "L1P1", "job_id": first["id"]}
+    )
+    assert receipt["queue_budget_used"] == 1
+    assert receipt["budget_used"] == 1 + external_count
+    assert receipt["task_budget_used"] == 2 + external_count
+    assert receipt["task_budget_remaining"] == 9 - external_count
+    recovered = q.bridge.handle(q.manifest, diagnostic_payload("first"))
+    assert recovered["id"] == first["id"]
+    assert recovered["task_budget_used"] == receipt["task_budget_used"]
+    status = q.bridge.handle(q.manifest, {"operation": "status"})["L1P1"]
+    assert all(j["task_budget_used"] == status["used"] for j in status["jobs"])
+    assert len(q.jobs) == 2
+
+
+def test_client_progress_uses_current_task_count_instead_of_old_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = module("client")
+    (tmp_path / "model_new.py").write_text("candidate")
+    job = {
+        "id": "old-job",
+        "state": "succeeded",
+        "budget_used": 3,
+        "task_budget_used": 4,
+        "task_budget_remaining": 7,
+    }
+    monkeypatch.setattr(client, "remote", lambda *args, **kwargs: job)
+    output = tmp_path / "output"
+    client.evaluate({"tasks": {"L1P1": {}}}, tmp_path, output, "L1P1", "model_new.py")
+    progress = json.loads((output / "progress.json").read_text())
+    assert "本题已用 4/11" in progress["message"]
+    assert "剩余 7 次" in progress["message"]
+    assert "3/11" not in progress["message"]
+    assert json.loads((output / "feedback.json").read_text())["budget_used"] == 3
+
+
 def test_collection_excludes_reviewed_code_but_keeps_history(diagnostic_queue: Any) -> None:
     q = diagnostic_queue
     for index, (source, speedup) in enumerate(((b"valid candidate", 1.2), (b"shortcut", 9.0))):

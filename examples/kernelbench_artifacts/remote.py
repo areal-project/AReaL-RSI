@@ -13,7 +13,9 @@ from pathlib import Path
 from typing import Any
 
 
-def summarize(job: dict[str, Any], external_used: int = 0) -> dict[str, Any]:
+def summarize(
+    job: dict[str, Any], external_used: int = 0, *, task_used: int | None = None
+) -> dict[str, Any]:
     evaluation = job.get("evaluation") or {}
     speedup = evaluation.get("speedup", 0)
     correct = (
@@ -43,6 +45,14 @@ def summarize(job: dict[str, Any], external_used: int = 0) -> dict[str, Any]:
         "budget_used": job["budget_used"] + external_used,
         "queue_budget_used": job["budget_used"],
         "external_budget_used": external_used,
+        **(
+            {
+                "task_budget_used": task_used,
+                "task_budget_remaining": max(0, job["budget"] - task_used),
+            }
+            if task_used is not None
+            else {}
+        ),
         "source_sha256": digest,
         **(
             {
@@ -166,9 +176,10 @@ def handle(manifest: dict[str, Any], request_data: dict[str, Any]) -> Any:
                 else:
                     receipt.write_text(json.dumps(intent))
                 jobs = query("/jobs")
+                task_used = len(jobs) + len(external)
                 old = next((j for j in jobs if j.get("idempotency_key") == key), None)
                 if old is None:
-                    if len(jobs) + len(external) >= 11:
+                    if task_used >= 11:
                         raise ValueError(
                             "GPU feedback budget exhausted (including external GPU work)"
                         )
@@ -196,24 +207,30 @@ def handle(manifest: dict[str, Any], request_data: dict[str, Any]) -> Any:
                             "idempotency_key": key,
                         }
                     old = query("/jobs", body)
+                    task_used += 1
                 assert old["task_id"] == task["task_id"] and old["budget"] == 11
                 if old["kind"] != ("run" if diagnostic else "eval"):
                     raise ValueError("Submission ID reused for another operation")
-                return summarize(old, len(external))
+                return summarize(old, len(external), task_used=task_used)
         if operation in {"job", "logs"}:
             if selected is None:
                 raise ValueError("Job lookup requires one task")
             job = query("/jobs/" + request_data["job_id"])
             assert job["task_id"] == task["task_id"] and job["budget"] == 11
-            return diagnostic_logs(job) if operation == "logs" else summarize(job, len(external))
+            if operation == "logs":
+                return diagnostic_logs(job)
+            jobs = query("/jobs")
+            if any(j["task_id"] != task["task_id"] or j["budget"] != 11 for j in jobs):
+                raise ValueError("Unexpected task ownership or budget")
+            return summarize(job, len(external), task_used=len(jobs) + len(external))
         jobs = query("/jobs")
         if any(j["task_id"] != task["task_id"] or j["budget"] != 11 for j in jobs):
             raise ValueError("Unexpected task ownership or budget")
-        public = [summarize(j, len(external)) for j in jobs]
+        used = len(jobs) + len(external)
+        public = [summarize(j, len(external), task_used=used) for j in jobs]
         public.sort(key=lambda j: j["created_at"])
         if len(public) > 11:
             raise ValueError("GPU submission cap was exceeded")
-        used = len(public) + len(external)
         value: dict[str, Any] = {
             "used": used,
             "remaining": max(0, 11 - used),

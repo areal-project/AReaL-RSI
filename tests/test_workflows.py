@@ -10,6 +10,7 @@ import tempfile
 import unittest
 from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 from areal_rsi.api.base import (
@@ -356,6 +357,47 @@ class WorkflowTest(unittest.IsolatedAsyncioTestCase):
                 self.plan.config["minimum_completed_iterations"] = invalid
                 with self.assertRaisesRegex(ValueError, "minimum_completed_iterations"):
                     self.service.validate(self.plan)
+                self.plan.config.pop("minimum_completed_iterations")
+
+    async def test_research_runtime_retries_are_bounded(self) -> None:
+        self.plan.research_agent_count = 1
+        self.plan.max_iterations = 1
+        self.plan.config.update(
+            research_retry_attempts=2,
+            research_retry_backoff_seconds=0,
+        )
+        self.context.research_agents = self.researchers[:1]
+        original = self.researchers[0].propose
+        calls = 0
+
+        async def flaky(*args: Any, **kwargs: Any) -> HarnessChange:
+            nonlocal calls
+            calls += 1
+            if calls < 3:
+                raise RuntimeError("temporary research gateway outage")
+            return await original(*args, **kwargs)
+
+        with patch.object(self.researchers[0], "propose", side_effect=flaky):
+            run = await self.execute()
+        self.assertEqual(run.state, RunState.SUCCEEDED, run.error)
+        self.assertEqual(calls, 3)
+        self.assertEqual(len(run.research_agents[0].iterations), 1)
+
+    async def test_research_operation_limits_are_validated(self) -> None:
+        invalid = (
+            ("research_concurrency", 0),
+            ("research_concurrency", 3),
+            ("research_retry_attempts", True),
+            ("research_retry_attempts", 11),
+            ("research_retry_backoff_seconds", -1),
+            ("research_retry_backoff_seconds", float("inf")),
+        )
+        for name, value in invalid:
+            with self.subTest(name=name, value=value):
+                self.plan.config[name] = value
+                with self.assertRaisesRegex(ValueError, name):
+                    self.service.validate(self.plan)
+                self.plan.config.pop(name)
 
     async def test_failed_line_resumes_without_repeating_finished_evaluations(self) -> None:
         self.researchers[1].fail_selection = True

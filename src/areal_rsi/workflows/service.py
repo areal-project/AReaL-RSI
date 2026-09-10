@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
+import math
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import TypeAlias
@@ -54,6 +55,24 @@ class LocalExperimentService:
         capacity = plan.research_agent_count * plan.max_iterations
         if type(minimum) is not int or not 0 <= minimum <= capacity:
             raise ValueError("minimum_completed_iterations 必须在计划总轮次容量内")
+        research_concurrency = plan.config.get(
+            "research_concurrency", plan.research_agent_count
+        )
+        if (
+            type(research_concurrency) is not int
+            or not 1 <= research_concurrency <= plan.research_agent_count
+        ):
+            raise ValueError("research_concurrency 必须在 1 到 ResearchAgent 数量之间")
+        research_retries = plan.config.get("research_retry_attempts", 0)
+        if type(research_retries) is not int or not 0 <= research_retries <= 10:
+            raise ValueError("research_retry_attempts 必须在 0 到 10 之间")
+        research_backoff = plan.config.get("research_retry_backoff_seconds", 1)
+        if (
+            type(research_backoff) not in (int, float)
+            or not math.isfinite(research_backoff)
+            or not 0 <= research_backoff <= 300
+        ):
+            raise ValueError("research_retry_backoff_seconds 必须在 0 到 300 之间")
 
     async def _execute(self, run: ExperimentRun) -> ExperimentRun:
         locks = self.root / "locks"

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from areal_rsi.api.base import (
     BenchmarkSplit,
@@ -36,6 +36,7 @@ from areal_rsi.base.storage import FileRecords, decode, encode, new_id, now, saf
 from areal_rsi.framework.verifier import VerifierExecutor
 
 PRUNED = "RSI Agent 已停止此研究线"
+T = TypeVar("T")
 
 
 class HarnessEvolutionWorkflow:
@@ -49,6 +50,7 @@ class HarnessEvolutionWorkflow:
         self.folder = root / safe_name(run.run_id)
         path = self.folder / "progress.json"
         self.progress: dict[str, Any] = json.loads(path.read_text()) if path.exists() else {}
+        self.research_slots: asyncio.Semaphore | None = None
 
     def save(self) -> None:
         self.records.save(self.state.run_id, self.state, immutable=False)
@@ -60,6 +62,32 @@ class HarnessEvolutionWorkflow:
     def _validate_context(self, context: WorkflowContext, plan: ExperimentPlan) -> None:
         if plan.target != EvolutionTarget.HARNESS or context.harness_builder is None:
             raise ValueError("当前工作流只执行 Harness 自迭代")
+
+    async def _research_call(
+        self,
+        plan: ExperimentPlan,
+        agent_id: str,
+        operation: str,
+        call: Callable[[], Awaitable[T]],
+    ) -> T:
+        if self.research_slots is None:
+            raise RuntimeError("ResearchAgent 并发控制器尚未初始化")
+        retries = int(plan.config.get("research_retry_attempts", 0))
+        backoff = float(plan.config.get("research_retry_backoff_seconds", 1))
+        for attempt in range(retries + 1):
+            try:
+                async with self.research_slots:
+                    return await call()
+            except RuntimeError:
+                if attempt == retries:
+                    raise
+                delay = min(backoff * (2**attempt), 300)
+                self.emit(
+                    f"[{agent_id}] {operation} 运行时失败，"
+                    f"{delay:g}s 后重试 {attempt + 1}/{retries}"
+                )
+                await asyncio.sleep(delay)
+        raise AssertionError("unreachable")
 
     async def _build_candidate(
         self, ctx: WorkflowContext, current: SolutionVersion, change: ResearchChange
@@ -346,8 +374,17 @@ class HarnessEvolutionWorkflow:
                 change = decode(self._change_type, json.loads(change_path.read_text()))
             else:
                 self.update_progress(agent.agent_id, phase="propose")
-                change = await researcher.propose(
-                    self.state.plan.goal, self.state.plan.target, current, train_report, bundle
+                change = await self._research_call(
+                    self.state.plan,
+                    agent.agent_id,
+                    "propose",
+                    lambda: researcher.propose(
+                        self.state.plan.goal,
+                        self.state.plan.target,
+                        current,
+                        train_report,
+                        bundle,
+                    ),
                 )
                 if not isinstance(change, self._change_type):
                     label = self._change_type.__name__.removesuffix("Change")
@@ -375,7 +412,12 @@ class HarnessEvolutionWorkflow:
             if selection_path.exists():
                 selected = json.loads(selection_path.read_text())["next_solution_id"]
             else:
-                selected = await researcher.select(current_id, tuple(candidates))
+                selected = await self._research_call(
+                    self.state.plan,
+                    agent.agent_id,
+                    "select",
+                    lambda: researcher.select(current_id, tuple(candidates)),
+                )
                 if selected is not None and selected not in {r.solution_id for r in candidates}:
                     raise ValueError("ResearchAgent 选择了其他研究线或未评测版本")
                 write_json(selection_path, {"next_solution_id": selected}, immutable=True)
@@ -422,6 +464,9 @@ class HarnessEvolutionWorkflow:
 
     async def run(self, context: WorkflowContext, plan: ExperimentPlan) -> ExperimentRun:
         self._validate_context(context, plan)
+        self.research_slots = asyncio.Semaphore(
+            int(plan.config.get("research_concurrency", plan.research_agent_count))
+        )
         researchers = {a.agent_id: a for a in context.research_agents}
         if len(researchers) != plan.research_agent_count or len(researchers) != len(
             context.research_agents

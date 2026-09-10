@@ -30,6 +30,24 @@ async def main() -> int:
         help="Disable research-line pruning until this many aggregate iterations finish",
     )
     parser.add_argument(
+        "--research-concurrency",
+        type=int,
+        default=0,
+        help="Maximum concurrent ResearchAgent model calls; 0 uses the agent count",
+    )
+    parser.add_argument(
+        "--research-retry-attempts",
+        type=int,
+        default=0,
+        help="Retries for transient ResearchAgent runtime failures",
+    )
+    parser.add_argument(
+        "--research-retry-backoff-seconds",
+        type=float,
+        default=1,
+        help="Initial exponential backoff for ResearchAgent runtime retries",
+    )
+    parser.add_argument(
         "--goal", default="根据 TRAIN 证据改进远端能力配置，完成一轮端到端评测；不要求分数提升"
     )
     parser.add_argument(
@@ -48,6 +66,11 @@ async def main() -> int:
         plan_config = app.model_plan_config()
         if args.minimum_completed_iterations:
             plan_config["minimum_completed_iterations"] = args.minimum_completed_iterations
+        if args.research_concurrency:
+            plan_config["research_concurrency"] = args.research_concurrency
+        if args.research_retry_attempts:
+            plan_config["research_retry_attempts"] = args.research_retry_attempts
+            plan_config["research_retry_backoff_seconds"] = args.research_retry_backoff_seconds
         plan = ExperimentPlan(
             args.goal,
             "harness-evolution",

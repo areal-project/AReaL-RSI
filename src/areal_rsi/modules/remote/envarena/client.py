@@ -79,9 +79,13 @@ class ArenaError(RuntimeError):
         super().__init__(f"Arena {method} {path.split('?')[0]} failed (HTTP {status})")
 
 
+class ArenaRedirect(RuntimeError):
+    """A control-plane redirect that must not receive the bearer credential."""
+
+
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, *args: Any, **kwargs: Any) -> None:
-        raise RuntimeError("Arena 控制面重定向被拒绝，请配置最终 API 地址")
+        raise ArenaRedirect("Arena 控制面重定向被拒绝，请配置最终 API 地址")
 
 
 @dataclass(frozen=True)
@@ -166,7 +170,20 @@ class ArenaClient:
         return await asyncio.to_thread(self._request, method, path, body)
 
     async def get(self, path: str) -> Any:
-        return await self.request("GET", path)
+        # Gateway deploys and load shedding can briefly answer with redirects or
+        # transport/5xx errors. Retry the original idempotent request without ever
+        # forwarding the bearer credential to the redirect target.
+        for attempt in range(4):
+            try:
+                return await self.request("GET", path)
+            except ArenaRedirect:
+                if attempt == 3:
+                    raise
+            except ArenaError as exc:
+                if attempt == 3 or exc.status not in {0, 429, 500, 502, 503, 504}:
+                    raise
+            await asyncio.sleep(0.25 * (2**attempt))
+        raise AssertionError("unreachable")
 
     async def post(self, path: str, body: Any = None) -> Any:
         return await self.request("POST", path, body if body is not None else {})

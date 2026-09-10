@@ -40,6 +40,7 @@ from areal_rsi.modules.remote.envarena.client import (
     ArenaClient,
     ArenaConnection,
     ArenaError,
+    ArenaRedirect,
     fingerprint,
     redact,
 )
@@ -322,6 +323,34 @@ class RemoteTest(unittest.IsolatedAsyncioTestCase):
         self.builder = ArenaHarnessBuilder(self.client, self.content, self.config)
         self.runtime = self.new_runtime()
         self.verifier = ArenaVerifier(self.content)
+
+    async def test_get_retries_transient_failures_but_post_does_not(self) -> None:
+        request = AsyncMock(
+            side_effect=[
+                ArenaRedirect("redirect rejected"),
+                ArenaError(502, "GET", "/jobs/example"),
+                {"ok": True},
+            ]
+        )
+        with (
+            patch.object(self.client, "request", request),
+            patch(
+                "areal_rsi.modules.remote.envarena.client.asyncio.sleep",
+                new_callable=AsyncMock,
+            ) as sleep,
+        ):
+            self.assertEqual(await self.client.get("/jobs/example"), {"ok": True})
+        self.assertEqual(request.await_count, 3)
+        self.assertEqual(sleep.await_count, 2)
+
+        request.reset_mock(side_effect=True)
+        request.side_effect = ArenaRedirect("redirect rejected")
+        with (
+            patch.object(self.client, "request", request),
+            self.assertRaises(ArenaRedirect),
+        ):
+            await self.client.post("/jobs/example/start")
+        request.assert_awaited_once()
 
     def new_runtime(self) -> ArenaHarnessRuntime:
         return ArenaHarnessRuntime(

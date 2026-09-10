@@ -91,7 +91,9 @@ COMMON = [
     ),
     definition(
         "save_candidate",
-        "将当前工作区保存为不可变的候选版本，记录父版本。仅在需要保留产物时使用。",
+        "将本 Agent 的默认工作区保存为不可变候选，记录父版本。"
+        "bash 的 workdir 不会改变保存目录；请核对回执中的 workspace 和文件数量。"
+        "仅在需要保留产物时使用。",
         description=STRING,
     ),
     definition(
@@ -547,10 +549,9 @@ class ResearchActions:
                 c.link_reference(agent_id, c.store.paths.reference(path))
                 self.mark_workspace_candidate(agent_id, candidate_id)
                 return ToolResult(
-                    {
-                        **encode(c.store.get("candidates", candidate_id, CandidateSnapshot)),
-                        "uri": c.store.paths.reference(path).uri,
-                    }
+                    await self.candidate_receipt(
+                        agent_id, c.store.get("candidates", candidate_id, CandidateSnapshot)
+                    )
                 )
             candidate = await c.store.snapshot(
                 self.workspace(agent_id),
@@ -562,7 +563,7 @@ class ResearchActions:
             )
             self.mark_workspace_candidate(agent_id, candidate_id)
             c.link_reference(agent_id, c.store.paths.reference(path))
-            return ToolResult({**encode(candidate), "uri": c.store.paths.reference(path).uri})
+            return ToolResult(await self.candidate_receipt(agent_id, candidate))
         if name == "checkout_candidate":
             candidate = c.store.get("candidates", args["candidate_id"], CandidateSnapshot)
             await c.store.check_candidate_scope(candidate, c.state["seed_candidate_id"])
@@ -625,6 +626,29 @@ class ResearchActions:
             c.store.event("run_completed", summary=args["summary"])
             return ToolResult({"completed": True}, stop=True, reason="completed")
         raise ValueError("Unknown tool")
+
+    async def candidate_receipt(
+        self, agent_id: str, candidate: CandidateSnapshot
+    ) -> dict[str, Any]:
+        manifest = await self.c.store.content.read_json(candidate.content)
+        assert isinstance(manifest, dict) and isinstance(manifest["files"], dict)
+        files = sorted(manifest["files"])
+        return {
+            **encode(candidate),
+            "uri": self.c.store.paths.reference(
+                self.c.store.root / "candidates" / f"{candidate.candidate_id}.json"
+            ).uri,
+            "workspace": str(self.workspace(agent_id)),
+            "file_count": len(files),
+            "files": files[:20],
+            "files_truncated": len(files) > 20,
+            "notice": (
+                "此快照没有文件。若预期保存代码或产物，请将文件放入上述 workspace 后重新保存；"
+                "bash 使用的其他目录不会自动纳入候选。"
+                if not files
+                else ""
+            ),
+        }
 
     def evidence_public(self, record: EvidenceRecord) -> dict[str, Any]:
         result = {

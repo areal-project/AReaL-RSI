@@ -125,6 +125,33 @@ def test_interaction_keeps_natural_brief_before_start(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
+def test_candidate_receipt_identifies_workspace_and_frozen_files(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        c = Coordinator.create(tmp_path, TaskBrief("保存源码", "核对实际保存的文件"))
+        actions = ResearchActions(c)
+        handler = actions.handler("rsi")
+        # A file in the run root must not be mistaken for an agent workspace file.
+        (c.store.root / "model_new.py").write_text("outside workspace")
+        empty = (
+            await handler(ToolCall("save_candidate", {"description": "尝试保存"}, "empty"))
+        ).output
+        workspace = actions.workspace("rsi")
+        assert empty["workspace"] == str(workspace)
+        assert empty["file_count"] == 0 and empty["files"] == []
+        assert "没有文件" in empty["notice"]
+
+        (workspace / "model_new.py").write_text("actual candidate")
+        call = ToolCall("save_candidate", {"description": "已放入正确目录"}, "saved")
+        saved = (await handler(call)).output
+        assert saved["file_count"] == 1 and saved["files"] == ["model_new.py"]
+        assert saved["notice"] == ""
+        # Replaying the original save describes that immutable snapshot, not later edits.
+        (workspace / "later.py").write_text("unsaved work")
+        assert (await handler(call)).output == saved
+
+    asyncio.run(scenario())
+
+
 def test_candidate_history_handoff_and_unsaved_work_are_preserved(tmp_path: Path) -> None:
     async def scenario() -> None:
         c = Coordinator.create(

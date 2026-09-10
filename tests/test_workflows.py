@@ -340,6 +340,23 @@ class WorkflowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.service.resume(run.run_id)).state.value, "succeeded")
         self.assertEqual(self.researchers[1].proposals, 1)
 
+    async def test_minimum_completed_iterations_delays_pruning(self) -> None:
+        self.plan.config["minimum_completed_iterations"] = 4
+        self.rsi.stop_ids = ("research-agent-2",)
+        run = await self.execute()
+        self.assertEqual(run.state.value, "succeeded", run.error)
+        first, second = run.research_agents
+        self.assertEqual((len(first.iterations), len(second.iterations)), (3, 2))
+        self.assertEqual(second.error, PRUNED)
+        self.assertEqual(self.rsi.calls, 1)
+
+    async def test_minimum_completed_iterations_cannot_exceed_plan_capacity(self) -> None:
+        for invalid in (True, -1, 7):
+            with self.subTest(invalid=invalid):
+                self.plan.config["minimum_completed_iterations"] = invalid
+                with self.assertRaisesRegex(ValueError, "minimum_completed_iterations"):
+                    self.service.validate(self.plan)
+
     async def test_failed_line_resumes_without_repeating_finished_evaluations(self) -> None:
         self.researchers[1].fail_selection = True
         run = await self.execute()

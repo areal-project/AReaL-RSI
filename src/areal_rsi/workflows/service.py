@@ -50,6 +50,10 @@ class LocalExperimentService:
             raise ValueError("计划中的 ResearchAgent 数量与装配不匹配")
         if len({a.agent_id for a in self.context.research_agents}) != plan.research_agent_count:
             raise ValueError("ResearchAgent ID 重复")
+        minimum = plan.config.get("minimum_completed_iterations", 0)
+        capacity = plan.research_agent_count * plan.max_iterations
+        if type(minimum) is not int or not 0 <= minimum <= capacity:
+            raise ValueError("minimum_completed_iterations 必须在计划总轮次容量内")
 
     async def _execute(self, run: ExperimentRun) -> ExperimentRun:
         locks = self.root / "locks"

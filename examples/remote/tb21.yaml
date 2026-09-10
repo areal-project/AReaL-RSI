@@ -7,33 +7,24 @@ benchmark: tb21-terminus2-full@2.1.1
 harness: terminus-2-tb21@1.0.12
 model: gpt-5-6-sol-4ipic@1.0.0
 research_harness: dsh
-namespace: areal-tb21
+namespace: areal-tb21-main
 
-# Seven capability failures observed on the source full-benchmark run.
+# Two fast capability failures observed on the source full-benchmark run.
 train_cases:
-  - tb2-configure-git-webserver
   - tb2-fix-ocaml-gc
   - tb2-kv-store-grpc
-  - tb2-model-extraction-relu-logits
-  - tb2-pytorch-model-recovery
-  - tb2-raman-fitting
-  - tb2-video-processing
 
-# Held-out difficult tasks plus short/long pass sentinels; never exposed to ResearchAgent.
+# A held-out failure and pass sentinel; never exposed to ResearchAgent.
 validate_cases:
-  - tb2-adaptive-rejection-sampler
   - tb2-make-doom-for-mips
-  - tb2-make-mips-interpreter
-  - tb2-query-optimize
   - tb2-cancel-async-tasks
-  - tb2-build-pov-ray
 
 allowed_changes:
   - system_prompt
   - model_parameters
 artifact_globs: []
 sample_numbers: 1
-max_parallel: 13
+max_parallel: 4
 max_retries: 0
 poll_seconds: 20
 timeout_seconds: 18000

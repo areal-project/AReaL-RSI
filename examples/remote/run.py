@@ -24,6 +24,12 @@ async def main() -> int:
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--iterations", type=int, default=1)
     parser.add_argument(
+        "--minimum-completed-iterations",
+        type=int,
+        default=0,
+        help="Disable research-line pruning until this many aggregate iterations finish",
+    )
+    parser.add_argument(
         "--goal", default="根据 TRAIN 证据改进远端能力配置，完成一轮端到端评测；不要求分数提升"
     )
     parser.add_argument(
@@ -39,6 +45,9 @@ async def main() -> int:
     os.environ["RSI_DATA_ROOT"] = str(args.root.resolve())
     app = await create_app(args.root, lambda text: print(text, flush=True))
     try:
+        plan_config = app.model_plan_config()
+        if args.minimum_completed_iterations:
+            plan_config["minimum_completed_iterations"] = args.minimum_completed_iterations
         plan = ExperimentPlan(
             args.goal,
             "harness-evolution",
@@ -48,7 +57,7 @@ async def main() -> int:
             args.iterations,
             research_agent_count=len(app.service.context.research_agents),
             stop_when_goal_reached=False,
-            config=app.model_plan_config(),
+            config=plan_config,
         )
         await app.bind_plan(plan)
         write_json(args.root / "plan.json", plan)

@@ -470,7 +470,11 @@ class HarnessEvolutionWorkflow:
             remaining = {
                 a.agent_id for a in self.state.research_agents if a.state == RunState.RUNNING
             }
-            if len(remaining) > 1:
+            completed_iterations = sum(
+                len(agent.iterations) for agent in self.state.research_agents
+            )
+            minimum_iterations = int(plan.config.get("minimum_completed_iterations", 0))
+            if len(remaining) > 1 and completed_iterations >= minimum_iterations:
                 # 深拷贝：控制 Agent 只能返回剪枝决定，不能直接篡改状态。
                 snapshot = decode(ExperimentRun, encode(self.state))
                 stopped = set(await context.rsi_agent.prune(snapshot))

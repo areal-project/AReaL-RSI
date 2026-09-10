@@ -67,15 +67,16 @@ uv run --env-file .env --locked rsi resume RUN_ID
 TRAIN 与 VALIDATE 明确隔离；允许 ResearchAgent 修改通用 system prompt 以及 Terminus
 白名单推理参数，但 ModelVersion 和模型权重始终不变。
 
-四条独立研究线、每线五轮可并行完成 20 个框架迭代：
+七条独立研究线、每线三轮可并行完成 21 个框架迭代；最小完成轮次会在达到
+20 轮前禁止研究线剪枝：
 
 ```bash
 export RSI_RUNTIME_CONFIG="$PWD/examples/runtime/dsh.json"
 export RSI_REMOTE_BACKEND=envarena
-export RSI_RESEARCH_AGENT_COUNT=4
+export RSI_RESEARCH_AGENT_COUNT=7
 uv run --env-file .env --locked python examples/remote/run.py \
-  --config examples/remote/tb21.yaml --root .rsi/areal-tb21 \
-  --iterations 5 --launch
+  --config examples/remote/tb21.yaml --root .rsi/areal-tb21/main \
+  --iterations 3 --minimum-completed-iterations 20 --launch
 ```
 
 这个筛选实验的 VALIDATE 分数不等于完整 TB2.1 分数；最佳候选必须再跑原始 89 题

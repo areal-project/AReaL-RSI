@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 
 from areal_rsi.api.base import AgentState, RecordRef, RunState
 from areal_rsi.api.research import CandidateSnapshot, EvidenceRecord, TaskBrief, VerifiedResult
-from areal_rsi.base.storage import decode, encode, now, safe_relative, write_json
+from areal_rsi.base.storage import decode, encode, now, safe_name, safe_relative, write_json
 from areal_rsi.coordination.coordinator import Coordinator, effect_id
 from areal_rsi.coordination.views import model_state, record_preview
 from areal_rsi.modules.responses import ToolCall, ToolHandler, ToolResult
@@ -60,7 +60,8 @@ COMMON = [
     definition("read_record", "用 run:// URI 读取你有权限查看的研究记录。", uri=STRING),
     definition(
         "list_records",
-        "按时间倒序查找历史记录，每页 10 条；返回引用，详情用 read_record 读取。",
+        "按时间倒序查找历史记录，每页 10 条；旧作业材料缺少时间时按来源作业时间排序。"
+        "返回摘要和引用，详情用 read_record 读取。",
         category={
             "type": "string",
             "enum": list(RECORD_CATEGORIES),
@@ -376,8 +377,23 @@ class ResearchActions:
                     value = self.read_record(agent_id, ref.uri)
                 except ValueError:
                     continue
-                records.append(record_preview(value, ref))
-            records.sort(key=lambda item: (item.get("created_at") or "", item["uri"]), reverse=True)
+                source_job = None
+                if category == "materials" and isinstance(value.get("job_id"), str):
+                    try:
+                        job_id = safe_name(value["job_id"])
+                        source_job = self.read_record(
+                            agent_id, f"run://{c.store.run_id}/executions/{job_id}.json"
+                        )
+                    except (ValueError, FileNotFoundError):
+                        pass  # Do not infer missing or unauthorized job metadata.
+                records.append(record_preview(value, ref, source_job=source_job))
+            records.sort(
+                key=lambda item: (
+                    item.get("created_at") or item.get("job_created_at") or "",
+                    item["uri"],
+                ),
+                reverse=True,
+            )
             page = records[offset : offset + 10]
             return ToolResult(
                 {

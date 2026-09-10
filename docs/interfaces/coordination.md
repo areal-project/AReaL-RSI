@@ -42,6 +42,11 @@ continuous model sessions. Execution and web research tools are separate adapter
   within that assignment; it does not replace the task or authorize another attempt.
   New assignments update this state from their durable records. Later RSI messages
   can refine the task as usual.
+- Material discovery identifies output excerpts by job and file, and web searches
+  by query. If an older excerpt has no timestamp, `job_created_at` supplies its
+  accessible source job's date for sorting; the archival date remains unknown.
+  Summaries stay bounded, omit full output bodies and respect job access controls.
+  Historical records are not rewritten to populate the index.
 - Messages and tool effects have stable identities. Recovering a delivery reuses
   the same session turn and reconciles the same effect; completed effects return
   their original result. A stopped direction archives late reports without wakeup.

@@ -6,6 +6,7 @@ current task and new findings; older records remain available by reference.
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
 from areal_rsi.api.base import RecordRef
@@ -86,19 +87,39 @@ def model_state(c: Coordinator, agent_id: str) -> dict[str, Any]:
     return result
 
 
-def record_preview(value: dict[str, Any], ref: RecordRef) -> dict[str, Any]:
+def record_preview(
+    value: dict[str, Any], ref: RecordRef, *, source_job: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """A discovery result is a pointer, not another copy of the whole record."""
     text = next(
         (
             value[key]
-            for key in ("title", "message", "description", "instruction", "interpretation")
+            for key in (
+                "title",
+                "message",
+                "description",
+                "instruction",
+                "interpretation",
+                "summary",
+                "query",
+                "url",
+            )
             if isinstance(value.get(key), str) and value[key]
         ),
         "",
     )
+    if not text and value.get("job_id") and value.get("path"):
+        job = source_job or {}
+        context = job.get("command_name") or "作业输出"
+        if job.get("parameters"):
+            context += " " + json.dumps(job["parameters"], ensure_ascii=False)[:120]
+        text = f"{value['job_id']} · {value['path']} · {context}"
     return {
         "uri": ref.uri,
         "created_at": value.get("created_at"),
         "summary": text[:240],
+        # Older output excerpts have no archival timestamp. Keep that unknown
+        # while exposing the producing job's real date for discovery/sorting.
+        **({"job_created_at": source_job.get("created_at")} if source_job else {}),
         **{key: value[key] for key in ("status", "score", "shared") if key in value},
     }

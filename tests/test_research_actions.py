@@ -152,6 +152,101 @@ def test_candidate_receipt_identifies_workspace_and_frozen_files(tmp_path: Path)
     asyncio.run(scenario())
 
 
+def test_material_discovery_identifies_legacy_outputs_without_rewriting_or_leaking(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        c = Coordinator.create(
+            tmp_path, TaskBrief("检索已有结果", "保留历史记录", ResearchLimits(max_agents=2))
+        )
+        c.start()
+        owner = c.spawn(key="owner", direction="A", instruction="检查结果")["agent_id"]
+        other = c.spawn(key="other", direction="B", instruction="独立研究")["agent_id"]
+        actions = ResearchActions(c)
+        original = {}
+        for key, job_id, date in (
+            ("zzz_old", "job-old", "2026-01-01T10:00:00Z"),
+            ("aaa_new", "job-new", "2026-01-01T11:00:00Z"),
+        ):
+            c.store.put(
+                "executions",
+                job_id,
+                {
+                    "agent_id": owner,
+                    "created_at": date,
+                    "command_name": "evaluate_task",
+                    "parameters": {"task": "L1P75"},
+                    "argv": ["DO_NOT_PREVIEW_ARGV"],
+                },
+            )
+            ref = c.store.put(
+                "materials",
+                key,
+                {
+                    "agent_id": owner,
+                    "job_id": job_id,
+                    "path": "feedback.json",
+                    "content": "DO_NOT_PREVIEW_BODY" * 1000,
+                },
+            )
+            original[ref.uri] = actions.read_record(owner, ref.uri)
+        c.store.put(
+            "executions",
+            "job-private",
+            {
+                "agent_id": other,
+                "created_at": "2026-01-01T13:00:00Z",
+                "command_name": "UNSHARED_COMMAND",
+                "parameters": {"key": "UNSHARED_VALUE"},
+            },
+        )
+        # Access to a material does not grant access to unrelated job metadata.
+        c.store.put(
+            "materials",
+            "private_pointer",
+            {"agent_id": owner, "job_id": "job-private", "path": "note.txt"},
+        )
+        c.store.put(
+            "materials", "other_material", {"agent_id": other, "title": "UNSHARED_MATERIAL"}
+        )
+        c.store.put(
+            "materials",
+            "search",
+            {
+                "agent_id": owner,
+                "created_at": "2026-01-01T12:00:00Z",
+                "query": "CUDA batch normalization",
+                "results": [{"snippet": "FULL_SEARCH_BODY"}],
+            },
+        )
+        result = (
+            await actions.handler(owner)(
+                ToolCall("list_records", {"category": "materials", "offset": 0}, "discover")
+            )
+        ).output
+        assert result["total"] == 4
+        items = result["records"]
+        assert items[0]["summary"] == "CUDA batch normalization"
+        assert "/aaa_new.json" in items[1]["uri"] and "/zzz_old.json" in items[2]["uri"]
+        assert items[1]["created_at"] is None
+        assert items[1]["job_created_at"] == "2026-01-01T11:00:00Z"
+        assert all(
+            part in items[1]["summary"]
+            for part in ("job-new", "feedback.json", "evaluate_task", "L1P75")
+        )
+        assert "job_created_at" not in items[3]
+        assert all(len(item["summary"]) <= 240 for item in items)
+        serialized = str(result)
+        assert all(
+            secret not in serialized
+            for secret in ("UNSHARED", "DO_NOT_PREVIEW", "FULL_SEARCH_BODY")
+        )
+        for uri, value in original.items():
+            assert actions.read_record(owner, uri) == value
+
+    asyncio.run(scenario())
+
+
 def test_candidate_history_handoff_and_unsaved_work_are_preserved(tmp_path: Path) -> None:
     async def scenario() -> None:
         c = Coordinator.create(

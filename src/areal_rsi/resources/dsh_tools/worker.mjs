@@ -28,7 +28,7 @@ await plugin('dsh-bash-local', {
 });
 await plugin('dsh-shell-env', { dshHome: stateDirectory });
 await plugin('dsh-tool-bash', { enableRunInBackground: false });
-await plugin('dsh-tool-fs', { readLimit: 200, readMaxBytes: 24000 });
+await plugin('dsh-tool-fs', { readLimit: 1000, readMaxBytes: 24000 });
 await plugin('dsh-fs-observation-policy');
 await plugin('dsh-tool-fs-search', { sampleOverCapGlobResults: false });
 

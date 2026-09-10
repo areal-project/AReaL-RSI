@@ -89,6 +89,19 @@ def test_real_file_tools_and_workspace_isolation(installation: Path, tmp_path: P
             outside.write_text("Operator-provided setup guide")
             read = await one.execute(ToolCall("read", {"file_path": str(outside)}, "outside"), env)
             assert "Operator-provided setup guide" in json.dumps(read)
+            source = one.workspace / "long.txt"
+            source.write_text("".join(f"source line {i}\n" for i in range(1, 401)))
+            read = await one.execute(
+                ToolCall("read", {"file_path": "long.txt", "limit": 400}, "long"), env
+            )
+            assert not read["isError"]
+            assert "source line 400" in json.dumps(read)
+            source.write_text("x" * 40000)
+            bounded = await one.execute(
+                ToolCall("read", {"file_path": "long.txt"}, "bounded"), env
+            )
+            assert not bounded["isError"]
+            assert "x" * 25000 not in json.dumps(bounded)
             pwd = await one.execute(command("pwd", "pwd"), env)
             assert pwd["value"]["stdout"]["text"].strip() == str(one.workspace)
         finally:

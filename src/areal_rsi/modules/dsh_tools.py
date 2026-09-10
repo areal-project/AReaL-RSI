@@ -95,7 +95,7 @@ PARAMETERS = {
     "workdir": "命令工作目录，默认当前 Agent 的工作区；相对路径以该工作区为基准。",
     "file_path": "文件路径；相对路径以当前 Agent 的工作区为基准，也支持绝对路径。",
     "offset": "开始读取的行号，从 1 开始。",
-    "limit": "最多读取的行数，默认 200。",
+    "limit": "最多读取 1000 行，默认 1000；返回文本另有 24 KB 上限，更多内容用 offset 分段读取。",
     "content": "完整的 UTF-8 文件内容。",
     "old_string": "要替换的原始文本，必须精确匹配。",
     "new_string": "替换后的文本；空字符串表示删除。",
@@ -111,6 +111,8 @@ def definitions() -> list[dict[str, Any]]:
         name = schema["name"]
         # Explicit non-strict mode preserves upstream's optional arguments.
         schema.update(type="function", strict=False, description=DESCRIPTIONS[name])
+        if name == "read":
+            schema["parameters"]["properties"]["limit"]["maximum"] = 1000
         for key, parameter in schema["parameters"]["properties"].items():
             parameter["description"] = (
                 "文件路径 glob 模式，例如 **/*.py。"

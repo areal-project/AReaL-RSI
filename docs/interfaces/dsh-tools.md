@@ -22,7 +22,7 @@ RSI_DATA_ROOT/
 
 每个 Agent 具有独立工具进程和文件观察记录。DSH 的 observation policy 要求修改已有文件前读取，并拒绝覆盖读取后发生的外部修改。工具进程重启或执行环境改变后需要重新读取相关文件，模型上下文仍保持连续。
 
-工具 schemas 从固定组合生成到 `resources/dsh_tools/schemas.json`，使未调用工具的会话无需安装 Node 依赖。启动工具进程时比对真实注册结果，拒绝不匹配的安装。适配层只翻译说明，保留上游参数及可选语义（Responses `strict=false`）。更新插件或组合时需重新生成 schemas 并运行真实 DSH 测试。
+工具 schemas 从固定组合生成到 `resources/dsh_tools/schemas.json`，使未调用工具的会话无需安装 Node 依赖。启动工具进程时比对真实注册结果，拒绝不匹配的安装。适配层翻译说明，并明确展示组合配置的读取上限，保留上游参数及可选语义（Responses `strict=false`）。`read` 默认及最多读取 1000 行，返回内容仍受 24 KB 上限约束，更多内容通过 offset 分段读取。更新插件或组合时需重新生成 schemas 并运行真实 DSH 测试。
 
 ## 命令生命周期
 

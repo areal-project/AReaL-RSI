@@ -204,10 +204,13 @@ class FixtureBackend:
                     "completion_criteria": "保存有证据的反例和适用边界",
                 },
                 "report": {
-                    **report,
                     "report_id": "report_b",
-                    "work": "检查 reductions 的精度风险，记录低精度累加导致偏差的反例。",
-                    "results": "形成一份反例记录；本节点不产生候选版本或验证分数。",
+                    "message": (
+                        "低精度累加导致偏差，已保存反例。"
+                        "建议下一轮检查累加精度；本轮没有候选或分数。"
+                    ),
+                    "references": [],
+                    "raw_trace": PRIVATE,
                 },
                 "evidence": [],
                 "verification": None,
@@ -448,6 +451,8 @@ class WorkbenchHttpTest(unittest.TestCase):
         self.assertNotIn("config", detail)
         self.assertNotIn("private", detail["intake"])
         self.assertNotIn("raw_trace", detail["nodes"][0]["report"])
+        self.assertIn("低精度累加导致偏差", detail["nodes"][2]["report"]["message"])
+        self.assertNotIn("raw_trace", detail["nodes"][2]["report"])
         self.assertEqual(len(detail["messages"]), 2)
         subsequent = json.loads(
             self.request("GET", f"/api/runs/{run_id}?after={detail['event_cursor']}")[2]

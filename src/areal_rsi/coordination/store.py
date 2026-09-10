@@ -12,7 +12,7 @@ import hashlib
 import json
 import threading
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 from urllib.parse import unquote, urlsplit
 
 from areal_rsi.api.base import ExperimentRun, RecordRef
@@ -20,6 +20,7 @@ from areal_rsi.api.research import (
     CandidateSnapshot,
     EvidenceRecord,
     ResearchEvent,
+    ResearchReport,
     TaskBrief,
     VerifiedResult,
 )
@@ -55,11 +56,17 @@ class ResearchStore:
 
     def get(self, category: str, key: str, kind: type[T]) -> T:
         path = self.root / safe_name(category) / f"{safe_name(key)}.json"
-        return decode(kind, json.loads(path.read_text()))  # type: ignore[no-any-return]
+        return self.decode_record(kind, json.loads(path.read_text()))
+
+    @staticmethod
+    def decode_record(kind: type[T], value: dict[str, Any]) -> T:
+        if kind is ResearchReport:
+            return cast(T, ResearchReport.from_record(value))
+        return cast(T, decode(kind, value))
 
     def records(self, category: str, kind: type[T]) -> list[T]:
         return [
-            decode(kind, json.loads(p.read_text()))
+            self.decode_record(kind, json.loads(p.read_text()))
             for p in sorted((self.root / safe_name(category)).glob("*.json"))
         ]
 
@@ -231,12 +238,17 @@ class ResearchStore:
         files, old_files = current["files"], previous["files"]
         assert isinstance(files, dict) and isinstance(old_files, dict)
         patterns = self.brief().limits.allowed_paths
-        if any(
-            old_files.get(name) != files.get(name)
-            and not any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns)
+        outside = sorted(
+            name
             for name in old_files.keys() | files.keys()
-        ):
-            raise ValueError("Candidate changes files outside the user's allowed_paths")
+            if old_files.get(name) != files.get(name)
+            and not any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns)
+        )
+        if outside:
+            detail = ", ".join(outside[:20])
+            if len(outside) > 20:
+                detail += f" (and {len(outside) - 20} more)"
+            raise ValueError("Candidate changes files outside the user's allowed_paths: " + detail)
 
     async def export(self, candidate_id: str, destination: Path) -> Path:
         candidate = self.get("candidates", candidate_id, CandidateSnapshot)

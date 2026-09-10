@@ -453,7 +453,8 @@ def test_state_evidence_preview_preserves_full_archived_record(tmp_path: Path) -
         assert shared.output["summary"] == full_summary
         state = await actions.handler("rsi")(ToolCall("get_state", {}, "state"))
         preview = next(item for item in state.output["evidence"] if item["shared"])
-        assert preview["summary"] == full_summary[:1000]
+        assert full_summary.startswith(preview["summary"])
+        assert len(preview["summary"]) < 500
         assert preview["truncated"] is True and preview["summary_chars"] == len(full_summary)
         assert preview["uri"] == shared.output["uri"]
         full = await actions.handler("rsi")(

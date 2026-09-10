@@ -68,7 +68,7 @@ def _report(value: Any) -> Json | None:
         return None
     result = _fields(
         value,
-        "report_id iteration_id assignment_id task_status work problems results "
+        "report_id iteration_id assignment_id message task_status work problems results "
         "interpretation next_steps shared_findings created_at",
     )
     result["references"] = _refs(value.get("references"))

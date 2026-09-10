@@ -448,7 +448,9 @@ class ResponsesRuntimeTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(checkpoint["active_instruction"]["message_id"], "source-message")
                 self.assertEqual(continued["input"][0]["role"], "assistant")
                 self.assertIn(message, continued["instructions"])
-                self.assertIn("不会暂停当前任务，也不需要用户解除", continued["instructions"])
+                self.assertIn(
+                    "压缩本身不表示暂停、完成、增加限制或撤销授权", continued["instructions"]
+                )
 
     async def test_in_turn_compact_recovery_reuses_response_and_committed_checkpoint(self) -> None:
         for interrupt_at in ("response_usage", "session_compacted"):

@@ -23,7 +23,7 @@ class ResearchConfig:
     base_url: str = "https://api.openai.com"
     api_key_env: str = "RSI_API_KEY"
     max_output_tokens: int = 16384
-    max_model_calls_per_turn: int = 32
+    max_model_calls_per_turn: int | None = None
     retry_initial_seconds: float = 2
     retry_max_seconds: float = 60
     commands: tuple[ApprovedCommand, ...] = ()

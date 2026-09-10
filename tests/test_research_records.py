@@ -48,16 +48,12 @@ def test_optional_products_and_natural_instructions(tmp_path: Path) -> None:
         "report1",
         "node1",
         "task1",
-        "Completed",
-        "Read the environment documentation",
-        "No GPU available",
-        "Confirmed command interface",
-        "Execution not tested",
-        "Provision the configured runner",
+        "Read the environment documentation and confirmed the command interface. "
+        "No GPU is available, so execution was not tested. Provision the configured runner.",
         now(),
     )
     ref = store.put("reports", report.report_id, report)
-    assert store.public_record(ref)["results"] == "Confirmed command interface"
+    assert "confirmed the command interface" in store.public_record(ref)["message"]
     assert not (store.root / "candidates").exists()
 
 
@@ -78,7 +74,7 @@ def test_candidate_scope_compares_actual_content(tmp_path: Path) -> None:
             parent_candidate_id=seed.candidate_id,
         )
         (workspace / "prompt.md").write_text("Disallowed change")
-        with pytest.raises(ValueError, match="outside"):
+        with pytest.raises(ValueError, match=r"outside.*prompt\.md"):
             await store.snapshot(
                 workspace,
                 agent_id="ra",
@@ -151,5 +147,5 @@ def test_invalid_constraints_and_report_are_rejected() -> None:
         ResearchLimits(max_agents=0)
     with pytest.raises(ValueError):
         ResearchLimits(max_wall_seconds=float("nan"))
-    with pytest.raises(ValueError, match="Report must"):
-        ResearchReport("r", "n", "a", "done", "", "none", "ok", "fact", "stop", now())
+    with pytest.raises(ValueError, match="nonempty message"):
+        ResearchReport("r", "n", "a", "", now())

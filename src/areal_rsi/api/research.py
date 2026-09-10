@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 from areal_rsi.api.base import ContentRef, JsonObject, RecordRef
 from areal_rsi.api.base import JsonValue as JsonValue  # Recursive JsonObject type resolution.
@@ -92,49 +92,52 @@ class Assignment:
     reply_to_report_id: str | None = None
 
     def __post_init__(self) -> None:
-        if not self.instruction.strip() or not self.completion_criteria.strip():
-            raise ValueError("Assignment requires a concrete instruction and completion criteria")
+        if not self.instruction.strip():
+            raise ValueError("Assignment requires a concrete instruction")
 
 
 @dataclass(slots=True)
 class ResearchReport:
+    """A researcher's reply, with system-owned identity and evidence references."""
+
     report_id: str
     iteration_id: str
     assignment_id: str
-    task_status: str
-    work: str
-    problems: str
-    results: str
-    interpretation: str
-    next_steps: str
+    message: str
     created_at: str
-    shared_findings: tuple[str, ...] = ()
     references: tuple[RecordRef, ...] = ()
 
     def __post_init__(self) -> None:
-        for name in ("task_status", "work", "problems", "results", "interpretation", "next_steps"):
-            if not getattr(self, name).strip():
-                raise ValueError(
-                    f"Report must explain {name}; use an explicit 'none' if applicable"
-                )
-        # Prompt asks for a concise 400–800 Chinese character report. This broad
-        # safety limit rejects accidental transcript dumps, never silently cuts text.
-        if (
-            sum(
-                len(getattr(self, n))
-                for n in (
-                    "task_status",
-                    "work",
-                    "problems",
-                    "results",
-                    "interpretation",
-                    "next_steps",
-                )
-            )
-            + sum(map(len, self.shared_findings))
-            > 12000
-        ):
-            raise ValueError("Report is too long; move detailed material into evidence")
+        if not self.message.strip():
+            raise ValueError("Report requires a nonempty message")
+
+    @staticmethod
+    def message_from(value: dict[str, Any]) -> str:
+        """Read old seven-field reports without rewriting their archives."""
+        if isinstance(value.get("message"), str):
+            return str(value["message"])
+        labels = {
+            "task_status": "任务",
+            "work": "工作",
+            "problems": "问题",
+            "results": "结果",
+            "interpretation": "结论",
+            "next_steps": "下一步",
+        }
+        parts = [f"{label}：{value[name]}" for name, label in labels.items() if value.get(name)]
+        parts.extend(str(item) for item in value.get("shared_findings", []))
+        return "\n\n".join(parts)
+
+    @classmethod
+    def from_record(cls, value: dict[str, Any]) -> ResearchReport:
+        return cls(
+            value["report_id"],
+            value["iteration_id"],
+            value["assignment_id"],
+            cls.message_from(value),
+            value["created_at"],
+            tuple(RecordRef(item["uri"]) for item in value.get("references", [])),
+        )
 
 
 @dataclass(slots=True)

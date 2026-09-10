@@ -645,7 +645,9 @@ class EngineTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(saved["turns"][0]["requests"]), 2)
         await second.close()
 
-    async def test_missing_report_retry_adds_correction_in_same_session_and_node(self) -> None:
+    async def test_final_reply_archives_report_and_waits_for_next_task_in_same_session(
+        self,
+    ) -> None:
         c = self.coordinator()
         branch = c.spawn(
             key="inspect",
@@ -674,8 +676,7 @@ class EngineTest(unittest.IsolatedAsyncioTestCase):
             context = json.dumps(payload["input"], ensure_ascii=False)
             self.assertIn("The input contract matches.", context)
             self.assertIn("Saved input contract evidence", context)
-            self.assertIn("在同一个节点和会话中继续原任务", context)
-            self.assertIn("不授权新任务", context)
+            self.assertIn("Now check the output contract", context)
             return packet(call("report", "corrected_report"))
 
         def tools(agent_id: str) -> ToolSet:
@@ -695,30 +696,63 @@ class EngineTest(unittest.IsolatedAsyncioTestCase):
         transport = RoutedTransport(respond)
         engine = ResearchEngine(c, ResponsesRuntime(self.config, transport), tools)
         await engine.run_until_idle(timeout=3)
-        self.assertEqual(c.actor(researcher).state, AgentState.FAILED)
-        self.assertEqual(c.state["turn_failures"][researcher]["kind"], "missing_report")
-        original = c.state["active"][researcher]
+        self.assertEqual(c.actor(researcher).state, AgentState.WAITING)
+        self.assertEqual(c.actor(researcher).wait_reason, "rsi_reply")
+        report = c.store.records("reports", ResearchReport)[0]
+        self.assertEqual(report.message, "The input contract matches.")
         session_id = c.actor(researcher).session_id
         count = len(transport.payloads)
         await engine.run_until_idle(timeout=2)
         self.assertEqual(len(transport.payloads), count)
-        c.retry_agent(researcher)
-        self.assertIn(original, c.state["delivered"])
+        c.assign(researcher, key="followup", instruction="Now check the output contract")
         self.assertNotIn(researcher, c.state["active"])
-        self.assertEqual(len(c.actor(researcher).iterations), 1)
+        self.assertEqual(len(c.actor(researcher).iterations), 2)
         await engine.run_until_idle(timeout=3)
         self.assertEqual(c.actor(researcher).session_id, session_id)
         self.assertEqual(c.actor(researcher).wait_reason, "rsi_reply")
-        self.assertEqual(len(c.actor(researcher).iterations), 1)
-        self.assertEqual(len(c.store.records("reports", ResearchReport)), 1)
+        self.assertEqual(len(c.actor(researcher).iterations), 2)
+        self.assertEqual(len(c.store.records("reports", ResearchReport)), 2)
         self.assertEqual(effects, ["read_once"])
         session = c.store.paths.agent(researcher) / "sessions" / (session_id or researcher)
         saved = json.loads((session / "session.json").read_text())
         self.assertEqual(len(saved["turns"]), 2)
-        self.assertEqual(saved["turns"][0]["message_id"], original)
-        self.assertNotEqual(saved["turns"][1]["message_id"], original)
-        self.assertNotIn(researcher, c.state["turn_failures"])
+        self.assertNotEqual(saved["turns"][0]["message_id"], saved["turns"][1]["message_id"])
+        self.assertNotIn(researcher, c.state.get("turn_failures", {}))
         await engine.close()
+
+    async def test_empty_final_reply_can_recover_without_replaying_completed_turn(self) -> None:
+        c = self.coordinator()
+        ra = c.spawn(key="a", direction="Inspect", instruction="Inspect the environment")[
+            "agent_id"
+        ]
+
+        async def respond(agent_id: str, index: int, payload: Json) -> Json:
+            if agent_id == "rsi":
+                return packet(call("wait", f"wait_{index}"))
+            if index == 0:
+                return packet()
+            return packet(
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "The environment is ready."}],
+                }
+            )
+
+        transport = RoutedTransport(respond)
+        engine = ResearchEngine(
+            c, ResponsesRuntime(self.config, transport), lambda aid: self.tools(c, aid)
+        )
+        await engine.run_until_idle(timeout=3)
+        session_id = c.actor(ra).session_id
+        self.assertEqual(c.state["turn_failures"][ra]["kind"], "missing_report")
+        c.retry_agent(ra)
+        await engine.run_until_idle(timeout=3)
+        self.assertEqual(c.actor(ra).session_id, session_id)
+        self.assertEqual(len(c.actor(ra).iterations), 1)
+        self.assertEqual(c.actor(ra).wait_reason, "rsi_reply")
+        self.assertEqual(transport.counts[ra], 2)
+        self.assertEqual(len(c.store.records("reports", ResearchReport)), 1)
 
     async def test_transport_failure_retry_resumes_original_turn_without_corrective_message(
         self,
@@ -762,7 +796,7 @@ class EngineTest(unittest.IsolatedAsyncioTestCase):
         engine = ResearchEngine(c, ResponsesRuntime(self.config, transport), tools)
         await engine.run_until_idle(timeout=3)
         self.assertEqual(c.actor(researcher).state, AgentState.FAILED)
-        self.assertNotIn(researcher, c.state["turn_failures"])
+        self.assertNotIn(researcher, c.state.get("turn_failures", {}))
         original = c.state["active"][researcher]
         c.retry_agent(researcher)
         self.assertEqual(c.state["active"][researcher], original)

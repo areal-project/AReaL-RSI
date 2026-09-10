@@ -345,9 +345,10 @@ class ResearchApp:
             c,
             runtime,
             lambda agent_id: ToolSet(
-                actions.definitions(agent_id),
+                actions.definitions(agent_id, include_hidden=True),
                 actions.handler(agent_id),
                 agent_tools.instructions(agent_id),
+                actions.definitions(agent_id),
             ),
             tick_hook=poll,
         )
@@ -360,7 +361,7 @@ class ResearchApp:
             except Exception as exc:
                 c.store.event("worker_error", error=str(exc))
             finally:
-                execution.close(cancel=c.state["status"] == "stopped")
+                execution.close(cancel=c.state["status"] in {"stopped", "succeeded", "failed"})
                 await agent_tools.close()
 
         task = asyncio.create_task(serve(), name="research:" + c.store.run_id)

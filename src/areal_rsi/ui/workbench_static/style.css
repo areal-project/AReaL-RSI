@@ -978,7 +978,7 @@ main {
   letter-spacing: 0.6px;
   margin: 0 0 8px;
 }
-.detail-section p {
+.detail-section p, .detail-section .message-content {
   font-size: 12px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;

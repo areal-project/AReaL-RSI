@@ -37,6 +37,7 @@ class ToolSet:
     definitions: list[Json]
     call: ToolHandler
     instructions: str = ""
+    advertised: list[Json] | None = None
 
 
 class BudgetExceeded(ResponsesError):
@@ -313,6 +314,7 @@ class ResearchEngine:
             (node for node in actor.iterations if node.iteration_id == actor.current_iteration_id),
             None,
         )
+        run = c.store.run()
         message_id = c.state["active"].get(agent_id)
         message = c.store.get("messages", message_id, ResearchMessage) if message_id else None
         return {
@@ -320,6 +322,12 @@ class ResearchEngine:
             "status": c.state["status"],
             "simulated": c.state["simulated"],
             "brief": encode(c.store.brief()),
+            "seed_candidate_id": c.state.get("seed_candidate_id"),
+            "best": c.store.public_record(run.best_result_ref) if run.best_result_ref else None,
+            "baseline": c.store.public_record(run.baseline_result_ref)
+            if run.baseline_result_ref
+            else None,
+            "execution_setup": c.state.get("execution_setup", "ready"),
             "plan": c.state["plan"],
             "agent_id": agent_id,
             "current_message": {
@@ -343,7 +351,7 @@ class ResearchEngine:
                     "state": researcher.state,
                     "current_iteration_id": researcher.current_iteration_id,
                 }
-                for researcher in c.store.run().research_agents
+                for researcher in run.research_agents
             ]
             if agent_id in {"rsi", "interaction"}
             else [],
@@ -412,6 +420,7 @@ class ResearchEngine:
                 else message.text,
                 message_id=message.message_id,
                 tools=toolset.definitions,
+                advertised_tools=toolset.advertised,
                 handler=toolset.call,
                 event_sink=event_sink,
                 recovery_state=state,
@@ -455,14 +464,20 @@ class ResearchEngine:
                 node = next(
                     n for n in c.actor(agent_id).iterations if n.iteration_id == iteration_id
                 )
-                if node.report_ref is None:
-                    c.end_turn(
+                if node.report_ref is None and not c.pending_updates(agent_id):
+                    if not result.text.strip():
+                        c.end_turn(
+                            agent_id,
+                            error="Research Agent returned an empty final reply",
+                            missing_report=True,
+                        )
+                        return
+                    c.report(
                         agent_id,
-                        error="Research Agent ended without a report or explicit wait",
-                        missing_report=True,
+                        key="final:" + message.message_id,
+                        fields={"message": result.text.strip(), "references": node.references},
                     )
-                else:
-                    c.end_turn(agent_id)
+                c.end_turn(agent_id)
             else:
                 c.end_turn(agent_id)
         except BudgetExceeded as exc:

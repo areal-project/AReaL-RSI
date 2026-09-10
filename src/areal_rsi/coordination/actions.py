@@ -13,10 +13,19 @@ from areal_rsi.api.base import AgentState, RecordRef, RunState
 from areal_rsi.api.research import CandidateSnapshot, EvidenceRecord, TaskBrief, VerifiedResult
 from areal_rsi.base.storage import decode, encode, now, safe_relative, write_json
 from areal_rsi.coordination.coordinator import Coordinator, effect_id
+from areal_rsi.coordination.views import model_state, record_preview
 from areal_rsi.modules.responses import ToolCall, ToolHandler, ToolResult
 
 STRING = {"type": "string"}
-STRINGS = {"type": "array", "items": STRING}
+RECORD_CATEGORIES = (
+    "evidence",
+    "reports",
+    "assignments",
+    "candidates",
+    "verifications",
+    "executions",
+    "materials",
+)
 REFERENCES = {
     "type": "array",
     "items": {
@@ -49,6 +58,15 @@ COMMON = [
         "查看已保存的研究状态、预算与证据摘要；需要完整记录时，用返回的 URI 调用read_record。",
     ),
     definition("read_record", "用 run:// URI 读取你有权限查看的研究记录。", uri=STRING),
+    definition(
+        "list_records",
+        "按时间倒序查找历史记录，每页 10 条；返回引用，详情用 read_record 读取。",
+        category={
+            "type": "string",
+            "enum": list(RECORD_CATEGORIES),
+        },
+        offset={"type": "integer", "minimum": 0},
+    ),
     definition(
         "read_candidate_file",
         "读取已保存候选中的文本文件，不切换工作区。提供 candidate_id 和相对文件路径。",
@@ -106,7 +124,6 @@ RSI = [
         "新建一个研究方向，向研究员下发第一项具体任务。",
         direction=STRING,
         instruction=STRING,
-        completion_criteria=STRING,
         references=REFERENCES,
     ),
     definition(
@@ -114,8 +131,6 @@ RSI = [
         "针对研究员的最新报告作出回复，并下发下一项任务。",
         agent_id=STRING,
         instruction=STRING,
-        completion_criteria=STRING,
-        reply_to_report_id=STRING,
         references=REFERENCES,
     ),
     definition(
@@ -153,14 +168,8 @@ RSI = [
 RESEARCH = [
     definition(
         "submit_report",
-        "提交当前任务报告并立即停止，等待 RSI 回复。",
-        task_status=STRING,
-        work=STRING,
-        problems=STRING,
-        results=STRING,
-        interpretation=STRING,
-        next_steps=STRING,
-        shared_findings=STRINGS,
+        "用自然语言结束本轮并等待 RSI 回复。也可以直接给出最终回复，系统会自动归档为报告。",
+        message=STRING,
         references=REFERENCES,
     )
 ]
@@ -199,18 +208,45 @@ class ResearchActions:
     ) -> None:
         self.extras[tool["name"]] = tool, factory, roles
 
-    def definitions(self, agent_id: str) -> list[dict[str, Any]]:
+    def definitions(self, agent_id: str, *, include_hidden: bool = False) -> list[dict[str, Any]]:
         role = self.role(agent_id)
-        common = COMMON if role != "interaction" else COMMON[:2]
+        common = COMMON if role != "interaction" else COMMON[:3]
+        hidden = set()
+        if not include_hidden:
+            if {"read", "write", "glob"} <= self.extras.keys():
+                hidden.update({"read_file", "write_file", "list_files"})
+            if (
+                self.c.state["status"] != "planned"
+                and self.c.state.get("execution_setup") != "pending"
+            ):
+                hidden.update(
+                    {
+                        "get_setup",
+                        "inspect_environment",
+                        "set_execution",
+                        "load_execution_config",
+                        "get_adapter_guide",
+                        "prepare_adapter",
+                        "prepare_research",
+                        "start_research",
+                        "handoff_research",
+                        "freeze_execution",
+                        "update_brief",
+                    }
+                )
         return [
-            *common,
-            *{"rsi": RSI, "interaction": INTERACTION, "research": RESEARCH}[role],
-            *(tool for tool, _, roles in self.extras.values() if role in roles),
+            tool
+            for tool in [
+                *common,
+                *{"rsi": RSI, "interaction": INTERACTION, "research": RESEARCH}[role],
+                *(tool for tool, _, roles in self.extras.values() if role in roles),
+            ]
+            if tool["name"] not in hidden
         ]
 
     def handler(self, agent_id: str) -> ToolHandler:
         async def handle(call: ToolCall) -> ToolResult:
-            allowed = {tool["name"] for tool in self.definitions(agent_id)}
+            allowed = {tool["name"] for tool in self.definitions(agent_id, include_hidden=True)}
             if call.name not in allowed:
                 return ToolResult({"error": "Tool is not available to this role"})
             actor = self.c.actor(agent_id)
@@ -316,30 +352,37 @@ class ResearchActions:
     ) -> ToolResult:
         c = self.c
         if name == "get_state":
-            summary = c.summary()
+            summary = model_state(c, agent_id)
             if agent_id == "interaction":
                 ids = c.current_message_ids(agent_id)
                 summary["current_message_id"] = ids[-1] if ids else None
                 summary["current_message_ids"] = ids
-            if self.role(agent_id) == "research":
-                summary["agents"] = [encode(c.actor(agent_id))]
-                summary.pop("waiting_for_user", None)
-            summary["evidence"] = [
-                self.evidence_public(item, preview=True) for item in c.store.evidence(agent_id)
-            ]
-            summary["seed_candidate_id"] = c.state["seed_candidate_id"]
             summary["workspace_candidate_id"] = self.workspace_candidate(agent_id)
             summary["require_final_confirmation"] = self.require_final_confirmation()
-            seed_id = c.state["seed_candidate_id"]
-            if seed_id is not None:
-                seed = c.store.get("candidates", seed_id, CandidateSnapshot)
-                summary["seed_candidate"] = {
-                    **encode(seed),
-                    "uri": c.store.paths.reference(
-                        c.store.root / "candidates" / f"{seed_id}.json"
-                    ).uri,
-                }
             return ToolResult(summary)
+        if name == "list_records":
+            category, offset = args["category"], args["offset"]
+            if category not in RECORD_CATEGORIES:
+                raise ValueError("Unknown public record category")
+            if type(offset) is not int or offset < 0:
+                raise ValueError("Offset must be a nonnegative integer")
+            records = []
+            for path in (c.store.root / category).glob("*.json"):
+                ref = c.store.paths.reference(path)
+                try:
+                    value = self.read_record(agent_id, ref.uri)
+                except ValueError:
+                    continue
+                records.append(record_preview(value, ref))
+            records.sort(key=lambda item: (item.get("created_at") or "", item["uri"]), reverse=True)
+            page = records[offset : offset + 10]
+            return ToolResult(
+                {
+                    "records": page,
+                    "total": len(records),
+                    "next_offset": offset + 10 if offset + 10 < len(records) else None,
+                }
+            )
         if name == "read_record":
             return ToolResult(self.read_record(agent_id, args["uri"]))
         if name == "read_candidate_file":
@@ -408,7 +451,6 @@ class ResearchActions:
             values = {
                 **args,
                 "references": self.refs(agent_id, args["references"]),
-                "shared_findings": tuple(args["shared_findings"]),
             }
             result = c.report(agent_id, key=key, fields=values)
             return ToolResult(result, stop=True, reason="rsi_reply")
@@ -483,6 +525,7 @@ class ResearchActions:
             path = c.store.root / "evidence" / f"{record.evidence_id}.json"
             if not path.exists():
                 c.store.put("evidence", record.evidence_id, record)
+            c.link_reference(agent_id, c.store.paths.reference(path))
             return ToolResult(
                 {
                     "uri": c.store.paths.reference(path).uri,
@@ -500,6 +543,7 @@ class ResearchActions:
             candidate_id = effect_id("candidate", key)
             path = c.store.root / "candidates" / f"{candidate_id}.json"
             if path.exists():
+                c.link_reference(agent_id, c.store.paths.reference(path))
                 self.mark_workspace_candidate(agent_id, candidate_id)
                 return ToolResult(
                     {
@@ -516,6 +560,7 @@ class ResearchActions:
                 scope_base_candidate_id=c.state["seed_candidate_id"],
             )
             self.mark_workspace_candidate(agent_id, candidate_id)
+            c.link_reference(agent_id, c.store.paths.reference(path))
             return ToolResult({**encode(candidate), "uri": c.store.paths.reference(path).uri})
         if name == "checkout_candidate":
             candidate = c.store.get("candidates", args["candidate_id"], CandidateSnapshot)
@@ -523,8 +568,6 @@ class ResearchActions:
             await self.checkout_candidate(agent_id, candidate, key)
             return ToolResult({"candidate_id": candidate.candidate_id, "checked_out": True})
         if name == "finish":
-            if any(a.state != AgentState.STOPPED for a in c.store.run().research_agents):
-                raise ValueError("Stop research directions before concluding the run")
             run = c.store.run()
             contract = c.store.brief().verification
             selected = args.get("candidate_id") or None
@@ -567,6 +610,10 @@ class ResearchActions:
                     run.final_result_ref = c.store.paths.reference(
                         c.store.root / "verifications" / f"{verified.result_id}.json"
                     )
+            for actor in run.research_agents:
+                if actor.state != AgentState.STOPPED:
+                    c.stop_agent(actor.agent_id, "研究已完成")
+            run.research_agents = c.store.run().research_agents
             c.state["selected_candidate_id"] = selected
             c.state["status"] = "succeeded"
             c.state["waiting_for_user"] = []
@@ -578,19 +625,13 @@ class ResearchActions:
             return ToolResult({"completed": True}, stop=True, reason="completed")
         raise ValueError("Unknown tool")
 
-    def evidence_public(self, record: EvidenceRecord, *, preview: bool = False) -> dict[str, Any]:
+    def evidence_public(self, record: EvidenceRecord) -> dict[str, Any]:
         result = {
             **encode(record),
             "uri": self.c.store.paths.reference(
                 self.c.store.root / "evidence" / f"{record.evidence_id}.json"
             ).uri,
         }
-        if preview:
-            result.update(
-                summary=record.summary[:1000],
-                truncated=len(record.summary) > 1000,
-                summary_chars=len(record.summary),
-            )
         return result
 
     def require_final_confirmation(self) -> bool:

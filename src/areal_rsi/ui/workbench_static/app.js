@@ -167,7 +167,13 @@ function agentAction(run, agent) {
     return `正在第 ${activity.attempt} 次尝试连接 API，等待模型响应`;
   const names = {read: "读取文件", grep: "检索代码", glob: "查找文件", bash: "执行命令",
     write: "写入文件", edit: "修改文件", spawn_researcher: "安排研究任务",
-    verify: "提交验证", wait: "等待后续消息", submit_report: "提交本轮报告"};
+    get_state: "查看研究进展", list_records: "查找研究记录", read_record: "阅读研究记录",
+    save_candidate: "保存候选版本", checkout_candidate: "切换候选版本",
+    verify_candidate: "提交验证", run_job: "运行实验", wait_for_job: "等待实验结果",
+    job_status: "查看作业状态", read_job_output_file: "阅读实验反馈",
+    save_evidence: "记录研究发现", share_evidence: "共享研究发现",
+    update_plan: "调整研究计划", assign: "安排下一轮任务", message_researcher: "补充研究要求",
+    wait: "等待后续消息", submit_report: "提交本轮报告"};
   return activity?.type === "tool_started" ? names[activity.tool] || `执行 ${activity.tool}`
     : activity?.type === "tool_completed" ? `已完成${names[activity.tool] || activity.tool}，继续处理`
     : "模型正在处理任务";
@@ -764,22 +770,19 @@ function section(title, value) {
 }
 function assignmentDetails(run, node) {
   const instruction = node.assignment?.instruction || "暂无记录";
-  const criteria = node.assignment?.completion_criteria || "暂无记录";
+  const criteria = node.assignment?.completion_criteria || "";
   const key = `${run.run_id}/${node.iteration_id}`;
   const details = element("details", "assignment-details");
   details.open =
     state.assignmentExpansion.get(key) ??
     instruction.length + criteria.length <= 240;
-  const summary = element("summary", "", "任务说明与完成条件");
+  const summary = element("summary", "", criteria ? "任务说明与完成条件" : "任务说明");
   summary.append(
     element("span", "assignment-expand", "展开全文"),
     element("span", "assignment-collapse", "收起"),
   );
-  details.append(
-    summary,
-    section("任务说明", instruction),
-    section("完成条件", criteria),
-  );
+  details.append(summary, section("任务说明", instruction));
+  if (criteria) details.append(section("完成条件", criteria));
   details.addEventListener("toggle", () => {
     if (details.isConnected) state.assignmentExpansion.set(key, details.open);
   });
@@ -817,7 +820,13 @@ function renderNode(run) {
     element("p", "muted", node.iteration_id),
   );
   const blocks = [heading, assignmentDetails(run, node)];
-  if (node.report) {
+  if (node.report?.message) {
+    const report = element("section", "detail-section");
+    const body = element("div", "message-content");
+    appendFormattedText(body, node.report.message);
+    report.append(element("h4", "", "本轮报告"), body);
+    blocks.push(report);
+  } else if (node.report) {
     const names = {
       task_status: "任务执行情况",
       work: "具体尝试",

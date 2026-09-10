@@ -467,7 +467,7 @@ class Coordinator:
         key: str,
         direction: str,
         instruction: str,
-        completion_criteria: str,
+        completion_criteria: str = "",
         references: tuple[RecordRef, ...] = (),
     ) -> dict[str, str]:
         if self.state["status"] != "running":
@@ -504,7 +504,7 @@ class Coordinator:
         *,
         key: str,
         instruction: str,
-        completion_criteria: str,
+        completion_criteria: str = "",
         reply_to_report_id: str | None = None,
         references: tuple[RecordRef, ...] = (),
     ) -> dict[str, str]:
@@ -522,9 +522,10 @@ class Coordinator:
                 previous = actor.iterations[-1]
                 if previous.report_ref is None:
                     raise ValueError("Researcher has not submitted its report")
-                report = decode(ResearchReport, self.store.public_record(previous.report_ref))
-                if reply_to_report_id != report.report_id:
+                report = ResearchReport.from_record(self.store.public_record(previous.report_ref))
+                if reply_to_report_id is not None and reply_to_report_id != report.report_id:
                     raise ValueError("Continuation must reply to the latest report explicitly")
+                reply_to_report_id = report.report_id
             if sum(len(a.iterations) for a in self.store.run().research_agents) >= (
                 self.store.brief().limits.max_nodes
             ):
@@ -571,7 +572,13 @@ class Coordinator:
         self.enqueue(
             "rsi",
             agent_id,
-            json.dumps(encode(assignment), ensure_ascii=False),
+            assignment.instruction
+            + (
+                "\n\n完成条件：" + assignment.completion_criteria
+                if assignment.completion_criteria
+                else ""
+            )
+            + ("\n\n相关记录：\n" + "\n".join(ref.uri for ref in references) if references else ""),
             key=assignment_id,
             references=references,
             reply_to=reply_to_report_id,
@@ -625,6 +632,17 @@ class Coordinator:
             reply_to=effect_id("message", assignment["assignment_id"]),
         )
 
+    def link_reference(
+        self, agent_id: str, ref: RecordRef, *, iteration_id: str | None = None
+    ) -> None:
+        """Attach a tool-produced record to its task, without asking the model to copy IDs."""
+        actor = self.actor(agent_id)
+        identifier = iteration_id or actor.current_iteration_id
+        node = next((n for n in actor.iterations if n.iteration_id == identifier), None)
+        if node is not None and ref not in node.references:
+            node.references = (*node.references, ref)
+            self.save_actor(actor)
+
     def report(self, agent_id: str, *, key: str, fields: dict[str, Any]) -> dict[str, str]:
         actor = self.actor(agent_id)
         if not actor.iterations:
@@ -639,7 +657,17 @@ class Coordinator:
             report = self.store.get("reports", report_id, ResearchReport)
         else:
             report = ResearchReport(
-                report_id, node.iteration_id, assignment.assignment_id, created_at=now(), **fields
+                report_id,
+                node.iteration_id,
+                assignment.assignment_id,
+                ResearchReport.message_from(fields),
+                now(),
+                tuple(
+                    RecordRef(uri)
+                    for uri in dict.fromkeys(
+                        ref.uri for ref in (*node.references, *fields.get("references", ()))
+                    )
+                ),
             )
             self.store.put("reports", report_id, report)
         if actor.state == AgentState.STOPPED or node.state == IterationState.CANCELLED:
@@ -658,7 +686,16 @@ class Coordinator:
         self.enqueue(
             agent_id,
             "rsi",
-            "研究报告：\n" + json.dumps(encode(report), ensure_ascii=False),
+            "研究员回复：\n"
+            + (
+                report.message
+                if len(report.message) <= 4000
+                else report.message[:3200]
+                + "\n[长报告的中间内容已省略，完整内容见记录]\n"
+                + report.message[-800:]
+            )
+            + "\n\n报告记录："
+            + node.report_ref.uri,
             key=report_id,
             references=(node.report_ref,),
             reply_to=assignment.assignment_id,

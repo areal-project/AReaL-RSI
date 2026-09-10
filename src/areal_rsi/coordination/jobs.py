@@ -19,6 +19,7 @@ from areal_rsi.execution import ApprovedCommand, JobManager, JobRecord, JobSpec
 from areal_rsi.modules.responses import ToolCall, ToolHandler, ToolResult
 
 VerificationReader = Callable[[JobRecord, CandidateSnapshot, str], VerifiedResult]
+INLINE_INSTRUCTIONS_CHARS = 8000
 
 
 class ResearchExecution:
@@ -64,7 +65,12 @@ class ResearchExecution:
                 candidate_id=STRING,
                 parameters_json=STRING,
             ),
-            definition("get_commands", "查看可用执行命令、参数、输出位置及环境用法。"),
+            definition(
+                "get_commands",
+                "查看可用执行命令、参数、输出位置及环境用法。"
+                "若 instructions_truncated 为 true，"
+                "执行前用 read_record 读取 instructions_ref 的完整说明。",
+            ),
             definition("job_status", "查看作业的公开状态与已发布结果。", job_id=STRING),
             definition(
                 "read_job_log",
@@ -138,9 +144,16 @@ class ResearchExecution:
                             for cmd in self.commands.values()
                         ],
                         "verification_available": self.verifier is not None,
-                        "instructions": self.instructions[:1200],
+                        "instructions": self.instructions[:INLINE_INSTRUCTIONS_CHARS],
                         "instructions_ref": guide.uri if guide else None,
-                        "instructions_truncated": len(self.instructions) > 1200,
+                        "instructions_truncated": len(self.instructions)
+                        > INLINE_INSTRUCTIONS_CHARS,
+                        "instructions_notice": (
+                            "这里只展示部分说明，后文可能包含执行和验证限制。"
+                            "执行前请用 read_record 读取 instructions_ref 指向的完整说明。"
+                            if len(self.instructions) > INLINE_INSTRUCTIONS_CHARS
+                            else ""
+                        ),
                         "verification_feedback_available": self.verifier is not None
                         and self.verifier.public_output_subdir is not None,
                         "simulated": self.simulated,

@@ -21,6 +21,42 @@ from areal_rsi.execution import ApprovedCommand, JobRecord
 from areal_rsi.modules.responses import ToolCall
 
 
+@pytest.mark.parametrize("long_guide", [False, True])
+def test_execution_rules_at_end_of_guide_are_available_to_researcher(
+    tmp_path: Path, long_guide: bool
+) -> None:
+    async def scenario() -> None:
+        c = Coordinator.create(tmp_path, TaskBrief("实现候选", "遵守执行环境的完整说明"))
+        c.start()
+        agent_id = c.spawn(key="a", direction="实现", instruction="读取执行说明")["agent_id"]
+        actions = ResearchActions(c)
+        execution = ResearchExecution(actions)
+        rule = "验证限制：不能修改评分器，候选计算必须由自定义 CUDA/Triton 实现。"
+        execution.instructions = "执行步骤与目录说明。\n" * (1000 if long_guide else 250) + rule
+        try:
+            handler = actions.handler(agent_id)
+            result = (await handler(ToolCall("get_commands", {}, "commands"))).output
+            if long_guide:
+                assert result["instructions_truncated"] is True
+                assert "read_record" in result["instructions_notice"]
+                assert rule not in result["instructions"]
+                guide = (
+                    await handler(
+                        ToolCall("read_record", {"uri": result["instructions_ref"]}, "guide")
+                    )
+                ).output
+                assert guide["content"] == execution.instructions
+            else:
+                # Normal multi-section guides must not hide later validation rules.
+                assert result["instructions_truncated"] is False
+                assert result["instructions"] == execution.instructions
+                assert rule in result["instructions"]
+        finally:
+            execution.close(cancel=True)
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("unlimited", [False, True])
 def test_background_verification_wakes_only_waiting_assignment(
     tmp_path: Path, unlimited: bool

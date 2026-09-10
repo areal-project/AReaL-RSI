@@ -108,6 +108,16 @@ def handle(manifest: dict[str, Any], request_data: dict[str, Any]) -> Any:
     from common import request
 
     operation = request_data["operation"]
+    excluded = request_data.get("exclude_sha256", [])
+    if not isinstance(excluded, list) or any(
+        not isinstance(digest, str)
+        or len(digest) != 64
+        or any(char not in "0123456789abcdef" for char in digest)
+        for digest in excluded
+    ):
+        raise ValueError("Excluded sources must be full lowercase SHA256 hashes")
+    if excluded and operation != "collect":
+        raise ValueError("Source exclusions only apply to collection")
     selected = request_data.get("task")
     tasks = manifest["tasks"]
     if selected is not None and selected not in tasks:
@@ -214,7 +224,11 @@ def handle(manifest: dict[str, Any], request_data: dict[str, Any]) -> Any:
         }
         if operation == "collect":
             best = max(
-                (j for j in public if j["kind"] == "eval" and j["correct"]),
+                (
+                    j
+                    for j in public
+                    if j["kind"] == "eval" and j["correct"] and j["source_sha256"] not in excluded
+                ),
                 key=lambda j: j["speedup"],
                 default=None,
             )
@@ -224,6 +238,8 @@ def handle(manifest: dict[str, Any], request_data: dict[str, Any]) -> Any:
                     (Path(raw["cwd"]) / "model_new.py").read_bytes()
                 ).decode()
                 value["best"] = best
+            if excluded:
+                value["excluded_sha256"] = sorted(set(excluded))
         elif operation != "status":
             raise ValueError("Unknown operation")
         result[name] = value

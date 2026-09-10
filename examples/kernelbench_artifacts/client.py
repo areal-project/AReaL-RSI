@@ -186,6 +186,33 @@ def score_bundle(
     return score, metrics, evidence
 
 
+def collect_bundle(
+    manifest: dict[str, Any], workspace: Path, excluded: list[str]
+) -> dict[str, Any]:
+    """Collect frozen evaluated sources, with review exclusions recorded separately."""
+    status: dict[str, Any] = remote(manifest, "collect", exclude_sha256=excluded)
+    sources = {}
+    for task, value in status.items():
+        if "source" not in value:
+            if (workspace / task / "model_new.py").exists():
+                raise ValueError(f"No selected source for {task}; collect into a fresh directory")
+            continue
+        source = base64.b64decode(value["source"], validate=True)
+        digest = hashlib.sha256(source).hexdigest()
+        if digest in excluded or digest != value["best"]["source_sha256"]:
+            raise ValueError(f"Collected source for {task} does not match the selected snapshot")
+        sources[task] = source
+    # Validate every source before touching the destination. Older bridges that
+    # ignore exclusions must not silently reintroduce a rejected candidate.
+    for task, source in sources.items():
+        path = workspace / task / "model_new.py"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(source)
+        status[task].pop("source")
+    write_json(workspace / "evaluation-sources.json", status)
+    return status
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -198,7 +225,10 @@ def main() -> None:
     parser.add_argument("--candidate")
     parser.add_argument("--script")
     parser.add_argument("--phase", default="search", choices=("search", "final"))
+    parser.add_argument("--exclude-sha256", action="append", default=[])
     args = parser.parse_args()
+    if args.exclude_sha256 and args.operation != "collect":
+        parser.error("--exclude-sha256 only applies to collect")
     manifest = json.loads(args.manifest.read_text())
     if args.operation == "evaluate":
         evaluate(manifest, args.workspace, args.output, args.task, args.candidate)
@@ -210,7 +240,11 @@ def main() -> None:
             manifest, args.workspace, args.output, args.task, args.script, args.candidate or ""
         )
         return
-    status = remote(manifest, "collect" if args.operation == "collect" else "status")
+    status = (
+        collect_bundle(manifest, args.workspace, args.exclude_sha256)
+        if args.operation == "collect"
+        else remote(manifest, "status")
+    )
     if args.operation == "status":
         print(
             json.dumps(
@@ -233,12 +267,6 @@ def main() -> None:
             )
         )
     elif args.operation == "collect":
-        for task, value in status.items():
-            if "source" in value:
-                path = args.workspace / task / "model_new.py"
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(base64.b64decode(value.pop("source")))
-        write_json(args.workspace / "evaluation-sources.json", status)
         print(
             json.dumps(
                 {task: {"used": v["used"], "best": v.get("best")} for task, v in status.items()},

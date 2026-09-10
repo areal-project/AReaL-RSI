@@ -191,6 +191,91 @@ def diagnostic_payload(key: str = "diagnosis") -> dict[str, str]:
     }
 
 
+def test_collection_excludes_reviewed_code_but_keeps_history(diagnostic_queue: Any) -> None:
+    q = diagnostic_queue
+    for index, (source, speedup) in enumerate(((b"valid candidate", 1.2), (b"shortcut", 9.0))):
+        q.bridge.handle(
+            q.manifest,
+            {
+                "operation": "submit",
+                "task": "L1P1",
+                "key": str(index),
+                "source": base64.b64encode(source).decode(),
+            },
+        )
+        q.jobs[-1].update(state="succeeded", evaluation={"correct": True, "speedup": speedup})
+    digest = hashlib.sha256(b"shortcut").hexdigest()
+    assert q.bridge.handle(q.manifest, {"operation": "collect"})["L1P1"]["best"]["speedup"] == 9
+    # Working files may now belong to another research direction.
+    (q.workspace / "model_new.py").write_text("another task entirely")
+    collected = q.bridge.handle(q.manifest, {"operation": "collect", "exclude_sha256": [digest]})[
+        "L1P1"
+    ]
+    assert base64.b64decode(collected["source"]) == b"valid candidate"
+    assert collected["best"]["speedup"] == 1.2
+    assert collected["excluded_sha256"] == [digest]
+    assert collected["used"] == 2 and len(collected["jobs"]) == 2
+    assert collected["jobs"][1]["speedup"] == 9
+    assert len(q.jobs) == 2
+    with pytest.raises(ValueError, match="full lowercase SHA256"):
+        q.bridge.handle(q.manifest, {"operation": "collect", "exclude_sha256": ["short"]})
+
+
+@pytest.mark.parametrize("failure", ["excluded", "corrupt", "stale"])
+def test_collection_checks_sources_before_changing_any_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    client = module("client")
+    source = b"frozen source"
+    digest = hashlib.sha256(source).hexdigest()
+    value = {"source": base64.b64encode(source).decode(), "best": {"source_sha256": digest}}
+    status = {"L1P1": dict(value), "L2P14": dict(value)}
+    excluded = []
+    if failure == "excluded":
+        # An older deployed bridge may ignore the new selection parameter.
+        excluded = [digest]
+    elif failure == "corrupt":
+        status["L2P14"]["source"] = base64.b64encode(b"different source").decode()
+    else:
+        status["L2P14"] = {}
+    for task in status:
+        (tmp_path / task).mkdir()
+        (tmp_path / task / "model_new.py").write_text("preserve previous files")
+    monkeypatch.setattr(client, "remote", lambda *args, **kwargs: status)
+    with pytest.raises(ValueError, match=r"selected snapshot|fresh directory"):
+        client.collect_bundle({"tasks": {name: {} for name in status}}, tmp_path, excluded)
+    for task in status:
+        assert (tmp_path / task / "model_new.py").read_text() == "preserve previous files"
+    assert not (tmp_path / "evaluation-sources.json").exists()
+
+
+def test_client_collects_selected_snapshot_and_archives_exclusions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = module("client")
+    source = b"selected frozen source"
+    digest = hashlib.sha256(source).hexdigest()
+    rejected = hashlib.sha256(b"rejected source").hexdigest()
+
+    def request(manifest: Any, operation: str, **kwargs: Any) -> Any:
+        assert operation == "collect" and kwargs == {"exclude_sha256": [rejected]}
+        return {
+            "L1P1": {
+                "source": base64.b64encode(source).decode(),
+                "best": {"source_sha256": digest},
+                "excluded_sha256": [rejected],
+            },
+            "L2P14": {"excluded_sha256": [rejected]},
+        }
+
+    monkeypatch.setattr(client, "remote", request)
+    result = client.collect_bundle({"tasks": {"L1P1": {}, "L2P14": {}}}, tmp_path, [rejected])
+    assert (tmp_path / "L1P1/model_new.py").read_bytes() == source
+    assert not (tmp_path / "L2P14/model_new.py").exists()
+    assert json.loads((tmp_path / "evaluation-sources.json").read_text()) == result
+    assert "source" not in result["L1P1"]
+
+
 def test_diagnostics_share_the_evaluation_cap_and_recover_the_same_intent(
     diagnostic_queue: Any,
 ) -> None:

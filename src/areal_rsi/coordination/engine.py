@@ -427,6 +427,16 @@ class ResearchEngine:
                     state.update(latest)
 
             retry = c.state.get("turn_retries", {}).get(agent_id, {})
+
+            def incoming_messages() -> list[Json]:
+                allowed = c.turn_update_senders(agent_id)
+                updates = (
+                    c.store.get("messages", identifier, ResearchMessage)
+                    for identifier in c.state["inboxes"].get(agent_id, [])
+                    if identifier != message.message_id
+                )
+                return [encode(update) for update in updates if update.sender in allowed]
+
             result = await runtime.turn(
                 session,
                 system_prompt=prompt,
@@ -442,25 +452,15 @@ class ResearchEngine:
                 retry_id=retry.get("retry_id")
                 if retry.get("mode") != "report" and retry.get("message_id") == message.message_id
                 else None,
-                incoming_messages=lambda: [
-                    encode(c.store.get("messages", identifier, ResearchMessage))
-                    for identifier in c.state["inboxes"].get(agent_id, [])
-                    if identifier != message.message_id
-                    and c.store.get("messages", identifier, ResearchMessage).sender
-                    == ("user" if agent_id in {"rsi", "interaction"} else "rsi")
-                ],
+                incoming_messages=incoming_messages,
             )
+            user_messages = [
+                identifier
+                for identifier in c.current_message_ids(agent_id)
+                if c.store.get("messages", identifier, ResearchMessage).sender == "user"
+            ]
             if (
-                (
-                    agent_id == "interaction"
-                    or (
-                        agent_id == "rsi"
-                        and (
-                            message.sender == "user"
-                            or c.state.get("turn_followups", {}).get(agent_id)
-                        )
-                    )
-                )
+                (agent_id == "interaction" or (agent_id == "rsi" and user_messages))
                 and result.stop_reason == "completed"
                 and result.text.strip()
             ):
@@ -469,7 +469,7 @@ class ResearchEngine:
                     "user",
                     result.text.strip(),
                     key=agent_id + "-response:" + message.message_id,
-                    reply_to=c.current_message_ids(agent_id)[-1],
+                    reply_to=(user_messages or c.current_message_ids(agent_id))[-1],
                 )
             if result.stop_reason == "budget_exhausted":
                 c.end_turn(

@@ -363,12 +363,17 @@ class Coordinator:
         self.save_actor(actor)
         self.save()
 
+    def turn_update_senders(self, agent_id: str) -> set[str]:
+        if agent_id == "rsi":
+            return {"user", *(actor.agent_id for actor in self.store.run().research_agents)}
+        return {"user"} if agent_id == "interaction" else {"rsi"}
+
     def receive_during_turn(self, agent_id: str, message_id: str) -> None:
-        """Acknowledge user or supervisor updates after the runtime has saved them."""
+        """Acknowledge authorized updates after the runtime has saved them."""
         message = self.store.get("messages", message_id, ResearchMessage)
-        allowed = {"user"} if agent_id in {"rsi", "interaction"} else {"rsi"}
+        allowed = self.turn_update_senders(agent_id)
         if message.sender not in allowed or message.recipient != agent_id:
-            raise ValueError("Only the agent's user or supervisor may update an active delivery")
+            raise ValueError("This sender cannot update the agent's active delivery")
         followups = self.state.setdefault("turn_followups", {}).setdefault(agent_id, [])
         if message_id not in followups:
             followups.append(message_id)

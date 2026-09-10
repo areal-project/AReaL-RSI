@@ -65,6 +65,27 @@ def test_incremental_events_do_not_reread_acknowledged_history(
     assert [event.sequence for event in c.store.events()] == list(range(1, third.sequence + 1))
 
 
+def test_active_report_receipt_is_durable_and_only_reaches_rsi(tmp_path: Path) -> None:
+    c = create(tmp_path)
+    researcher = c.spawn(key="a", direction="A", instruction="检查结果")["agent_id"]
+    c.begin_turn("rsi")
+    report_id = c.enqueue(researcher, "rsi", "本轮检查结束", key="result")
+    c.receive_during_turn("rsi", report_id)
+    reopened = Coordinator(ResearchStore(tmp_path, c.store.run_id))
+    reopened.receive_during_turn("rsi", report_id)  # Replay an already durable injection.
+    assert reopened.state["delivered"].count(report_id) == 1
+    assert report_id not in reopened.state["inboxes"]["rsi"]
+    assert reopened.current_message_ids("rsi")[-1] == report_id
+    for sender, recipient in (
+        ("unregistered_researcher", "rsi"),
+        (researcher, "interaction"),
+        (researcher, researcher),
+    ):
+        message_id = reopened.enqueue(sender, recipient, "不具备中途指挥权限", key=recipient)
+        with pytest.raises(ValueError, match="cannot update"):
+            reopened.receive_during_turn(recipient, message_id)
+
+
 def test_report_is_a_hard_barrier_and_session_is_continuous(tmp_path: Path) -> None:
     c = create(tmp_path)
     first = c.spawn(

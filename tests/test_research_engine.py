@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from areal_rsi.api.base import AgentState
-from areal_rsi.api.research import ResearchLimits, ResearchReport, TaskBrief
+from areal_rsi.api.research import ResearchLimits, ResearchMessage, ResearchReport, TaskBrief
 from areal_rsi.coordination.coordinator import Coordinator
 from areal_rsi.coordination.engine import ResearchEngine, ToolSet
 from areal_rsi.coordination.store import ResearchStore
@@ -115,6 +115,81 @@ class EngineTest(unittest.IsolatedAsyncioTestCase):
             return ToolResult("waiting", stop=True)
 
         return ToolSet(definitions("report", "wait"), handle)
+
+    async def test_report_reaches_active_rsi_once_and_does_not_replace_user_reply(self) -> None:
+        async def scenario(has_user_update: bool) -> None:
+            c = self.coordinator()
+            researcher = c.spawn(key="research", direction="A", instruction="检查结果")["agent_id"]
+            user_id = (
+                c.enqueue("user", "rsi", "请告诉我最新进展", key="user")
+                if has_user_update
+                else None
+            )
+            reported = asyncio.Event()
+            received: list[str] = []
+
+            async def respond(agent_id: str, index: int, payload: Json) -> Json:
+                if agent_id == researcher:
+                    return packet(call("report", "report"))
+                if index == 0:
+                    await reported.wait()  # Report arrives during RSI's model call.
+                    return packet(call("inspect", "inspect"))
+                self.assertEqual(index, 1, "Report incorrectly woke RSI for a second turn")
+                updates = []
+                for item in payload["input"]:
+                    if item.get("role") != "user":
+                        continue
+                    try:
+                        value = json.loads(item.get("content", ""))
+                    except ValueError:
+                        continue
+                    if isinstance(value, dict) and value.get("sender") == researcher:
+                        updates.append(value)
+                self.assertEqual(len(updates), 1)
+                self.assertIn("报告记录：", updates[0]["text"])
+                received.append(updates[0]["message_id"])
+                return packet(
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "已收到研究结果。"}],
+                    }
+                )
+
+            def tools(agent_id: str) -> ToolSet:
+                regular = self.tools(c, agent_id)
+
+                async def handle(item: ToolCall) -> ToolResult:
+                    if item.name == "inspect":
+                        return ToolResult({"checked": True})
+                    result = await regular.call(item)
+                    if item.name == "report":
+                        reported.set()
+                    return result
+
+                return ToolSet(definitions("inspect", "report", "wait"), handle)
+
+            transport = RoutedTransport(respond)
+            engine = ResearchEngine(c, ResponsesRuntime(self.config, transport), tools)
+            await engine.run_until_idle(timeout=5)
+            self.assertEqual(transport.counts, {"rsi": 2, researcher: 1})
+            recovered = Coordinator(ResearchStore(self.root, c.store.run_id))
+            self.assertEqual(recovered.state["delivered"].count(received[0]), 1)
+            self.assertNotIn("rsi", recovered.pending())
+            replies = [
+                m
+                for m in c.store.records("messages", ResearchMessage)
+                if m.sender == "rsi" and m.recipient == "user"
+            ]
+            if has_user_update:
+                self.assertEqual(len(replies), 1)
+                self.assertEqual(replies[0].reply_to, user_id)
+            else:
+                self.assertEqual(replies, [])
+
+        for has_user_update in (False, True):
+            with self.subTest(has_user_update=has_user_update):
+                await scenario(has_user_update)
 
     async def test_job_wakeup_retains_current_assignment_after_controller_reload(self) -> None:
         c = self.coordinator()

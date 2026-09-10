@@ -50,6 +50,11 @@ continuous model sessions. Execution and web research tools are separate adapter
 - Messages and tool effects have stable identities. Recovering a delivery reuses
   the same session turn and reconciles the same effect; completed effects return
   their original result. A stopped direction archives late reports without wakeup.
+- Registered researchers' messages can reach an active RSI session at a resolved
+  tool boundary. The runtime persists each message before acknowledging it, so it
+  will not become a redundant later turn. This does not let researchers steer
+  other researchers or Interaction. RSI replies to users retain the actual user
+  message as their reply target, even if a research report arrived more recently.
 - Incremental event reads skip acknowledged files before decoding their bodies.
   A full-history request still reads the complete archive; subsequent workbench
   polls only decode events after the supplied cursor.

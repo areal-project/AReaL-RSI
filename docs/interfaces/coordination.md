@@ -37,6 +37,11 @@ continuous model sessions. Execution and web research tools are separate adapter
   are public run data: credentials belong in the configured execution environment.
   Operator argv, environment and private verifier inputs are not included. Legacy
   jobs without saved parameters return `null` rather than inferred values.
+- Researcher turn and recovery state includes `current_assignment` with its ID,
+  instruction and completion criteria. A job completion message remains a delivery
+  within that assignment; it does not replace the task or authorize another attempt.
+  New assignments update this state from their durable records. Later RSI messages
+  can refine the task as usual.
 - Messages and tool effects have stable identities. Recovering a delivery reuses
   the same session turn and reconciles the same effect; completed effects return
   their original result. A stopped direction archives late reports without wakeup.

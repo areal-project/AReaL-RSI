@@ -323,6 +323,7 @@ class ResearchEngine:
         run = c.store.run()
         message_id = c.state["active"].get(agent_id)
         message = c.store.get("messages", message_id, ResearchMessage) if message_id else None
+        assignment = c.store.public_record(current.assignment_ref) if current else None
         return {
             "run_id": c.store.run_id,
             "status": c.state["status"],
@@ -347,6 +348,14 @@ class ResearchEngine:
             "waiting_for_user": c.user_questions() if agent_id in {"rsi", "interaction"} else [],
             "direction": actor.direction,
             "current_node": encode(current),
+            # A completion notification is a new delivery, not a replacement
+            # assignment. Keep the task itself available after wakeups/compaction.
+            "current_assignment": {
+                key: assignment[key]
+                for key in ("assignment_id", "instruction", "completion_criteria")
+            }
+            if assignment
+            else None,
             "budget": {
                 name: c.state[name] for name in ("model_calls", "total_tokens", "verify_calls")
             },

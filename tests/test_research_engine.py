@@ -116,6 +116,50 @@ class EngineTest(unittest.IsolatedAsyncioTestCase):
 
         return ToolSet(definitions("report", "wait"), handle)
 
+    async def test_job_wakeup_retains_current_assignment_after_controller_reload(self) -> None:
+        c = self.coordinator()
+        instruction = "仅提交一次评测；收到结果后向 RSI 汇报，再等待下一轮任务。"
+        criteria = "报告本次结果，不自动提交下一次评测。"
+        assignment = c.spawn(
+            key="direction",
+            direction="改进实现",
+            instruction=instruction,
+            completion_criteria=criteria,
+        )
+        researcher = assignment["agent_id"]
+
+        async def respond(agent_id: str, index: int, payload: Json) -> Json:
+            if agent_id == "rsi":
+                return packet(call("wait", f"rsi_{index}"))
+            raw = payload["instructions"].split("当前 run 的系统状态：\n", 1)[1]
+            state = json.JSONDecoder().raw_decode(raw)[0]
+            task = state["current_assignment"]
+            if index < 2:
+                self.assertEqual(task["instruction"], instruction)
+                self.assertEqual(task["completion_criteria"], criteria)
+            else:
+                self.assertEqual(task["instruction"], "根据报告继续做代码审查，不提交评测。")
+                self.assertNotEqual(task["assignment_id"], first_task_id)
+            if index == 1:
+                self.assertEqual(state["current_message"]["sender"], "system")
+                self.assertEqual(task["assignment_id"], first_task_id)
+            return packet(call("wait" if index == 0 else "report", f"research_{index}"))
+
+        transport = RoutedTransport(respond)
+        engine = ResearchEngine(c, ResponsesRuntime(self.config, transport), partial(self.tools, c))
+        first_task_id = engine._recovery_state(researcher)["current_assignment"]["assignment_id"]
+        await engine.run_until_idle(timeout=5)
+        c.enqueue("system", researcher, "你订阅的作业已完成，请处理结果。", key="job-completed")
+        # Recover from durable records with a job message as the active delivery.
+        c = Coordinator(ResearchStore(self.root, c.store.run_id))
+        engine = ResearchEngine(c, ResponsesRuntime(self.config, transport), partial(self.tools, c))
+        await engine.run_until_idle(timeout=5)
+        self.assertEqual(len(c.actor(researcher).iterations), 1)
+        self.assertIsNotNone(c.actor(researcher).iterations[0].report_ref)
+        c.assign(researcher, key="next", instruction="根据报告继续做代码审查，不提交评测。")
+        await engine.run_until_idle(timeout=5)
+        self.assertEqual(transport.counts[researcher], 3)
+
     async def test_unlimited_run_keeps_usage_and_enforces_only_five_researchers(self) -> None:
         limits = ResearchLimits(
             max_agents=5,

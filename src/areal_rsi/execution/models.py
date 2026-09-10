@@ -92,6 +92,8 @@ class ApprovedCommand:
     gpu_count: int = 0
     timeout_seconds: float | None = None
     output_subdir: str = "."
+    # Verifiers keep all output private unless an operator publishes a subdirectory.
+    public_output_subdir: str | None = None
 
     def bind(self, values: dict[str, str], *, cwd: str, **metadata: str) -> JobSpec:
         if set(values) != set(self.parameters):

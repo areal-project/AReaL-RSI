@@ -18,6 +18,7 @@ def register_sources(actions: ResearchActions, client: ResearchWebClient | None 
             path = actions.c.store.root / "materials" / f"{key}.json"
             if path.exists():
                 record = actions.c.store.public_record(actions.c.store.paths.reference(path))
+                actions.c.link_reference(agent_id, actions.c.store.paths.reference(path))
                 return ToolResult({**record, "uri": actions.c.store.paths.reference(path).uri})
             if call.name == "search_web":
                 result = await web.search_web(call.arguments["query"])
@@ -31,6 +32,7 @@ def register_sources(actions: ResearchActions, client: ResearchWebClient | None 
                 **result,
             }
             ref = actions.c.store.put("materials", key, record)
+            actions.c.link_reference(agent_id, ref)
             actions.c.store.event(
                 "source_read",
                 agent_id=agent_id,

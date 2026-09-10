@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from collections.abc import Callable
@@ -9,7 +10,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
-from areal_rsi.api.base import AgentState, ContentRef, IterationState
+from areal_rsi.api.base import AgentState, ContentRef, IterationState, RecordRef
 from areal_rsi.api.research import CandidateSnapshot, ResearchMessage, VerifiedResult
 from areal_rsi.base.storage import decode, encode, now, write_json
 from areal_rsi.coordination.actions import STRING, ResearchActions, definition
@@ -91,7 +92,8 @@ class ResearchExecution:
             ),
             definition(
                 "verify_candidate",
-                "使用可信验证器测量固定候选。phase 为 search、final 或 diagnostic。",
+                "按 candidate_id 验证已保存版本，无需切换工作区。"
+                "phase：search 用于研究反馈，final 用于最终确认，diagnostic 用于诊断。",
                 candidate_id=STRING,
                 phase=STRING,
             ),
@@ -111,6 +113,18 @@ class ResearchExecution:
         async def handle(call: ToolCall) -> ToolResult:
             args = call.arguments
             if call.name == "get_commands":
+                guide = None
+                if self.instructions:
+                    guide = self.c.store.put(
+                        "materials",
+                        "execution_guide_"
+                        + hashlib.sha256(self.instructions.encode()).hexdigest()[:16],
+                        {
+                            "title": "执行环境使用说明",
+                            "content": self.instructions,
+                            "shared": True,
+                        },
+                    )
                 return ToolResult(
                     {
                         "commands": [
@@ -124,7 +138,11 @@ class ResearchExecution:
                             for cmd in self.commands.values()
                         ],
                         "verification_available": self.verifier is not None,
-                        "instructions": self.instructions,
+                        "instructions": self.instructions[:1200],
+                        "instructions_ref": guide.uri if guide else None,
+                        "instructions_truncated": len(self.instructions) > 1200,
+                        "verification_feedback_available": self.verifier is not None
+                        and self.verifier.public_output_subdir is not None,
                         "simulated": self.simulated,
                         "execution_setup": self.c.state.get("execution_setup", "ready"),
                     }
@@ -133,8 +151,19 @@ class ResearchExecution:
                 return await self.submit(agent_id, call)
             job_id = args["job_id"]
             info = self.jobs[job_id]
-            if agent_id != "rsi" and info["agent_id"] != agent_id:
-                raise ValueError("Job belongs to another research direction")
+            # Status and completion subscriptions are run-wide. File access below
+            # still observes ownership/sharing and the verifier's publication boundary.
+            if (
+                call.name in {"read_job_log", "collect_job_output", "read_job_output_file"}
+                and not info["verification"]
+                and agent_id not in {"rsi", info["agent_id"]}
+            ):
+                self.actions.read_record(
+                    agent_id,
+                    self.c.store.paths.reference(
+                        self.c.store.root / "executions" / f"{job_id}.json"
+                    ).uri,
+                )
             record = self.manager.get(job_id)
             assert record is not None
             if call.name == "read_job_log":
@@ -145,10 +174,19 @@ class ResearchExecution:
                     stream.seek(max(0, stream.tell() - 16000))
                     return ToolResult({"text": stream.read().decode(errors="replace")})
             if call.name in {"collect_job_output", "read_job_output_file"}:
-                if info["verification"] or record.state != "succeeded":
-                    raise ValueError("Only completed execution job outputs can be collected")
+                if record.state != "succeeded":
+                    raise ValueError("Job outputs are available after successful completion")
+                subdir = (
+                    info.get("public_output_subdir")
+                    if info["verification"]
+                    else info.get("output_subdir", ".")
+                )
+                if subdir is None:
+                    raise ValueError(
+                        "The verifier has not published file feedback; use its result record"
+                    )
                 output_root = Path(info["output"])
-                source = output_root / info.get("output_subdir", ".")
+                source = output_root / subdir
                 if not source.resolve().is_relative_to(output_root.resolve()):
                     raise ValueError("Configured artifact path escapes job output")
                 if source.is_symlink() or any(p.is_symlink() for p in source.rglob("*")):
@@ -182,6 +220,7 @@ class ResearchExecution:
                         "simulated": self.simulated,
                     }
                     ref = self.c.store.put("materials", effect_id("output", call.call_id), value)
+                    self.c.link_reference(agent_id, ref)
                     return ToolResult({**value, "uri": ref.uri})
                 destination = self.actions.workspace_path(agent_id, args["destination"])
                 if destination.exists() and any(p.is_symlink() for p in destination.rglob("*")):
@@ -325,6 +364,7 @@ class ResearchExecution:
             "processed": False,
             "output": str(output),
             "output_subdir": command.output_subdir,
+            "public_output_subdir": command.public_output_subdir,
             "created_at": now(),
             "spec": encode(spec),
         }
@@ -353,6 +393,8 @@ class ResearchExecution:
             "error": record.error,
             "simulated": record.spec.backend == "mock",
             "verification": info["verification"],
+            "public_files_available": record.state == "succeeded"
+            and (not info["verification"] or info.get("public_output_subdir") is not None),
             "result": info.get("result"),
         }
 
@@ -390,6 +432,12 @@ class ResearchExecution:
             with suppress(FileNotFoundError):
                 # Older notifications can have a different JSON field order after reload.
                 text = self.c.store.get("messages", effect_id("message", key), ResearchMessage).text
+            if info.get("result", {}).get("uri"):
+                self.c.link_reference(
+                    agent_id,
+                    RecordRef(info["result"]["uri"]),
+                    iteration_id=subscription["iteration_id"],
+                )
             self.c.enqueue(
                 "system",
                 agent_id,
@@ -415,7 +463,7 @@ class ResearchExecution:
                 self.manager.submit(decode(JobSpec, info["spec"]), job_id=key)
             must_cancel = (
                 actor_stopped
-                or self.c.state["status"] == "stopped"
+                or self.c.state["status"] in {"stopped", "succeeded", "failed"}
                 or self.c.state.get("budget_stop_reason") == "Run wall-time budget exhausted"
             )
             if must_cancel and not self.manager.get(key).terminal:
@@ -467,8 +515,15 @@ class ResearchExecution:
                     self.c.store.record_verification(result)
                 ref = self.c.store.paths.reference(result_path)
                 run = self.c.store.run()
+                baseline_id = self.c.state.get("baseline_candidate_id")
+                baseline = (
+                    self.c.store.get("candidates", baseline_id, CandidateSnapshot)
+                    if baseline_id
+                    else None
+                )
                 if (
-                    candidate.candidate_id == self.c.state.get("baseline_candidate_id")
+                    baseline is not None
+                    and candidate.content == baseline.content
                     and result.phase == "search"
                     and result.status == "succeeded"
                     and result.passed
@@ -511,6 +566,11 @@ class ResearchExecution:
                 if not result_path.exists():
                     self.c.store.put("executions", record.job_id, info["result"])
                 info["result"]["uri"] = self.c.store.paths.reference(result_path).uri
+            self.c.link_reference(
+                info["agent_id"],
+                RecordRef(info["result"]["uri"]),
+                iteration_id=info["iteration_id"],
+            )
             self.notify_completion(record)
             info["processed"] = True
             self.save()

@@ -247,6 +247,211 @@ def test_stream_retries_overload_before_meaningful_output(monkeypatch: pytest.Mo
             proxy.close()
 
 
+def test_stream_overload_falls_back_to_complete_chat_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[dict[str, object]] = []
+    overloaded = (
+        b'data: {"error":{"message":"Our servers are currently overloaded. '
+        b'Please try again later.","type":"upstream_error"}}\n\n'
+    )
+    completion = {
+        "id": "chatcmpl-fixture",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "gateway-fixture-model",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "recovered"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
+    }
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            requests.append(request)
+            self.send_response(200)
+            if request["stream"]:
+                body = overloaded
+                self.send_header("Content-Type", "text/event-stream")
+            else:
+                body = json.dumps(completion).encode()
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            self.wfile.flush()
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    monkeypatch.setattr("areal_rsi.modules.gateway.time.sleep", lambda _: None)
+    with local_upstream(Handler) as upstream:
+        proxy = GatewayProxy(upstream, "offline-fixture")
+        try:
+            request = urllib.request.Request(
+                proxy.url,
+                data=json.dumps(
+                    {
+                        "model": "gateway-fixture-model",
+                        "messages": [],
+                        "stream": True,
+                        "stream_options": {"include_usage": True},
+                    }
+                ).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                body = response.read()
+            chunks = [
+                json.loads(line[6:])
+                for line in body.decode().splitlines()
+                if line.startswith("data: {")
+            ]
+            assert len(requests) == 7
+            assert all(item["stream"] is True for item in requests[:6])
+            assert requests[-1]["stream"] is False
+            assert "stream_options" not in requests[-1]
+            assert chunks == [
+                {
+                    "id": "chatcmpl-fixture",
+                    "created": 1,
+                    "model": "gateway-fixture-model",
+                    "usage": completion["usage"],
+                    "object": "chat.completion.chunk",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"role": "assistant", "content": "recovered"},
+                            "finish_reason": "stop",
+                            "logprobs": None,
+                        }
+                    ],
+                }
+            ]
+            assert b"data: [DONE]" in body and b"upstream_error" not in body
+            assert proxy.requests[0]["stream_retries"] == 5
+            assert proxy.requests[0]["stream_fallback"] is True
+            assert proxy.requests[0]["fallback_status"] == 200
+        finally:
+            proxy.close()
+
+
+def test_complete_json_response_is_converted_when_stream_was_requested() -> None:
+    completion = {
+        "id": "chatcmpl-json-fixture",
+        "model": "gateway-fixture-model",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "json recovery"},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+    received: list[dict[str, object]] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            received.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+            body = json.dumps(completion).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    with local_upstream(Handler) as upstream:
+        proxy = GatewayProxy(upstream, "offline-fixture")
+        try:
+            request = urllib.request.Request(
+                proxy.url,
+                data=json.dumps(
+                    {"model": "gateway-fixture-model", "messages": [], "stream": True}
+                ).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                body = response.read()
+                assert response.headers["Content-Type"] == "text/event-stream"
+            chunks = [
+                json.loads(line[6:])
+                for line in body.decode().splitlines()
+                if line.startswith("data: {")
+            ]
+            assert received == [
+                {
+                    "model": "gateway-fixture-model",
+                    "messages": [],
+                    "stream": True,
+                    "store": False,
+                }
+            ]
+            assert chunks[0]["choices"][0]["delta"]["content"] == "json recovery"
+            assert b"data: [DONE]" in body
+            assert "stream_fallback" not in proxy.requests[0]
+        finally:
+            proxy.close()
+
+
+def test_empty_stream_uses_immediate_non_stream_fallback() -> None:
+    requests: list[dict[str, object]] = []
+    completion = {
+        "id": "chatcmpl-empty-fixture",
+        "model": "gateway-fixture-model",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "recovered from empty"},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            requests.append(request)
+            self.send_response(200)
+            if request["stream"]:
+                body = b""
+                self.send_header("Content-Type", "text/event-stream")
+            else:
+                body = json.dumps(completion).encode()
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    with local_upstream(Handler) as upstream:
+        proxy = GatewayProxy(upstream, "offline-fixture")
+        try:
+            request = urllib.request.Request(
+                proxy.url,
+                data=b'{"model":"gateway-fixture-model","messages":[],"stream":true}',
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                body = response.read()
+            assert len(requests) == 2
+            assert requests[0]["stream"] is True and requests[1]["stream"] is False
+            assert b"recovered from empty" in body and b"data: [DONE]" in body
+            assert proxy.requests[0]["stream_fallback"] is True
+            assert "stream_retries" not in proxy.requests[0]
+        finally:
+            proxy.close()
+
+
 def test_stream_does_not_retry_after_meaningful_output(monkeypatch: pytest.MonkeyPatch) -> None:
     attempts = 0
     partial = (

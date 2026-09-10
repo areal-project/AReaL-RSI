@@ -66,8 +66,10 @@ def _done(event: bytes) -> bool:
     )
 
 
-def _relay_stream(response: Any, send_event: Callable[[bytes], None]) -> tuple[bytes, bool, bool]:
-    """转发一次上游流，返回原文、是否完成、是否可在无副作用前提下重试。"""
+def _relay_stream(
+    response: Any, send_event: Callable[[bytes], None]
+) -> tuple[bytes, bool, str | None]:
+    """转发一次上游流，返回原文、是否完成及无副作用恢复原因。"""
     raw, event = bytearray(), bytearray()
     # role-only 首事件暂存到真正输出出现；紧随其后的过载才可以透明重试。
     pending: list[bytes] = []
@@ -80,7 +82,7 @@ def _relay_stream(response: Any, send_event: Callable[[bytes], None]) -> tuple[b
         completed_event = bytes(event)
         event.clear()
         if _retryable_stream_error(completed_event) and not meaningful:
-            return bytes(raw), False, True
+            return bytes(raw), False, "overload"
         if _has_meaningful_delta(completed_event):
             for buffered in pending:
                 send_event(buffered)
@@ -94,11 +96,13 @@ def _relay_stream(response: Any, send_event: Callable[[bytes], None]) -> tuple[b
         if _done(completed_event):
             for buffered in pending:
                 send_event(buffered)
-            return bytes(raw), True, False
+            return bytes(raw), True, None
     if event:
         # 不完整事件已经来自实际响应，不能假定重放请求不会造成重复输出。
         send_event(bytes(event))
-    return bytes(raw), False, False
+        return bytes(raw), False, None
+    # 空流或只有 role/comment 的流没有对调用方产生可见输出，可安全改走完整响应。
+    return bytes(raw), False, "empty" if not meaningful else None
 
 
 def normalize_tool_deltas(body: bytes) -> bytes:
@@ -117,6 +121,39 @@ def normalize_tool_deltas(body: bytes) -> bytes:
             line = "data: " + json.dumps(item, ensure_ascii=False)
         lines.append(line)
     return ("\n".join(lines) + "\n\n").encode()
+
+
+def _completion_to_sse(body: bytes) -> bytes:
+    """Convert one complete Chat Completions response into a terminal SSE event."""
+    try:
+        completion = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ValueError("non-stream fallback returned invalid JSON") from exc
+    choices = completion.get("choices") if isinstance(completion, dict) else None
+    if not isinstance(choices, list) or not choices:
+        raise ValueError("non-stream fallback returned no choices")
+    chunks = []
+    for index, choice in enumerate(choices):
+        if not isinstance(choice, dict) or not isinstance(choice.get("message"), dict):
+            raise ValueError("non-stream fallback returned an invalid choice")
+        finish_reason = choice.get("finish_reason")
+        if not isinstance(finish_reason, str) or not finish_reason:
+            raise ValueError("non-stream fallback did not finish")
+        chunks.append(
+            {
+                "index": choice.get("index", index),
+                "delta": choice["message"],
+                "finish_reason": finish_reason,
+                "logprobs": choice.get("logprobs"),
+            }
+        )
+    event = {
+        key: completion[key]
+        for key in ("id", "created", "model", "system_fingerprint", "usage")
+        if key in completion
+    }
+    event.update(object="chat.completion.chunk", choices=chunks)
+    return b"data: " + json.dumps(event, ensure_ascii=False).encode() + b"\n\ndata: [DONE]\n\n"
 
 
 class GatewayProxy:
@@ -171,6 +208,24 @@ class GatewayProxy:
                     "removed_fields": [k for k in removed if k in original],
                 }
                 owner.requests.append(entry)
+
+                def fallback_completion() -> bytes:
+                    fallback_payload = dict(forwarded)
+                    fallback_payload["stream"] = False
+                    fallback_payload.pop("stream_options", None)
+                    fallback_request = urllib.request.Request(
+                        upstream,
+                        data=json.dumps(fallback_payload).encode(),
+                        headers=headers,
+                    )
+                    with urllib.request.urlopen(fallback_request, timeout=210) as fallback:
+                        fallback_body = fallback.read()
+                        entry["fallback_status"] = fallback.status
+                        entry["fallback_content_type"] = fallback.headers.get("Content-Type")
+                    entry["fallback_response"] = fallback_body.decode(errors="replace")
+                    entry["stream_fallback"] = True
+                    return _completion_to_sse(fallback_body)
+
                 headers_sent = False
                 try:
                     with urllib.request.urlopen(request, timeout=210) as response:
@@ -198,23 +253,30 @@ class GatewayProxy:
 
                             raw = bytearray()
                             try:
-                                attempt_raw, _, retryable = _relay_stream(response, send_event)
+                                attempt_raw, _, retry_reason = _relay_stream(response, send_event)
                                 raw.extend(attempt_raw)
                                 # 已有正文或工具调用时绝不重放请求，避免重复输出或副作用。
                                 for attempt in range(1, _MAX_STREAM_ATTEMPTS):
-                                    if not retryable:
+                                    if retry_reason != "overload":
                                         break
                                     # 号池过载通常会持续数秒；仅在尚未输出正文/工具调用时
                                     # 使用封顶指数退避，避免重放已经可见或可能有副作用的内容。
                                     delay = min(2 ** (attempt - 1), _MAX_RETRY_DELAY_SECONDS)
                                     time.sleep(delay)
                                     with urllib.request.urlopen(request, timeout=210) as retried:
-                                        attempt_raw, _, retryable = _relay_stream(
+                                        attempt_raw, _, retry_reason = _relay_stream(
                                             retried, send_event
                                         )
                                     raw.extend(attempt_raw)
                                     entry["stream_retries"] = attempt
-                                if retryable:
+                                if retry_reason and route == "/chat/completions":
+                                    # Some compatible gateways can serve a complete response while
+                                    # their SSE pool is overloaded. No meaningful delta has reached
+                                    # the caller, so one non-stream request cannot duplicate visible
+                                    # output or tool side effects.
+                                    send_event(fallback_completion())
+                                    retry_reason = None
+                                if retry_reason:
                                     send_event(
                                         b'data: {"error":{"message":"upstream service remained '
                                         b'overloaded after retries","type":"upstream_error"}}\n\n'
@@ -227,6 +289,15 @@ class GatewayProxy:
                             return
                         body = response.read()
                         entry["response"] = body.decode(errors="replace")
+                        if route == "/chat/completions" and original.get("stream") is True:
+                            try:
+                                body = _completion_to_sse(body)
+                            except ValueError:
+                                event = b"data: " + body + b"\n\n"
+                                if not _retryable_stream_error(event):
+                                    raise
+                                body = fallback_completion()
+                            content_type = "text/event-stream"
                         self.send_response(response.status)
                         self.send_header("Content-Type", content_type)
                         self.send_header("Content-Length", str(len(body)))

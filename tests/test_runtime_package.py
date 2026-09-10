@@ -49,6 +49,12 @@ class PackageRuntimeTest(unittest.IsolatedAsyncioTestCase):
             turns = trace["turns"]
             assert isinstance(turns, list)
             self.assertEqual(len(turns), 4)
+            self.assertTrue((session.directory / "data/state").is_dir())
+            self.assertEqual(list((session.directory / "data").rglob("*.sqlite*")), [])
+            self.assertEqual(trace["events"], session.events)
+            self.assertEqual(
+                sum(event["type"] == "run.completed" for event in session.events), 2
+            )
             self.assertIsNotNone(session.process.returncode)
             with self.assertRaisesRegex(RuntimeError, "已结束"):
                 await session.send("late")
@@ -213,6 +219,12 @@ class PackageRuntimeTest(unittest.IsolatedAsyncioTestCase):
                 json.dumps(
                     {
                         "dataRoot": str(root / "remote-data"),
+                        "storage": {
+                            "entrypoint": (
+                                "areal_agent_runtime.adapters.storage.plugin:create_plugin"
+                            ),
+                            "config": {"stateBackend": "file"},
+                        },
                         "runtime": {"kind": "fake"},
                         "wire": {
                             "host": "127.0.0.1",

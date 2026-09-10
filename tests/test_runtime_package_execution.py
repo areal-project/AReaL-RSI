@@ -300,7 +300,8 @@ class RealPackageExecutionTest(unittest.IsolatedAsyncioTestCase):
                 finally:
                     await session.finish()
                 # finish() reloads committed events, so also check the durable export.
-                self.assertTrue((session.directory / "data/state.sqlite3").is_file())
+                self.assertTrue((session.directory / "data/state").is_dir())
+                self.assertEqual(list((session.directory / "data").rglob("*.sqlite*")), [])
                 self.assertIn("run.completed", [e["type"] for e in session.events])
                 self.assertIn("tool.completed", [e["type"] for e in session.events])
                 if stream_fragments is not None:
@@ -412,7 +413,7 @@ class RealPackageExecutionTest(unittest.IsolatedAsyncioTestCase):
             await asyncio.to_thread(model_server.close)
 
     async def test_cancel_commits_terminal_and_reaps_worker(self) -> None:
-        from areal_agent_runtime.adapters.storage import SQLiteStateStore
+        from areal_rsi.modules.runtime_storage import read_journal
 
         model_server = ScriptedModel()
         release = threading.Event()
@@ -444,9 +445,10 @@ class RealPackageExecutionTest(unittest.IsolatedAsyncioTestCase):
                     await task
                 await session.finish()
                 self.assertIsNotNone(session.process.returncode)
-                self.assertTrue((session.directory / "data/state.sqlite3").is_file())
-                state = SQLiteStateStore(session.directory / "data")
-                snapshot = await state.get_run(session.run_ids[-1])
+                self.assertTrue((session.directory / "data/state").is_dir())
+                self.assertEqual(list((session.directory / "data").rglob("*.sqlite*")), [])
+                _events, snapshots = read_journal(session.directory / "data/state")
+                snapshot = snapshots.get(session.run_ids[-1])
                 assert snapshot is not None
                 self.assertEqual(snapshot.status, "cancelled")
                 self.assertIn("run.cancelled", [e["type"] for e in session.events])
@@ -501,6 +503,13 @@ class RealPackageExecutionTest(unittest.IsolatedAsyncioTestCase):
                         await session.send("Use the arithmetic MCP tool"), "RSI_FINAL_OK"
                     )
                     self.assertTrue(any("42" in r for r in model_server.results))
+                    for request in model_server.requests:
+                        names = [
+                            tool.get("function", tool)["name"]
+                            for tool in request.get("tools", [])
+                        ]
+                        self.assertTrue(names)
+                        self.assertTrue(all(name.startswith("rsi_mcp_") for name in names), names)
                     completed = [e for e in session.events if e["type"] == "tool.completed"]
                     self.assertEqual(len(completed), 1)
                     self.assertIn("rsi_mcp_", json.dumps(completed))

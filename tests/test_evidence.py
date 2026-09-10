@@ -10,7 +10,7 @@ from pathlib import Path
 
 from areal_rsi.api.base import ContentRef, EvidenceBundle, EvidenceFile
 from areal_rsi.base.evidence import FileEvidenceStore
-from areal_rsi.base.storage import FileContentStore
+from areal_rsi.base.storage import DIRECTORY_TYPE, FileContentStore, encode
 from areal_rsi.modules.runtime import sandbox_wrapper
 
 
@@ -74,6 +74,51 @@ class EvidenceTest(unittest.IsolatedAsyncioTestCase):
             with self.subTest(paths=paths), self.assertRaises(ValueError):
                 await self.store.materialize(self.bundle, self.root / "not-created", paths=paths)
             self.assertFalse((self.root / "not-created").exists())
+
+    async def test_directory_children_are_readable_and_individually_granted(self) -> None:
+        source = self.root / "source"
+        (source / "nested").mkdir(parents=True)
+        (source / "nested/question.txt").write_text("PUBLIC QUESTION")
+        (source / "private.txt").write_text("PRIVATE_VALIDATION")
+        snapshot = await self.content.snapshot(source)
+        ref = await self.store.put(
+            EvidenceBundle(
+                (EvidenceFile("tasks/1/input", snapshot, "input", {"task_id": "one"}),),
+                {"split": "train"},
+            )
+        )
+        bundle = await self.store.get(ref)
+        self.assertEqual(bundle.metadata, {"split": "train"})
+        self.assertEqual(
+            {entry.path for entry in bundle.files},
+            {"tasks/1/input/nested/question.txt", "tasks/1/input/private.txt"},
+        )
+        for entry in bundle.files:
+            self.assertEqual(entry.kind, "input")
+            self.assertEqual(entry.metadata, {"task_id": "one"})
+        destination = self.root / "view"
+        await self.store.materialize(
+            ref, destination, paths=["tasks/1/input/nested/question.txt"]
+        )
+        self.assertEqual(
+            (destination / "tasks/1/input/nested/question.txt").read_text(), "PUBLIC QUESTION"
+        )
+        self.assertFalse((destination / "tasks/1/input/private.txt").exists())
+        index = (destination / "index.json").read_text()
+        self.assertNotIn("private", index)
+        self.assertNotIn("content://", index)
+
+    async def test_directory_expansion_rejects_escape_and_collisions(self) -> None:
+        for names in (["../outside"], ["/absolute"], ["./alias"], ["a", "A"], ["a", "a/b"]):
+            with self.subTest(names=names):
+                snapshot = await self.content.put_bytes(
+                    json.dumps({"files": {name: encode(self.public) for name in names}}).encode(),
+                    media_type=DIRECTORY_TYPE,
+                )
+                with self.assertRaises(ValueError):
+                    await self.store.put(
+                        EvidenceBundle((EvidenceFile("input", snapshot, "input"),))
+                    )
 
     async def test_symlink_destinations_and_corrupt_content_rejected(self) -> None:
         (self.root / "link").symlink_to(self.root, target_is_directory=True)

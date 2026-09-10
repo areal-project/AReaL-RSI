@@ -1,15 +1,19 @@
-"""Minimal Contract V2 benchmark implementation for one 3D task."""
+"""3D dataset, isolated verifier and scoring shared by CLI and TUI."""
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import re
-import shutil
-import subprocess
-import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import Any
+
+if __package__:
+    from .environment import ModelEnvironment
+else:
+    from environment import ModelEnvironment
 
 from areal_rsi.api.base import (
     BenchmarkSplit,
@@ -20,100 +24,134 @@ from areal_rsi.api.base import (
     VerificationResult,
     VerificationStatus,
 )
-from areal_rsi.base.storage import FileContentStore, now
-from areal_rsi.benchmarks.catalog import BenchmarkBundle
+from areal_rsi.base.storage import (
+    FileContentStore,
+    decode,
+    encode,
+    new_id,
+    now,
+    safe_name,
+    write_json,
+)
+
+SCOPE = "shared train/validate diagnostic; Contract V2 and build, no visual or held-out score"
 
 
-class ThreeModelBenchmark:
-    name = "3d-model-v1"
-
-    def __init__(self, tasks_path: Path, task_id: str = "MODEL-001") -> None:
-        self.tasks_path = tasks_path
-        self.task_id = task_id
-        # Accept the short public example name and legacy task directories.
-        matches = list(tasks_path.glob(f"{task_id[6:]}-*"))
-        public_directory = tasks_path / task_id.lower()
-        if public_directory.is_dir():
-            matches.append(public_directory)
-        if len(matches) != 1:
-            raise ValueError(f"无法唯一定位 {task_id} TARGET.md: {tasks_path}")
-        self.target_path = matches[0] / "TARGET.md"
-        if not self.target_path.is_file():
-            raise ValueError(f"缺少 TARGET.md: {self.target_path}")
-
-    async def list_tasks(self, split: BenchmarkSplit) -> Sequence[Task]:
-        if split is not BenchmarkSplit.TRAIN:
-            return ()
-        return (Task(self.task_id, self.target_path.read_text(encoding="utf-8")),)
-
-
-def load_tasks(tasks_path: Path) -> tuple[Task, ...]:
-    """Read all 100 public targets in numeric order; reject gaps and ambiguous IDs."""
+def load_tasks(tasks_path: Path, *, task_ids: Sequence[str] | None = None) -> tuple[Task, ...]:
+    """Read public targets without requiring a fixed-size private dataset."""
     tasks = {}
-    for path in tasks_path.glob("*/TARGET.md"):
-        match = re.fullmatch(r"(\d{3})-.+", path.parent.name)
+    for path in sorted(tasks_path.glob("*/TARGET.md")):
+        match = re.fullmatch(r"(?:model-(\d{3})|(\d{3})-.+)", path.parent.name, re.IGNORECASE)
         if match is None:
             raise ValueError(f"Unexpected task directory: {path.parent.name}")
-        number = int(match[1])
-        if number in tasks or not 1 <= number <= 100:
-            raise ValueError(f"Duplicate or out-of-range task number: {number}")
+        task_id = f"MODEL-{int(match[1] or match[2]):03d}"
+        if task_id in tasks:
+            raise ValueError(f"Duplicate task ID: {task_id}")
         text = path.read_text(encoding="utf-8")
         if not text.strip():
             raise ValueError(f"Empty target: {path}")
-        tasks[number] = Task(
-            f"MODEL-{number:03d}",
+        tasks[task_id] = Task(
+            task_id,
             text,
             {
                 "target_sha256": hashlib.sha256(text.encode()).hexdigest(),
                 "source_directory": path.parent.name,
             },
         )
-    if set(tasks) != set(range(1, 101)):
-        raise ValueError(f"Expected exactly MODEL-001..MODEL-100, found {len(tasks)} tasks")
-    return tuple(tasks[number] for number in sorted(tasks))
+    if not tasks:
+        raise ValueError(f"No TARGET.md tasks found under {tasks_path}")
+    selected = set(tasks) if task_ids is None else set(task_ids)
+    if not selected or (task_ids is not None and len(selected) != len(task_ids)):
+        raise ValueError("Selected task IDs must be nonempty and unique")
+    if not selected <= tasks.keys():
+        raise ValueError("Unknown selected task IDs")
+    return tuple(tasks[key] for key in sorted(selected))
+
+
+class ThreeModelBenchmark:
+    """An explicit same-suite diagnostic, with both required workflow splits."""
+
+    def __init__(
+        self, tasks: Path | Task | Sequence[Task], snapshot: Any = None, *, scope: str | None = None
+    ) -> None:
+        values = (
+            load_tasks(tasks)
+            if isinstance(tasks, Path)
+            else ((tasks,) if isinstance(tasks, Task) else tuple(tasks))
+        )
+        if not values or len({task.task_id for task in values}) != len(values):
+            raise ValueError("Tasks must be nonempty and unique")
+        self.tasks = tuple(decode(Task, encode(task)) for task in values)
+        label = self.tasks[0].task_id if len(self.tasks) == 1 else f"{len(self.tasks)} tasks"
+        self.scope = scope if scope is not None else f"{label} {SCOPE}"
+        identity = json.dumps(
+            {"tasks": encode(self.tasks), "snapshot": snapshot, "scope": self.scope}, sort_keys=True
+        ).encode()
+        prefix = (
+            f"3d-{label.lower().replace('-', '')}-diagnostic-"
+            if len(values) == 1
+            else ("3d-suite-diagnostic-")
+        )
+        self.name = prefix + hashlib.sha256(identity).hexdigest()[:16]
+
+    async def list_tasks(self, split: BenchmarkSplit) -> Sequence[Task]:
+        if split not in (BenchmarkSplit.TRAIN, BenchmarkSplit.VALIDATE):
+            raise ValueError("Unsupported split")
+        return tuple(decode(Task, encode(task)) for task in self.tasks)
 
 
 class ThreeModelVerifier:
-    def __init__(self, content: FileContentStore, runtime_path: Path) -> None:
-        self.content = content
-        self.runtime_path = runtime_path
+    """Always use host-owned validation in a fresh, isolated environment."""
+
+    def __init__(
+        self,
+        root: Path,
+        content: FileContentStore,
+        emit: Callable[[str], None] = lambda _: None,
+        *,
+        environment: ModelEnvironment,
+    ) -> None:
+        self.root, self.content, self.emit = root.resolve(), content, emit
+        self.environment = environment
 
     async def verify(self, request: VerificationRequest) -> VerificationResult:
         result = request.result
-        if result.output.media_type not in (None, "text/javascript", "text/plain; charset=utf-8"):
-            raise ValueError("3D verifier 要求 model.js 文件型 TaskResult.output")
-        source = await self.content.resolve_path(result.output)
-        if not source.is_file():
-            raise ValueError("3D TaskResult.output 必须是 model.js 文件内容")
-        with tempfile.TemporaryDirectory(prefix="rsi-3d-verify-") as temporary:
-            workspace = Path(temporary) / "viewer"
-            template = self.runtime_path / "viewer-template"
-            if not template.is_dir():
-                template = self.runtime_path
-            shutil.copytree(template, workspace)
-            shutil.copy2(source, workspace / "src/model.js")
-            completed = await asyncio.to_thread(
-                subprocess.run,
-                ["node", "scripts/check-model.mjs"],
-                cwd=workspace,
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-        passed = completed.returncode == 0
-        feedback = (completed.stdout + completed.stderr).strip()[-4000:]
-        payload = {"passed": passed, "returncode": completed.returncode, "output": feedback}
-        output_ref = await self.content.put_json(payload)
-        return VerificationResult(
+        if result.output.media_type != "text/javascript":
+            raise ValueError("Expected model.js file contents")
+        source = await self.content.read_bytes(result.output)
+        key = hashlib.sha256(json.dumps(request.metadata, sort_keys=True).encode()).hexdigest()
+        folder = self.root / safe_name(result.trajectory.trajectory_id) / key[:16]
+        folder.mkdir(parents=True, exist_ok=True)
+        # Missing checkers, dependencies or sandbox support raise to VerifierExecutor,
+        # which records INFRA_ERROR rather than a model score.
+        checked = await asyncio.to_thread(
+            self.environment.validate, source, folder / new_id("check")
+        )
+        passed = checked["passed"]
+        feedback = "\n".join(
+            f"{name}: {'passed' if item['returncode'] == 0 else 'failed'}\n{item['stderr']}"
+            for name, item in checked["checks"].items()
+        )
+        if "receipt_error" in checked:
+            feedback += "\n" + checked["receipt_error"]
+        verification = VerificationResult(
             request.task.task_id,
             result.trajectory.trajectory_id,
             passed,
-            1.0 if passed else 0.0,
-            {"contract_v2": 1.0 if passed else 0.0},
+            float(passed),
+            {
+                "contract_v2": float(
+                    checked["checks"]["contract"]["returncode"] == 0
+                    and "receipt_error" not in checked
+                ),
+                "build": float(checked["checks"]["build"]["returncode"] == 0),
+            },
             feedback,
-            attachments=(output_ref,),
-            status=VerificationStatus.SUCCEEDED,
+            attachments=(await self.content.put_json(checked),),
         )
+        write_json(folder / "verification.json", verification)
+        self.emit(f"Verifier: passed={passed}; trajectory={result.trajectory.trajectory_id}")
+        return verification
 
 
 class ThreeModelEvaluation:
@@ -142,22 +180,4 @@ class ThreeModelEvaluation:
                 "pass_count": float(sum(item.passed is True for item in results)),
             },
             now(),
-        )
-
-
-class ThreeModelAdapter:
-    def create(self, descriptor, config, content):
-        if descriptor.verifier != "3d-model-v1" or descriptor.evaluation != "contract-v2-v1":
-            raise ValueError("3D Benchmark manifest 组件组合不受支持")
-        tasks_path = Path(config["tasks_path"])
-        runtime_path = Path(config["runtime_path"])
-        if not tasks_path.is_dir() or not runtime_path.is_dir():
-            raise ValueError("3D Benchmark 的 tasks_path/runtime_path 必须是目录")
-        benchmark = ThreeModelBenchmark(tasks_path)
-        return BenchmarkBundle(
-            descriptor,
-            benchmark.name,
-            benchmark,
-            ThreeModelVerifier(content, runtime_path),
-            ThreeModelEvaluation(),
         )

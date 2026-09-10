@@ -140,6 +140,11 @@ examples/3d_bench/
 ```
 
 `run_local.py` provides the shared application factory and standalone runner;
-`adapter.py` owns task loading and scoring; `environment.py` owns the local
-generation workspace and isolated validation. None of these modules is imported
+`adapter.py` owns the shared dataset reader, Verifier and scoring implementation;
+both CLI and TUI use these directly, without a separate 3D Adapter registry.
+The diagnostic dataset provides the same tasks for TRAIN and VALIDATE. The Verifier
+always uses the isolated environment; missing checker files, dependencies or sandbox
+support produce infrastructure errors, rather than model scores.
+`environment.py` owns the local generation workspace and isolated validation.
+None of these modules is imported
 by the infrastructure until the host explicitly registers this example.

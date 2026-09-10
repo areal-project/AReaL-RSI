@@ -509,6 +509,8 @@ grant_ref = await evidence_store.materialize(
 
 导出必须显式列出授权路径。未知路径、重复路径、目录冲突、路径穿越和软链接目标会被拒绝；内容按摘要校验。返回值记录实际授权文件，导出的 `index.json` 只列出这些文件的路径、大小、用途和摘要，不包含未授权条目或底层存储地址。修改工作副本不会修改原始内容。
 
+当条目的 ContentRef 指向目录快照时，`FileEvidenceStore.put` 会将其展开为独立文件引用。例如 `tasks/1/input` 下的 `nested/question.txt` 会成为 `tasks/1/input/nested/question.txt`，继承原条目的 kind 和 metadata。调用方从 `get` 返回的清单逐文件授权；不会将目录清单中的底层引用直接交给模型，也不会自动授权整个目录。
+
 当前标准 Workflow 收集评测文件，DefaultResearchAgent 的 `evidence_access` 决定导出哪些文件，`evidence_instructions` 决定模型怎么读；自定义 Agent 和 Workflow 可直接使用同一接口。`WorkflowContext.evidence_store` 可替换存储实现。TRAIN 与 VALIDATE 的使用限制是研究方法的策略，不是 EvidenceStore 固定的规则。
 
 标准工作流交给 Research Agent 的目录如下，`output` 保留 TaskResult.output 原始字节，不嵌入轨迹：
@@ -528,6 +530,8 @@ workspace/train/
 初始提案消息只给目标、可编辑目录、证据目录及读取规则，不自动注入报告、错误或代码。Agent 用工具分段读取；原始文件不截断，工具显示仍有长度上限，超过时必须继续小段读取。实际读取行为保存于模型工具调用轨迹，授权清单保存在工作区外的宿主审计文件。
 
 `DefaultResearchAgent(file_tools_only=True)` 可把提案工具限制为只读文件工具，不提供 Shell 或执行证据代码的工具。通用 `FileReader` 只接收工作目录和显式文件清单，提供 `list_files`、`read_file`、`read_json`、`inspect_json`、`search_file`；它不理解任务、分数或 Benchmark。每次响应最多 6000 字节，文本页最多 4000 个字符，通过 `next_offset` 继续读取；JSON 子树用 JSON Pointer 选择。当前默认仍保留 Shell 工具模式，具体研究方法自行选择。
+
+Package Runtime 不会因启用 MCP 自动开放工作区工具：`bash@v1` 才授权 `workspace.run`，`editor@v1` 只授权文件读写与编辑。依赖原生 Shell 调用 MCP 的 Runtime 无法提供 MCP-only 模式；缺少显式 Bash 授权时会拒绝启动，应选用支持 Application Tool 的 portable Runtime。
 
 文件导出本身不是沙箱。AgentRuntime 还必须禁止访问底层 ContentStore、其他 Agent 工作区和宿主隐藏数据。当前 DSH Runtime 在 macOS 上用 sandbox-exec 执行这个边界；导出副本可写，原始证据不可变。其他 Runtime 需实现等效隔离，不能把提示词当作访问控制。
 

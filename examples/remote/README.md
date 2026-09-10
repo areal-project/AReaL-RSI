@@ -57,4 +57,5 @@ uv run --env-file .env --locked rsi resume RUN_ID
 
 `research_harness` 选择与 Runtime JSON 相同的后端时，保留该角色已有的配置
 （没有角色配置时保留 default 配置）；切换后端时不继承不兼容的选项。
-发布或复用 RSI 创建的远端版本前，会比较完整 spec，而不只信任摘要标签。
+已有草稿在发布前会校验资源身份和 spec 内容。已发布版本依赖 EnvArena 的不可变版本保证，
+复用时只校验精确的 `key@version` 和 `PUBLISHED` 状态，不再比较 spec 或可变的实体标签。

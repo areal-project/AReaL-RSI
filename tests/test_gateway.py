@@ -5,10 +5,118 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from io import BytesIO
 
 import pytest
 
-from areal_rsi.modules.gateway import GatewayProxy, normalize_tool_deltas
+from areal_rsi.modules.gateway import GatewayProxy, _relay_stream, normalize_tool_deltas
+
+
+@pytest.fixture(autouse=True)
+def bypass_local_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NO_PROXY", "localhost,127.0.0.1")
+    monkeypatch.setenv("no_proxy", "localhost,127.0.0.1")
+
+
+@pytest.mark.parametrize(
+    ("route", "first", "last"),
+    [
+        (
+            "/responses",
+            b'event: response.output_text.delta\ndata: '
+            b'{"type":"response.output_text.delta","delta":"hello"}\n\n',
+            b'event: response.completed\ndata: {"type":"response.completed"}\n\n',
+        ),
+        (
+            "/messages",
+            b'event: content_block_delta\ndata: {"type":"content_block_delta",'
+            b'"delta":{"type":"text_delta","text":"hello"}}\n\n',
+            b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+        ),
+    ],
+)
+def test_other_protocols_stream_immediately_and_finish_without_eof(
+    route: str, first: bytes, last: bytes
+) -> None:
+    release = threading.Event()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers["Content-Length"]))
+            assert self.path == route
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            self.wfile.write(first)
+            self.wfile.flush()
+            if release.wait(timeout=3):
+                self.wfile.write(last)
+                self.wfile.flush()
+                # Keep the connection open until the client has seen completion.
+                finished.wait(timeout=3)
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    finished = threading.Event()
+    with local_upstream(Handler) as upstream:
+        proxy = GatewayProxy(upstream, "offline-fixture")
+        try:
+            request = urllib.request.Request(
+                proxy.url + route,
+                data=b'{"model":"fixture","stream":true}',
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(request, timeout=2) as response:
+                assert response.read(len(first)) == first
+                release.set()
+                assert response.read() == last
+            assert proxy.requests[0]["response"] == (first + last).decode()
+        finally:
+            release.set()
+            finished.set()
+            proxy.close()
+
+
+@pytest.mark.parametrize("failure", ["upstream", "downstream"])
+def test_stream_audit_survives_io_failure(failure: str) -> None:
+    event = b'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'
+    partial = b'data: {"choices":'
+
+    class InterruptedStream(BytesIO):
+        def readline(self, size: int | None = -1) -> bytes:
+            line = super().readline(size)
+            if not line:
+                raise TimeoutError("upstream stalled")
+            return line
+
+    sent = []
+
+    def send(data: bytes) -> None:
+        if failure == "downstream":
+            raise BrokenPipeError("client disconnected")
+        sent.append(data)
+
+    raw = bytearray()
+    with pytest.raises((TimeoutError, BrokenPipeError)):
+        _relay_stream(
+            InterruptedStream(event + partial), send, route="/chat/completions", raw=raw
+        )
+    assert raw == (event + partial if failure == "upstream" else event)
+    assert sent == ([event] if failure == "upstream" else [])
+
+
+def test_non_retryable_error_is_forwarded_and_role_only_eof_is_preserved() -> None:
+    role = b'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n'
+    error = b'data: {"error":{"type":"invalid_request_error","message":"bad request"}}\n\n'
+    for source, done in ((role, False), (role + error, True)):
+        sent: list[bytes] = []
+        raw = bytearray()
+        assert _relay_stream(
+            BytesIO(source), sent.append, route="/chat/completions", raw=raw
+        ) == (done, False)
+        assert b"".join(sent) == source
+        assert raw == source
 
 
 @contextmanager

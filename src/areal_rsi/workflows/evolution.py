@@ -326,7 +326,10 @@ class HarnessEvolutionWorkflow:
         self.state.best_solution_id = max(candidates, key=lambda r: (r.passed, r.score)).solution_id
         if (
             record.next_solution_id is None
-            or iteration >= self.state.plan.max_iterations
+            or (
+                self.state.plan.max_iterations is not None
+                and iteration >= self.state.plan.max_iterations
+            )
             or (self.state.plan.stop_when_goal_reached and record.validation_report.passed)
         ):
             agent.state = AgentState.STOPPED

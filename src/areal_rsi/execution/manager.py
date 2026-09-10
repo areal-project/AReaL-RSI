@@ -53,14 +53,14 @@ class JobManager:
         self,
         run_root: str | Path,
         gpu_ids: tuple[str, ...] | list[str] = (),
-        max_jobs: int = 1,
+        max_jobs: int | None = 1,
         *,
         on_event: Callable[[JobEvent], None] | None = None,
         auto_monitor: bool = True,
         scheduling_enabled: bool = True,
         poll_interval: float = 0.1,
     ) -> None:
-        if max_jobs < 1:
+        if max_jobs is not None and max_jobs < 1:
             raise ValueError("max_jobs must be at least one")
         if not math.isfinite(poll_interval) or poll_interval <= 0:
             raise ValueError("poll_interval must be positive and finite")
@@ -318,7 +318,11 @@ class JobManager:
     def _schedule_records(self, records: tuple[JobRecord, ...], foreign_gpus: set[str]) -> None:
         claimed = [record for record in records if not record.resources_released]
         used = foreign_gpus | {gpu for record in claimed for gpu in record.assigned_gpu_ids}
-        available_slots = self.max_jobs - len(claimed)
+        available_slots = (
+            sum(record.state == "queued" for record in records)
+            if self.max_jobs is None
+            else self.max_jobs - len(claimed)
+        )
         for record in records:
             if record.state != "queued" or available_slots <= 0:
                 continue

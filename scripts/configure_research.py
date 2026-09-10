@@ -26,6 +26,14 @@ from areal_rsi.execution import ApprovedCommand
 REPOSITORY = Path(__file__).resolve().parents[1]
 
 
+def integer_limit(value: str) -> int | None:
+    return None if value.lower() in {"none", "null", "unlimited"} else int(value)
+
+
+def seconds_limit(value: str) -> float | None:
+    return None if value.lower() in {"none", "null", "unlimited"} else float(value)
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument("--example", choices=("kernelbench", "cuhkx"), required=True)
@@ -42,12 +50,12 @@ def parser() -> argparse.ArgumentParser:
         "--instructions-file", type=Path, help="Additional user guidance as UTF-8 text"
     )
     result.add_argument("--max-agents", type=int, help="Default: KernelBench 1, CUHK-X 2")
-    result.add_argument("--max-nodes", type=int, default=12)
-    result.add_argument("--max-model-calls", type=int, default=200)
-    result.add_argument("--max-total-tokens", type=int, default=2_000_000)
-    result.add_argument("--max-verify-calls", type=int, default=6)
-    result.add_argument("--max-jobs", type=int, default=1)
-    result.add_argument("--max-wall-seconds", type=float, default=14400)
+    result.add_argument("--max-nodes", type=integer_limit, default=12)
+    result.add_argument("--max-model-calls", type=integer_limit, default=200)
+    result.add_argument("--max-total-tokens", type=integer_limit, default=2_000_000)
+    result.add_argument("--max-verify-calls", type=integer_limit, default=6)
+    result.add_argument("--max-jobs", type=integer_limit, default=1)
+    result.add_argument("--max-wall-seconds", type=seconds_limit, default=14400)
     result.add_argument("--base-url", default="https://4ipic.com")
     result.add_argument("--python", type=Path, default=Path(sys.executable), help="Host RSI Python")
     result.add_argument("--preflight-timeout", type=float, default=180)

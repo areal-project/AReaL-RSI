@@ -113,6 +113,8 @@ uv run --env-file .env --locked rsi workbench --config /operator/kernelbench-res
 
 ## 等待、暂停和恢复
 
+研究预算可以由用户明确设为不限：`ResearchLimits` 的 `max_nodes / max_model_calls / max_total_tokens / max_wall_seconds / max_verify_calls / max_jobs` 使用 JSON `null` 表示不设上限，页面显示「不限」。`max_agents` 仍需指定正整数；GPU 列表描述可用设备，评测规则和可修改范围仍单独约定。未说明预算时，Interaction 应在开始前询问，不把默认值当成用户确认。`configure_research.py` 对应参数也接受 `unlimited`。取消预算不取消单次请求的输出容量或故障超时，也不改变实际设备容量。
+
 Research Agent 给出最终回复（自动归档为报告）或调用报告工具后立即停止推理，RSI 回复后在同一会话中继续。等待后台作业时由完成事件唤醒。RSI 可以在其他研究员工作时继续有价值的调研；没有可推进事项时停止等待。刷新工作台只读取本地状态，不调用模型。
 
 RSI 和 Interaction 都可以直接向你提问。例如目标模型返回权限错误、GPU 无法连接，RSI 应说明已做检查、受影响的工作和需要你处理的事项，然后结束本回合等待。工作台显示提问者；选择对应问题，回复“已修复”或处理进展，消息会直接进入提问者的原会话。RSI 随后检查是否恢复，再继续任务。也可在「发送给」中选择 Agent 发送独立消息。

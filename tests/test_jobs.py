@@ -88,6 +88,21 @@ def test_gpu_queue_allocations_and_explicit_ids(tmp_path: Path) -> None:
         assert json.loads(Path(final.result_path).read_text())["backend"] == "mock"
 
 
+def test_unlimited_job_concurrency_still_respects_gpu_allocations(tmp_path: Path) -> None:
+    with JobManager(tmp_path, gpu_ids=("0",), max_jobs=None, auto_monitor=False) as manager:
+        try:
+            gpu = manager.submit(JobSpec(backend="mock", gpu_count=1, mock_duration_seconds=60))
+            blocked = manager.submit(JobSpec(backend="mock", gpu_count=1, mock_duration_seconds=60))
+            cpu = [
+                manager.submit(JobSpec(backend="mock", mock_duration_seconds=60)) for _ in range(3)
+            ]
+            assert gpu.state == "running" and gpu.assigned_gpu_ids == ("0",)
+            assert blocked.state == "queued"
+            assert all(job.state == "running" for job in cpu)
+        finally:
+            manager.close(preserve_running=False)
+
+
 def test_cpu_jobs_obey_concurrency_limit(tmp_path: Path) -> None:
     with JobManager(tmp_path, max_jobs=1, auto_monitor=False) as manager:
         first = manager.submit(JobSpec(backend="mock", mock_duration_seconds=0.3))

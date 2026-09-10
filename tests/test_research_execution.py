@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from dataclasses import replace
 from pathlib import Path
+
+import pytest
 
 from areal_rsi.api.research import (
     CandidateSnapshot,
@@ -18,7 +21,10 @@ from areal_rsi.execution import ApprovedCommand, JobRecord
 from areal_rsi.modules.responses import ToolCall
 
 
-def test_background_verification_wakes_only_waiting_assignment(tmp_path: Path) -> None:
+@pytest.mark.parametrize("unlimited", [False, True])
+def test_background_verification_wakes_only_waiting_assignment(
+    tmp_path: Path, unlimited: bool
+) -> None:
     async def scenario() -> None:
         c = Coordinator.create(
             tmp_path,
@@ -28,6 +34,12 @@ def test_background_verification_wakes_only_waiting_assignment(tmp_path: Path) -
             simulated=True,
         )
         c.start()
+        if unlimited:
+            run = c.store.run()
+            brief = c.store.brief()
+            brief.limits = replace(brief.limits, max_verify_calls=None, max_jobs=None)
+            run.brief_ref = c.store.put("briefs", "unlimited", brief)
+            c.store.save_run(run)
         assignment = c.spawn(
             key="a",
             direction="A",

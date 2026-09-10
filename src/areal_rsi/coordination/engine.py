@@ -147,7 +147,8 @@ class ResearchEngine:
         if started is None:
             return None
         elapsed = self.clock() - datetime.fromisoformat(started.replace("Z", "+00:00")).timestamp()
-        if elapsed >= self.coordinator.store.brief().limits.max_wall_seconds:
+        max_seconds = self.coordinator.store.brief().limits.max_wall_seconds
+        if max_seconds is not None and elapsed >= max_seconds:
             return "Run wall-time budget exhausted"
         return None
 
@@ -219,8 +220,10 @@ class ResearchEngine:
             self.coordinator.save()
             reason = self._wall_reason()
             reserved = sum(r["reserved_tokens"] for r in self._request_records().values())
-            if self.coordinator.state["total_tokens"] + reserved > (
-                self.coordinator.store.brief().limits.max_total_tokens
+            max_tokens = self.coordinator.store.brief().limits.max_total_tokens
+            if (
+                max_tokens is not None
+                and self.coordinator.state["total_tokens"] + reserved > max_tokens
             ):
                 reason = "Run token budget exhausted during API retries"
             if reason is not None:
@@ -257,7 +260,10 @@ class ResearchEngine:
             if request_id not in records:
                 reason = self._wall_reason()
                 limits = self.coordinator.store.brief().limits
-                if self.coordinator.state["model_calls"] >= limits.max_model_calls:
+                if (
+                    limits.max_model_calls is not None
+                    and self.coordinator.state["model_calls"] >= limits.max_model_calls
+                ):
                     reason = "Run model-call budget exhausted"
                 payload = json.loads((session / "requests" / f"{request_id}.json").read_text())
                 # UTF-8 bytes conservatively estimate ordinary BPE input tokens;
@@ -269,7 +275,8 @@ class ResearchEngine:
                 )
                 reserved = sum(record["reserved_tokens"] for record in records.values())
                 if (
-                    self.coordinator.state["total_tokens"] + reserved + reserve
+                    limits.max_total_tokens is not None
+                    and self.coordinator.state["total_tokens"] + reserved + reserve
                     > limits.max_total_tokens
                 ):
                     reason = "Insufficient token budget for the next request and its maximum output"
@@ -293,9 +300,8 @@ class ResearchEngine:
             record = self._request_records().get(event["request_id"])
             if record is not None:
                 self._settle(record, event["usage"])
-                if self.coordinator.state["total_tokens"] > (
-                    self.coordinator.store.brief().limits.max_total_tokens
-                ):
+                max_tokens = self.coordinator.store.brief().limits.max_total_tokens
+                if max_tokens is not None and self.coordinator.state["total_tokens"] > max_tokens:
                     self._pause_for_budget(
                         "Provider-reported usage exceeded the reserved token limit"
                     )

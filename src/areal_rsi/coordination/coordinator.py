@@ -526,8 +526,10 @@ class Coordinator:
                 if reply_to_report_id is not None and reply_to_report_id != report.report_id:
                     raise ValueError("Continuation must reply to the latest report explicitly")
                 reply_to_report_id = report.report_id
-            if sum(len(a.iterations) for a in self.store.run().research_agents) >= (
-                self.store.brief().limits.max_nodes
+            max_nodes = self.store.brief().limits.max_nodes
+            if (
+                max_nodes is not None
+                and sum(len(a.iterations) for a in self.store.run().research_agents) >= max_nodes
             ):
                 raise ValueError("Research node budget exhausted")
             path = self.store.root / "assignments" / f"{assignment_id}.json"

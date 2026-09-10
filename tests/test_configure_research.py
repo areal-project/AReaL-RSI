@@ -29,6 +29,40 @@ def configure() -> ModuleType:
     return module
 
 
+def test_configuration_accepts_explicit_unlimited_budgets(configure: ModuleType) -> None:
+    args = configure.parser().parse_args(
+        [
+            "--example",
+            "kernelbench",
+            "--operator",
+            "operator.json",
+            "--output",
+            "config.json",
+            "--max-nodes",
+            "None",
+            "--max-model-calls",
+            "unlimited",
+            "--max-total-tokens",
+            "null",
+            "--max-verify-calls",
+            "unlimited",
+            "--max-jobs",
+            "unlimited",
+            "--max-wall-seconds",
+            "None",
+        ]
+    )
+    for name in (
+        "max_nodes",
+        "max_model_calls",
+        "max_total_tokens",
+        "max_verify_calls",
+        "max_jobs",
+        "max_wall_seconds",
+    ):
+        assert getattr(args, name) is None
+
+
 def operator(root: Path, example: str, **updates: Any) -> Path:
     prepared = root / "prepared"
     (prepared / "train").mkdir(parents=True)

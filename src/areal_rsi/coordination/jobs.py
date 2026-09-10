@@ -264,8 +264,10 @@ class ResearchExecution:
             command = self.verifier
             if command is None or self.read_verification is None:
                 raise ValueError("No trusted verifier configured for this run")
-            if sum(bool(info["verification"]) for info in self.jobs.values()) >= (
-                self.c.store.brief().limits.max_verify_calls
+            max_verify = self.c.store.brief().limits.max_verify_calls
+            if (
+                max_verify is not None
+                and sum(bool(info["verification"]) for info in self.jobs.values()) >= max_verify
             ):
                 raise ValueError("Verification budget exhausted")
         else:

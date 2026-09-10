@@ -9,6 +9,7 @@ import unittest
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -114,6 +115,48 @@ class EngineTest(unittest.IsolatedAsyncioTestCase):
             return ToolResult("waiting", stop=True)
 
         return ToolSet(definitions("report", "wait"), handle)
+
+    async def test_unlimited_run_keeps_usage_and_enforces_only_five_researchers(self) -> None:
+        limits = ResearchLimits(
+            max_agents=5,
+            max_nodes=None,
+            max_model_calls=None,
+            max_total_tokens=None,
+            max_wall_seconds=None,
+            max_verify_calls=None,
+            max_jobs=None,
+        )
+        c = self.coordinator(limits)
+        c.state.update(
+            model_calls=1000, total_tokens=20_000_000, started_at="2000-01-01T00:00:00+00:00"
+        )
+        c.save()
+        agents = [
+            c.spawn(key=str(i), direction=str(i), instruction="检查证据")["agent_id"]
+            for i in range(5)
+        ]
+        with self.assertRaisesRegex(ValueError, "agent limit"):
+            c.spawn(key="sixth", direction="extra", instruction="检查证据")
+
+        async def respond(agent_id: str, index: int, payload: Json) -> Json:
+            return packet(call("wait" if agent_id == "rsi" else "report", f"{agent_id}_{index}"))
+
+        transport = RoutedTransport(respond)
+        for round_index in range(5):
+            c = Coordinator(ResearchStore(self.root, c.store.run_id))
+            if round_index:
+                for agent in agents:
+                    c.assign(agent, key=f"{round_index}:{agent}", instruction="继续检查")
+            engine = ResearchEngine(
+                c, ResponsesRuntime(self.config, transport), partial(self.tools, c)
+            )
+            await engine.run_until_idle(timeout=5)
+            self.assertEqual(c.state["status"], "running")
+        self.assertEqual(sum(len(a.iterations) for a in c.store.run().research_agents), 25)
+        self.assertGreater(c.state["model_calls"], 1000)
+        self.assertGreater(c.state["total_tokens"], 20_000_000)
+        self.assertIsNone(c.store.brief().limits.max_total_tokens)
+        self.assertIsNone(c.store.run().plan.max_iterations)
 
     async def test_report_is_barrier_and_waiting_never_requests_tokens(self) -> None:
         c = self.coordinator()

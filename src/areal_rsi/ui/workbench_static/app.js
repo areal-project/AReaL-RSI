@@ -463,7 +463,7 @@ function render() {
   $("node-caption").textContent =
     `${nodes.filter((node) => node.state === "completed").length} 已完成 · ${(run.agents || []).filter((agent) => agent.direction).length} 个研究方向`;
   $("model-count").textContent =
-    `${integer(run.budget?.model_calls ?? 0)} / ${integer(run.brief?.limits?.max_model_calls)}`;
+    `${integer(run.budget?.model_calls ?? 0)} / ${budgetLimit(run.brief?.limits?.max_model_calls)}`;
   $("token-count").textContent =
     `${integer(run.budget?.total_tokens ?? 0)} tokens${run.budget?.reserved_tokens ? ` · ${integer(run.budget.reserved_tokens)} 已预留` : ""}`;
   $("plan").textContent =
@@ -1104,6 +1104,7 @@ function appendFormattedText(container, text) {
   }
   container.append(document.createTextNode(text.slice(offset)));
 }
+function budgetLimit(value) { return value === null ? "不限" : integer(value); }
 function renderBrief(run) {
   const brief = run.brief || {},
     limits = brief.limits || {},
@@ -1115,10 +1116,12 @@ function renderBrief(run) {
   const grid = element("dl", "brief-grid");
   const rows = [
     ["Research Agents 上限", limits.max_agents],
-    ["节点上限", limits.max_nodes],
-    ["模型调用上限", limits.max_model_calls],
-    ["Token 上限", integer(limits.max_total_tokens)],
-    ["作业并发上限", limits.max_jobs],
+    ["节点上限", budgetLimit(limits.max_nodes)],
+    ["模型调用上限", budgetLimit(limits.max_model_calls)],
+    ["Token 上限", budgetLimit(limits.max_total_tokens)],
+    ["验证次数上限", budgetLimit(limits.max_verify_calls)],
+    ["研究时长上限", limits.max_wall_seconds === null ? "不限" : `${budgetLimit(limits.max_wall_seconds)} 秒`],
+    ["作业并发上限", budgetLimit(limits.max_jobs)],
     ["GPU", limits.gpu_ids?.join(", ") || "尚未配置"],
     ["允许修改", limits.allowed_paths?.join(", ") || "待确认"],
     ["验证指标", verification?.metric || "尚未设置"],

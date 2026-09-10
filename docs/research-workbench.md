@@ -42,6 +42,14 @@ uv run --env-file .env --locked rsi workbench
 
 研究视图展示 RSI 当前计划、研究方向、节点任务与具体报告、共享证据、作业及调用预算。方向标题由 RSI 创建研究员时填写，随任务而变。有验证协议的研究显示可比较的最佳成绩；没有分数的任务不会补零或伪造最佳版本。产物按 run 归档，不要求所有成果都能打包下载。
 
+### 每个研究的模型设置
+
+新建研究后，在页面上方的「模型设置」修改 API 地址、模型和推理强度，点击「保存设置」。这三个设置由本 run 的 Interaction、RSI 和 Research Agents 共用；被优化的 Task 模型仍由执行配置独立指定。
+
+可选模型为 `gpt-5.6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-6-astra`。推理强度随模型展示支持的选项：5.6 的三个模型支持 `none / low / medium / high / xhigh / max`，6 Astra 支持 `low / medium / high / xhigh / max`。参考 [5.6 模型说明](https://developers.openai.com/api/docs/models/gpt-5.6-terra) 和 [6 Astra 模型说明](https://developers.openai.com/api/docs/models/gpt-6-astra)；实际网关需要支持所选组合。
+
+需求讨论期间也可修改，已有消息、需求和已完成的工具结果继续保留。研究一旦开始，设置永久锁定，暂停或停止后也不能修改。新研究创建时读取进程环境中的默认值，之后独立保存；更改全局默认值不会覆盖已有研究。API 密钥继续从服务端环境读取，页面不编辑或展示密钥。
+
 ## 各 Agent 的基础工具
 
 Interaction、RSI 和 Research 都可以使用 DSH 的 `bash / read / write / edit / glob / grep`，以及 `search_web / fetch_url`。例如可以直接告诉 Interaction：“阅读这份环境说明，用 `ssh et15` 检查远端环境。”SSH 使用本机已有配置和认证，不需要专用 SSH 工具。

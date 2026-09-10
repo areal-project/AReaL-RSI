@@ -253,6 +253,45 @@ class ResponsesRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(transport.payloads), 1)
         self.assertEqual(result.usage["total_tokens"], 25)
 
+    async def test_model_change_consumes_saved_response_without_replaying_old_reasoning(
+        self,
+    ) -> None:
+        transport = ScriptedTransport(
+            response(
+                {"type": "reasoning", "id": "r_old", "encrypted_content": "opaque-old"},
+                call("report", "report_once"),
+            ),
+            response(answer("done")),
+        )
+        seen: list[str] = []
+
+        async def interrupt(event: Json) -> None:
+            if event["type"] == "response_usage":
+                raise asyncio.CancelledError
+
+        async def report(item: ToolCall) -> ToolResult:
+            seen.append(item.call_id)
+            return ToolResult("saved", stop=True)
+
+        kwargs: Json = {"system_prompt": "Research", "tools": [tool("report")], "handler": report}
+        with self.assertRaises(asyncio.CancelledError):
+            await ResponsesRuntime(self.config, transport).turn(
+                self.root, user_message="Try", event_sink=interrupt, **kwargs
+            )
+        runtime = ResponsesRuntime(replace(self.config, model="gpt-5.6-sol"), transport)
+        await runtime.reconfigure_session(self.root, "model-change-1")
+        await runtime.reconfigure_session(self.root, "model-change-1")
+        result = await runtime.turn(self.root, user_message=None, **kwargs)
+        self.assertEqual(result.stop_reason, "waiting")
+        self.assertEqual(seen, ["report_once"])
+        self.assertEqual(len(transport.payloads), 1)
+        self.assertEqual(len(self.saved()["model_changes"]), 1)
+        await runtime.turn(self.root, user_message="Continue", message_id="next", **kwargs)
+        request = transport.payloads[-1]
+        self.assertEqual(request["model"], "gpt-5.6-sol")
+        self.assertNotIn("opaque-old", json.dumps(request["input"]))
+        self.assertTrue(any(i.get("call_id") == "report_once" for i in request["input"]))
+
     async def test_completed_tool_not_repeated_after_later_tool_interrupts(self) -> None:
         transport = ScriptedTransport(
             response(call("first", "a"), call("second", "b")), response(answer("done"))

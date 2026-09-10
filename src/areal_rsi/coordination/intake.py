@@ -262,10 +262,8 @@ class ResearchIntake:
             "execution_env": config.execution_env,
             "issues": validate_execution(config),
             "target_key_configured": bool(os.environ.get("RSI_TARGET_API_KEY")),
-            "research_model": os.environ.get("RSI_MODEL", config.model),
-            "research_reasoning_effort": os.environ.get(
-                "RSI_REASONING_EFFORT", config.reasoning_effort
-            ),
+            "research_model": config.model_settings()["model"],
+            "research_reasoning_effort": config.model_settings()["reasoning_effort"],
         }
 
     def import_config(self, config: ResearchConfig, description: str) -> None:
@@ -297,6 +295,8 @@ class ResearchIntake:
                         raise ValueError("接入不能改变已约定的验证条件：" + key)
         config.model, config.reasoning_effort = current.model, current.reasoning_effort
         config.base_url, config.api_key_env = current.base_url, current.api_key_env
+        config.model_settings_pinned = current.model_settings_pinned
+        config.model_settings_revision = current.model_settings_revision
         config.brief.limits.gpu_ids = incoming.limits.gpu_ids
         config.brief.limits.allowed_paths = (
             incoming.limits.allowed_paths if allowed == ("*",) else allowed

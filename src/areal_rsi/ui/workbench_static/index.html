@@ -80,6 +80,23 @@
             </button>
           </div>
         </section>
+        <details class="card model-settings" id="model-settings" hidden>
+          <summary><span>模型设置</span><span id="model-settings-summary" class="muted"></span></summary>
+          <form id="model-settings-form">
+            <div class="model-settings-fields">
+              <label class="model-url-field" for="model-base-url">API 地址
+                <input id="model-base-url" type="url" required spellcheck="false"
+                  autocomplete="off" placeholder="https://api.example.com/v1" />
+              </label>
+              <div><label for="research-model-trigger">模型</label><div id="research-model"></div></div>
+              <div><label for="reasoning-effort-trigger">推理强度</label><div id="reasoning-effort"></div></div>
+            </div>
+            <div class="model-settings-footer">
+              <p id="model-settings-status" class="muted" role="status"></p>
+              <button class="secondary" id="save-model-settings" type="submit">保存设置</button>
+            </div>
+          </form>
+        </details>
         <section class="metrics" id="metrics" aria-label="研究概览">
           <div class="metric" id="score-metric">
             <span>最佳验证结果</span><strong id="best-score">—</strong

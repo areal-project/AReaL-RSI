@@ -111,6 +111,9 @@ def public_detail(value: Json) -> Json:
     )
     result["brief"] = _brief(value.get("brief"))
     result["intake"] = _fields(value.get("intake"), "status summary environment execution_required")
+    result["model_settings"] = _fields(
+        value.get("model_settings"), "base_url model reasoning_effort editable"
+    )
     result["pending_agents"] = [a for a in value.get("pending_agents", []) if isinstance(a, str)]
     result["execution_blocker"] = _fields(value.get("execution_blocker"), "job_id error created_at")
     result["agent_activity"] = {
@@ -333,6 +336,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                             name: raw.get(name) is True
                             for name in ("allow_simulation", "default_simulated", "has_config")
                         },
+                        "models": [_fields(model, "id efforts") for model in raw.get("models", [])],
                     },
                 )
                 return
@@ -409,6 +413,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                     "resume": "",
                     "stop": "reason",
                     "retry": "agent_id",
+                    "model-settings": "base_url model reasoning_effort",
                 }
                 if action not in allowed:
                     self._json(404, {"error": "操作不存在"})

@@ -25,6 +25,10 @@ const state = {
   refreshSequence: 0,
   latestAppliedSequence: 0,
   creating: false,
+  models: [],
+  modelDrafts: new Map(),
+  modelFormRun: null,
+  modelSavingRun: null,
 };
 const emptyChat = $("messages").firstElementChild.cloneNode(true);
 const runDropdown = new WorkbenchDropdown($("mobile-runs"), {
@@ -36,6 +40,96 @@ const recipientDropdown = new WorkbenchDropdown($("chat-recipient"), {
     state.replyTargets.set(state.runId, { value, explicit: true });
     render();
   },
+});
+const modelDropdown = new WorkbenchDropdown($("research-model"), {
+  label: "模型",
+  onChange: (value) => {
+    const draft = modelDraft();
+    draft.model = value;
+    const supported = state.models.find((model) => model.id === value)?.efforts || [];
+    if (!supported.includes(draft.reasoning_effort)) draft.reasoning_effort = "medium";
+    renderModelSettings();
+  },
+});
+const effortDropdown = new WorkbenchDropdown($("reasoning-effort"), {
+  label: "推理强度",
+  onChange: (value) => { modelDraft().reasoning_effort = value; renderModelSettings(); },
+});
+const effortLabels = {
+  none: "无推理 · none", low: "低 · low", medium: "中 · medium",
+  high: "高 · high", xhigh: "很高 · xhigh", max: "最高 · max",
+};
+
+function modelDraft() {
+  if (!state.modelDrafts.has(state.runId)) {
+    const saved = state.run?.model_settings || {};
+    state.modelDrafts.set(state.runId, {
+      base_url: saved.base_url || "", model: saved.model || "",
+      reasoning_effort: saved.reasoning_effort || "",
+    });
+  }
+  return state.modelDrafts.get(state.runId);
+}
+
+function modelSettingsChanged() {
+  const saved = state.run?.model_settings;
+  const draft = state.modelDrafts.get(state.runId);
+  return !!saved?.editable && !!draft &&
+    ["base_url", "model", "reasoning_effort"].some((key) => draft[key] !== saved[key]);
+}
+
+function renderModelSettings() {
+  const saved = state.run?.model_settings;
+  $("model-settings").hidden = !saved?.model;
+  if (!saved?.model) return;
+  if (state.modelFormRun !== state.runId) {
+    state.modelFormRun = state.runId;
+    $("model-settings").open = saved.editable;
+  }
+  if (!saved.editable) state.modelDrafts.delete(state.runId);
+  const draft = saved.editable ? (state.modelDrafts.get(state.runId) || saved) : saved;
+  const disabled = !saved.editable || !!state.modelSavingRun;
+  $("model-settings-summary").textContent = `${saved.model} · ${saved.reasoning_effort}${saved.editable ? "" : " · 已锁定"}`;
+  if ($("model-base-url").value !== draft.base_url) $("model-base-url").value = draft.base_url;
+  $("model-base-url").disabled = disabled;
+  const models = state.models.map((model) => ({ value: model.id, text: model.id }));
+  if (!models.some((model) => model.value === draft.model))
+    models.push({ value: draft.model, text: draft.model, disabled: true });
+  modelDropdown.update(models, draft.model, disabled);
+  const efforts = [...(state.models.find((model) => model.id === draft.model)?.efforts || [])];
+  if (!efforts.includes(draft.reasoning_effort)) efforts.push(draft.reasoning_effort);
+  effortDropdown.update(efforts.map((value) => ({ value, text: effortLabels[value] || value })), draft.reasoning_effort, disabled);
+  $("save-model-settings").hidden = !saved.editable;
+  $("save-model-settings").disabled = disabled || !modelSettingsChanged();
+  $("save-model-settings").textContent = state.modelSavingRun === state.runId ? "保存中…" : "保存设置";
+  $("model-settings-status").textContent = !saved.editable
+    ? "研究已开始，设置已锁定。"
+    : modelSettingsChanged() ? "有未保存的修改，请保存后继续对话或开始研究。"
+    : "用于本研究的 Interaction、RSI 和 Research Agents；开始研究后锁定。";
+}
+
+$("model-base-url").addEventListener("input", () => {
+  modelDraft().base_url = $("model-base-url").value;
+  renderModelSettings();
+});
+$("model-settings-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!state.run?.model_settings?.editable || state.modelSavingRun || !modelSettingsChanged()) return;
+  const runId = state.runId;
+  const values = { ...modelDraft() };
+  state.modelSavingRun = runId;
+  renderModelSettings();
+  notice();
+  try {
+    await api(`/api/runs/${encodeURIComponent(runId)}/model-settings`, values);
+    state.modelDrafts.delete(runId);
+    if (state.runId === runId) { await refresh(true); notice("模型设置已保存。"); }
+  } catch (error) {
+    if (state.runId === runId) { notice(error.message); await refresh(true); }
+  } finally {
+    state.modelSavingRun = null;
+    renderModelSettings();
+  }
 });
 const statuses = {
   planned: "待确认",
@@ -327,6 +421,7 @@ async function refresh(force = false) {
 function render() {
   const run = state.run;
   if (!run) return;
+  renderModelSettings();
   $("welcome").hidden = true;
   $("workspace").hidden = false;
   $("objective").textContent =
@@ -1114,6 +1209,10 @@ function switchTab(tab) {
 
 async function control(action, params = {}) {
   if (!state.runId || state.busy) return;
+  if (action === "start" && (modelSettingsChanged() || state.modelSavingRun)) {
+    notice("请先保存模型设置。");
+    return;
+  }
   state.busy = true;
   notice();
   for (const button of $("controls").querySelectorAll("button"))
@@ -1212,6 +1311,10 @@ $("chat-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const text = $("chat-input").value.trim();
   if (!text || !state.runId || state.sending) return;
+  if (modelSettingsChanged() || state.modelSavingRun) {
+    notice("请先保存模型设置。");
+    return;
+  }
   const target = renderReplyTarget(state.run);
   if (target.stale) return;
   const runId = state.runId;
@@ -1248,6 +1351,7 @@ $("chat-input").addEventListener("keydown", (event) => {
 async function bootstrap() {
   const config = await api("/api/bootstrap");
   state.token = config.csrf_token;
+  state.models = config.models || [];
 }
 
 async function boot() {

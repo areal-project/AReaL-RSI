@@ -61,6 +61,8 @@ result = await runtime.turn(
 
 完整 Responses output 会回放，包括 encrypted reasoning 和 assistant `phase`，不依赖远端 conversation 或 `previous_response_id` 的保留期。失败或未完整结束的响应不会执行其中的工具；失败流中的文本也不作为完成输出发布到工作台。
 
+工作台允许在研究启动前显式修改模型连接。调用方先停止 worker，再用 `reconfigure_session(session_dir, revision)` 迁移 Interaction 会话；相同 revision 可重复调用。原始 history、请求、响应、回合和工具回执保留。后续请求的 context 保留消息及工具调用/结果，去掉旧模型或服务专属的 encrypted reasoning 与 item ID；未完成请求由新配置替代，已保存的完整响应仍会先被消费。普通恢复不会自行切换模型，研究开始后也不调用此迁移入口。
+
 每个逻辑请求保存 `attempt` 与 `retry`（失败类型、退避秒数、下次时间）。等待中取消、暂停或关闭服务会立即退出本地等待；恢复时沿用相同请求 ID、请求内容和退避截止时间。临时失败响应单独存为 `responses/<request_id>.attempt-<N>.json`，成功响应仍使用原有文件名。HTTP 传输层每次只发一次请求，重试调度由持久会话管理。
 
 重试等待不调用模型。模型调用次数预算按逻辑请求计算，失败重试不会不断耗尽同一回合的调用额度；`budget.api_attempts` 单独累计 HTTP 尝试数。失败响应若提供 usage，也计入 token 消耗。读取中断或取消后的服务端执行、计费可能仍继续，恢复时保留相应未知用量预留；无法观测的用量不能视为零。run 的时间和 token 预算、用户暂停/停止仍有效，持续重试不绕过这些边界。

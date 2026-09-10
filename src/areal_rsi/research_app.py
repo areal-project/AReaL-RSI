@@ -23,7 +23,12 @@ from areal_rsi.base.runs import FileRunStore
 from areal_rsi.base.storage import decode, encode, new_id, now, write_json
 from areal_rsi.coordination.actions import ResearchActions
 from areal_rsi.coordination.agent_tools import AgentTools
-from areal_rsi.coordination.config import ResearchConfig
+from areal_rsi.coordination.config import (
+    MODEL_EFFORTS,
+    MODEL_FIELDS,
+    ResearchConfig,
+    validate_model_settings,
+)
 from areal_rsi.coordination.coordinator import Coordinator
 from areal_rsi.coordination.engine import ResearchEngine, ToolSet
 from areal_rsi.coordination.intake import ResearchIntake, validate_execution
@@ -63,6 +68,10 @@ class ResearchApp:
         self.runtime_factory = runtime_factory or (lambda cfg: ResponsesRuntime(cfg.runtime()))
         self.allow_simulation = allow_simulation
         self.active: dict[str, ActiveResearch] = {}
+        self._run_locks: dict[str, asyncio.Lock] = {}
+
+    def run_lock(self, c: Coordinator) -> asyncio.Lock:
+        return self._run_locks.setdefault(c.store.run_id, asyncio.Lock())
 
     def worker_elsewhere(self, c: Coordinator) -> bool:
         local = self.active.get(c.store.run_id)
@@ -88,7 +97,59 @@ class ResearchApp:
         config: ResearchConfig = decode(
             ResearchConfig, json.loads((c.store.root / "coordination" / "config.json").read_text())
         )
+        if not config.model_settings_pinned:
+            # Legacy archives stored service defaults. Prefer the actual recorded
+            # connection for a started run, without rewriting its history.
+            recorded = sorted(
+                c.store.root.glob("agents/*/sessions/*/configuration.json"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            if c.state.get("started_at") and recorded:
+                settings = json.loads(recorded[0].read_text())
+                for key in MODEL_FIELDS:
+                    setattr(config, key, settings[key])
+                config.model_settings_pinned = True
+            else:
+                config.pin_model_settings()
         return config
+
+    def model_settings(self, c: Coordinator) -> dict[str, Any]:
+        return {
+            **self.config(c).model_settings(),
+            "editable": c.state["status"] == "planned" and not c.state.get("started_at"),
+        }
+
+    async def set_model_settings(self, c: Coordinator, values: dict[str, Any]) -> None:
+        settings = validate_model_settings(values)
+        async with self.run_lock(c):
+            c = self.coordinator(c.store.run_id)
+            if not self.model_settings(c)["editable"]:
+                raise ValueError("研究已经开始，模型设置已锁定；暂停或停止后也不能修改")
+            active = self.active.get(c.store.run_id)
+            if active:
+                active.task.cancel()
+                await asyncio.gather(active.task, return_exceptions=True)
+                self.active.pop(c.store.run_id, None)
+            # An Interaction tool may have updated other config fields before
+            # cancellation. Reload them instead of replacing the whole config.
+            config = self.config(c)
+            for key, value in settings.items():
+                setattr(config, key, value)
+            config.model_settings_pinned = True
+            config.model_settings_revision = new_id("model")
+            directory = c.store.root / "coordination"
+            write_json(
+                directory / "configurations" / f"{config.model_settings_revision}.json",
+                config.public(),
+                immutable=True,
+            )
+            write_json(directory / "config.json", config.public())
+            c.store.event("model_settings_updated", **settings)
+            if active:
+                # Resume the same delivery and session, including an interrupted
+                # API retry. The attach path also handles a later process restart.
+                await self.attach(c)
 
     async def create(self, params: dict[str, Any]) -> dict[str, Any]:
         conversation = bool(
@@ -121,6 +182,7 @@ class ResearchApp:
             raise ValueError(
                 "This template is for workflow simulation; configure real runners first"
             )
+        config.pin_model_settings()
         if not conversation and config.seed_dir and not Path(config.seed_dir).is_dir():
             raise FileNotFoundError(f"Seed directory does not exist: {config.seed_dir}")
         if (
@@ -194,12 +256,17 @@ class ResearchApp:
             c.save()
 
     async def start(self, c: Coordinator, confirmation_message_id: str | None = None) -> None:
+        async with self.run_lock(c):
+            await self._start(self.coordinator(c.store.run_id), confirmation_message_id)
+
+    async def _start(self, c: Coordinator, confirmation_message_id: str | None) -> None:
         if c.state["status"] != "planned":
             raise ValueError("研究已经开始")
         if "intake" in c.state and c.state["intake"].get("status") != "ready":
             raise ValueError("请先与 Interaction 确认研究目标和执行条件")
         config = self.config(c)
         config.brief = c.store.brief()
+        write_json(c.store.root / "coordination" / "config.json", config.public())
         pending_setup = c.state.get("execution_setup") == "pending"
         if "intake" in c.state and not pending_setup:
             issues = validate_execution(config)
@@ -309,6 +376,14 @@ class ResearchApp:
             await existing.tools.close()
         config = self.config(c)
         runtime = self.runtime_factory(config)
+        if c.state["status"] == "planned" and config.model_settings_revision:
+            actor = c.actor("interaction")
+            session = (
+                c.store.paths.agent("interaction")
+                / "sessions"
+                / (actor.session_id or "interaction")
+            )
+            await runtime.reconfigure_session(session, config.model_settings_revision)
         actions = ResearchActions(c)
         await actions.initialize_workspace("rsi")
         register_sources(actions)
@@ -488,6 +563,7 @@ class ResearchApp:
             "messages": messages,
             "agent_activity": c.state.get("agent_activity", {}),
             "execution_setup": c.state.get("execution_setup", "ready"),
+            "model_settings": self.model_settings(c),
             "jobs": jobs,
             "evidence": encode(c.store.records("evidence", EvidenceRecord)),
             "final": c.store.public_record(run.final_result_ref) if run.final_result_ref else None,
@@ -509,6 +585,10 @@ class ResearchApp:
                 "allow_simulation": self.allow_simulation,
                 "default_simulated": self.allow_simulation and self.default_config is None,
                 "has_config": self.default_config is not None,
+                "models": [
+                    {"id": model, "efforts": list(efforts)}
+                    for model, efforts in MODEL_EFFORTS.items()
+                ],
             }
         if action == "list":
             runs = FileRunStore(self.root).list(ExperimentRun)
@@ -538,45 +618,57 @@ class ResearchApp:
                 "with Ctrl+C, then resume it here; viewing and export remain available."
             )
         if action == "chat":
-            message_id = c.user_message(
-                params["text"],
-                key=params.get("message_id") or new_id("user"),
-                reply_to=params.get("reply_to"),
-                recipient=params.get("recipient"),
-            )
-            active = await self.attach(c)
-            active.engine.wake()
+            async with self.run_lock(c):
+                c = self.coordinator(c.store.run_id)
+                message_id = c.user_message(
+                    params["text"],
+                    key=params.get("message_id") or new_id("user"),
+                    reply_to=params.get("reply_to"),
+                    recipient=params.get("recipient"),
+                )
+                active = await self.attach(c)
+                active.engine.wake()
             return {"run_id": c.store.run_id, "message_id": message_id, "status": c.state["status"]}
+        elif action == "model-settings":
+            await self.set_model_settings(c, {k: v for k, v in params.items() if k != "run_id"})
         elif action == "start":
             await self.start(c)
         elif action == "pause":
-            c.pause()
-            if c.store.run_id in self.active:
-                await self.active[c.store.run_id].engine.tick()
+            async with self.run_lock(c):
+                c = self.coordinator(c.store.run_id)
+                c.pause()
+                if c.store.run_id in self.active:
+                    await self.active[c.store.run_id].engine.tick()
         elif action == "resume":
-            if c.state["status"] == "paused":
-                c.resume()
-            elif c.state["status"] == "stopped":
-                c.reopen()
-            elif c.state["status"] not in {"planned", "running"}:
-                raise ValueError("This run cannot be resumed")
-            active = await self.attach(c)
-            active.engine.wake()
+            async with self.run_lock(c):
+                c = self.coordinator(c.store.run_id)
+                if c.state["status"] == "paused":
+                    c.resume()
+                elif c.state["status"] == "stopped":
+                    c.reopen()
+                elif c.state["status"] not in {"planned", "running"}:
+                    raise ValueError("This run cannot be resumed")
+                active = await self.attach(c)
+                active.engine.wake()
         elif action == "retry":
-            c.retry_agent(params["agent_id"])
-            active = await self.attach(c)
-            active.engine.wake()
+            async with self.run_lock(c):
+                c = self.coordinator(c.store.run_id)
+                c.retry_agent(params["agent_id"])
+                active = await self.attach(c)
+                active.engine.wake()
         elif action == "stop":
-            c.stop("Stopped by user")
-            if c.store.run_id in self.active:
-                active = self.active[c.store.run_id]
-                await active.engine.close()
-                active.execution.close(cancel=True)
-                active.task.cancel()
-                await asyncio.gather(active.task, return_exceptions=True)
-            else:
-                manager = JobManager(c.store.root, auto_monitor=False, scheduling_enabled=False)
-                manager.close(preserve_running=False)
+            async with self.run_lock(c):
+                c = self.coordinator(c.store.run_id)
+                c.stop("Stopped by user")
+                if c.store.run_id in self.active:
+                    active = self.active[c.store.run_id]
+                    await active.engine.close()
+                    active.execution.close(cancel=True)
+                    active.task.cancel()
+                    await asyncio.gather(active.task, return_exceptions=True)
+                else:
+                    manager = JobManager(c.store.root, auto_monitor=False, scheduling_enabled=False)
+                    manager.close(preserve_running=False)
         elif action == "export":
             from areal_rsi.ui.workbench import WorkbenchDownload
 

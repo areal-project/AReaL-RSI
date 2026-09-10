@@ -229,7 +229,10 @@ def test_real_verification_requires_identity_and_failed_create_leaves_no_run(
         with pytest.raises(FileNotFoundError, match="Seed directory"):
             await app.create({"simulated": False})
         assert not (tmp_path / "runs").exists()
-        assert await app.call("bootstrap", {}) == {
+        bootstrap = await app.call("bootstrap", {})
+        assert {
+            key: bootstrap[key] for key in ("allow_simulation", "default_simulated", "has_config")
+        } == {
             "allow_simulation": False,
             "default_simulated": False,
             "has_config": True,

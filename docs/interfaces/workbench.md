@@ -17,11 +17,12 @@ server.serve_forever()
 
 | HTTP | action | params / 返回值 |
 | --- | --- | --- |
-| GET `/api/bootstrap` | `bootstrap` | `{}` → `{allow_simulation, default_simulated, has_config}`；HTTP 层追加 `csrf_token` |
+| GET `/api/bootstrap` | `bootstrap` | `{}` → `{allow_simulation, default_simulated, has_config, models: [{id, efforts}]}`；HTTP 层追加 `csrf_token` |
 | GET `/api/runs` | `list` | `{}` → `{"runs": [...]}` |
 | POST `/api/runs` | `create` | `{message?, message_id?}` → `{run_id}` |
 | GET `/api/runs/{id}?after=N` | `detail` | `{run_id, after}` → 下方快照 |
 | POST `/api/runs/{id}/chat` | `chat` | `{run_id, text, message_id?, reply_to?, recipient?}` → `{run_id, message_id, status}` |
+| POST `/api/runs/{id}/model-settings` | `model-settings` | `{run_id, base_url, model, reasoning_effort}` → `{run_id, status}` |
 | POST `/api/runs/{id}/start` | `start` | `{run_id}` → `{status}` |
 | POST `/api/runs/{id}/pause` | `pause` | `{run_id}` → `{status}` |
 | POST `/api/runs/{id}/resume` | `resume` | `{run_id}` → `{status}` |
@@ -31,6 +32,8 @@ server.serve_forever()
 创建请求只接受首条消息和消息 ID，也可以用 `{}` 新建空对话。HTTP 层固定传入 `conversation=true`，不接受模板选择或模拟模式。Interaction 在准备阶段逐步保存 brief 与执行配置，用 `prepare_research` 发布总结；用户后续明确要求开始，才调用 `start_research`。按钮 `start` 使用相同的准备状态检查。
 
 chat/control 在消息或状态持久化后返回，不等待模型完整回合。Web 不提供通用产物导出入口；候选快照与研究结论按 run 保存。内部应用的旧归档操作不属于 Web API。
+
+模型设置仅在 `status=planned` 且没有 `started_at` 时可写。后端串行处理保存与启动，拒绝开始后的变更；暂停、停止不解除锁定。地址必须是不含凭证、查询参数或片段的 HTTP(S) 地址；模型与推理强度由 `models` 目录校验。三个设置独立保存在 run 的 `coordination/config.json`，修改快照存入 `coordination/configurations/`。准备阶段的显式切换会中断当前 Interaction 请求，沿用原会话恢复；已完成的工具操作不会重做。公共接口仅暴露这三个设置和 `editable`，不返回完整配置或凭证。
 
 已经开始过的研究即使被停止，也会显示「恢复研究」。用户调用 `resume` 后接续原 run、会话、报告和候选；已完成作业不重放，取消的未完成任务由 RSI 重新安排。单独被停止的方向不自动恢复。最新验证为基础设施错误时，概览显示 `execution_blocker: {job_id, error, created_at}`；RSI 应提问并等待处理，不能将环境阻塞作为结束研究的理由。
 
@@ -44,6 +47,7 @@ chat/control 在消息或状态持久化后返回，不等待模型完整回合�
 run_id, objective, status, simulated, started_at?, finished_at?, worker_alive?
 brief: { objective, instructions, limits: ResearchLimits, verification: contract|null }
 intake: { status: discussing|ready, summary?, environment?, execution_required? }
+model_settings: { base_url, model, reasoning_effort, editable }
 pending_agents: [agent_id]
 plan: string
 agents: [{ agent_id, direction?, state, current_iteration_id?, wait_reason?, error? }]

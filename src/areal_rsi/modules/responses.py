@@ -341,11 +341,55 @@ def _text(output: Sequence[Json]) -> str:
     )
 
 
+def _portable_context(items: Sequence[Json]) -> list[Json]:
+    """Keep messages and tool exchanges when moving between models/providers."""
+    return [
+        {
+            key: copy.deepcopy(value)
+            for key, value in item.items()
+            if key not in {"id", "encrypted_content"}
+        }
+        for item in items
+        if item.get("type") not in {"reasoning", "item_reference"}
+    ]
+
+
 class ResponsesRuntime:
     def __init__(self, config: ResponsesConfig, transport: ResponsesTransport | None = None):
         self.config = config
         self.transport = transport or HttpResponsesTransport()
         self._locks: dict[Path, asyncio.Lock] = {}
+
+    async def reconfigure_session(self, session_dir: Path, revision: str) -> None:
+        """Explicit pre-research model change; caller must first stop its worker.
+
+        History, receipts and delivery IDs remain intact. Pending requests without
+        a completed response are superseded; completed effects are never replayed.
+        """
+        directory = session_dir.resolve()
+        path = directory / "session.json"
+        if not path.exists():
+            return
+        async with self._locks.setdefault(directory, asyncio.Lock()):
+            with _session_lock(directory):
+                state = json.loads(path.read_text())
+                if state.get("model_settings_revision") == revision:
+                    return
+                if state.get("schema_version") != 1:
+                    raise ResponsesError("Unsupported session schema")
+                state.setdefault("model_changes", []).append(
+                    {"from": state["model"], "to": self.config.model, "revision": revision}
+                )
+                state["model"] = self.config.model
+                state["model_settings_revision"] = revision
+                state["context"] = _portable_context(state["context"])
+                for turn in state["turns"]:
+                    for request in turn["requests"]:
+                        if not request.get("consumed"):
+                            request["portable_response"] = True
+                            if request["status"] in {"running", "retrying"}:
+                                request["status"] = "superseded"
+                _atomic_json(path, state)
 
     async def turn(
         self,
@@ -604,6 +648,8 @@ class _Conversation:
             return None
         self.account_usage(record, response)
         self.validate_response(response)
+        if record.get("portable_response"):
+            response["output"] = _portable_context(response["output"])
         return response
 
     def account_usage(self, record: Json, response: Json) -> None:

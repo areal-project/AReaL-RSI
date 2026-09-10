@@ -3,7 +3,8 @@
 const $ = (id) => document.getElementById(id);
 const state = {
   token: "",
-  runId: localStorage.getItem("rsi.workbench.run") || null,
+  runId: new URLSearchParams(window.location.search).get("run") ||
+    localStorage.getItem("rsi.workbench.run") || null,
   run: null,
   runs: [],
   events: new Map(),
@@ -275,6 +276,9 @@ async function selectRun(runId) {
   state.events.clear();
   state.cursors.set(runId, 0);
   localStorage.setItem("rsi.workbench.run", runId);
+  const url = new URL(window.location.href);
+  url.searchParams.set("run", runId);
+  window.history.replaceState(null, "", url);
   const saved = localStorage.getItem(`rsi.workbench.node.${runId}`);
   if (saved) state.selected.set(runId, saved);
   notice();

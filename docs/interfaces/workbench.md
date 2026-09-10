@@ -68,6 +68,8 @@ budget_stop_reason?: string
 
 新报告通过 `report.message` 展示自然语言正文；旧七字段报告仍按原栏目呈现。没有独立完成条件时不展示空栏目。
 
+`/?run=<run_id>` 可直接打开指定研究；切换研究时同步更新地址，便于分享同一份搜索图。
+
 ## 执行进度
 
 研究图同时展示未完成的 ResearchIteration 和独立执行作业。作业使用 `job:<job_id>` 作为前端选择标识，不创建额外的 ResearchIteration；有 `iteration_id` 时连接其所属研究节点。RSI 直接提交的作业显示在「RSI 执行」一行。节点、作业和当前进展卡都可打开对应详情，「定位进行中」在未完成任务之间切换。

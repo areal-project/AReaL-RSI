@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 
-def summarize(job: dict[str, Any]) -> dict[str, Any]:
+def summarize(job: dict[str, Any], external_used: int = 0) -> dict[str, Any]:
     evaluation = job.get("evaluation") or {}
     speedup = evaluation.get("speedup", 0)
     correct = (
@@ -40,6 +40,9 @@ def summarize(job: dict[str, Any]) -> dict[str, Any]:
                 "run_seconds",
             )
         },
+        "budget_used": job["budget_used"] + external_used,
+        "queue_budget_used": job["budget_used"],
+        "external_budget_used": external_used,
         "source_sha256": digest,
         **(
             {
@@ -84,6 +87,22 @@ def diagnostic_logs(job: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def external_submissions(workspace: Path, task_id: str) -> list[dict[str, Any]]:
+    """Operator-audited GPU work outside the queue still consumes the task budget."""
+    records = []
+    for path in sorted((workspace.parent / "external-submissions").glob("*.json")):
+        record = json.loads(path.read_text())
+        if (
+            record.get("task_id") != task_id
+            or record.get("event_id") != path.stem
+            or type(record.get("count")) is not int
+            or record["count"] != 1
+        ):
+            raise ValueError("Invalid external GPU submission record")
+        records.append(record)
+    return records
+
+
 def handle(manifest: dict[str, Any], request_data: dict[str, Any]) -> Any:
     sys.path.insert(0, manifest["kb_root"])
     from common import request
@@ -98,6 +117,7 @@ def handle(manifest: dict[str, Any], request_data: dict[str, Any]) -> Any:
         if selected is not None and name != selected:
             continue
         workspace = Path(task["workspace"])
+        external = external_submissions(workspace, task["task_id"])
         token = (workspace.parent / "gpuq-token").read_text().strip()
 
         def query(path: str, body: Any = None, token: str = token) -> Any:
@@ -123,6 +143,7 @@ def handle(manifest: dict[str, Any], request_data: dict[str, Any]) -> Any:
             key = request_data["key"]
             with (workspace.parent / "submission.lock").open("a+") as lock:
                 fcntl.flock(lock, fcntl.LOCK_EX)
+                external = external_submissions(workspace, task["task_id"])
                 receipts = workspace.parent / "receipts"
                 receipts.mkdir(exist_ok=True)
                 receipt = receipts / (hashlib.sha256(key.encode()).hexdigest() + ".json")
@@ -134,8 +155,13 @@ def handle(manifest: dict[str, Any], request_data: dict[str, Any]) -> Any:
                         raise ValueError("Submission ID reused with different code")
                 else:
                     receipt.write_text(json.dumps(intent))
-                old = next((j for j in query("/jobs") if j.get("idempotency_key") == key), None)
+                jobs = query("/jobs")
+                old = next((j for j in jobs if j.get("idempotency_key") == key), None)
                 if old is None:
+                    if len(jobs) + len(external) >= 11:
+                        raise ValueError(
+                            "GPU feedback budget exhausted (including external GPU work)"
+                        )
                     candidate = workspace / "model_new.py"
                     diagnostic_path = workspace / "_rsi_diagnostic.py"
                     if diagnostic:
@@ -163,21 +189,29 @@ def handle(manifest: dict[str, Any], request_data: dict[str, Any]) -> Any:
                 assert old["task_id"] == task["task_id"] and old["budget"] == 11
                 if old["kind"] != ("run" if diagnostic else "eval"):
                     raise ValueError("Submission ID reused for another operation")
-                return summarize(old)
+                return summarize(old, len(external))
         if operation in {"job", "logs"}:
             if selected is None:
                 raise ValueError("Job lookup requires one task")
             job = query("/jobs/" + request_data["job_id"])
             assert job["task_id"] == task["task_id"] and job["budget"] == 11
-            return diagnostic_logs(job) if operation == "logs" else summarize(job)
+            return diagnostic_logs(job) if operation == "logs" else summarize(job, len(external))
         jobs = query("/jobs")
         if any(j["task_id"] != task["task_id"] or j["budget"] != 11 for j in jobs):
             raise ValueError("Unexpected task ownership or budget")
-        public = [summarize(j) for j in jobs]
+        public = [summarize(j, len(external)) for j in jobs]
         public.sort(key=lambda j: j["created_at"])
         if len(public) > 11:
             raise ValueError("GPU submission cap was exceeded")
-        value: dict[str, Any] = {"used": len(public), "remaining": 11 - len(public), "jobs": public}
+        used = len(public) + len(external)
+        value: dict[str, Any] = {
+            "used": used,
+            "remaining": max(0, 11 - used),
+            "queue_used": len(public),
+            "external_used": len(external),
+            "external_submissions": external,
+            "jobs": public,
+        }
         if operation == "collect":
             best = max(
                 (j for j in public if j["kind"] == "eval" and j["correct"]),

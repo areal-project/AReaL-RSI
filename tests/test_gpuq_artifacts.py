@@ -352,3 +352,68 @@ def test_diagnostic_bad_inputs_do_not_reach_the_queue(
         client.diagnose(
             {"tasks": {"L1P1": {}}}, tmp_path, tmp_path / "output", "L1P1", "../outside.py"
         )
+
+
+def test_audited_external_gpu_work_reduces_the_remaining_submission_allowance(
+    diagnostic_queue: Any,
+) -> None:
+    q = diagnostic_queue
+    ledger = q.workspace.parent / "external-submissions"
+    ledger.mkdir()
+    (ledger / "outside-check.json").write_text(
+        json.dumps(
+            {
+                "event_id": "outside-check",
+                "task_id": "task1",
+                "count": 1,
+                "note": "Operator confirmed one GPU execution outside the queue",
+            }
+        )
+    )
+    for i in range(10):
+        q.bridge.handle(q.manifest, diagnostic_payload(str(i)))
+    state = q.bridge.handle(q.manifest, {"operation": "status"})["L1P1"]
+    assert (state["used"], state["remaining"], state["queue_used"], state["external_used"]) == (
+        11,
+        0,
+        10,
+        1,
+    )
+    assert state["jobs"][-1]["budget_used"] == 11
+    assert q.bridge.handle(q.manifest, diagnostic_payload("9"))["id"] == q.jobs[-1]["id"]
+    with pytest.raises(ValueError, match="budget exhausted"):
+        q.bridge.handle(q.manifest, diagnostic_payload("eleventh-queued"))
+    with pytest.raises(ValueError, match="budget exhausted"):
+        q.bridge.handle(
+            q.manifest,
+            {
+                "operation": "submit",
+                "task": "L1P1",
+                "key": "another-eval",
+                "source": base64.b64encode(b"candidate").decode(),
+            },
+        )
+    assert len(q.jobs) == 10
+
+
+@pytest.mark.parametrize("patch", [{"task_id": "wrong-task"}, {"count": -1}, {"count": True}])
+def test_external_accounting_rejects_invalid_records_before_submission(
+    diagnostic_queue: Any,
+    patch: dict[str, Any],
+) -> None:
+    q = diagnostic_queue
+    ledger = q.workspace.parent / "external-submissions"
+    ledger.mkdir()
+    (ledger / "audit.json").write_text(
+        json.dumps(
+            {
+                "event_id": "audit",
+                "task_id": "task1",
+                "count": 1,
+                **patch,
+            }
+        )
+    )
+    with pytest.raises(ValueError, match="Invalid external"):
+        q.bridge.handle(q.manifest, diagnostic_payload())
+    assert not q.jobs

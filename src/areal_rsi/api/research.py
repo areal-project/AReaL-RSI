@@ -81,6 +81,13 @@ class TaskBrief:
     def __post_init__(self) -> None:
         if not self.objective.strip():
             raise ValueError("Research objective must not be empty")
+        if self.verification is not None and not isinstance(
+            self.verification, VerificationContract
+        ):
+            raise ValueError(
+                "verification 只能包含 metric、direction、target、description、identity；"
+                "具体评测约定请放在 description 或 instructions 中"
+            )
 
 
 @dataclass(slots=True)

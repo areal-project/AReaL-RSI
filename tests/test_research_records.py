@@ -14,7 +14,7 @@ from areal_rsi.api.research import (
     VerificationContract,
     VerifiedResult,
 )
-from areal_rsi.base.storage import now
+from areal_rsi.base.storage import decode, now
 from areal_rsi.coordination.store import ResearchStore
 
 
@@ -36,6 +36,33 @@ def make_store(root: Path, name: str = "example") -> ResearchStore:
         )
     )
     return store
+
+
+def test_malformed_verification_is_rejected_before_persisting_a_brief() -> None:
+    with pytest.raises(ValueError, match="verification 只能包含"):
+        decode(
+            TaskBrief,
+            {
+                "objective": "任务",
+                "instructions": "",
+                "verification": {
+                    "metric": "speedup",
+                    "correctness_trials": 5,
+                },
+            },
+        )
+    brief = decode(
+        TaskBrief,
+        {
+            "objective": "任务",
+            "instructions": "",
+            "verification": {
+                "metric": "speedup",
+                "description": "5 次正确性检查",
+            },
+        },
+    )
+    assert isinstance(brief.verification, VerificationContract)
 
 
 def test_optional_products_and_natural_instructions(tmp_path: Path) -> None:

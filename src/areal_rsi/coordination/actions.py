@@ -184,7 +184,8 @@ INTERACTION = [
         "update_brief",
         "启动前更新需求。先读取 get_state；brief_json 包含"
         "objective、instructions、limits 和可为空的"
-        "verification，保留未修改字段。",
+        "verification，保留未修改字段。verification 的字段为 metric、direction、target、"
+        "description、identity；详细任务与评测要求写进 instructions 或 description。",
         brief_json=STRING,
     ),
 ]

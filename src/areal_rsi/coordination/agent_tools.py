@@ -14,7 +14,7 @@ from areal_rsi.modules.responses import ToolCall, ToolHandler, ToolResult
 
 TOOL_PROMPT = """基础工具包含 bash、read、write、edit、glob、grep。
 bash 可以使用本机已有的 SSH、Git、Python；
-每次是新 shell，目录用 workdir 指定。
+每次是新 shell，默认在当前 Agent 的工作区执行；仅切换目录时传 workdir。
 远端检查采用非交互模式并设置超时。
 普通文件操作使用这组基础工具；
 保存版本、共享发现、运行实验和验证使用相应业务工具。

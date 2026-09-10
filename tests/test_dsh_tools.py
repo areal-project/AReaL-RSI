@@ -97,9 +97,7 @@ def test_real_file_tools_and_workspace_isolation(installation: Path, tmp_path: P
             assert not read["isError"]
             assert "source line 400" in json.dumps(read)
             source.write_text("x" * 40000)
-            bounded = await one.execute(
-                ToolCall("read", {"file_path": "long.txt"}, "bounded"), env
-            )
+            bounded = await one.execute(ToolCall("read", {"file_path": "long.txt"}, "bounded"), env)
             assert not bounded["isError"]
             assert "x" * 25000 not in json.dumps(bounded)
             pwd = await one.execute(command("pwd", "pwd"), env)
@@ -150,6 +148,47 @@ def test_completed_call_replays_without_executing_again(installation: Path, tmp_
             conflicting = await worker.execute(command("append-once", "printf y >> count.txt"), env)
             assert conflicting["isError"]
             assert (worker.workspace / "count.txt").read_text() == "x"
+        finally:
+            await worker.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("absolute", [False, True])
+def test_invalid_bash_workdir_has_actionable_durable_error(
+    installation: Path, tmp_path: Path, absolute: bool
+) -> None:
+    async def scenario() -> None:
+        worker = DshToolWorker(installation, tmp_path / "workspace", tmp_path / "tools")
+        env = tool_environment()
+        directory = worker.workspace / "missing"
+        workdir = str(directory) if absolute else "missing"
+        call = command("invalid-directory", "touch executed", workdir=workdir)
+        try:
+            first = await worker.execute(call, env)
+            assert first["error"]["code"] == "INVALID_WORKDIR"
+            assert first["command_started"] is False
+            assert first["workdir"] == str(directory)
+            assert first["default_workdir"] == str(worker.workspace)
+            assert "省略 workdir" in first["error"]["message"]
+            assert not directory.exists()
+            assert not (worker.workspace / "executed").exists()
+            # Replaying the rejected intent cannot execute it after the path appears.
+            directory.mkdir()
+            await worker.close()
+            assert await worker.execute(call, env) == first
+            assert not (directory / "executed").exists()
+            fresh = await worker.execute(
+                command("new-intent", "touch executed", workdir=workdir), env
+            )
+            assert fresh["value"]["exitCode"] == 0
+            assert (directory / "executed").is_file()
+            not_directory = await worker.execute(
+                command("file-workdir", "touch unexpected", workdir="missing/executed"), env
+            )
+            assert not_directory["error"]["code"] == "INVALID_WORKDIR"
+            default = await worker.execute(command("default-directory", "pwd"), env)
+            assert default["value"]["stdout"]["text"].strip() == str(worker.workspace)
         finally:
             await worker.close()
 

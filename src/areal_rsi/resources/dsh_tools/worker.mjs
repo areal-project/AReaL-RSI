@@ -2,7 +2,7 @@
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
-import { mkdir, open, readFile, rename } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, stat } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { createInterface } from 'node:readline';
 
@@ -61,6 +61,28 @@ function failure(code, message) {
   return { isError: true, error: { code, message }, content: [{ type: 'text', text: message }] };
 }
 
+async function invalidBashDirectory(request) {
+  if (request.name !== 'bash') return;
+  const supplied = request.arguments.workdir;
+  // Preserve upstream argument validation for non-string values.
+  if (supplied !== undefined && typeof supplied !== 'string') return;
+  const directory = resolve(workspace, supplied ?? '.');
+  let isDirectory = false;
+  try {
+    isDirectory = (await stat(directory)).isDirectory();
+  } catch (error) {
+    if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error;
+  }
+  if (!isDirectory) {
+    return {
+      ...failure('INVALID_WORKDIR',
+        `工作目录不存在或不是目录：${directory}。命令尚未执行。` +
+        `当前 Agent 的默认工作区是 ${workspace}；在该工作区执行时省略 workdir 即可。`),
+      command_started: false, workdir: directory, default_workdir: workspace,
+    };
+  }
+}
+
 async function execute(request) {
   const key = createHash('sha256').update(request.id).digest('hex');
   const path = join(callsDirectory, key + '.json');
@@ -85,14 +107,17 @@ async function execute(request) {
   const timeout = setTimeout(() => active?.abort(), 65000);
   let result;
   try {
-    const output = await ctx.tools.execute({
-      callId: request.id, name: request.name, arguments: request.arguments,
-      agent, signal: active.signal,
-    });
-    // Keep DSH's model-facing rendering; filesystem values can contain whole before/after files.
-    result = { isError: output.isError, content: output.content };
-    if (output.error) result.error = output.error;
-    if (request.name === 'bash' && output.value) result.value = output.value;
+    result = await invalidBashDirectory(request);
+    if (!result) {
+      const output = await ctx.tools.execute({
+        callId: request.id, name: request.name, arguments: request.arguments,
+        agent, signal: active.signal,
+      });
+      // Keep DSH's model-facing rendering; filesystem values can contain whole before/after files.
+      result = { isError: output.isError, content: output.content };
+      if (output.error) result.error = output.error;
+      if (request.name === 'bash' && output.value) result.value = output.value;
+    }
   } catch (error) {
     result = failure('TOOL_ERROR', String(error.message ?? error));
   } finally {

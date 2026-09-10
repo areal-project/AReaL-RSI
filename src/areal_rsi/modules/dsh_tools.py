@@ -80,7 +80,8 @@ def native_schemas() -> list[dict[str, Any]]:
 
 DESCRIPTIONS = {
     "bash": "通过 DSH 执行 bash 命令，可调用 SSH、Git、Python 等本机程序。"
-    "每次是独立 shell；目录用 workdir 指定。默认 30 秒，上限 60 秒，超时会终止。"
+    "每次是独立 shell；默认在当前 Agent 的工作区执行，仅切换目录时传 workdir。"
+    "默认 30 秒，上限 60 秒，超时会终止。"
     "长时间实验使用 run_job/wait_for_job；不要用 nohup、& 或轮询绕过作业管理。",
     "read": "读取 UTF-8 文件并显示行号。offset 从 1 开始；长文件用 offset/limit 分段读取。",
     "write": "创建或完整替换 UTF-8 文件。替换已有文件前先用 read 阅读，避免覆盖未读修改。",

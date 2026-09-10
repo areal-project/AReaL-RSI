@@ -16,6 +16,10 @@
 
 将 `evaluate` 配置为 `ApprovedCommand`，声明 `workspace / output / task / candidate` 四个参数，前两者由系统绑定。研究员通过 `run_job` 提交，`wait_for_job` 休眠等待完成，`read_job_output_file` 读取 `feedback.json`。反馈包含 `task` 题号；应结合任务参数和反馈确认评测归属，不能从 Job ID 猜测。远端排队、执行状态和每题额度写入作业的 `progress.json`。
 
+普通 `bash` 在研究员的本地工作区执行；直接 SSH 登录的主机也不一定是评分环境。需要查看评分环境的 Torch 版本、头文件或做 CPU 检查时，应使用本 run manifest 中的 `host`、`continue_script`、`slurm_job` 进入对应容器，再调用容器的 Python。`client.py` 的 `remote()` 展示了这条入口；不能因为 SSH 主机上没有 Torch 就断定评测容器缺少依赖。明确的 CPU 检查可设置 `CUDA_VISIBLE_DEVICES=""`，并输出实际 Python 与库路径。读取库源码应限定在确认过的库目录，避免搜索其他 run 的研究文件。
+
+上述入口用于只读检查和 CPU 工作；实际 CUDA tensor、kernel 或模型执行仍须通过已注册题目的 `evaluate` / `diagnose` 队列并计入同一额度。恢复环境访问不意味着增加提交次数，也不覆盖 RSI 对当前任务的诊断限制。
+
 将 `diagnose` 配置为 `diagnose_task` 命令，声明 `workspace / output / task / script / candidate` 参数。`script` 和可选 `candidate` 都是冻结工作区内的相对路径；仅运行参考实现时，`candidate` 传空字符串。远端工作区含公开题目 `reference.py`，候选统一保存为 `model_new.py`，脚本保存为 `_rsi_diagnostic.py`。脚本使用远端 Python/Torch 环境、1 张 GPU，最长运行 300 秒；提交前检查 Python 语法，输入总大小不超过 2 MB。所有输入随队列作业保存独立快照。
 
 诊断直接启动脚本，不经过正式评分器，不能假定 Torch 默认设置与评分协议一致。用于定位正式正确性问题时，应在诊断脚本中先复现并打印固定协议的精度设置，再以相同参数、输入和训练态对照两侧。例如 `strict-fp32-v1` 要求 `torch.backends.cuda.matmul.allow_tf32=False`、`torch.backends.cudnn.allow_tf32=False`、`torch.set_float32_matmul_precision("highest")`；Torch 默认的 cuDNN TF32 开关可能为开启。上述设置属于诊断启动条件，不能写入 `ModelNew` 或改动评分器。条件不一致的诊断只能说明该实验自身的结果，不能直接用于解释正式评测误差。

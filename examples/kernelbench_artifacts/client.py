@@ -55,12 +55,41 @@ def remote(manifest: dict[str, Any], operation: str, **values: Any) -> Any:
 def evaluate(
     manifest: dict[str, Any], workspace: Path, output: Path, task: str, candidate: str
 ) -> None:
-    if task not in manifest["tasks"]:
-        raise ValueError("Task is outside this research run")
+    source = input_source(workspace, candidate)
+    submit_and_wait(manifest, output, task, "submit", source=source)
+
+
+def input_source(workspace: Path, candidate: str) -> str:
     path = (workspace / candidate).resolve()
     if not path.is_relative_to(workspace.resolve()) or not path.is_file():
-        raise ValueError("Candidate must be a file in the frozen job workspace")
-    source = base64.b64encode(path.read_bytes()).decode()
+        raise ValueError("Input must be a file in the frozen job workspace")
+    content = path.read_bytes()
+    if len(content) > 2_000_000:
+        raise ValueError("Input exceeds 2 MB")
+    return base64.b64encode(content).decode()
+
+
+def diagnose(
+    manifest: dict[str, Any],
+    workspace: Path,
+    output: Path,
+    task: str,
+    script: str,
+    candidate: str = "",
+) -> None:
+    script_source = input_source(workspace, script)
+    compile(base64.b64decode(script_source), "_rsi_diagnostic.py", "exec")
+    source = input_source(workspace, candidate) if candidate else ""
+    submit_and_wait(
+        manifest, output, task, "submit_diagnostic", source=source, script=script_source
+    )
+
+
+def submit_and_wait(
+    manifest: dict[str, Any], output: Path, task: str, operation: str, **sources: str
+) -> None:
+    if task not in manifest["tasks"]:
+        raise ValueError("Task is outside this research run")
     output.mkdir(parents=True, exist_ok=True)
     record_path = output / "remote-job.json"
     while True:
@@ -70,19 +99,30 @@ def evaluate(
                     manifest, "job", task=task, job_id=json.loads(record_path.read_text())["id"]
                 )
             else:
-                job = remote(manifest, "submit", task=task, source=source, key=output.name)
+                job = remote(manifest, operation, task=task, key=output.name, **sources)
             write_json(record_path, job)
             write_json(
                 output / "progress.json",
                 {
                     "message": f"{task}：{job['state']}，已用 {job['budget_used']}/11 次 GPU 提交",
-                    "stage": "远端评测",
+                    "stage": "远端诊断" if operation == "submit_diagnostic" else "远端评测",
                     "completed": int(job["state"] in TERMINAL),
                     "total": 1,
                 },
             )
             if job["state"] in TERMINAL:
                 write_json(output / "feedback.json", {**job, "task": task})
+                if operation == "submit_diagnostic":
+                    logs = remote(manifest, "logs", task=task, job_id=job["id"])
+                    for stream in ("stdout", "stderr"):
+                        (output / (stream + ".log")).write_text(logs[stream]["text"])
+                    write_json(
+                        output / "diagnostic-logs.json",
+                        {
+                            s: {k: v for k, v in data.items() if k != "text"}
+                            for s, data in logs.items()
+                        },
+                    )
                 print(json.dumps({"task": task, **job}, ensure_ascii=False))
                 return  # A measured incorrect candidate is feedback, not an infrastructure failure.
         except (subprocess.TimeoutExpired, RuntimeError) as exc:
@@ -93,7 +133,7 @@ def evaluate(
                 )
                 print(str(exc))
                 return
-            if any(
+            if str(exc).startswith(("ValueError:", "SyntaxError:", "AssertionError:")) or any(
                 code in str(exc)
                 for code in (
                     "GPUQ HTTP 400",
@@ -148,17 +188,27 @@ def score_bundle(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("evaluate", "status", "collect", "verify"))
+    parser.add_argument(
+        "operation", choices=("evaluate", "diagnose", "status", "collect", "verify")
+    )
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--workspace", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--task")
     parser.add_argument("--candidate")
+    parser.add_argument("--script")
     parser.add_argument("--phase", default="search", choices=("search", "final"))
     args = parser.parse_args()
     manifest = json.loads(args.manifest.read_text())
     if args.operation == "evaluate":
         evaluate(manifest, args.workspace, args.output, args.task, args.candidate)
+        return
+    if args.operation == "diagnose":
+        if not args.script:
+            parser.error("diagnose requires --script")
+        diagnose(
+            manifest, args.workspace, args.output, args.task, args.script, args.candidate or ""
+        )
         return
     status = remote(manifest, "collect" if args.operation == "collect" else "status")
     if args.operation == "status":

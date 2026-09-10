@@ -16,7 +16,9 @@ from typing import Any
 def summarize(job: dict[str, Any]) -> dict[str, Any]:
     evaluation = job.get("evaluation") or {}
     speedup = evaluation.get("speedup", 0)
-    correct = evaluation.get("correct") is True and job["state"] == "succeeded"
+    correct = (
+        job["kind"] == "eval" and evaluation.get("correct") is True and job["state"] == "succeeded"
+    )
     valid = isinstance(speedup, (int, float)) and math.isfinite(speedup) and speedup > 0
     source = Path(job["cwd"]) / "model_new.py"
     digest = hashlib.sha256(source.read_bytes()).hexdigest() if source.is_file() else None
@@ -39,11 +41,47 @@ def summarize(job: dict[str, Any]) -> dict[str, Any]:
             )
         },
         "source_sha256": digest,
+        **(
+            {
+                "diagnostic_sha256": hashlib.sha256(
+                    (Path(job["cwd"]) / "_rsi_diagnostic.py").read_bytes()
+                ).hexdigest()
+                if (Path(job["cwd"]) / "_rsi_diagnostic.py").is_file()
+                else None,
+                "stdout_tail": str(job.get("stdout_tail", ""))[-12000:],
+            }
+            if job["kind"] == "run"
+            else {}
+        ),
         "correct": correct,
         "speedup": float(speedup) if correct and valid else 0.0,
         "evaluation": evaluation,
         "stderr_tail": str(job.get("stderr_tail", ""))[-12000:],
     }
+
+
+def diagnostic_logs(job: dict[str, Any]) -> dict[str, Any]:
+    if job["kind"] != "run":
+        raise ValueError("Diagnostic logs require a diagnostic job")
+    result = {}
+    for stream in ("stdout", "stderr"):
+        path = Path(job.get(stream + "_path", "")).resolve()
+        artifacts = Path(job["artifacts"]).resolve()
+        if path.is_relative_to(artifacts) and path.is_file():
+            with path.open("rb") as handle:
+                content = handle.read(1_000_001)
+            result[stream] = {
+                "text": content[:1_000_000].decode(errors="replace"),
+                "truncated": len(content) > 1_000_000,
+                "source": "file",
+            }
+        else:
+            result[stream] = {
+                "text": str(job.get(stream + "_tail", "")),
+                "truncated": True,
+                "source": "queue_tail",
+            }
+    return result
 
 
 def handle(manifest: dict[str, Any], request_data: dict[str, Any]) -> Any:
@@ -69,12 +107,18 @@ def handle(manifest: dict[str, Any], request_data: dict[str, Any]) -> Any:
                 error = json.loads(exc.read()).get("error", "request rejected")
                 raise RuntimeError(f"GPUQ HTTP {exc.code}: {error}") from exc
 
-        if operation == "submit":
+        if operation in {"submit", "submit_diagnostic"}:
             if selected is None:
                 raise ValueError("Submission requires one task")
+            diagnostic = operation == "submit_diagnostic"
             source = base64.b64decode(request_data["source"], validate=True)
-            if len(source) > 2_000_000:
-                raise ValueError("Candidate exceeds 2 MB")
+            script = base64.b64decode(request_data["script"], validate=True) if diagnostic else b""
+            if len(source) + len(script) > 2_000_000:
+                raise ValueError("Submission sources exceed 2 MB")
+            if diagnostic:
+                compile(script, "_rsi_diagnostic.py", "exec")
+                if not script.strip():
+                    raise ValueError("Diagnostic script is empty")
             digest = hashlib.sha256(source).hexdigest()
             key = request_data["key"]
             with (workspace.parent / "submission.lock").open("a+") as lock:
@@ -83,6 +127,8 @@ def handle(manifest: dict[str, Any], request_data: dict[str, Any]) -> Any:
                 receipts.mkdir(exist_ok=True)
                 receipt = receipts / (hashlib.sha256(key.encode()).hexdigest() + ".json")
                 intent = {"key": key, "sha256": digest}
+                if diagnostic:
+                    intent.update(kind="run", script_sha256=hashlib.sha256(script).hexdigest())
                 if receipt.exists():
                     if json.loads(receipt.read_text()) != intent:
                         raise ValueError("Submission ID reused with different code")
@@ -91,19 +137,39 @@ def handle(manifest: dict[str, Any], request_data: dict[str, Any]) -> Any:
                 old = next((j for j in query("/jobs") if j.get("idempotency_key") == key), None)
                 if old is None:
                     candidate = workspace / "model_new.py"
-                    candidate.write_bytes(source)
-                    old = query(
-                        "/jobs",
-                        {"kind": "eval", "candidate": "model_new.py", "idempotency_key": key},
-                    )
+                    diagnostic_path = workspace / "_rsi_diagnostic.py"
+                    if diagnostic:
+                        diagnostic_path.write_bytes(script)
+                        if source:
+                            candidate.write_bytes(source)
+                        else:
+                            candidate.unlink(missing_ok=True)
+                        body = {
+                            "kind": "run",
+                            "argv": [sys.executable, "-u", "_rsi_diagnostic.py"],
+                            "gpus": 1,
+                            "timeout_s": 300,
+                            "idempotency_key": key,
+                        }
+                    else:
+                        diagnostic_path.unlink(missing_ok=True)
+                        candidate.write_bytes(source)
+                        body = {
+                            "kind": "eval",
+                            "candidate": "model_new.py",
+                            "idempotency_key": key,
+                        }
+                    old = query("/jobs", body)
                 assert old["task_id"] == task["task_id"] and old["budget"] == 11
+                if old["kind"] != ("run" if diagnostic else "eval"):
+                    raise ValueError("Submission ID reused for another operation")
                 return summarize(old)
-        if operation == "job":
+        if operation in {"job", "logs"}:
             if selected is None:
                 raise ValueError("Job lookup requires one task")
             job = query("/jobs/" + request_data["job_id"])
-            assert job["task_id"] == task["task_id"]
-            return summarize(job)
+            assert job["task_id"] == task["task_id"] and job["budget"] == 11
+            return diagnostic_logs(job) if operation == "logs" else summarize(job)
         jobs = query("/jobs")
         if any(j["task_id"] != task["task_id"] or j["budget"] != 11 for j in jobs):
             raise ValueError("Unexpected task ownership or budget")
@@ -114,7 +180,9 @@ def handle(manifest: dict[str, Any], request_data: dict[str, Any]) -> Any:
         value: dict[str, Any] = {"used": len(public), "remaining": 11 - len(public), "jobs": public}
         if operation == "collect":
             best = max(
-                (j for j in public if j["correct"]), key=lambda j: j["speedup"], default=None
+                (j for j in public if j["kind"] == "eval" and j["correct"]),
+                key=lambda j: j["speedup"],
+                default=None,
             )
             if best:
                 raw = next(j for j in jobs if j["id"] == best["id"])

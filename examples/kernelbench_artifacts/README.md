@@ -18,6 +18,8 @@
 
 将 `diagnose` 配置为 `diagnose_task` 命令，声明 `workspace / output / task / script / candidate` 参数。`script` 和可选 `candidate` 都是冻结工作区内的相对路径；仅运行参考实现时，`candidate` 传空字符串。远端工作区含公开题目 `reference.py`，候选统一保存为 `model_new.py`，脚本保存为 `_rsi_diagnostic.py`。脚本使用远端 Python/Torch 环境、1 张 GPU，最长运行 300 秒；提交前检查 Python 语法，输入总大小不超过 2 MB。所有输入随队列作业保存独立快照。
 
+诊断直接启动脚本，不经过正式评分器，不能假定 Torch 默认设置与评分协议一致。用于定位正式正确性问题时，应在诊断脚本中先复现并打印固定协议的精度设置，再以相同参数、输入和训练态对照两侧。例如 `strict-fp32-v1` 要求 `torch.backends.cuda.matmul.allow_tf32=False`、`torch.backends.cudnn.allow_tf32=False`、`torch.set_float32_matmul_precision("highest")`；Torch 默认的 cuDNN TF32 开关可能为开启。上述设置属于诊断启动条件，不能写入 `ModelNew` 或改动评分器。条件不一致的诊断只能说明该实验自身的结果，不能直接用于解释正式评测误差。
+
 诊断结束后读取 `stdout.log`、`stderr.log` 和 `feedback.json`。日志各保留前 1 MB，是否截断及来源记录在 `diagnostic-logs.json`；远端完整日志不可读时回退到队列日志尾部并明确标记。`kind=run` 的诊断记录用于分析，即使脚本写出评分字段，也不会进入 `collect` 或 `verify` 的正式成绩。应先设计能定位问题的实验，再消耗剩余额度；诊断失败同样计数。
 
 候选编译失败、正确性失败等是实际反馈，结束本地作业并保留结果。临时连接故障查询同一远端 Job ID，尚未拿到 ID 时复用同一提交意图；不能靠重复 CLI 调用恢复不确定的提交。任务额度用完会明确返回，不能持续重试第 12 次。所有 GPU 调试和正式评测共用该题额度，查询、等待、汇总不消耗额度。

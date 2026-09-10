@@ -13,7 +13,7 @@
 | `collect` | 从远端实际评测快照收集每题历史最佳正确源码及来源 | 无 |
 | `verify` | 核对本地候选集合的源码哈希与真实评测记录，生成通用 `content` 验证结果 | 无 |
 
-将 `evaluate` 配置为 `ApprovedCommand`，声明 `workspace / output / task / candidate` 四个参数，前两者由系统绑定。研究员通过 `run_job` 提交，`wait_for_job` 休眠等待完成，`read_job_output_file` 读取 `feedback.json`。远端排队、执行状态和每题额度写入作业的 `progress.json`。
+将 `evaluate` 配置为 `ApprovedCommand`，声明 `workspace / output / task / candidate` 四个参数，前两者由系统绑定。研究员通过 `run_job` 提交，`wait_for_job` 休眠等待完成，`read_job_output_file` 读取 `feedback.json`。反馈包含 `task` 题号；应结合任务参数和反馈确认评测归属，不能从 Job ID 猜测。远端排队、执行状态和每题额度写入作业的 `progress.json`。
 
 候选编译失败、正确性失败等是实际反馈，结束本地作业并保留结果。临时连接故障查询同一远端 Job ID，尚未拿到 ID 时复用同一提交意图；不能靠重复 CLI 调用恢复不确定的提交。任务额度用完会明确返回，不能持续重试第 12 次。所有 GPU 调试和正式评测共用该题额度，查询、等待、汇总不消耗额度。
 

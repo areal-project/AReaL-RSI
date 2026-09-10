@@ -111,3 +111,24 @@ def test_exhausted_submission_returns_feedback_instead_of_retrying(
     client.evaluate({"tasks": {"L1P1": {}}}, tmp_path, output, "L1P1", "model_new.py")
     assert len(calls) == 1
     assert json.loads((output / "feedback.json").read_text())["budget_exhausted"] is True
+
+
+@pytest.mark.parametrize("task", ["L3P10", "L3P36"])
+def test_evaluation_feedback_identifies_the_submitted_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, task: str
+) -> None:
+    client = module("client")
+    (tmp_path / "model_new.py").write_text("candidate")
+    job = {"id": "remote-job", "state": "failed", "budget_used": 2, "correct": False}
+
+    def request(manifest: Any, operation: str, **kwargs: Any) -> Any:
+        assert operation == "submit"
+        assert kwargs["task"] == task
+        return job
+
+    monkeypatch.setattr(client, "remote", request)
+    output = tmp_path / "output"
+    client.evaluate({"tasks": {task: {}}}, tmp_path, output, task, "model_new.py")
+    feedback = json.loads((output / "feedback.json").read_text())
+    assert feedback == {**job, "task": task}
+    assert json.loads((output / "remote-job.json").read_text()) == job

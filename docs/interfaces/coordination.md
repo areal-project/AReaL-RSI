@@ -30,6 +30,13 @@ continuous model sessions. Execution and web research tools are separate adapter
   delivered once per subscriber; a processed result with a missing notification
   is reconciled on restart. Finished assignments and stopped directions are not
   resumed by late job results.
+- Job submission receipts, `job_status` and completion messages include the command
+  name, caller-supplied `parameters`, iteration and candidate identity, plus the
+  verification phase when applicable. Use these fields and the actual feedback to
+  identify the task; a job ID or its owner's direction is not a task label. Parameters
+  are public run data: credentials belong in the configured execution environment.
+  Operator argv, environment and private verifier inputs are not included. Legacy
+  jobs without saved parameters return `null` rather than inferred values.
 - Messages and tool effects have stable identities. Recovering a delivery reuses
   the same session turn and reconciles the same effect; completed effects return
   their original result. A stopped direction archives late reports without wakeup.

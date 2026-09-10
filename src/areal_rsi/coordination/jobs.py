@@ -71,7 +71,12 @@ class ResearchExecution:
                 "若 instructions_truncated 为 true，"
                 "执行前用 read_record 读取 instructions_ref 的完整说明。",
             ),
-            definition("job_status", "查看作业的公开状态与已发布结果。", job_id=STRING),
+            definition(
+                "job_status",
+                "查看作业的命令、原始任务参数、公开状态与已发布结果。"
+                "任务归属以 parameters 和实际反馈为准，不凭 Job ID 猜测。",
+                job_id=STRING,
+            ),
             definition(
                 "read_job_log",
                 "读取普通执行作业的最近日志。私有验证日志不公开。",
@@ -372,6 +377,7 @@ class ResearchExecution:
         self.jobs[key] = {
             "agent_id": agent_id,
             "iteration_id": self.c.actor(agent_id).current_iteration_id,
+            "parameters": supplied,
             "candidate_id": candidate_id,
             "verification": verification,
             "phase": phase,
@@ -399,6 +405,14 @@ class ResearchExecution:
         return {
             "job_id": record.job_id,
             "agent_id": info["agent_id"],
+            "iteration_id": info.get("iteration_id"),
+            "command_name": record.spec.metadata.get("command_template"),
+            # Only caller-supplied data arguments are public. Never publish the
+            # operator's argv, environment, frozen paths or private verifier inputs.
+            # Legacy records have no parameters; do not infer them from argv.
+            "parameters": info.get("parameters"),
+            "candidate_id": info.get("candidate_id"),
+            "phase": info.get("phase") if info["verification"] else None,
             "state": record.state,
             "gpu_ids": list(record.assigned_gpu_ids),
             "created_at": record.created_at,

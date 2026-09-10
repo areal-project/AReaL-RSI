@@ -82,7 +82,7 @@ def evaluate(
                 },
             )
             if job["state"] in TERMINAL:
-                write_json(output / "feedback.json", job)
+                write_json(output / "feedback.json", {**job, "task": task})
                 print(json.dumps({"task": task, **job}, ensure_ascii=False))
                 return  # A measured incorrect candidate is feedback, not an infrastructure failure.
         except (subprocess.TimeoutExpired, RuntimeError) as exc:

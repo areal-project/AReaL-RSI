@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -123,6 +124,10 @@ def test_background_verification_wakes_only_waiting_assignment(
             job = await handler(call)
             repeated = await handler(call)
             assert repeated == job and len(execution.manager.records()) == 1
+            assert job.output["candidate_id"] == candidate.candidate_id
+            assert job.output["command_name"] == "verify"
+            assert job.output["phase"] == "search"
+            assert job.output["parameters"] == {}
             waiting = await handler(
                 ToolCall("wait_for_job", {"job_id": job.output["job_id"]}, "wait")
             )
@@ -270,8 +275,13 @@ def test_job_subscription_survives_other_messages_and_notifies_rsi_observer(tmp_
             simulated=True,
             mock_duration=0.05,
             commands={
-                "task": ApprovedCommand("task", ("configured-command",), ()),
+                "task": ApprovedCommand(
+                    "task",
+                    ("configured-command", "operator-private-argument", "{task}", "{candidate}"),
+                    ("task", "candidate"),
+                ),
             },
+            execution_env={"SECRET": "operator-private-environment"},
         )
         try:
             call = ToolCall(
@@ -279,12 +289,23 @@ def test_job_subscription_survives_other_messages_and_notifies_rsi_observer(tmp_
                 {
                     "command_name": "task",
                     "candidate_id": "",
-                    "parameters_json": "{}",
+                    "parameters_json": json.dumps(
+                        {"task": "L3P10", "candidate": "L3P10/model_new.py"}
+                    ),
                 },
                 "task",
             )
             job = await actions.handler(researcher)(call)
             job_id = job.output["job_id"]
+            identity = {
+                "command_name": "task",
+                "parameters": {"task": "L3P10", "candidate": "L3P10/model_new.py"},
+                "iteration_id": assignment["iteration_id"],
+                "candidate_id": None,
+                "phase": None,
+            }
+            assert all(job.output[key] == value for key, value in identity.items())
+            assert "operator-private" not in json.dumps(job.output)
             for agent_id in [researcher, "rsi"]:
                 await actions.handler(agent_id)(
                     ToolCall("wait_for_job", {"job_id": job_id}, "wait")
@@ -304,6 +325,14 @@ def test_job_subscription_survives_other_messages_and_notifies_rsi_observer(tmp_
                 m for m in c.store.records("messages", ResearchMessage) if m.sender == "system"
             ]
             assert len(notices) == 2
+            for notice in notices:
+                receipt = json.loads(notice.text.split("\n", 1)[1])
+                assert all(receipt[key] == value for key, value in identity.items())
+                assert "operator-private" not in notice.text
+            status = await actions.handler("rsi")(
+                ToolCall("job_status", {"job_id": job_id}, "identity-status")
+            )
+            assert all(status.output[key] == value for key, value in identity.items())
             for agent_id in [researcher, "rsi"]:
                 c.begin_turn(agent_id)
                 c.end_turn(agent_id)
@@ -361,6 +390,7 @@ def test_completed_legacy_job_recovers_missing_delivery_after_restart(tmp_path: 
         # Reproduce the old state: result processed, subscribed, but no completion message.
         info = execution.jobs[job_id]
         assert info["processed"]
+        info.pop("parameters")  # Older persisted jobs did not retain these arguments.
         info["waiting"] = True
         info.pop("waiters", None)
         execution.save()
@@ -369,6 +399,9 @@ def test_completed_legacy_job_recovers_missing_delivery_after_restart(tmp_path: 
         resumed = ResearchExecution(ResearchActions(recovered), simulated=True, commands=commands)
         try:
             await resumed.poll()
+            receipt = resumed.public(resumed.manager.get(job_id))
+            assert receipt["command_name"] == "task"
+            assert receipt["parameters"] is None
             assert recovered.pending() == ["rsi"]
             before = list(recovered.state["inboxes"]["rsi"])
             # Also repair a lost notified marker without duplicating an existing message.

@@ -9,36 +9,66 @@ const stamp=value=>value?new Date(value).toLocaleString("zh-CN",{hour12:false}):
 const badge=state=>`<span class="badge ${esc(state)}">${esc(states[state]||state)}</span>`;
 function hashRun(){try{return decodeURIComponent(location.hash.slice(1));}catch{return "";}}
 let selected=hashRun(),busy=false,lastRendered="";
+function versionTarget(run,id){return `version-${run.run_id}-${id}`;}
+function versionHistory(run,agent){
+  const baseline={solution_id:run.baseline_solution_id,iteration:0,score:run.baseline_score,label:"基线版本"};
+  const versions=new Map([[baseline.solution_id,baseline]]);
+  const steps=agent.history.map(step=>{
+    const node={solution_id:step.candidate_solution_id,iteration:step.iteration,score:step.validation_score,label:`第 ${step.iteration} 轮候选`};
+    const parent=versions.get(step.input_solution_id)||null;
+    versions.set(node.solution_id,node);
+    return {step,node,parent};
+  });
+  return {baseline,steps};
+}
+function versionLink(run,node,label){
+  return `<a class="version-link" href="#${encodeURIComponent(run.run_id)}" data-version-target="${esc(versionTarget(run,node.solution_id))}" aria-label="查看${esc(label||node.label)}：${esc(node.solution_id)}">${esc(label||node.label)}<code>${esc(node.solution_id)}</code></a>`;
+}
 function chart(run){
   const w=900,h=230,left=48,top=16,bottom=38,right=18,max=Math.max(1,run.max_iterations);
   const x=i=>left+(w-left-right)*i/max,y=score=>top+(h-top-bottom)*(1-score);
-  let svg=`<svg class="chart" viewBox="0 0 ${w} ${h}" role="img" aria-label="各研究线逐轮 VALIDATE 得分，横轴为迭代轮次">`;
+  let svg=`<svg class="chart" viewBox="0 0 ${w} ${h}" role="group" aria-label="各研究线 VALIDATE 得分与实际父版本连线，点击节点查看修改原因">`;
   for(const v of [0,.5,1])svg+=`<line class="grid" x1="${left}" y1="${y(v)}" x2="${w-right}" y2="${y(v)}"/><text x="3" y="${y(v)+5}">${v*100}%</text>`;
   const ticks=new Set([0,max]);for(let i=0;i<=max;i+=Math.max(1,Math.ceil(max/8)))ticks.add(i);
   for(const i of [...ticks].sort((a,b)=>a-b))svg+=`<text x="${x(i)}" y="${h-10}" text-anchor="middle">${i===0?"基线":i}</text>`;
   run.agents.forEach((agent,index)=>{
-    const points=agent.history.map(s=>[s.iteration,s.validation_score]);
-    if(typeof run.baseline_score==="number")points.unshift([0,run.baseline_score]);
-    const valid=points.filter(p=>Number.isFinite(p[0])&&Number.isFinite(p[1]));
-    const color=colors[index%colors.length];
-    svg+=`<polyline fill="none" stroke="${color}" stroke-width="2" points="${valid.map(p=>`${x(p[0])},${y(p[1])}`).join(" ")}"/>`;
-    for(const p of valid)svg+=`<circle cx="${x(p[0])}" cy="${y(p[1])}" r="4" fill="${color}"><title>${esc(agent.agent_id)} · 第 ${p[0]} 轮 · ${percent(p[1])}</title></circle>`;
+    const {baseline,steps}=versionHistory(run,agent),color=colors[index%colors.length];
+    svg+=`<defs><marker id="parent-arrow-${index}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="${color}"/></marker></defs>`;
+    for(const {step,node,parent} of steps){
+      if(!parent||!Number.isFinite(parent.score)||!Number.isFinite(node.score))continue;
+      const dx=x(node.iteration)-x(parent.iteration),dy=y(node.score)-y(parent.score),length=Math.hypot(dx,dy);
+      if(!length)continue;
+      svg+=`<line class="parent-edge" data-parent-version="${esc(parent.solution_id)}" data-child-version="${esc(node.solution_id)}" x1="${x(parent.iteration)+dx/length*5}" y1="${y(parent.score)+dy/length*5}" x2="${x(node.iteration)-dx/length*8}" y2="${y(node.score)-dy/length*8}" stroke="${color}" stroke-width="2" marker-end="url(#parent-arrow-${index})"><title>${esc(agent.agent_id)} · ${esc(parent.label)} → ${esc(node.label)}：${esc(step.reason||"未记录修改原因")}</title></line>`;
+    }
+    for(const node of [baseline,...steps.map(item=>item.node)]){
+      if(!Number.isFinite(node.score)||!Number.isFinite(node.iteration))continue;
+      svg+=`<a href="#${encodeURIComponent(run.run_id)}" data-version-target="${esc(versionTarget(run,node.solution_id))}" aria-label="${esc(agent.agent_id)} · 查看${esc(node.label)} · 验证 ${percent(node.score)}"><circle cx="${x(node.iteration)}" cy="${y(node.score)}" r="12" fill="transparent"/><circle cx="${x(node.iteration)}" cy="${y(node.score)}" r="4" fill="${color}"/><title>${esc(node.label)} · ${esc(node.solution_id)} · ${percent(node.score)}</title></a>`;
+    }
   });
   return svg+"</svg>";
 }
-function agentCard(agent,index,baseline){
-  const latest=agent.history.at(-1),delta=latest&&typeof baseline==="number"?latest.validation_score-baseline:null;
+function iterationCard(run,agent,entry){
+  const {step,node,parent}=entry;
+  const previous=parent?versionLink(run,parent):`<span class="missing-parent">未找到上一版本<code>${esc(step.input_solution_id||"未记录")}</code></span>`;
+  return `<section class="iteration" id="${esc(versionTarget(run,node.solution_id))}" tabindex="-1" aria-label="${esc(agent.agent_id)} 第 ${step.iteration} 轮候选">
+    <h4>第 ${step.iteration} 轮 <span>验证 ${percent(step.validation_score)}</span></h4>
+    <div class="ancestry"><div><span class="label">上一版本</span>${previous}</div><span class="version-arrow" aria-label="改进为">→</span><div><span class="label">本轮候选</span><code>${esc(node.solution_id)}</code></div></div>
+    <div class="iteration-reason"><strong>修改原因</strong><p>${esc(step.reason||"未记录修改原因")}</p></div>
+    <details data-key="${esc(agent.agent_id)}:${step.iteration}"><summary>版本详情与训练结果</summary><div class="version"><span>下一轮</span><code>${esc(step.next_solution_id||"结束研究")}</code></div>
+    <p class="meta">TRAIN ${percent(step.train_score)} · ${esc(stamp(step.finished_at))}</p></details></section>`;
+}
+function agentCard(agent,index,run){
+  const baseline=run.baseline_score,latest=agent.history.at(-1),delta=latest&&typeof baseline==="number"?latest.validation_score-baseline:null;
   const task=agent.phase.startsWith("evaluate_")&&agent.task_count?` · 任务 ${agent.task}/${agent.task_count}`:"";
+  const currentReason=agent.current_reason&&(!latest||agent.iteration>latest.iteration);
   return `<article class="agent"><div class="agenthead"><h3>${esc(agent.agent_id)}</h3>${badge(agent.state)}</div>
     <p class="meta">模型 ${esc(agent.model||"未记录")} · 使用统一实验目标</p><div class="phase">${esc(phases[agent.phase]||agent.phase)}${esc(task)}</div>
     <progress value="${Number(agent.completed_iterations)}" max="${Number(agent.max_iterations)}" aria-label="${esc(agent.agent_id)} 轮次进度"></progress>
     <div class="phase">已完成 ${agent.completed_iterations} / ${agent.max_iterations} 轮</div>
     <div class="scoreline"><strong>${percent(latest?.validation_score)}</strong><span class="${delta>0?"positive":delta<0?"negative":"muted"}">${delta===null?"尚无候选验证结果":`${delta>=0?"+":""}${(delta*100).toFixed(1)} 个百分点`}</span></div>
     ${agent.error?`<p class="error">${esc(agent.error)}</p>`:""}
-    ${agent.current_reason&&!latest?`<p class="meta">当前修改依据：${esc(agent.current_reason)}</p>`:""}
-    ${agent.history.map(step=>`<details data-key="${esc(agent.agent_id)}:${step.iteration}"><summary>第 ${step.iteration} 轮 · 验证 ${percent(step.validation_score)}</summary><p>${esc(step.reason)}</p>
-      <div class="version"><span>基于</span><code>${esc(step.input_solution_id)}</code><span>候选</span><code>${esc(step.candidate_solution_id)}</code><span>下一轮</span><code>${esc(step.next_solution_id||"结束研究")}</code></div>
-      <p class="meta">TRAIN ${percent(step.train_score)} · ${esc(stamp(step.finished_at))}</p></details>`).join("")}</article>`;
+    ${currentReason?`<p class="meta">当前修改依据：${esc(agent.current_reason)}</p>`:""}
+    ${versionHistory(run,agent).steps.map(entry=>iterationCard(run,agent,entry)).join("")}</article>`;
 }
 function render(run){
   const completed=run.agents.reduce((n,a)=>n+a.completed_iterations,0);
@@ -49,12 +79,12 @@ function render(run){
     ${run.state==="running"&&!run.worker_alive?'<div class="notice">记录显示运行中，但未发现持有此 Run 执行锁的进程。请通过 CLI 核对或恢复；页面不会重新启动实验。</div>':""}
     ${run.error?`<div class="notice">${esc(run.error)}</div>`:""}
     ${run.remote_jobs?.length?`<details class="goal" data-key="remote-jobs"><summary>远端评测任务（${run.remote_jobs.length}）</summary>${run.remote_jobs.map(job=>`<p>${job.url?`<a href="${esc(job.url)}" target="_blank" rel="noopener noreferrer">${esc(job.job_id)}</a>`:esc(job.job_id||"提交待核对")} · ${esc(remoteStates[job.state]||job.state)} · 成功 ${Number(job.task_counts?.done||0)}，失败 ${Number(job.task_counts?.failed||0)}，取消 ${Number(job.task_counts?.cancelled||0)} / 共 ${Number(job.task_counts?.total||0)} 题</p>`).join("")}</details>`:""}
-    <section class="stats" aria-label="实验概览"><div class="stat"><div class="label">基线验证得分</div><div class="value">${percent(run.baseline_score)}</div><div class="meta">${run.baseline_score===null?(run.state==="running"&&run.worker_alive&&run.baseline_progress?.task_count?`正在评测 ${run.baseline_progress.task}/${run.baseline_progress.task_count} 题`:"尚无有效基线结果"):"固定数据分区"}</div></div>
+    <section class="stats" aria-label="实验概览"><div class="stat baseline-version" id="${esc(versionTarget(run,run.baseline_solution_id))}" tabindex="-1"><div class="label">基线版本 · 验证得分</div><div class="value">${percent(run.baseline_score)}</div><div class="meta">${run.baseline_score===null?(run.state==="running"&&run.worker_alive&&run.baseline_progress?.task_count?`正在评测 ${run.baseline_progress.task}/${run.baseline_progress.task_count} 题`:"尚无有效基线结果"):"固定数据分区"}</div><code class="baseline-id" title="${esc(run.baseline_solution_id)}">${esc(run.baseline_solution_id)}</code></div>
     <div class="stat"><div class="label">历史最佳验证得分</div><div class="value">${percent(run.best_score)}</div><div class="meta">允许持平或退化，不保证提升</div></div>
     <div class="stat"><div class="label">已完成研究轮次</div><div class="value">${completed} <span class="meta">/ ${run.max_iterations*run.research_agent_count}</span></div><div class="meta">${run.research_agent_count} 条独立研究线</div></div>
     <div class="stat"><div class="label">开始时间</div><div class="value meta">${esc(stamp(run.started_at))}</div><div class="meta">${run.finished_at?`结束 ${esc(stamp(run.finished_at))}`:"尚未结束"}</div></div></section>
-    <section class="panel"><h2>验证得分 · 按研究线比较</h2>${chart(run)}<div class="legend">${run.agents.map((a,i)=>`<span class="line-${i}">${esc(a.agent_id)}</span>`).join("")}</div></section>
-    <h2>独立研究线与迭代记录</h2><section class="agents">${run.agents.length?run.agents.map((a,i)=>agentCard(a,i,run.baseline_score)).join(""):'<p class="muted">研究线尚未初始化。</p>'}</section>
+    <section class="panel"><h2>验证得分 · 版本演进关系</h2><p class="meta">箭头从实际输入版本指向本轮候选；点击节点查看版本及修改原因。</p>${chart(run)}<div class="legend">${run.agents.map((a,i)=>`<span class="line-${i}">${esc(a.agent_id)}</span>`).join("")}</div></section>
+    <h2>独立研究线与迭代记录</h2><section class="agents">${run.agents.length?run.agents.map((a,i)=>agentCard(a,i,run)).join(""):'<p class="muted">研究线尚未初始化。</p>'}</section>
     <footer>最佳版本 <code>${esc(run.best_solution_id)}</code> · 本地只读视图，每 3 秒刷新；评测错误不会作为成功样本隐藏。</footer>`;
 }
 async function get(path){const response=await fetch(path,{cache:"no-store"});const data=await response.json();if(!response.ok)throw Error(data.error||`HTTP ${response.status}`);return data;}
@@ -73,6 +103,17 @@ async function refresh(){
     document.getElementById("connection").textContent=`已连接 · ${new Date().toLocaleTimeString("zh-CN",{hour12:false})}`;
   }catch(error){document.getElementById("connection").textContent=`读取失败：${error.message} · 将自动重试`;}finally{busy=false;}
 }
+document.getElementById("main").addEventListener("click",event=>{
+  const link=event.target.closest?.("[data-version-target]");
+  if(!link)return;
+  event.preventDefault();
+  const target=document.getElementById(link.dataset.versionTarget);
+  if(!target)return;
+  document.querySelectorAll(".version-focus").forEach(el=>el.classList.remove("version-focus"));
+  target.classList.add("version-focus");
+  target.scrollIntoView({behavior:"smooth",block:"center"});
+  target.focus({preventScroll:true});
+});
 document.getElementById("refresh").addEventListener("click",refresh);
 window.addEventListener("hashchange",()=>{selected=hashRun();lastRendered="";refresh();});
 refresh();setInterval(refresh,3000);

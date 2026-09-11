@@ -1,0 +1,11 @@
+{
+  "dir": "swarm_env",
+  "task": "agent-swarm-optimization",
+  "gpus": 1,
+  "cpus": 16,
+  "mem": "64G",
+  "time": "08:00:00",
+  "model": "Qwen/Qwen3-4B",
+  "revision": "1cfa9a7208912126459214e8b04321603b3df60c",
+  "datasets": []
+}

@@ -1,0 +1,16 @@
+{
+  "dir": "opsd_env",
+  "task": "on-policy-self-distillation",
+  "gpus": 4,
+  "cpus": 32,
+  "mem": "128G",
+  "time": "06:00:00",
+  "model": "Qwen/Qwen3-1.7B",
+  "revision": "70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
+  "datasets": [
+    [
+      "siyanzhao/Openthoughts_math_30k_opsd",
+      "1f33e9dc2e8a1c639ca74f8024ad4a9f1f5eae62"
+    ]
+  ]
+}

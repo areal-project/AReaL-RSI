@@ -1,0 +1,24 @@
+{
+  "dir": "jailbreak_env",
+  "task": "jailbreak-robustness",
+  "gpus": 1,
+  "cpus": 16,
+  "mem": "64G",
+  "time": "04:00:00",
+  "model": "Qwen/Qwen3-8B",
+  "revision": "b968826d9c46dd6066d109eabc6255188de91218",
+  "datasets": [
+    [
+      "bench-llms/or-bench",
+      "fd6ee135ee63ff6c4f3ff72c0e39627bf0a7f314"
+    ],
+    [
+      "google/IFEval",
+      "966cd89545d6b6acfd7638bc708b98261ca58e84"
+    ],
+    [
+      "tatsu-lab/alpaca",
+      "dce01c9b08f87459cf36a430d809084718273017"
+    ]
+  ]
+}

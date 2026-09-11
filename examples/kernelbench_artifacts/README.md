@@ -39,3 +39,13 @@
 `search` 汇总每份源码已测正确的最佳速度；`final` 要求同一源码至少有两次独立正式记录，并使用最后一次结果。未评测、源码不匹配或不符合严格 FP32 规则的题目计 0。主指标是固定题目集合中正确且 `speedup > 1` 的比例；只有 8/8 才达到 `fast_1=1`。应在每题 11 次中预留最终复测，不得另加第 12 次。
 
 测试覆盖提交幂等性、跨题拒绝、代码哈希绑定、最终复测、失败结果不能被旧成功掩盖，以及预算用完后终止。SSH/GPUQ 地址和可用 Slurm Job 由操作员提供，不能将示例环境当成永久可用的服务。
+
+## 将已有单题研究的成绩接入工作台
+
+`verify_existing.py` 用于已经通过 GPUQ 运行、但尚未配置工作台验证器的单题研究。它只查询原任务，核对冻结的 `model_new.py`、评分入口、题号、随机种子和严格 FP32 结果，不注册任务、不提交 GPU，也不改原有评测额度。候选仍需自包含；源码合规性审查不能由分数代替。
+
+操作员将脚本复制到远端控制目录，并在本地 manifest 中固定 `host`、`continue_script`、`slurm_job`、`python`、`remote_script`、`reader_sha256`、`kb_root`、`token_file`、`gpuq_url`、`task_id`、`budget`、`level`、`problem`、`seed`、`worker_hashes`、`metric`、`protocol_id` 和 `manifest_id`。凭据只保留在远端 token 文件；`worker_hashes` 应覆盖实际分发入口及 strict/instrumented worker。身份摘要由操作员根据原评分协议和原任务生成，不能借接入修改已约定条件。
+
+将该脚本配置为零 GPU 的 `verifier`，固定 manifest 路径，声明 `workspace / output / phase` 参数与 `public_output_subdir: "public"`；`verification_identity` 使用 `content`，为 search、final 分别声明相同的协议与任务身份。处于 `execution_setup=pending` 的运行可由 RSI 调用 `load_execution_config`、`freeze_execution` 接入，无需重启研究。RSI 将选中源码保存为候选目录根部的 `model_new.py`，再调用 `verify_candidate`。
+
+search 使用该源码已测正确的最佳加速比；final 要求至少两条独立正式记录并使用最新一条，且必须严格大于 1 才通过。诊断、单次评测中的 100 次计时、旧源码的成功记录均不能替代最终复测。读取的是 GPUQ 的完整 `evaluation.json`：stdout 中的结果标记可能早于严格精度身份写入，不能作为完整验证记录。

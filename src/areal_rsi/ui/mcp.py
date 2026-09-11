@@ -152,13 +152,15 @@ def create_server(controller: ExperimentController | ExperimentWorkspace) -> MCP
     async def rsi_plan(
         goal: Goal,
         max_iterations: Iterations,
-        preset: Literal["arithmetic", "lcb"] | None = None,
+        preset: Literal["arithmetic", "lcb", "tb21"] | None = None,
         config_path: Annotated[str, Field(strict=True, min_length=1, max_length=4096)]
         | None = None,
     ) -> str:
         """生成待确认计划，不启动实验。preset=arithmetic 是 local 算术 demo，preset=lcb 是
-        remote EnvArena LCB demo；省略时使用 arithmetic。也可用 config_path 选择项目中的实验
-        YAML，与 preset 二选一；mode 从 YAML 读取。同一 TUI 可创建两种模式的计划，无需重启。
+        remote EnvArena LCB demo，preset=tb21 是固定 gpt-5-6-sol-4ipic@1.0.0 与
+        terminus-2-tb21@1.0.10 的 EnvArena TB2.1 优化；省略时使用 arithmetic。也可用
+        config_path 选择项目中的实验 YAML，与 preset 二选一；mode 从 YAML 读取。同一 TUI
+        可创建多种模式的计划，无需重启。
         实验 YAML 与 Runtime 配置按计划保存快照。请展示 mode、研究 Harness、所有 Agent 模型、
         Benchmark、研究线数量和轮数，再等待用户确认。模型连接与凭证仍来自宿主环境。
         """

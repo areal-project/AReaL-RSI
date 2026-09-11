@@ -1,0 +1,30 @@
+# Terminal-Bench 2.1 uses env_refs and pins tb2-reward@4.0.16.
+mode: remote
+backend: envarena
+source_job: gpt56sol-4ipic-terminus2-tb21-full-2609100846
+benchmark: tb21-terminus2-full@2.1.1
+harness: terminus-2-tb21@1.0.10
+model: gpt-5-6-sol-4ipic@1.0.0
+research_harness: dsh
+namespace: areal-tb21-main
+
+# Both TRAIN cases are capability-valid zeroes in the pinned source Job.
+train_cases:
+  - tb2-fix-ocaml-gc
+  - tb2-kv-store-grpc
+
+# Keep one source failure for improvement and one source pass for regression detection.
+validate_cases:
+  - tb2-make-doom-for-mips
+  - tb2-cancel-async-tasks
+
+allowed_changes:
+  - system_prompt
+  - model_parameters
+artifact_globs: []
+sample_numbers: 1
+max_parallel: 4
+max_retries: 0
+poll_seconds: 20
+timeout_seconds: 18000
+target_score: 1.0

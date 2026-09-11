@@ -3,18 +3,17 @@ mode: remote
 backend: envarena
 source_job: gpt56sol-4ipic-terminus2-tb21-full-2609100846
 benchmark: tb21-terminus2-full@2.1.1
-# v1.0.12 keeps the Terminus-2 runtime fixed while exposing supported inference controls.
-harness: terminus-2-tb21@1.0.12
+harness: terminus-2-tb21@1.0.10
 model: gpt-5-6-sol-4ipic@1.0.0
 research_harness: dsh
 namespace: areal-tb21-main
 
-# Two fast capability failures observed on the source full-benchmark run.
+# Both TRAIN cases are capability-valid zeroes in the pinned source Job.
 train_cases:
   - tb2-fix-ocaml-gc
   - tb2-kv-store-grpc
 
-# A held-out failure and pass sentinel; never exposed to ResearchAgent.
+# Keep one source failure for improvement and one source pass for regression detection.
 validate_cases:
   - tb2-make-doom-for-mips
   - tb2-cancel-async-tasks

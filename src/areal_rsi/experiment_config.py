@@ -62,9 +62,15 @@ def select_config(preset: str | None = None, config_path: str | None = None) -> 
         raise ModelConfigurationError("preset 和 config_path 只能选择一个。")
     if config_path:
         return Path(config_path).expanduser().resolve()
-    if preset not in (None, "arithmetic", "lcb"):
-        raise ModelConfigurationError("preset 支持 arithmetic 或 lcb。")
-    return default_config("remote" if preset == "lcb" else "local")
+    if preset not in (None, "arithmetic", "lcb", "tb21"):
+        raise ModelConfigurationError("preset 支持 arithmetic、lcb 或 tb21。")
+    name = {
+        None: "arithmetic.yaml",
+        "arithmetic": "arithmetic.yaml",
+        "lcb": "livecodebench.yaml",
+        "tb21": "tb21.yaml",
+    }[preset]
+    return Path(str(files("areal_rsi").joinpath("resources/presets", name)))
 
 
 @contextmanager

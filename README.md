@@ -35,11 +35,18 @@ uv run --env-file .env --locked rsi tui
 用 local 算术 demo 生成一个 1 轮的实验计划。
 用 remote LCB demo 生成一个 1 轮的实验计划。
 使用 examples/local/arithmetic.yaml 生成一个 1 轮的实验计划。
+在Arena上使用gpt-5.6-sol terminus@1.0.10优化TB2.1的表现
 ```
 
-Interaction Agent 分别通过 `rsi_plan(preset="arithmetic")`、`rsi_plan(preset="lcb")`
+Interaction Agent 分别通过 `rsi_plan(preset="arithmetic")`、`rsi_plan(preset="lcb")`、
+`rsi_plan(preset="tb21")`
 或 `rsi_plan(config_path="…")` 选择配置，同时传入目标和轮数。`preset` 与 `config_path`
 二选一；两者均省略时使用算术 demo。mode 从 YAML 读取并写入计划。
+
+TB2.1 快捷语句默认生成每条研究线 3 轮的待确认计划，配置见
+[`examples/tb21/`](examples/tb21/README.md)。它把口语中的 `gpt-5.6-sol` 和
+`terminus@1.0.10` 映射到固定 Arena 引用 `gpt-5-6-sol-4ipic@1.0.0` 和
+`terminus-2-tb21@1.0.10`。计划展示后仍需回复“确认”，才会提交远端 Job。
 
 demo 中的 `research_harness: dsh` 明确选择 ARealAgentRuntime 的 DSH，优先于旧
 `RSI_RUNTIME_CONFIG` 中 RSI Agent / ResearchAgent 的配置。移除此字段可使用高级 Runtime 配置。

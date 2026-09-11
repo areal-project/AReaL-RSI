@@ -292,6 +292,7 @@ class RsiMcpTest(unittest.IsolatedAsyncioTestCase):
             for selection in (
                 {"preset": "arithmetic"},
                 {"preset": "lcb"},
+                {"preset": "tb21"},
                 {"config_path": str(config)},
             ):
                 result = self.body(
@@ -301,7 +302,7 @@ class RsiMcpTest(unittest.IsolatedAsyncioTestCase):
                 )
                 modes.append(result["plan"]["config"]["mode"])
                 self.assertTrue(result["confirmation_required"])
-            self.assertEqual(modes, ["local", "remote", "local"])
+            self.assertEqual(modes, ["local", "remote", "remote", "local"])
             self.assertEqual(self.body(await session.call_tool("rsi_status", {})), {"runs": []})
             invalid = await session.call_tool(
                 "rsi_plan",

@@ -18,11 +18,13 @@ uv run --env-file .env --locked rsi tui
 macOS 本地执行需要 Node.js 22.19+（或 24+）和 pnpm。默认后台选择 DSH，首次启动自动安装固定版本 CLI/profile。
 
 在对话里问“怎么启动 RSI 实验？给我一个 demo”即可获得最小示例。
-local / remote 都使用实验 YAML，分别见 `examples/local/arithmetic.yaml` 和
-`examples/remote/livecodebench.yaml`，文件内分别声明 `mode: local` 和 `mode: remote`。
+local / remote 都使用实验 YAML，分别见 `examples/local/arithmetic.yaml`、
+`examples/remote/livecodebench.yaml` 和 `examples/tb21/experiment.yaml`。
 在同一会话说“用 local 算术 demo 生成一轮计划”或“用 remote LCB demo 生成一轮计划”，
 也可指定 YAML 路径，不需要重启。每份计划有独立目录和配置快照，确认时按 plan_id 执行。
-两份 demo 都明确指定 `research_harness: dsh`，通过 ARealAgentRuntime 的 DSH 执行研究角色。
+对 TB2.1 也可以直接说“在Arena上使用gpt-5.6-sol terminus@1.0.10优化TB2.1的表现”；
+TUI 会选择 `tb21` preset 并生成待确认计划。
+三份 demo 都明确指定 `research_harness: dsh`，通过 ARealAgentRuntime 的 DSH 执行研究角色。
 该字段优先于旧 Runtime JSON 的研究角色配置；Task Runtime 仍独立配置。
 
 ## 切换模型和 Harness

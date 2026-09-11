@@ -28,24 +28,32 @@ def isolated_configuration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.chdir(tmp_path)
 
 
-@pytest.mark.parametrize("mode,name", [("local", "arithmetic"), ("remote", "livecodebench")])
+@pytest.mark.parametrize(
+    ("preset", "mode", "example"),
+    [
+        ("arithmetic", "local", "examples/local/arithmetic.yaml"),
+        ("lcb", "remote", "examples/remote/livecodebench.yaml"),
+        ("tb21", "remote", "examples/tb21/experiment.yaml"),
+    ],
+)
 def test_symmetric_demo_selection_with_dsh(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    preset: str,
     mode: str,
-    name: str,
+    example: str,
 ) -> None:
     stale = tmp_path / "old-runtime.json"
     stale.write_text(json.dumps({"default": {"kind": "codex-cli"}}))
     monkeypatch.setenv("RSI_RUNTIME_CONFIG", str(stale))
     monkeypatch.setenv("RSI_DATA_ROOT", "")
-    path = select_config("lcb" if mode == "remote" else "arithmetic")
+    path = select_config(preset)
     monkeypatch.setenv("RSI_MODE", mode)
     monkeypatch.setenv(f"RSI_{mode.upper()}_CONFIG", str(path))
     assert os.environ[f"RSI_{mode.upper()}_CONFIG"] == str(path)
     assert data_root() == tmp_path / ".rsi"
     root = Path(__file__).resolve().parents[1]
-    assert path.read_bytes() == (root / "examples" / mode / f"{name}.yaml").read_bytes()
+    assert path.read_bytes() == (root / example).read_bytes()
     selection = RuntimeSettings.from_environment()
     assert selection.select("research-agent")["kind"] == "dsh"
     assert selection.select("rsi-agent")["kind"] == "dsh"
@@ -61,6 +69,23 @@ def test_remote_demo_keeps_server_harness_separate(monkeypatch: pytest.MonkeyPat
     assert config.train_cases == ("rsi-lcb-claude-code-lcb-2727",)
     assert config.validate_cases == ("rsi-lcb-claude-code-lcb-2777",)
     assert RuntimeSettings.from_environment().select("research-agent")["kind"] == "dsh"
+
+
+def test_tb21_demo_pins_requested_arena_versions(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RSI_MODE", "remote")
+    monkeypatch.setenv("RSI_REMOTE_CONFIG", str(select_config("tb21")))
+    path = RemoteSettings.from_environment().config_path
+    client = AsyncMock()
+    client.job_summary.return_value = {}
+    config = asyncio.run(ArenaConfig.load(path, client))
+    assert config.benchmark == {"key": "tb21-terminus2-full", "version": "2.1.1"}
+    assert config.harness == {"key": "terminus-2-tb21", "version": "1.0.10"}
+    assert config.model == {"key": "gpt-5-6-sol-4ipic", "version": "1.0.0"}
+    assert config.train_cases == ("tb2-fix-ocaml-gc", "tb2-kv-store-grpc")
+    assert config.validate_cases == (
+        "tb2-make-doom-for-mips",
+        "tb2-cancel-async-tasks",
+    )
 
 
 def test_local_yaml_is_used_for_model_and_baseline(

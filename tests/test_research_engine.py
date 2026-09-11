@@ -995,6 +995,106 @@ class EngineTest(unittest.IsolatedAsyncioTestCase):
             sum(item["reserved_tokens"] for item in c.state["model_requests"].values()), 30000
         )
 
+    async def test_usage_attribution_stays_archived_without_inflating_live_budget(self) -> None:
+        c = self.coordinator()
+        attribution = {"items": {"large-provider-detail": {"input_tokens": 200}}}
+
+        async def respond(agent_id: str, index: int, payload: Json) -> Json:
+            if index == 0:
+                return {
+                    "status": "failed",
+                    "error": {"code": "server_error"},
+                    "output": [],
+                    "usage": {"total_tokens": 3, "attribution": attribution},
+                }
+            response = packet(call("wait", "done"))
+            response["usage"].update(
+                attribution=attribution, input_tokens_details={"cached_tokens": 12}
+            )
+            return response
+
+        config = replace(self.config, retry_initial_seconds=0.001, retry_max_seconds=0.002)
+        runtime = ResponsesRuntime(config, RoutedTransport(respond))
+        engine = ResearchEngine(c, runtime, lambda agent: self.tools(c, agent))
+        await engine.run_until_idle(timeout=3)
+        self.assertEqual(c.state["total_tokens"], 33)
+        record = next(iter(c.state["model_requests"].values()))
+        self.assertEqual(record["usage"]["input_tokens_details"], {"cached_tokens": 12})
+        self.assertEqual(record["retry_usage"], {"1": {"total_tokens": 3}})
+        self.assertNotIn("attribution", record["usage"])
+        path = c.store.root / record["response_path"]
+        archived = [path, *path.parent.glob(path.stem + ".attempt-*.json")]
+        before = {item: item.read_bytes() for item in archived}
+        self.assertEqual(len(archived), 2)
+        for item in archived:
+            self.assertEqual(json.loads(item.read_text())["usage"]["attribution"], attribution)
+        await engine.close()
+        restored = ResearchEngine(Coordinator(c.store), runtime, lambda a: self.tools(c, a))
+        restored._acquire()
+        self.assertEqual(restored.coordinator.state["total_tokens"], 33)
+        self.assertEqual({item: item.read_bytes() for item in archived}, before)
+        await restored.close()
+
+    async def test_legacy_usage_migration_preserves_accounting_and_recovers_pending_response(
+        self,
+    ) -> None:
+        c = self.coordinator()
+        folder = c.store.root / "agents/rsi/sessions/rsi/responses"
+        folder.mkdir(parents=True)
+        usage = {"total_tokens": 30, "attribution": {"items": {"detail": [1, 2, 3]}}}
+        saved = folder / "pending.json"
+        saved.write_text(json.dumps({"status": "completed", "usage": usage}))
+        before = saved.read_bytes()
+        (folder / "old.json").write_text(json.dumps({"usage": {**usage, "total_tokens": 100}}))
+        (folder / "old.attempt-1.json").write_text(
+            json.dumps({"usage": {**usage, "total_tokens": 2}})
+        )
+        c.state["total_tokens"] = 102
+        c.state["model_requests"] = {
+            "old": {
+                "settled": True,
+                "usage": {**usage, "total_tokens": 100},
+                "retry_usage": {"1": {**usage, "total_tokens": 2}},
+                "reserved_tokens": 7,
+                "unresolved_tokens": 7,
+                "response_path": str((folder / "old.json").relative_to(c.store.root)),
+            },
+            "pending": {
+                "settled": False,
+                "reserved_tokens": 80,
+                "unresolved_tokens": 5,
+                "response_path": str(saved.relative_to(c.store.root)),
+            },
+            "missing_archive": {
+                "settled": True,
+                "usage": {**usage, "total_tokens": 0},
+                "reserved_tokens": 0,
+                "response_path": str((folder / "missing.json").relative_to(c.store.root)),
+            },
+        }
+        c.save()
+
+        async def respond(agent_id: str, index: int, payload: Json) -> Json:
+            raise AssertionError("Recover accounting without making model calls")
+
+        engine = ResearchEngine(
+            c, ResponsesRuntime(self.config, RoutedTransport(respond)), lambda a: self.tools(c, a)
+        )
+        engine._acquire()
+        records = c.state["model_requests"]
+        self.assertEqual(records["old"]["usage"], {"total_tokens": 100})
+        self.assertEqual(records["old"]["retry_usage"], {"1": {"total_tokens": 2}})
+        self.assertEqual(records["old"]["reserved_tokens"], 7)
+        self.assertEqual(records["pending"]["usage"], {"total_tokens": 30})
+        self.assertEqual(records["pending"]["reserved_tokens"], 5)
+        self.assertEqual(records["missing_archive"]["usage"], {**usage, "total_tokens": 0})
+        self.assertEqual(c.state["total_tokens"], 132)
+        engine._reconcile_usage()
+        self.assertEqual(c.state["total_tokens"], 132)
+        self.assertEqual(saved.read_bytes(), before)
+        self.assertEqual(json.loads(c.path.read_text())["model_requests"], records)
+        await engine.close()
+
     async def test_all_roles_retry_overload_and_keep_usage_without_failure_messages(self) -> None:
         from areal_rsi.ui.workbench import public_detail
 

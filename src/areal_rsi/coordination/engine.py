@@ -32,6 +32,21 @@ Json = dict[str, Any]
 TickHook = Callable[[], Awaitable[bool | None]]
 
 
+def _budget_usage(usage: Json) -> Json:
+    """Keep aggregate accounting here; full provider usage lives in response archives."""
+    return {
+        name: usage[name]
+        for name in (
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+            "input_tokens_details",
+            "output_tokens_details",
+        )
+        if name in usage
+    }
+
+
 @dataclass(frozen=True)
 class ToolSet:
     definitions: list[Json]
@@ -98,7 +113,15 @@ class ResearchEngine:
         self._lock_file = handle
         # A previous owner may have advanced state since this object was created.
         self.coordinator.state = json.loads(self.coordinator.path.read_text())
-        self.coordinator.state.setdefault("model_requests", {})
+        # Older runs copied per-item provider attribution into every state save.
+        # Normalize only after acquiring ownership, without settling usage again.
+        for record in self._request_records().values():
+            path = self.coordinator.store.root / record["response_path"]
+            if isinstance(record.get("usage"), dict) and path.is_file():
+                record["usage"] = _budget_usage(record["usage"])
+            for attempt, usage in record.get("retry_usage", {}).items():
+                if path.with_name(f"{path.stem}.attempt-{attempt}.json").is_file():
+                    record["retry_usage"][attempt] = _budget_usage(usage)
         self.coordinator.save()
         self._reconcile_usage()
         self.coordinator.store.event("worker_started", pid=os.getpid())
@@ -127,7 +150,7 @@ class ResearchEngine:
             return
         tokens = usage.get("total_tokens")
         if isinstance(tokens, (int, float)) and not isinstance(tokens, bool) and tokens >= 0:
-            attempts[attempt] = usage
+            attempts[attempt] = _budget_usage(usage)
             self.coordinator.state["total_tokens"] += tokens
             self.coordinator.save()
 
@@ -138,7 +161,11 @@ class ResearchEngine:
         if not isinstance(tokens, (int, float)) or isinstance(tokens, bool) or tokens < 0:
             # Without reliable usage retain the reservation; never silently count it as zero.
             return
-        record.update(settled=True, usage=usage, reserved_tokens=record.get("unresolved_tokens", 0))
+        record.update(
+            settled=True,
+            usage=_budget_usage(usage),
+            reserved_tokens=record.get("unresolved_tokens", 0),
+        )
         self.coordinator.state["total_tokens"] += tokens
         self.coordinator.save()
 

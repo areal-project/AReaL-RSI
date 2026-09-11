@@ -42,9 +42,13 @@ Runtime wheel 固定在 `vendor/`，版本为 `0.4.0.dev1`，来自 Runtime 提�
 DSH npm bundle 仍使用原来的 `0.3.0` 制品，其来源提交单独记录在 `artifact_source_commits` 中。
 消费代码只导入公开 Python API，不需要相邻 Runtime checkout 或手工修改 PYTHONPATH。
 
-新会话的运行事件存入 `data/state.sqlite3`，避免每个流式片段反复重写历史文件。
-事件仍持久化，轨迹仍可导出；RSI 导出同时识别旧的 `data/state/` 文件存储。
-不会自动迁移或删除旧数据。本次升级改变 Runtime 制品摘要，应创建新实验，不要换包后续跑旧实验。
+RSI 使用 `runtime_storage` Plugin，将事件与对应状态作为一条 JSONL 记录追加到
+`data/state/journal.jsonl`，每条记录完成 fsync 后才交给消费者，不重写历史事件。
+Runtime 的内存 StateStore 负责当前进程内的状态校验和查询，日志负责持久化和轨迹导出。
+同时设置 `eventSinks: []`，关闭默认轨迹投影器及其 SQLite 索引；运行过程不使用 SQLite。
+每个日志只由一个新 worker 写入，不重开已有日志，不探测、兼容或迁移旧轨迹存储。
+异常退出后导出保留完整日志前缀，仅忽略末尾未写完的一行；完整行损坏则报错。
+存储格式计入实验的 Runtime 配置摘要，应创建新实验，不要续跑使用其他存储配置的旧实验。
 
 本地流式回归测试不调用付费模型：
 
@@ -134,7 +138,7 @@ portable ToolSpec 的精确授权。远端执行的隔离需要在远端部署�
 ## 数据与失败
 
 `RSI_DATA_ROOT/sessions/<trajectory>/data/` 保存 Runtime 的权威 StateStore、资产和事件出口。
-`run-bindings.json` 记录同一会话的 Runtime Run IDs；原有 RSI `trajectories/` 与 ContentStore 保存兼容导出和业务关联。
+`run-bindings.json` 记录同一会话的 Runtime Run IDs；RSI `trajectories/` 与 ContentStore 保存轨迹导出和业务关联。
 导出从已提交事件重新读取，保留 `turns` 供 ResearchAgent 使用，包含 Runtime run/session 等原始身份。
 这是可重建的投影，不是第二份执行状态机。
 

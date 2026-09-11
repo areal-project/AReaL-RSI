@@ -43,7 +43,7 @@ Codex、Anthropic、Claude 分别需要对应 Python extra；原生 CLI 和远�
 
 ## 数据与验证
 
-Runtime 保存权威事件和资产；RSI 轨迹是兼容导出。后台保留工作区隔离、RSI 工具和候选 MCP。
+Runtime 使用文件存储保存权威事件和资产；RSI 从已提交事件导出轨迹。后台保留工作区隔离、RSI 工具和候选 MCP。
 个人 `.env`、密钥和实验数据不提交 Git。Runtime wheel 与 DSH npm bundle 固定在仓库，来源及摘要随制品记录。
 
 完整配置、能力边界见 [接入指南](runtime-package.md)，实际测试与跳过项见 [验收记录](runtime-package-validation.md)。

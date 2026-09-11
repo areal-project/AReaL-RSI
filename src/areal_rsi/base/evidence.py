@@ -7,9 +7,9 @@ import json
 from collections.abc import Sequence
 from pathlib import Path
 
-from areal_rsi.api.base import EVIDENCE_BUNDLE_MEDIA_TYPE, ContentRef, EvidenceBundle
+from areal_rsi.api.base import EVIDENCE_BUNDLE_MEDIA_TYPE, ContentRef, EvidenceBundle, EvidenceFile
 from areal_rsi.api.modules import ContentStore
-from areal_rsi.base.storage import decode, encode, safe_relative, write_json
+from areal_rsi.base.storage import DIRECTORY_TYPE, decode, encode, safe_relative, write_json
 
 
 def validate_bundle(bundle: EvidenceBundle) -> None:
@@ -42,6 +42,29 @@ class FileEvidenceStore:
 
     async def put(self, bundle: EvidenceBundle) -> ContentRef:
         # Store references only; existing outputs and traces are not copied or rewritten.
+        validate_bundle(bundle)
+        files = []
+        for entry in bundle.files:
+            if entry.content.media_type != DIRECTORY_TYPE:
+                files.append(entry)
+                continue
+            # Snapshot manifests contain flat relative file names. Expand before
+            # granting access so each child can be authorized independently.
+            manifest = await self.content.read_json(entry.content)
+            children = manifest.get("files") if isinstance(manifest, dict) else None
+            if not isinstance(children, dict):
+                raise ValueError("Invalid evidence directory snapshot")
+            for name, value in children.items():
+                path = safe_relative(name)
+                if path.as_posix() != name or not path.parts:
+                    raise ValueError("Invalid evidence snapshot path")
+                child = decode(ContentRef, value)
+                if child.media_type == DIRECTORY_TYPE:
+                    raise ValueError("Evidence snapshots must contain file references")
+                files.append(
+                    EvidenceFile(f"{entry.path}/{name}", child, entry.kind, dict(entry.metadata))
+                )
+        bundle = EvidenceBundle(tuple(files), dict(bundle.metadata))
         validate_bundle(bundle)
         return await self.content.put_text(
             json.dumps(encode(bundle), ensure_ascii=False, sort_keys=True),

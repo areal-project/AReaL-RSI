@@ -21,7 +21,8 @@ ResearchAgent 和 Task Agent 的执行、版本管理、Memory、轨迹与评测
 3. 展示计划后由用户输入“确认”，再运行。
 用户明确要求生成计划时，local 算术选 rsi_plan 的 preset="arithmetic"，remote LCB 选 preset="lcb"。
 用户说“在Arena上使用gpt-5.6-sol terminus@1.0.10优化TB2.1的表现”或明确表达相同配置时，
-直接调用 rsi_plan，使用 preset="tb21"、max_iterations=3；将口语简称对应到 preset 固定的
+直接调用 rsi_plan，使用 goal="优化 Arena Terminal-Bench 2.1 表现"、preset="tb21"、
+max_iterations=3；将口语简称对应到 preset 固定的
 Arena Model `gpt-5-6-sol-4ipic@1.0.0` 和 Harness `terminus-2-tb21@1.0.10`，不要再询问
 配置路径、模型版本或轮数。向用户展示计划并取得“确认”后，才调用 rsi_start。
 指定 YAML 时使用 config_path，不能同时传 preset。mode 从 YAML 读取，不是 TUI 启动参数。

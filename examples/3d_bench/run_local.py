@@ -6,23 +6,32 @@ import argparse
 import asyncio
 import hashlib
 import json
-import os
 import shutil
-import subprocess
 from pathlib import Path
 
 if __package__:
-    from .adapter import ThreeModelBenchmark, ThreeModelEvaluation, load_tasks
+    from .adapter import (
+        SCOPE,
+        ThreeModelBenchmark,
+        ThreeModelEvaluation,
+        ThreeModelVerifier,
+        load_tasks,
+    )
     from .environment import ENVIRONMENT_VERSION, PUBLIC_FILES, ModelEnvironment, ValidationService
 else:
-    from adapter import ThreeModelBenchmark, ThreeModelEvaluation, load_tasks
+    from adapter import (
+        SCOPE,
+        ThreeModelBenchmark,
+        ThreeModelEvaluation,
+        ThreeModelVerifier,
+        load_tasks,
+    )
     from environment import ENVIRONMENT_VERSION, PUBLIC_FILES, ModelEnvironment, ValidationService
 
 from areal_rsi.agents.research.default import DefaultResearchAgent
 from areal_rsi.agents.rsi.default import DefaultRsiAgent
 from areal_rsi.api.base import (
     AgentSpec,
-    BenchmarkSplit,
     EvolutionTarget,
     ExperimentPlan,
     ModelVersion,
@@ -30,7 +39,6 @@ from areal_rsi.api.base import (
     SolutionVersion,
     Task,
     TaskResult,
-    VerificationResult,
     VerifierSpec,
 )
 from areal_rsi.api.workflow import WorkflowContext
@@ -48,12 +56,10 @@ from areal_rsi.base.storage import (
 from areal_rsi.config import AgentModelSettings, ModelConfig
 from areal_rsi.modules.gateway import GatewayProxy
 from areal_rsi.modules.harness import LocalHarnessBuilder
-from areal_rsi.modules.runtime import sandbox_wrapper
 from areal_rsi.modules.runtime_package import PackageAgentRuntime, RuntimeSettings
 from areal_rsi.workflows.service import LocalExperimentService
 
 TASK_MESSAGE = "Read TARGET.md and CAPABILITIES.md, then implement src/model.js."
-SCOPE = "shared train/validate diagnostic; Contract V2 and build, no visual or held-out score"
 GENERATION_ENVIRONMENT = ENVIRONMENT_VERSION
 EXAMPLE = Path(__file__).resolve().parent
 DATASET = EXAMPLE.parents[1] / ".rsi/datasets/3d-model-v2"
@@ -76,31 +82,6 @@ def prepare_public_workspace(template: Path, workspace: Path) -> None:
         destination = workspace / name
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(template / name, destination)
-
-
-class DiagnosticBenchmark:
-    """Explicit TRAIN/VALIDATE overlap, never a held-out benchmark result."""
-
-    def __init__(self, task, snapshot, *, scope=None):
-        self.tasks = (task,) if isinstance(task, Task) else tuple(task)
-        if not self.tasks:
-            raise ValueError("The benchmark task list cannot be empty")
-        label = self.tasks[0].task_id if len(self.tasks) == 1 else f"{len(self.tasks)} tasks"
-        scope = scope if scope is not None else f"{label} {SCOPE}"
-        identity = json.dumps(
-            {"task": encode(task), "snapshot": snapshot, "scope": scope}, sort_keys=True
-        ).encode()
-        prefix = (
-            f"3d-{label.lower().replace('-', '')}-diagnostic-"
-            if len(self.tasks) == 1
-            else "3d-suite-diagnostic-"
-        )
-        self.name = prefix + hashlib.sha256(identity).hexdigest()[:16]
-
-    async def list_tasks(self, split):
-        if split not in (BenchmarkSplit.TRAIN, BenchmarkSplit.VALIDATE):
-            raise ValueError("Unsupported split")
-        return tuple(decode(Task, encode(task)) for task in self.tasks)
 
 
 class FileTaskRuntime:
@@ -253,105 +234,6 @@ class FileTaskRuntime:
         return result
 
 
-class IsolatedVerifier:
-    def __init__(self, root, content, emit, *, environment=None):
-        self.root, self.content, self.emit = root, content, emit
-        self.environment = environment
-
-    async def verify(self, request):
-        result = request.result
-        source = await self.content.read_bytes(result.output)
-        if result.output.media_type != "text/javascript":
-            raise ValueError("Expected model.js file contents")
-        folder = self.root / result.trajectory.trajectory_id
-        if self.environment is not None:
-            # One source may serve both TRAIN and VALIDATE; retain their receipts separately.
-            key = hashlib.sha256(json.dumps(request.metadata, sort_keys=True).encode()).hexdigest()
-            folder = folder / key[:16]
-            # Final evaluation never trusts the agent's local check result or project files.
-            folder.mkdir(parents=True, exist_ok=True)
-            checked = await asyncio.to_thread(
-                self.environment.validate, source, folder / new_id("check")
-            )
-            passed = checked["passed"]
-            feedback = "\n".join(
-                f"{name}: {'passed' if item['returncode'] == 0 else 'failed'}\n{item['stderr']}"
-                for name, item in checked["checks"].items()
-            )
-            if "receipt_error" in checked:
-                feedback += "\n" + checked["receipt_error"]
-            verification = VerificationResult(
-                request.task.task_id,
-                result.trajectory.trajectory_id,
-                passed,
-                float(passed),
-                {
-                    "contract_v2": float(
-                        checked["checks"]["contract"]["returncode"] == 0
-                        and "receipt_error" not in checked
-                    ),
-                    "build": float(checked["checks"]["build"]["returncode"] == 0),
-                },
-                feedback,
-                attachments=(await self.content.put_json(checked),),
-            )
-            write_json(folder / "verification.json", verification)
-            self.emit(f"Verifier: passed={passed}; trajectory={result.trajectory.trajectory_id}")
-            return verification
-        folder.mkdir(parents=True)
-        evaluation = folder / "evaluation"
-        prepared = await asyncio.to_thread(
-            subprocess.run,
-            ["bash", str(EXAMPLE / "run.sh"), "prepare", str(evaluation)],
-            capture_output=True,
-            text=True,
-            timeout=180,
-        )
-        (folder / "prepare.log").write_text(prepared.stdout + prepared.stderr)
-        prepared.check_returncode()
-        (evaluation / "src/model.js").write_bytes(source)
-        sandbox = folder / "sandbox"
-        sandbox.mkdir()
-        node = Path(shutil.which("node")).resolve()
-        sandbox_wrapper(sandbox, evaluation, node)
-        profile = sandbox / "sandbox.sb"
-        profile.write_text(profile.read_text() + "\n(deny network*)\n")
-        checked = await asyncio.to_thread(
-            subprocess.run,
-            ["/usr/bin/sandbox-exec", "-f", str(profile), str(node), "scripts/check-model.mjs"],
-            cwd=evaluation,
-            env={"PATH": os.environ.get("PATH", ""), "GAMEAGENT_GDD_STYLE_ID": "piggy-island"},
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        (folder / "validator.stdout").write_text(checked.stdout)
-        (folder / "validator.stderr").write_text(checked.stderr)
-        if checked.returncode not in (0, 1):
-            raise RuntimeError(f"Validator process failed: exit {checked.returncode}")
-        passed = checked.returncode == 0
-        verification = VerificationResult(
-            request.task.task_id,
-            result.trajectory.trajectory_id,
-            passed,
-            float(passed),
-            {"contract_v2": float(passed)},
-            (checked.stdout + checked.stderr).strip(),
-            attachments=(
-                await self.content.put_json(
-                    {
-                        "source_sha256": hashlib.sha256(source).hexdigest(),
-                        "returncode": checked.returncode,
-                        "scope": f"{request.task.task_id} {SCOPE}",
-                    }
-                ),
-            ),
-        )
-        write_json(folder / "verification.json", verification)
-        self.emit(f"Verifier: passed={passed}; trajectory={result.trajectory.trajectory_id}")
-        return verification
-
-
 def check_plan(plan, baseline_id, benchmark_name, iterations=3):
     if not isinstance(plan, ExperimentPlan) or (
         plan.max_iterations != iterations
@@ -482,7 +364,7 @@ async def assemble_app(
             benchmark_description=scope + "; only prompt.md may change; no new tools/dependencies",
             target_model_name=models["task-agent"].name,
         )
-        verifier = IsolatedVerifier(root / "verification", content, emit, environment=environment)
+        verifier = ThreeModelVerifier(root / "verification", content, emit, environment=environment)
         researcher = DefaultResearchAgent(
             "research-agent-1",
             runtimes["research-agent"],
@@ -583,7 +465,7 @@ async def create_tui_app(root, emit):
     root = root.resolve()
     root.mkdir(parents=True, exist_ok=True)
     template, snapshot, environment = await prepare_environment()
-    selected = tuple(await ThreeModelBenchmark(CASE).list_tasks(BenchmarkSplit.TRAIN))
+    selected = load_tasks(CASE, task_ids=("MODEL-001",))
     identity = {
         "tasks": encode(selected),
         "snapshot": snapshot,
@@ -594,7 +476,7 @@ async def create_tui_app(root, emit):
     saved = json.loads(record.read_text()) if record.exists() else None
     if saved and any(saved.get(key) != value for key, value in identity.items()):
         raise ValueError("Public case or environment changed; create a new TUI plan")
-    benchmark = DiagnosticBenchmark(selected[0], snapshot)
+    benchmark = ThreeModelBenchmark(selected[0], snapshot)
     app = await assemble_app(
         root,
         benchmark,
@@ -681,7 +563,7 @@ async def main(
                     raise ValueError("Unknown or duplicate selected task IDs")
                 selected = tuple(task for task in selected if task.task_id in requested)
         else:
-            selected = tuple(await ThreeModelBenchmark(tasks).list_tasks(BenchmarkSplit.TRAIN))
+            selected = load_tasks(tasks, task_ids=("MODEL-001",))
         concurrency = concurrency if concurrency is not None else (4 if len(selected) > 1 else 1)
         if type(concurrency) is not int or not 1 <= concurrency <= 8:
             raise ValueError("Concurrency must be between 1 and 8")
@@ -696,7 +578,7 @@ async def main(
         )
         root = DATASET / "outputs" / new_id("model001_full" if len(selected) == 1 else "suite_full")
         root.mkdir(parents=True)
-    benchmark = DiagnosticBenchmark(
+    benchmark = ThreeModelBenchmark(
         selected[0] if len(selected) == 1 else selected, snapshot, scope=scope
     )
 
@@ -745,8 +627,8 @@ async def main(
             immutable=True,
         )
         message = (
-            f"Start exactly {iterations} iterations with one Research Agent to improve the reusable "
-            "Harness "
+            f"Start exactly {iterations} iterations with one Research Agent to improve "
+            "the reusable Harness "
             f"for the selected {len(selected)} 3D modeling tasks. "
             "Only change prompt.md; preserve framework helpers, file output, "
             "Contract V2 precedence, tools, model and generation limits. "

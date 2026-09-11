@@ -53,24 +53,31 @@ def _has_meaningful_delta(event: bytes) -> bool:
         if choice.get("finish_reason") is not None:
             return True
         delta = choice.get("delta") or {}
-        if delta.get("content") not in (None, ""):
-            return True
-        if delta.get("tool_calls") or delta.get("function_call"):
+        if any(value not in (None, "", [], {}) for key, value in delta.items() if key != "role"):
             return True
     return False
 
 
-def _done(event: bytes) -> bool:
+def _done(event: bytes, route: str) -> bool:
+    payload = _event_payload(event) or {}
+    if payload.get("error") or payload.get("type") == "error":
+        return True
+    if route == "/responses":
+        return payload.get("type") in {
+            "response.completed", "response.failed", "response.incomplete"
+        }
+    if route == "/messages":
+        return payload.get("type") == "message_stop"
     return any(
         part.startswith(b"data:") and part[5:].strip() == b"[DONE]" for part in event.splitlines()
     )
 
 
 def _relay_stream(
-    response: Any, send_event: Callable[[bytes], None]
-) -> tuple[bytes, bool, str | None]:
-    """转发一次上游流，返回原文、是否完成及无副作用恢复原因。"""
-    raw, event = bytearray(), bytearray()
+    response: Any, send_event: Callable[[bytes], None], *, route: str, raw: bytearray
+) -> tuple[bool, str | None]:
+    """逐行记录原文，返回完成状态及尚未产生可见输出时的恢复原因。"""
+    event = bytearray()
     # role-only 首事件暂存到真正输出出现；紧随其后的过载才可以透明重试。
     pending: list[bytes] = []
     meaningful = False
@@ -81,9 +88,13 @@ def _relay_stream(
             continue
         completed_event = bytes(event)
         event.clear()
-        if _retryable_stream_error(completed_event) and not meaningful:
-            return bytes(raw), False, "overload"
-        if _has_meaningful_delta(completed_event):
+        if (
+            route == "/chat/completions"
+            and _retryable_stream_error(completed_event)
+            and not meaningful
+        ):
+            return False, "overload"
+        if route != "/chat/completions" or _has_meaningful_delta(completed_event):
             for buffered in pending:
                 send_event(buffered)
             pending.clear()
@@ -93,16 +104,20 @@ def _relay_stream(
             send_event(completed_event)
         else:
             pending.append(completed_event)
-        if _done(completed_event):
+        if _done(completed_event, route):
             for buffered in pending:
                 send_event(buffered)
-            return bytes(raw), True, None
+            return True, None
     if event:
         # 不完整事件已经来自实际响应，不能假定重放请求不会造成重复输出。
         send_event(bytes(event))
-        return bytes(raw), False, None
-    # 空流或只有 role/comment 的流没有对调用方产生可见输出，可安全改走完整响应。
-    return bytes(raw), False, "empty" if not meaningful else None
+        return False, None
+    if route == "/chat/completions" and not meaningful:
+        # 空流或只有 role/comment 的流没有对调用方产生可见输出，可安全改走完整响应。
+        return False, "empty"
+    for buffered in pending:
+        send_event(buffered)
+    return False, None
 
 
 def normalize_tool_deltas(body: bytes) -> bytes:
@@ -253,8 +268,9 @@ class GatewayProxy:
 
                             raw = bytearray()
                             try:
-                                attempt_raw, _, retry_reason = _relay_stream(response, send_event)
-                                raw.extend(attempt_raw)
+                                _, retry_reason = _relay_stream(
+                                    response, send_event, route=route, raw=raw
+                                )
                                 # 已有正文或工具调用时绝不重放请求，避免重复输出或副作用。
                                 for attempt in range(1, _MAX_STREAM_ATTEMPTS):
                                     if retry_reason != "overload":
@@ -264,10 +280,9 @@ class GatewayProxy:
                                     delay = min(2 ** (attempt - 1), _MAX_RETRY_DELAY_SECONDS)
                                     time.sleep(delay)
                                     with urllib.request.urlopen(request, timeout=210) as retried:
-                                        attempt_raw, _, retry_reason = _relay_stream(
-                                            retried, send_event
+                                        _, retry_reason = _relay_stream(
+                                            retried, send_event, route=route, raw=raw
                                         )
-                                    raw.extend(attempt_raw)
                                     entry["stream_retries"] = attempt
                                 if retry_reason and route == "/chat/completions":
                                     # Some compatible gateways can serve a complete response while

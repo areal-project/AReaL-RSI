@@ -21,6 +21,7 @@ PLUGIN_PATCH = "- insert:\n  - id: dsh-tui\n    name: '@deepseek-harness-tui/dsh
 
 def test_persona_routes_tb21_arena_shortcut() -> None:
     assert "在Arena上使用gpt-5.6-sol terminus@1.0.10优化TB2.1的表现" in dsh_config.PERSONA
+    assert 'goal="优化 Arena Terminal-Bench 2.1 表现"' in dsh_config.PERSONA
     assert 'preset="tb21"' in dsh_config.PERSONA
     assert "max_iterations=3" in dsh_config.PERSONA
 

@@ -11,6 +11,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -45,6 +46,13 @@ class ModelEnvironment:
 
     def check(self) -> None:
         """Fail before paid calls if the fixed viewer or its dependencies are incomplete."""
+        if sys.platform != "darwin" or not Path("/usr/bin/sandbox-exec").is_file():
+            raise RuntimeError("3D validation requires macOS sandbox-exec")
+        if shutil.which("node") is None:
+            raise RuntimeError("Node.js is unavailable")
+        checker = self.template / "scripts/check-model.mjs"
+        if not checker.is_file():
+            raise RuntimeError(f"Missing Contract V2 checker: {checker}")
         manifest = json.loads((self.template.parent / "snapshot.json").read_text())
         # Match runtime.mjs's compact JSON digest, including the recorded file order.
         manifest_digest = hashlib.sha256(
@@ -52,6 +60,8 @@ class ModelEnvironment:
         ).hexdigest()
         if manifest.get("commit") != SNAPSHOT_COMMIT or manifest_digest != SNAPSHOT_DIGEST:
             raise ValueError("Runtime manifest does not match the pinned snapshot")
+        if "scripts/check-model.mjs" not in manifest["files"]:
+            raise ValueError("Runtime snapshot must pin the Contract V2 checker")
         for name, digest in manifest["files"].items():
             if hashlib.sha256((self.template / name).read_bytes()).hexdigest() != digest:
                 raise ValueError(f"Pinned template changed: {name}")

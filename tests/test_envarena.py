@@ -728,19 +728,45 @@ class RemoteTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "草稿内容"):
             await self.client.ensure_version("harnesses", "test", spec)
 
-    async def test_version_body_is_verified_even_with_the_original_digest_label(self) -> None:
+    async def test_draft_body_is_verified_even_with_the_original_digest_label(self) -> None:
         spec = {"runtime": {"type": "runner", "uri": "fixed"}, "ttl_seconds": 600}
         ref = await self.client.ensure_version("harnesses", "test", spec)
         self.assertEqual(await self.client.ensure_version("harnesses", "test", spec), ref)
         saved = self.client.versions[f"/harnesses/{ref['key']}/versions/1.0.0"]
         saved["spec"]["runtime"]["uri"] = "tampered"
-        for status in ("DRAFT", "PUBLISHED"):
-            with self.subTest(status=status):
-                saved["status"] = status
+        saved["status"] = "DRAFT"
+        self.client.calls.clear()
+        with self.assertRaisesRegex(ValueError, "内容与请求不符"):
+            await self.client.ensure_version("harnesses", "test", spec)
+        self.assertFalse(any(method == "POST" for method, _, _ in self.client.calls))
+
+    async def test_published_version_reuse_checks_identity_not_spec_or_tags(self) -> None:
+        spec = {"runtime": {"type": "runner", "uri": "fixed"}, "ttl_seconds": 600}
+        ref = await self.client.ensure_version("harnesses", "test", spec)
+        saved = self.client.versions[f"/harnesses/{ref['key']}/versions/1.0.0"]
+        saved["spec"] = {"server_normalized": True}
+        self.client.entities[f"/harnesses/{ref['key']}"]["tags"] = []
+        self.client.calls.clear()
+        with patch(
+            "areal_rsi.modules.remote.envarena.client.matching_spec",
+            side_effect=AssertionError("Published specs must not be compared"),
+        ):
+            self.assertEqual(await self.client.ensure_version("harnesses", "test", spec), ref)
+        self.assertFalse(any(method == "POST" for method, _, _ in self.client.calls))
+
+    async def test_reuse_rejects_wrong_key_version_and_unpublished_state(self) -> None:
+        spec = {"runtime": {"type": "runner", "uri": "fixed"}}
+        ref = await self.client.ensure_version("harnesses", "test", spec)
+        saved = self.client.versions[f"/harnesses/{ref['key']}/versions/1.0.0"]
+        for field, value in (("key", "wrong"), ("version", "2.0.0"), ("status", "DEPRECATED")):
+            with self.subTest(field=field):
+                original = saved[field]
+                saved[field] = value
                 self.client.calls.clear()
-                with self.assertRaisesRegex(ValueError, "内容与请求不符"):
+                with self.assertRaises(ValueError):
                     await self.client.ensure_version("harnesses", "test", spec)
                 self.assertFalse(any(method == "POST" for method, _, _ in self.client.calls))
+                saved[field] = original
 
     async def test_missing_aggregation_uses_validated_defaults_in_subset(self) -> None:
         self.client.versions["/benchmarks/base/versions/1.0.0"]["spec"].pop("aggregation")
@@ -752,6 +778,26 @@ class RemoteTest(unittest.IsolatedAsyncioTestCase):
             published["spec"]["aggregation"],
             {"method": "mean", "failed_task_policy": "failed_as_zero"},
         )
+
+    async def test_case_benchmark_accepts_null_env_refs_but_rejects_content_changes(self) -> None:
+        spec = {"case_refs": [{"case_ref": REF, "weight": 1}], "reward_ref": REF}
+        ref = await self.client.ensure_version("benchmarks", "test", spec)
+        saved = self.client.versions[f"/benchmarks/{ref['key']}/versions/1.0.0"]
+        saved["spec"]["env_refs"] = None
+        for status in ("DRAFT", "PUBLISHED"):
+            saved["status"] = status
+            self.assertEqual(await self.client.ensure_version("benchmarks", "test", spec), ref)
+        original = copy.deepcopy(saved["spec"])
+        for field, value in (
+            ("env_refs", [{"env_ref": REF}]),
+            ("reward_ref", {"key": "different", "version": "1.0.0"}),
+            ("unknown_field", None),
+        ):
+            with self.subTest(field=field):
+                saved["status"] = "DRAFT"
+                saved["spec"] = {**original, field: value}
+                with self.assertRaisesRegex(ValueError, "内容与请求不符"):
+                    await self.client.ensure_version("benchmarks", "test", spec)
 
     async def test_remote_app_separates_research_model_and_never_persists_credentials(self) -> None:
         path = self.root / "app.yaml"

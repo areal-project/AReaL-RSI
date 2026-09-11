@@ -339,13 +339,13 @@ class ArenaClient:
                 if create_error.status != 409:
                     raise
             entity = await self.get(path)
-        if f"rsi-digest:{digest}" not in entity.get("tags", []):
-            raise ValueError("远端资源身份冲突，拒绝复用")
         try:
             version = await self.get(path + "/versions/1.0.0")
         except ArenaError as exc:
             if exc.status != 404:
                 raise
+            if f"rsi-digest:{digest}" not in entity.get("tags", []):
+                raise ValueError("远端资源身份冲突，拒绝创建版本") from None
             try:
                 await self.post(path + "/versions", {"version": "1.0.0", "spec": spec})
             except ArenaError as create_error:
@@ -353,18 +353,34 @@ class ArenaClient:
                     raise
             version = await self.get(path + "/versions/1.0.0")
         if version.get("status") == "DRAFT":
+            if f"rsi-digest:{digest}" not in entity.get("tags", []):
+                raise ValueError("远端资源身份冲突，拒绝发布")
             # A digest label is not proof of content: drafts can be edited in place.
-            if version.get("spec") != spec:
+            if not matching_spec(kind, version.get("spec"), spec):
                 raise ValueError("远端草稿内容与请求不符，拒绝发布")
             try:
                 await self.post(path + "/versions/1.0.0/publish")
             except ArenaError as exc:
                 if exc.status != 409:
                     raise
-        published = await self.version(kind, ref)
-        if published.get("spec") != spec:
-            raise ValueError("远端版本内容与请求不符，拒绝复用")
+        # EnvArena owns published-version immutability. Reuse requires only
+        # the exact key/version and PUBLISHED status, not another spec comparison.
+        await self.version(kind, ref)
         return ref
+
+
+def matching_spec(kind: str, actual: Any, expected: dict[str, Any]) -> bool:
+    """Compare draft content while accepting the server's optional null env_refs."""
+    if not isinstance(actual, dict):
+        return False
+    actual, expected = dict(actual), dict(expected)
+    if kind == "benchmarks":
+        for value in (actual, expected):
+            # Case Benchmarks may serialize their unused alternative as null.
+            # Nonempty env_refs and all other differences still fail comparison.
+            if value.get("case_refs") and value.get("env_refs") is None:
+                value.pop("env_refs", None)
+    return bool(actual == expected)
 
 
 def segment(value: str) -> str:

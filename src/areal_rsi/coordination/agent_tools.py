@@ -12,15 +12,11 @@ from areal_rsi.coordination.actions import ResearchActions
 from areal_rsi.modules.dsh_tools import DshToolWorker, definitions, ensure_tools, tool_environment
 from areal_rsi.modules.responses import ToolCall, ToolHandler, ToolResult
 
-TOOL_PROMPT = """基础工具包含 bash、read、write、edit、glob、grep。
-bash 可以使用本机已有的 SSH、Git、Python；
-每次是新 shell，默认在当前 Agent 的工作区执行；仅切换目录时传 workdir。
-远端检查采用非交互模式并设置超时。
-普通文件操作使用这组基础工具；
-保存版本、共享发现、运行实验和验证使用相应业务工具。
-修改前先读取文件，长输出分页读取，长期作业交给作业管理器。
-沿用已授权的认证方式，不打印或归档凭证。
-工具失败时根据真实错误处理，OUTCOME_UNKNOWN 先检查实际结果再决定是否重试。
+TOOL_PROMPT = """bash、read、write、edit、glob、grep 用于日常工作。
+bash 可使用已有 SSH、Git、Python。
+bash 每次是新 shell，默认在当前工作区；远端检查用非交互模式并设置超时。
+实验和长期作业使用作业工具，结果与产物可直接读取、收集或复测，无需手抄记录。
+沿用已授权的认证，不打印凭证。OUTCOME_UNKNOWN 先检查实际结果，避免重复执行。
 """
 
 
@@ -48,9 +44,11 @@ class AgentTools:
         *,
         environment: Callable[[], Mapping[str, str]],
         credential_names: tuple[str, ...],
+        instructions: str | None = None,
     ):
         self.actions, self.root = actions, root
         self.environment, self.credential_names = environment, credential_names
+        self.tool_prompt = TOOL_PROMPT if instructions is None else instructions
         self.workers: dict[str, DshToolWorker] = {}
         self.installation: Path | None = None
         self.install_lock = asyncio.Lock()
@@ -58,7 +56,11 @@ class AgentTools:
             actions.register(tool, self.handler, roles={"interaction", "rsi", "research"})
 
     def instructions(self, agent_id: str) -> str:
-        return TOOL_PROMPT + "\n你的默认工作区：" + str(self.actions.workspace(agent_id).resolve())
+        return (
+            self.tool_prompt
+            + "\n你的默认工作区："
+            + str(self.actions.workspace(agent_id).resolve())
+        )
 
     async def _installation(self) -> Path:
         async with self.install_lock:

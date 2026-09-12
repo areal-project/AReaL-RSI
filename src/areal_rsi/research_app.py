@@ -386,12 +386,14 @@ class ResearchApp:
             await runtime.reconfigure_session(session, config.model_settings_revision)
         actions = ResearchActions(c)
         await actions.initialize_workspace("rsi")
-        register_sources(actions)
+        if config.metadata.get("allow_web_access", True):
+            register_sources(actions)
         agent_tools = AgentTools(
             actions,
             self.root,
             environment=lambda: self.config(c).execution_env,
             credential_names=(config.api_key_env,),
+            instructions=config.metadata.get("agent_tool_instructions"),
         )
         execution = ResearchExecution(
             actions,

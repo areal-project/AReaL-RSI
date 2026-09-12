@@ -5,11 +5,13 @@ import json
 import sys
 from dataclasses import replace
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
 from areal_rsi.api.research import (
     CandidateSnapshot,
+    ResearchLimits,
     TaskBrief,
     VerificationContract,
     VerifiedResult,
@@ -20,6 +22,171 @@ from areal_rsi.coordination.coordinator import Coordinator
 from areal_rsi.coordination.jobs import ResearchExecution
 from areal_rsi.execution import ApprovedCommand, JobRecord
 from areal_rsi.modules.responses import ToolCall
+
+
+@pytest.mark.parametrize("policy", ["single", "multiple"])
+def test_final_candidate_policy_is_operator_controlled(
+    tmp_path: Path, policy: Literal["single", "multiple"]
+) -> None:
+    async def scenario() -> None:
+        c = Coordinator.create(
+            tmp_path,
+            TaskBrief(
+                "Verify",
+                "Use existing measured records",
+                verification=VerificationContract("score"),
+            ),
+        )
+        c.start()
+        actions = ResearchActions(c)
+        source = actions.workspace("rsi")
+        candidates = []
+        for text in ("first", "second"):
+            (source / "model.py").write_text(text)
+            candidates.append(await c.store.snapshot(source, agent_id="rsi", description=text))
+        execution = ResearchExecution(
+            actions,
+            verifier=ApprovedCommand(
+                "verify", (sys.executable, "-c", "pass"), final_candidate_policy=policy
+            ),
+            read_verification=lambda record, snapshot, phase: VerifiedResult(
+                record.job_id,
+                snapshot.candidate_id,
+                c.store.contract_digest(),
+                now(),
+                "succeeded",
+                0.5,
+                True,
+                phase="final",
+                simulated=False,
+            ),
+        )
+        try:
+            first = await execution.submit(
+                "rsi",
+                ToolCall(
+                    "verify_candidate",
+                    {
+                        "candidate_id": candidates[0].candidate_id,
+                        "phase": "final",
+                    },
+                    "first",
+                ),
+            )
+            await execution.wait_for_result("rsi", first.output["job_id"])
+            second = ToolCall(
+                "verify_candidate",
+                {
+                    "candidate_id": candidates[1].candidate_id,
+                    "phase": "final",
+                },
+                "second",
+            )
+            if policy == "single":
+                with pytest.raises(ValueError, match="final pool"):
+                    await execution.submit("rsi", second)
+                assert len(execution.jobs) == 1
+            else:
+                result = await execution.submit("rsi", second)
+                assert result.output["candidate_id"] == candidates[1].candidate_id
+                assert len(execution.jobs) == 2
+                assert (await execution.submit("rsi", second)).output["job_id"] == result.output[
+                    "job_id"
+                ]
+        finally:
+            execution.close(cancel=True)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("inline", [True, False])
+def test_wait_publishes_feedback_and_recheck_uses_frozen_input(
+    tmp_path: Path, inline: bool
+) -> None:
+    async def scenario() -> None:
+        c = Coordinator.create(
+            tmp_path,
+            TaskBrief("Optimize", "Check exact measured sources", ResearchLimits(max_agents=2)),
+        )
+        c.start()
+        owner = c.spawn(key="a", direction="A", instruction="Implement")["agent_id"]
+        other = c.spawn(key="b", direction="B", instruction="Explore")["agent_id"]
+        actions = ResearchActions(c)
+        source = actions.workspace(owner) / "model.py"
+        source.write_text("original")
+        command = ApprovedCommand(
+            "evaluate",
+            (
+                sys.executable,
+                "-c",
+                "import pathlib,sys,json; out=pathlib.Path(sys.argv[2]); "
+                "text=(pathlib.Path(sys.argv[1])/'model.py').read_text(); "
+                "(out/'model.py').write_text(text); "
+                "(out/'feedback.json').write_text(json.dumps({'measured':text}))",
+                "{workspace}",
+                "{output}",
+            ),
+            ("workspace", "output"),
+        )
+        execution = ResearchExecution(actions, commands={"evaluate": command})
+        execution.inline_wait_seconds = 2 if inline else 0
+        handler = actions.handler(owner)
+        try:
+            result = await handler(
+                ToolCall(
+                    "run_job",
+                    {
+                        "command_name": "evaluate",
+                        "candidate_id": "",
+                        "parameters_json": "{}",
+                        "wait": True,
+                    },
+                    "first",
+                )
+            )
+            job_id = result.output["job_id"]
+            assert result.stop is not inline
+            for _ in range(300):
+                if not await execution.poll():
+                    break
+                await asyncio.sleep(0.01)
+            record = execution.manager.get(job_id)
+            assert record.state == "succeeded"
+            assert "original" in execution.for_agent(record, owner)["feedback"]["content"]
+            assert "feedback" not in execution.for_agent(record, other)
+            source.write_text("changed since evaluation")
+            execution.inline_wait_seconds = 2
+            repeated = await handler(
+                ToolCall("rerun_job", {"job_id": job_id, "wait": True}, "recheck")
+            )
+            assert repeated.output["source_job_id"] == job_id
+            assert "original" in repeated.output["feedback"]["content"]
+            assert "changed" not in repeated.output["feedback"]["content"]
+            assert (
+                await handler(ToolCall("rerun_job", {"job_id": job_id, "wait": True}, "recheck"))
+            ) == repeated
+            assert len(execution.manager.records()) == 2
+            collected = await handler(
+                ToolCall(
+                    "collect_job_output",
+                    {
+                        "job_id": job_id,
+                        "destination": "",
+                        "as_candidate": True,
+                    },
+                    "collect",
+                )
+            )
+            candidate = c.store.get(
+                "candidates", collected.output["candidate_id"], CandidateSnapshot
+            )
+            destination = tmp_path / "collected"
+            await c.store.content.materialize(candidate.content, destination)
+            assert (destination / "model.py").read_text() == "original"
+        finally:
+            execution.close(cancel=True)
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("long_guide", [False, True])

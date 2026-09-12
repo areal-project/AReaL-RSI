@@ -1,4 +1,4 @@
-"""GPUQ evaluation jobs and read-only verification of a collected eight-task bundle."""
+"""GPUQ evaluation jobs and read-only verification of a collected task bundle."""
 
 from __future__ import annotations
 
@@ -92,6 +92,7 @@ def submit_and_wait(
         raise ValueError("Task is outside this research run")
     output.mkdir(parents=True, exist_ok=True)
     record_path = output / "remote-job.json"
+    budget = manifest.get("submission_budget_per_task", 11)
     while True:
         try:
             if record_path.exists():
@@ -102,10 +103,10 @@ def submit_and_wait(
                 job = remote(manifest, operation, task=task, key=output.name, **sources)
             write_json(record_path, job)
             budget_message = (
-                f"本题已用 {job['task_budget_used']}/11 次 GPU 提交，"
+                f"本题已用 {job['task_budget_used']}/{budget} 次 GPU 提交，"
                 f"剩余 {job['task_budget_remaining']} 次"
                 if "task_budget_used" in job
-                else f"本次回执计数 {job['budget_used']}/11；最新总数请查 status"
+                else f"本次回执计数 {job['budget_used']}/{budget}；最新总数请查 status"
             )
             write_json(
                 output / "progress.json",
@@ -182,6 +183,14 @@ def score_bundle(
                 chosen = None
         else:
             chosen = max(valid, key=lambda j: j["speedup"], default=None)
+        # A baseline-matched run reserves its final request for a new seed.
+        if (
+            phase == "final"
+            and "final_seed" in manifest
+            and chosen is not None
+            and (chosen.get("evaluation") or {}).get("seed") != manifest["final_seed"]
+        ):
+            chosen = None
         speedup = chosen["speedup"] if chosen else 0.0
         metrics[task + "_speedup"] = speedup
         metrics[task + "_fast1"] = float(speedup > 1.0)
@@ -246,8 +255,10 @@ def main() -> None:
             manifest, args.workspace, args.output, args.task, args.script, args.candidate or ""
         )
         return
+    if args.operation == "collect" and not (args.output or args.workspace):
+        parser.error("collect requires --output or --workspace")
     status = (
-        collect_bundle(manifest, args.workspace, args.exclude_sha256)
+        collect_bundle(manifest, args.output or args.workspace, args.exclude_sha256)
         if args.operation == "collect"
         else remote(manifest, "status")
     )
@@ -273,9 +284,12 @@ def main() -> None:
             )
         )
     elif args.operation == "collect":
+        summary = {task: {"used": v["used"], "best": v.get("best")} for task, v in status.items()}
+        if args.output:
+            write_json(args.output / "feedback.json", summary)
         print(
             json.dumps(
-                {task: {"used": v["used"], "best": v.get("best")} for task, v in status.items()},
+                summary,
                 ensure_ascii=False,
             )
         )

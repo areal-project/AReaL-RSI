@@ -94,6 +94,16 @@ class ApprovedCommand:
     output_subdir: str = "."
     # Verifiers keep all output private unless an operator publishes a subdirectory.
     public_output_subdir: str | None = None
+    # Relative to the published output directory; None disables inline feedback.
+    # This is an execution receipt, never a replacement for trusted verification.
+    feedback_file: str | None = "feedback.json"
+    # Hidden final pools default to one candidate. Read-only result aggregation
+    # and reusable public validators can explicitly accept several candidates.
+    final_candidate_policy: Literal["single", "multiple"] = "single"
+
+    def __post_init__(self) -> None:
+        if self.final_candidate_policy not in {"single", "multiple"}:
+            raise ValueError("final_candidate_policy must be single or multiple")
 
     def bind(self, values: dict[str, str], *, cwd: str, **metadata: str) -> JobSpec:
         if set(values) != set(self.parameters):

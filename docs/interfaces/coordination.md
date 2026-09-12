@@ -30,6 +30,17 @@ continuous model sessions. Execution and web research tools are separate adapter
   delivered once per subscriber; a processed result with a missing notification
   is reconciled on restart. Finished assignments and stopped directions are not
   resumed by late job results.
+- `run_job` and `verify_candidate` accept `wait=true`: a short job returns directly,
+  otherwise its caller durably sleeps and resumes with the published feedback.
+  No model request is used to poll. Archived calls without `wait` stay asynchronous.
+  Optional `ApprovedCommand.feedback_file` defaults to `feedback.json`; bounded
+  excerpts are archived once. Ordinary feedback is visible to its owner and RSI;
+  verifier feedback only comes from the configured public output directory.
+- `rerun_job` freezes the original execution's inputs, parameters and command into
+  a new, normally budgeted job. It rejects running jobs and changed command templates;
+  replaying the same tool call remains idempotent. `collect_job_output` with
+  `as_candidate=true` snapshots published artifacts directly; an empty destination
+  avoids copying them into a mutable working directory.
 - Job submission receipts, `job_status` and completion messages include the command
   name, caller-supplied `parameters`, iteration and candidate identity, plus the
   verification phase when applicable. Use these fields and the actual feedback to
@@ -60,6 +71,17 @@ continuous model sessions. Execution and web research tools are separate adapter
   polls only decode events after the supplied cursor.
 - Waiting has no active inference. RSI can still perform useful work while other
   directions run; only an explicit wait or completed turn yields control.
+- Outstanding report replies are derived from existing researcher/node state and
+  included in RSI's model-facing state. If RSI implicitly becomes idle after a
+  delivered report without assigning or stopping its researcher, the scheduler
+  sends one durable reminder for that report. Explicit waits (including user/job
+  waits), paused/stopped runs and failed controllers are respected. The reminder
+  does not start a research iteration; its stable identity prevents polling or
+  restart loops. An unanswered reminder remains visible as an outstanding reply.
+- Event writers use a run-local process lock and a recoverable sequence index.
+  Committed events precede index updates, so a restart discovers an unindexed
+  tail. Indexed appends and incremental reads do not scan the historical directory;
+  legacy archives bootstrap from their existing immutable event filenames.
 - Pause preserves unfinished deliveries for recovery. A stopped, previously
   started research run can be reopened explicitly by the user via `resume`.
   It retains scores, reports, candidates and sessions, restarts the controllers,

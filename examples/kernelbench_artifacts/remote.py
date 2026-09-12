@@ -118,6 +118,10 @@ def handle(manifest: dict[str, Any], request_data: dict[str, Any]) -> Any:
     from common import request
 
     operation = request_data["operation"]
+    # Older manifests used a fixed eleven-submission protocol.
+    budget = manifest.get("submission_budget_per_task", 11)
+    if type(budget) is not int or budget <= 0:
+        raise ValueError("Submission budget must be a positive integer")
     excluded = request_data.get("exclude_sha256", [])
     if not isinstance(excluded, list) or any(
         not isinstance(digest, str)
@@ -179,7 +183,8 @@ def handle(manifest: dict[str, Any], request_data: dict[str, Any]) -> Any:
                 task_used = len(jobs) + len(external)
                 old = next((j for j in jobs if j.get("idempotency_key") == key), None)
                 if old is None:
-                    if task_used >= 11:
+                    exploration_budget = manifest.get("exploration_budget_per_task", budget)
+                    if task_used >= exploration_budget:
                         raise ValueError(
                             "GPU feedback budget exhausted (including external GPU work)"
                         )
@@ -208,7 +213,7 @@ def handle(manifest: dict[str, Any], request_data: dict[str, Any]) -> Any:
                         }
                     old = query("/jobs", body)
                     task_used += 1
-                assert old["task_id"] == task["task_id"] and old["budget"] == 11
+                assert old["task_id"] == task["task_id"] and old["budget"] == budget
                 if old["kind"] != ("run" if diagnostic else "eval"):
                     raise ValueError("Submission ID reused for another operation")
                 return summarize(old, len(external), task_used=task_used)
@@ -216,24 +221,24 @@ def handle(manifest: dict[str, Any], request_data: dict[str, Any]) -> Any:
             if selected is None:
                 raise ValueError("Job lookup requires one task")
             job = query("/jobs/" + request_data["job_id"])
-            assert job["task_id"] == task["task_id"] and job["budget"] == 11
+            assert job["task_id"] == task["task_id"] and job["budget"] == budget
             if operation == "logs":
                 return diagnostic_logs(job)
             jobs = query("/jobs")
-            if any(j["task_id"] != task["task_id"] or j["budget"] != 11 for j in jobs):
+            if any(j["task_id"] != task["task_id"] or j["budget"] != budget for j in jobs):
                 raise ValueError("Unexpected task ownership or budget")
             return summarize(job, len(external), task_used=len(jobs) + len(external))
         jobs = query("/jobs")
-        if any(j["task_id"] != task["task_id"] or j["budget"] != 11 for j in jobs):
+        if any(j["task_id"] != task["task_id"] or j["budget"] != budget for j in jobs):
             raise ValueError("Unexpected task ownership or budget")
         used = len(jobs) + len(external)
         public = [summarize(j, len(external), task_used=used) for j in jobs]
         public.sort(key=lambda j: j["created_at"])
-        if len(public) > 11:
+        if used > budget:
             raise ValueError("GPU submission cap was exceeded")
         value: dict[str, Any] = {
             "used": used,
-            "remaining": max(0, 11 - used),
+            "remaining": max(0, budget - used),
             "queue_used": len(public),
             "external_used": len(external),
             "external_submissions": external,

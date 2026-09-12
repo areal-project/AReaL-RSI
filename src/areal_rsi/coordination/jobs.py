@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import shutil
@@ -12,7 +13,7 @@ from typing import Any
 
 from areal_rsi.api.base import AgentState, ContentRef, IterationState, RecordRef
 from areal_rsi.api.research import CandidateSnapshot, ResearchMessage, VerifiedResult
-from areal_rsi.base.storage import decode, encode, now, write_json
+from areal_rsi.base.storage import decode, encode, now, safe_relative, write_json
 from areal_rsi.coordination.actions import STRING, ResearchActions, definition
 from areal_rsi.coordination.coordinator import effect_id
 from areal_rsi.execution import ApprovedCommand, JobManager, JobRecord, JobSpec
@@ -20,6 +21,11 @@ from areal_rsi.modules.responses import ToolCall, ToolHandler, ToolResult
 
 VerificationReader = Callable[[JobRecord, CandidateSnapshot, str], VerifiedResult]
 INLINE_INSTRUCTIONS_CHARS = 8000
+FEEDBACK_CHARS = 12000
+WAIT = {
+    "type": "boolean",
+    "description": "通常为 true：完成后带回反馈；有独立工作要并行做时为 false。",
+}
 
 
 class ResearchExecution:
@@ -47,6 +53,7 @@ class ResearchExecution:
         self.execution_env = execution_env or {}
         self.instructions = ""
         self.simulated, self.mock_duration = simulated, mock_duration
+        self.inline_wait_seconds = 1.0
         limits = self.c.store.brief().limits
         self.manager = JobManager(
             self.c.store.root,
@@ -60,10 +67,19 @@ class ResearchExecution:
         for tool in (
             definition(
                 "run_job",
-                "按已配置命令运行工作区的固定副本。candidate_id 可以为空。先查看get_commands。",
+                "按已配置命令运行固定输入。candidate_id 为空时使用当前工作区。"
+                "wait=true 时短作业直接返回，长作业停止推理、完成后带回公开反馈。",
                 command_name=STRING,
                 candidate_id=STRING,
                 parameters_json=STRING,
+                wait=WAIT,
+            ),
+            definition(
+                "rerun_job",
+                "用原作业的冻结输入和相同命令重新执行一次，无需找文件或核对哈希。"
+                "用于已选版本的独立复测；会消耗正常作业/评测预算。原作业须已结束。",
+                job_id=STRING,
+                wait=WAIT,
             ),
             definition(
                 "get_commands",
@@ -84,9 +100,11 @@ class ResearchExecution:
             ),
             definition(
                 "collect_job_output",
-                "将已完成作业的输出复制到工作区，以便检查或保存版本。destination 为相对路径。",
+                "收集作业公开产物。destination 为工作区相对目录；"
+                "as_candidate=true 同时保存为不可变候选，destination 为空时只保存候选。",
                 job_id=STRING,
                 destination=STRING,
+                as_candidate={"type": "boolean"},
             ),
             definition(
                 "read_job_output_file",
@@ -107,6 +125,7 @@ class ResearchExecution:
                 "phase：search 用于研究反馈，final 用于最终确认，diagnostic 用于诊断。",
                 candidate_id=STRING,
                 phase=STRING,
+                wait=WAIT,
             ),
         ):
             actions.register(tool, self.handler, roles={"rsi", "research"})
@@ -145,6 +164,7 @@ class ResearchExecution:
                                     p for p in cmd.parameters if p not in {"workspace", "output"}
                                 ],
                                 "output_subdir": cmd.output_subdir,
+                                "feedback_file": cmd.feedback_file,
                             }
                             for cmd in self.commands.values()
                         ],
@@ -166,13 +186,18 @@ class ResearchExecution:
                     }
                 )
             if call.name in {"run_job", "verify_candidate"}:
-                return await self.submit(agent_id, call)
+                result = await self.submit(agent_id, call)
+                # Missing wait preserves the semantics of archived tool calls.
+                if args.get("wait", False):
+                    return await self.wait_for_result(agent_id, result.output["job_id"])
+                return result
             job_id = args["job_id"]
             info = self.jobs[job_id]
             # Status and completion subscriptions are run-wide. File access below
             # still observes ownership/sharing and the verifier's publication boundary.
             if (
-                call.name in {"read_job_log", "collect_job_output", "read_job_output_file"}
+                call.name
+                in {"read_job_log", "collect_job_output", "read_job_output_file", "rerun_job"}
                 and not info["verification"]
                 and agent_id not in {"rsi", info["agent_id"]}
             ):
@@ -184,6 +209,29 @@ class ResearchExecution:
                 )
             record = self.manager.get(job_id)
             assert record is not None
+            if call.name == "rerun_job":
+                if not record.terminal:
+                    raise ValueError("原作业尚未结束，请等待原作业，不要重复提交")
+                if info["verification"]:
+                    raise ValueError("验证作业请直接用 verify_candidate 和原 candidate_id")
+                snapshot = self.c.store.root / "execution-inputs" / job_id / "snapshot.json"
+                content = decode(ContentRef, json.loads(snapshot.read_text()))
+                replay = ToolCall(
+                    "run_job",
+                    {
+                        "command_name": record.spec.metadata["command_template"],
+                        "candidate_id": info.get("candidate_id") or "",
+                        "parameters_json": json.dumps(info["parameters"]),
+                    },
+                    call.call_id,
+                    recovered=call.recovered,
+                )
+                result = await self.submit(
+                    agent_id, replay, source_content=content, source_job_id=job_id
+                )
+                if args.get("wait", False):
+                    return await self.wait_for_result(agent_id, result.output["job_id"])
+                return result
             if call.name == "read_job_log":
                 if info["verification"]:
                     raise ValueError("Private verifier logs are not public feedback")
@@ -210,8 +258,6 @@ class ResearchExecution:
                 if source.is_symlink() or any(p.is_symlink() for p in source.rglob("*")):
                     raise ValueError("Job output must not contain symbolic links")
                 if call.name == "read_job_output_file":
-                    from areal_rsi.base.storage import safe_relative
-
                     if not args["path"]:
                         files = sorted(
                             p.relative_to(source).as_posix()
@@ -240,31 +286,76 @@ class ResearchExecution:
                     ref = self.c.store.put("materials", effect_id("output", call.call_id), value)
                     self.c.link_reference(agent_id, ref)
                     return ToolResult({**value, "uri": ref.uri})
-                destination = self.actions.workspace_path(agent_id, args["destination"])
-                if destination.exists() and any(p.is_symlink() for p in destination.rglob("*")):
-                    raise ValueError("Collection destination contains symbolic links")
-                shutil.copytree(source, destination, dirs_exist_ok=True)
-                return ToolResult({"destination": args["destination"]})
+                collected: dict[str, Any] = {}
+                if args.get("as_candidate", False):
+                    candidate_id = effect_id("candidate", agent_id + ":" + call.call_id)
+                    candidate_path = self.c.store.root / "candidates" / f"{candidate_id}.json"
+                    if candidate_path.exists():
+                        candidate = self.c.store.get("candidates", candidate_id, CandidateSnapshot)
+                    else:
+                        candidate = await self.c.store.snapshot(
+                            source,
+                            agent_id=agent_id,
+                            description="作业产物：" + job_id,
+                            parent_candidate_id=info.get("candidate_id"),
+                            candidate_id=candidate_id,
+                            scope_base_candidate_id=self.c.state["seed_candidate_id"],
+                        )
+                    self.c.link_reference(agent_id, self.c.store.paths.reference(candidate_path))
+                    collected["candidate_id"] = candidate.candidate_id
+                    collected["content"] = encode(candidate.content)
+                if args["destination"]:
+                    destination = self.actions.workspace_path(agent_id, args["destination"])
+                    if destination.exists() and any(p.is_symlink() for p in destination.rglob("*")):
+                        raise ValueError("Collection destination contains symbolic links")
+                    shutil.copytree(source, destination, dirs_exist_ok=True)
+                    collected["destination"] = args["destination"]
+                elif not collected:
+                    raise ValueError("请指定收集目录或 as_candidate=true")
+                return ToolResult(collected)
             if call.name == "wait_for_job" and not record.terminal:
-                self.waiters(info).setdefault(
-                    agent_id,
-                    {
-                        "iteration_id": self.c.actor(agent_id).current_iteration_id,
-                        "notified": False,
-                    },
-                )
-                info["waiting"] = True
-                self.save()
-                self.c.wait(agent_id, "job:" + job_id)
-                return ToolResult(self.public(record), stop=True, reason="job")
+                return await self.wait_for_result(agent_id, job_id, inline=False)
             await self.poll()
             record = self.manager.get(job_id)
             assert record is not None
-            return ToolResult(self.public(record))
+            return ToolResult(self.for_agent(record, agent_id))
 
         return handle
 
-    async def submit(self, agent_id: str, call: ToolCall) -> ToolResult:
+    async def wait_for_result(
+        self, agent_id: str, job_id: str, *, inline: bool = True
+    ) -> ToolResult:
+        deadline = asyncio.get_running_loop().time() + (self.inline_wait_seconds if inline else 0)
+        while True:
+            await self.poll()
+            record = self.manager.get(job_id)
+            if record.terminal:
+                return ToolResult(self.for_agent(record, agent_id))
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                break
+            await asyncio.sleep(min(0.05, remaining))
+        info = self.jobs[job_id]
+        self.waiters(info).setdefault(
+            agent_id,
+            {
+                "iteration_id": self.c.actor(agent_id).current_iteration_id,
+                "notified": False,
+            },
+        )
+        info["waiting"] = True
+        self.save()
+        self.c.wait(agent_id, "job:" + job_id)
+        return ToolResult(self.for_agent(record, agent_id), stop=True, reason="job")
+
+    async def submit(
+        self,
+        agent_id: str,
+        call: ToolCall,
+        *,
+        source_content: ContentRef | None = None,
+        source_job_id: str | None = None,
+    ) -> ToolResult:
         if self.c.state.get("execution_setup") == "pending":
             raise ValueError("执行接入尚未冻结；RSI 调用 freeze_execution 后才能运行作业")
         key = effect_id("job", agent_id + ":" + call.call_id).replace("job_", "job-", 1)
@@ -293,7 +384,12 @@ class ResearchExecution:
         candidate_id = args.get("candidate_id") or None
         if verification and candidate_id is None:
             raise ValueError("Verification requires an immutable candidate")
-        if verification and phase == "final" and not self.simulated:
+        if (
+            verification
+            and phase == "final"
+            and not self.simulated
+            and command.final_candidate_policy == "single"
+        ):
             confirmed = {
                 item["candidate_id"]
                 for item in self.jobs.values()
@@ -314,7 +410,9 @@ class ResearchExecution:
         if snapshot_record.exists():
             content = decode(ContentRef, json.loads(snapshot_record.read_text()))
         else:
-            if candidate_id is not None:
+            if source_content is not None:
+                content = source_content
+            elif candidate_id is not None:
                 content = self.c.store.get("candidates", candidate_id, CandidateSnapshot).content
             else:
                 content = await self.c.store.content.snapshot(self.actions.workspace(agent_id))
@@ -346,6 +444,17 @@ class ResearchExecution:
         spec = command.bind(
             values, cwd=str(workspace), agent_id=agent_id, verification=str(verification).lower()
         )
+        if source_job_id:
+            old = self.manager.get(source_job_id)
+            old_values = dict(values)
+            for name, value in {
+                "workspace": old.spec.cwd,
+                "output": self.jobs[source_job_id]["output"],
+            }.items():
+                if name in old_values:
+                    old_values[name] = value
+            if command.bind(old_values, cwd=old.spec.cwd).command != old.spec.command:
+                raise ValueError("原作业的命令配置已变化，不能作为同一实验直接复测")
         if self.execution_env:
             from dataclasses import replace
 
@@ -379,6 +488,7 @@ class ResearchExecution:
             "iteration_id": self.c.actor(agent_id).current_iteration_id,
             "parameters": supplied,
             "candidate_id": candidate_id,
+            "source_job_id": source_job_id,
             "verification": verification,
             "phase": phase,
             "waiting": False,
@@ -386,6 +496,7 @@ class ResearchExecution:
             "output": str(output),
             "output_subdir": command.output_subdir,
             "public_output_subdir": command.public_output_subdir,
+            "feedback_file": command.feedback_file,
             "created_at": now(),
             "spec": encode(spec),
         }
@@ -412,6 +523,7 @@ class ResearchExecution:
             # Legacy records have no parameters; do not infer them from argv.
             "parameters": info.get("parameters"),
             "candidate_id": info.get("candidate_id"),
+            "source_job_id": info.get("source_job_id"),
             "phase": info.get("phase") if info["verification"] else None,
             "state": record.state,
             "gpu_ids": list(record.assigned_gpu_ids),
@@ -426,6 +538,62 @@ class ResearchExecution:
             and (not info["verification"] or info.get("public_output_subdir") is not None),
             "result": info.get("result"),
         }
+
+    def for_agent(self, record: JobRecord, agent_id: str) -> dict[str, Any]:
+        result = self.public(record)
+        info = self.jobs[record.job_id]
+        # Run-wide status access does not grant access to another branch's files.
+        if info.get("feedback") and (info["verification"] or agent_id in {"rsi", info["agent_id"]}):
+            result["feedback"] = info["feedback"]
+        return result
+
+    def publish_feedback(self, record: JobRecord) -> None:
+        info = self.jobs[record.job_id]
+        saved = self.c.store.root / "materials" / (effect_id("feedback", record.job_id) + ".json")
+        if saved.exists():
+            ref = self.c.store.paths.reference(saved)
+            info["feedback"] = {**json.loads(saved.read_text()), "uri": ref.uri}
+            self.c.link_reference(info["agent_id"], ref, iteration_id=info["iteration_id"])
+            return
+        name = info.get("feedback_file", "feedback.json")
+        subdir = (
+            info.get("public_output_subdir")
+            if info["verification"]
+            else info.get("output_subdir", ".")
+        )
+        if not name or subdir is None:
+            return
+        root = Path(info["output"])
+        source = root / subdir
+        try:
+            path = source / safe_relative(name)
+            if (
+                not path.is_file()
+                or not source.resolve().is_relative_to(root.resolve())
+                or not path.resolve().is_relative_to(source.resolve())
+                or any(
+                    p.is_symlink()
+                    for p in (path, *path.parents)
+                    if p != root and p.is_relative_to(root)
+                )
+            ):
+                return
+            with path.open() as stream:
+                text = stream.read(FEEDBACK_CHARS + 1)
+            value = {
+                "agent_id": info["agent_id"],
+                "job_id": record.job_id,
+                "path": name,
+                "content": text[:FEEDBACK_CHARS],
+                "truncated": len(text) > FEEDBACK_CHARS,
+                "job_state": record.state,
+            }
+            ref = self.c.store.put("materials", effect_id("feedback", record.job_id), value)
+            info["feedback"] = {**value, "uri": ref.uri}
+            self.c.link_reference(info["agent_id"], ref, iteration_id=info["iteration_id"])
+        except (OSError, ValueError, UnicodeError):
+            # Missing/binary feedback must not hide the job's real terminal state.
+            return
 
     @staticmethod
     def waiters(info: dict[str, Any]) -> dict[str, Any]:
@@ -455,8 +623,9 @@ class ResearchExecution:
             key = "job:" + record.job_id
             if agent_id != info["agent_id"]:
                 key += ":" + agent_id
-            text = "你订阅的作业已完成。请读取结果，在原任务和会话中继续推进。\n" + json.dumps(
-                self.public(record), ensure_ascii=False
+            text = (
+                "作业已完成，以下是执行结果与已发布反馈。继续当前任务；需要细节时再读日志。\n"
+                + json.dumps(self.for_agent(record, agent_id), ensure_ascii=False)
             )
             with suppress(FileNotFoundError):
                 # Older notifications can have a different JSON field order after reload.
@@ -603,6 +772,7 @@ class ResearchExecution:
                 RecordRef(info["result"]["uri"]),
                 iteration_id=info["iteration_id"],
             )
+            self.publish_feedback(record)
             self.notify_completion(record)
             info["processed"] = True
             self.save()

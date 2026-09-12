@@ -44,6 +44,13 @@ def test_bundle_scores_only_matching_real_code_and_requires_final_repeat(tmp_pat
     assert client.score_bundle(manifest, tmp_path, status, "final")[0] == 0
     status["L1P1"]["jobs"].append({**job, "created_at": 2})
     assert client.score_bundle(manifest, tmp_path, status, "final")[0] == 0.5
+    manifest["final_seed"] = 137
+    assert client.score_bundle(manifest, tmp_path, status, "final")[0] == 0
+    status["L1P1"]["jobs"][-1]["evaluation"] = {
+        "evaluation_policy": "strict-fp32-v1",
+        "seed": 137,
+    }
+    assert client.score_bundle(manifest, tmp_path, status, "final")[0] == 0.5
     status["L1P1"]["jobs"].append({**job, "created_at": 3, "correct": False, "state": "failed"})
     assert client.score_bundle(manifest, tmp_path, status, "final")[0] == 0
     source.write_text("different code")
@@ -189,6 +196,37 @@ def diagnostic_payload(key: str = "diagnosis") -> dict[str, str]:
         "source": base64.b64encode(b"class ModelNew: pass").decode(),
         "script": base64.b64encode(b"print('layer comparison')").decode(),
     }
+
+
+def test_manifest_submission_cap_includes_diagnostics(diagnostic_queue: Any) -> None:
+    q = diagnostic_queue
+    q.manifest["submission_budget_per_task"] = 10
+    # Seed ten existing queue receipts as returned by a task registered with budget ten.
+    q.manifest["submission_budget_per_task"] = 11
+    for i in range(10):
+        q.bridge.handle(q.manifest, diagnostic_payload(str(i)))
+    q.manifest["submission_budget_per_task"] = 10
+    for job in q.jobs:
+        job["budget"] = 10
+    status = q.bridge.handle(q.manifest, {"operation": "status"})["L1P1"]
+    assert status["remaining"] == 0 and status["used"] == 10
+    with pytest.raises(ValueError, match="budget exhausted"):
+        q.bridge.handle(q.manifest, diagnostic_payload("eleventh"))
+    assert len(q.jobs) == 10
+    # Retrying an acknowledged intent at the cap must not consume another submission.
+    assert q.bridge.handle(q.manifest, diagnostic_payload("0"))["id"] == q.jobs[0]["id"]
+
+
+def test_exploration_cannot_consume_the_reserved_final_request(diagnostic_queue: Any) -> None:
+    q = diagnostic_queue
+    q.manifest["exploration_budget_per_task"] = 10
+    for i in range(10):
+        q.bridge.handle(q.manifest, diagnostic_payload(str(i)))
+    with pytest.raises(ValueError, match="budget exhausted"):
+        q.bridge.handle(q.manifest, diagnostic_payload("eleventh"))
+    assert len(q.jobs) == 10
+    assert q.bridge.handle(q.manifest, {"operation": "status"})["L1P1"]["remaining"] == 1
+    assert q.bridge.handle(q.manifest, diagnostic_payload("0"))["id"] == q.jobs[0]["id"]
 
 
 @pytest.mark.parametrize("external_count", [0, 1])

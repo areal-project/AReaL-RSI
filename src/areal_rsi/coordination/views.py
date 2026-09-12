@@ -34,6 +34,8 @@ def model_state(c: Coordinator, agent_id: str) -> dict[str, Any]:
     """Return current work, without copying past iterations into the context."""
     result = c.summary()
     agents = result["agents"]
+    if agent_id != "rsi":
+        result.pop("pending_report_replies", None)
     if agent_id not in {"rsi", "interaction"}:
         agents = [a for a in agents if a["agent_id"] == agent_id]
         result.pop("waiting_for_user", None)

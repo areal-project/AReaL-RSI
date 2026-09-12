@@ -134,7 +134,12 @@ class EngineTest(unittest.IsolatedAsyncioTestCase):
                 if index == 0:
                     await reported.wait()  # Report arrives during RSI's model call.
                     return packet(call("inspect", "inspect"))
-                self.assertEqual(index, 1, "Report incorrectly woke RSI for a second turn")
+                if index == 2:
+                    # A user-facing final reply did not decide this report. The
+                    # scheduler reminds once; explicit waiting then stays idle.
+                    self.assertIn("系统提醒", payload["input"][-1]["content"])
+                    return packet(call("wait", "wait-after-reminder"))
+                self.assertEqual(index, 1, "Unexpected repeated report reminder")
                 updates = []
                 for item in payload["input"]:
                     if item.get("role") != "user":
@@ -172,10 +177,12 @@ class EngineTest(unittest.IsolatedAsyncioTestCase):
             transport = RoutedTransport(respond)
             engine = ResearchEngine(c, ResponsesRuntime(self.config, transport), tools)
             await engine.run_until_idle(timeout=5)
-            self.assertEqual(transport.counts, {"rsi": 2, researcher: 1})
+            self.assertEqual(transport.counts, {"rsi": 3, researcher: 1})
             recovered = Coordinator(ResearchStore(self.root, c.store.run_id))
             self.assertEqual(recovered.state["delivered"].count(received[0]), 1)
             self.assertNotIn("rsi", recovered.pending())
+            self.assertTrue(recovered.state["rsi_explicit_wait"])
+            self.assertEqual(len(recovered.pending_report_replies()), 1)
             replies = [
                 m
                 for m in c.store.records("messages", ResearchMessage)

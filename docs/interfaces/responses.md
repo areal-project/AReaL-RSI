@@ -55,6 +55,8 @@ result = await runtime.turn(
 
 ## 归档与恢复
 
+HTTP 客户端在一个连续模型回合内复用，重叠 Agent 共享连接池；凭证、目标地址和超时仍按请求设置。最后一个回合退出时关闭客户端，取消某个 Agent 不关闭其他 Agent 的活动连接。可重试 HTTP 错误先消费响应体，使可用连接可以回到池中；SSE 终态仍立即返回，不无限等待服务端关闭流。连接复用不改变请求身份、自动重试、计费或工具幂等规则，也不代表服务端连接错误已经消除。
+
 会话目录包含 `session.json`、`events.jsonl`、`requests/`、`responses/`。目录由调用方放在所属 run 下。`session.json` 保留完整 history、用于推理的当前 context、回合、工具调用账本、usage 和 compact 检查点。每次工具执行前后都原子保存状态；同一会话的线程与进程并发执行由锁拒绝或串行化。
 
 完成的工具不再执行。若进程在副作用生效后、结果保存前退出，运行时无法单独保证外部系统的 exactly-once：恢复时会用**相同的 call_id** 和 `recovered=True` 调用 handler。handler 必须通过该 ID 查询已经创建的消息、作业或记录并返回原结果；无法判断结果时应报告未决状态，不能盲目重新执行。不同 call_id 的工具仍可具有相同参数，不应按参数粗暴去重。
@@ -77,7 +79,9 @@ Research Agent 的普通最终回复现在由调度器自动归档为报告，�
 
 ## Compact 与事件
 
-默认在新回合开始前检查 context，也在同一长回合的完整工具 batch 结束后、下一次模型请求前检查；context JSON 超过 180,000 个字符时，使用同一模型生成继续工作所需的摘要。字符数是可配置的估算阈值，不是 token 上限，单次超大返回仍可能超过模型限制。压缩前必须清空 pending 并完成每个 function call/output 配对；已有未消费响应先恢复，不能被 compact 越过。原始历史、工具账本和 turn/message/call ID 始终保留，不依赖第三方 native compact API。
+默认在新回合开始前，以及同一长回合完整工具 batch 结束后检查 context。优先使用服务端最近一次实际 input_tokens，加上新增上下文的估算量；没有用量记录时，按可读输入的 UTF-8 字节数粗估，不把加密 reasoning 的字符串长度当成 token 数。默认 `context_window_tokens=128000` 是可配置的保守容量，扣除输出预留后达到 85% 时压缩，不代表模型的官方窗口规格。`ResearchConfig` 可覆盖容量与近期上下文保留量；显式设置旧 `compact_after_chars` 仍按字符阈值处理，设为 0 禁用。
+
+自动 token 模式只总结较早的上下文，默认保留最近约 8000 个估算 token 的原始消息与完整工具调用/返回。压缩前必须完成每个 function call/output 配对；未消费响应先恢复。压缩边界持久化，重启后继续同一计划。原始 history、工具账本和 turn/message/call ID 始终保留，不依赖第三方 native compact API。估算不是精确 tokenizer，单次超大输入仍需工具本身限制大小。
 
 compact 请求与后续继续请求都计入当前回合和整个 run 的预算。若剩余额度不足以完成这两次请求，会保留完整边界并停止；不会另起回合或增加额度。检查点保存对应的 history 边界和请求 ID；压缩响应已保存时直接恢复它，检查点已提交时直接继续，避免重启后对同一边界重复 compact。摘要要求保留可恢复的事实、记录引用和未完成步骤，目标约 1,500–3,000 字符，按下一步需要保留信息。
 

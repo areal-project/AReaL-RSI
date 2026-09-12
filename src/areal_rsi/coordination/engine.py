@@ -437,6 +437,8 @@ class ResearchEngine:
                     "max_output_tokens": config.max_output_tokens,
                     "max_model_calls_per_turn": config.max_model_calls_per_turn,
                     "compact_after_chars": config.compact_after_chars,
+                    "context_window_tokens": config.context_window_tokens,
+                    "compact_keep_recent_tokens": config.compact_keep_recent_tokens,
                     "timeout": config.timeout,
                     "retry_initial_seconds": config.retry_initial_seconds,
                     "retry_max_seconds": config.retry_max_seconds,
@@ -580,6 +582,7 @@ class ResearchEngine:
                     if actor.state == AgentState.PAUSED and actor.wait_reason == "run_paused":
                         actor.state, actor.wait_reason = AgentState.WAITING, "resume"
                         self.coordinator.save_actor(actor)
+                self.coordinator.reconcile_report_replies()
                 for agent_id in self.coordinator.pending():
                     if agent_id not in self._tasks and len(self._tasks) < self.max_concurrent_turns:
                         self._tasks[agent_id] = asyncio.create_task(

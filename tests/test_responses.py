@@ -364,6 +364,67 @@ class ResponsesRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("opaque-state-not-source-evidence", json.dumps(state["history"]))
         self.assertNotIn("Temporary summary drafting", state["compactions"][0]["summary"])
 
+    async def test_token_compaction_ignores_opaque_size_when_usage_is_low(self) -> None:
+        transport = ScriptedTransport(
+            response({"type": "reasoning", "encrypted_content": "x" * 400_000}, answer("Ready")),
+            response(answer("Continued")),
+        )
+        runtime = ResponsesRuntime(self.config, transport)
+        await runtime.turn(
+            self.root, system_prompt="Research", user_message="Begin", tools=[], handler=reject_call
+        )
+        await runtime.turn(
+            self.root,
+            system_prompt="Research",
+            user_message="Continue",
+            tools=[],
+            handler=reject_call,
+        )
+        self.assertEqual(len(transport.payloads), 2)
+        self.assertEqual(self.saved()["compactions"], [])
+
+    async def test_token_compaction_uses_actual_usage_and_keeps_recent_tool_pair(self) -> None:
+        measured = response(answer("Recent conclusion"))
+        measured["usage"]["input_tokens"] = 110_000
+        transport = ScriptedTransport(
+            response(answer("Older evidence " * 2000)),
+            response(call("read", "recent")),
+            measured,
+            response(answer("Older evidence summarized")),
+            response(answer("Continued")),
+        )
+
+        async def handler(item: ToolCall) -> ToolResult:
+            return ToolResult({"evidence": "recent exact measurement"})
+
+        runtime = ResponsesRuntime(replace(self.config, compact_keep_recent_tokens=600), transport)
+        for text in ("Begin", "Read recent evidence", "Continue"):
+            await runtime.turn(
+                self.root,
+                system_prompt="Research",
+                user_message=text,
+                tools=[tool("read")],
+                handler=handler,
+            )
+        state = self.saved()
+        self.assertEqual(len(state["compactions"]), 1)
+        self.assertGreater(state["compactions"][0]["retained_context_items"], 0)
+        inputs = transport.payloads[-1]["input"]
+        self.assertTrue(
+            any(
+                item.get("type") == "function_call" and item.get("call_id") == "recent"
+                for item in inputs
+            )
+        )
+        self.assertTrue(
+            any(
+                item.get("type") == "function_call_output" and item.get("call_id") == "recent"
+                for item in inputs
+            )
+        )
+        self.assertNotIn("Older evidence " * 2000, json.dumps(inputs))
+        self.assertIn("Older evidence " * 2000, json.dumps(state["history"]))
+
     async def test_cancel_during_compact_keeps_new_user_instruction(self) -> None:
         transport = ScriptedTransport(
             response(answer("Old evidence " * 100)),

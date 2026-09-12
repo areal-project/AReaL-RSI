@@ -296,12 +296,80 @@ class Coordinator:
                 ready.append(actor.agent_id)
         return ready
 
+    def pending_report_replies(self) -> list[dict[str, Any]]:
+        """Derive outstanding replies from existing nodes, not a second report store."""
+        result = []
+        for actor in self.store.run().research_agents:
+            if actor.state != AgentState.WAITING or actor.wait_reason != "rsi_reply":
+                continue
+            node = next(
+                (n for n in actor.iterations if n.iteration_id == actor.current_iteration_id), None
+            )
+            if node is not None and node.report_ref is not None:
+                result.append(
+                    {
+                        "agent_id": actor.agent_id,
+                        "direction": actor.direction,
+                        "iteration_id": node.iteration_id,
+                        "report_ref": encode(node.report_ref),
+                    }
+                )
+        return result
+
+    def reconcile_report_replies(self) -> list[str]:
+        """Give an implicitly idle RSI one durable reminder per unanswered report.
+
+        Explicit wait/ask_user/job subscriptions remain dormant. A reminder is
+        never an assignment and cannot restart a researcher or spend GPU budget.
+        Stable message identities prevent polling/restarts from causing a loop.
+        """
+        if (
+            self.state["status"] != "running"
+            or self.actor("rsi").state != AgentState.WAITING
+            or self.actor("rsi").wait_reason != "message"
+            or self.state.get("rsi_explicit_wait")
+            or self.state["inboxes"].get("rsi")
+            or "rsi" in self.state["active"]
+        ):
+            return []
+        reminders = []
+        for item in self.pending_report_replies():
+            ref = RecordRef(item["report_ref"]["uri"])
+            report = ResearchReport.from_record(self.store.public_record(ref))
+            original_message = effect_id("message", report.report_id)
+            key = "report-reply:" + report.report_id
+            if (
+                original_message not in self.state["delivered"]
+                or effect_id("message", key) in self.state["delivered"]
+            ):
+                continue
+            reminders.append(
+                self.enqueue(
+                    "runtime",
+                    "rsi",
+                    f"系统提醒：研究员 {item['agent_id']}（{item['direction']}）"
+                    "已经提交报告，仍在等待你的回复。\n"
+                    f"报告记录：{ref.uri}\n"
+                    "请根据报告安排下一步或停止该方向。"
+                    "如果确实需要等待其他结果，请调用 wait 说明等待的事件。",
+                    key=key,
+                    references=(ref,),
+                    reply_to=report.report_id,
+                )
+            )
+            # The next RSI turn already sees every outstanding report in state.
+            # Do not queue a burst that would override an explicit wait decision.
+            break
+        return reminders
+
     def begin_turn(self, agent_id: str) -> tuple[ResearchMessage, bool]:
         actor = self.actor(agent_id)
         if agent_id not in self.pending():
             raise ValueError("Agent has no authorized pending turn")
         active = self.state["active"].get(agent_id)
         resumed = active is not None
+        if agent_id == "rsi" and not resumed:
+            self.state.pop("rsi_explicit_wait", None)
         identifier = active or self.state["inboxes"][agent_id][0]
         self.state["active"][agent_id] = identifier
         actor.state, actor.wait_reason = AgentState.RUNNING, None
@@ -721,6 +789,9 @@ class Coordinator:
         actor = self.actor(agent_id)
         actor.state, actor.wait_reason = AgentState.WAITING, reason
         self.save_actor(actor)
+        if agent_id == "rsi":
+            self.state["rsi_explicit_wait"] = True
+            self.save()
         self.store.event("agent_waiting", agent_id=agent_id, reason=reason)
 
     def stop_agent(self, agent_id: str, reason: str) -> None:
@@ -854,6 +925,7 @@ class Coordinator:
                 ),
             },
             "waiting_for_user": self.user_questions(),
+            "pending_report_replies": self.pending_report_replies(),
             "budget_stop_reason": self.state.get("budget_stop_reason"),
             "intake": self.state.get("intake"),
         }

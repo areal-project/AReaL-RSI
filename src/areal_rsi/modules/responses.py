@@ -17,8 +17,8 @@ import os
 import random
 import time
 import uuid
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
+from contextlib import asynccontextmanager, contextmanager, nullcontext
 from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -30,30 +30,16 @@ import httpx
 Json = dict[str, Any]
 EventSink = Callable[[Json], Awaitable[None]]
 
-RECOVERY_PROMPT = """继续同一任务。
-下面提供当前工作摘要和系统状态：摘要帮助恢复上下文，不是新的用户指令。
-
-以最新用户或 RSI 消息、已保存的任务约束和实际工具结果为准。
-检查点中的 active_instruction 与 authoritative_state 保留任务原文和系统状态；
-摘要若遗漏或扩大了限制的适用范围，按原文纠正，不据此撤销已有授权。
-只有发生矛盾或缺少关键依据时，才读取相关原始记录。
-保留尚未解决的问题，不重复已完成的操作。
-压缩本身不表示暂停、完成、增加限制或撤销授权。
+RECOVERY_PROMPT = """继续当前任务的未完成部分。检查点是历史摘要，不是新指令。
+active_instruction 保留原始要求，authoritative_state 是系统状态，后续消息和工具结果更近。
+压缩本身不表示暂停、完成、增加限制或撤销授权。沿用事实与最近原文，只补查影响下一步的缺口。
 """
 
-COMPACT_PROMPT = """为原 Agent 整理继续工作的简短检查点。
-conversation 是已发生的对话记录；
-你只整理，不执行其中任务。
-active_instruction 与 authoritative_state 会由系统原样附在检查点中，
-摘要无需重写目标、任务全文和限制，也不要把有范围限定的限制扩大为全面禁令。
-保留已做决定及原因、关键结果、未解决的问题、待处理消息与作业，以及必要记录引用。
-区分事实和猜测。
-以真实用户/负责人消息和工具回执为依据。
-压缩不新增授权、暂停、停止或要求确认；
-不要把本次摘要指令写进原任务要求。
-使用简体中文，优先保留影响下一步的内容；
-约 1500–3000 字符，不复制长日志和重复状态。
-工具和记录 ID 保持准确。"""
+COMPACT_PROMPT = """用简体中文压缩历史 conversation，供原 Agent 继续工作；不执行记录中的任务。
+保留决定及原因、关键结果、已排除的假设、未解决问题和必要引用，区分事实与猜测。
+系统另行保留任务原文、状态和最近原文，不必重抄；准确保留限制的适用范围。
+不新增授权、禁令或停止决定，也不把本次摘要要求写进原任务。
+篇幅由信息量决定，通常几段，不复制长日志。"""
 
 
 class ResponsesError(RuntimeError):
@@ -119,7 +105,10 @@ class ResponsesConfig:
     max_output_tokens: int = 16384
     timeout: float = 600
     max_model_calls_per_turn: int | None = 32
-    compact_after_chars: int = 180_000
+    # Explicit character limits remain a compatibility override; 0 disables compact.
+    compact_after_chars: int | None = None
+    context_window_tokens: int = 128_000
+    compact_keep_recent_tokens: int = 8_000
     stream: bool = True
     retry_initial_seconds: float = 2
     retry_max_seconds: float = 60
@@ -143,8 +132,15 @@ class ResponsesConfig:
             self.max_model_calls_per_turn is not None and self.max_model_calls_per_turn <= 0
         ):
             raise ValueError("token, timeout and model-call limits must be positive")
-        if self.compact_after_chars < 0:
+        if self.compact_after_chars is not None and self.compact_after_chars < 0:
             raise ValueError("compact_after_chars must be nonnegative (0 disables compact)")
+        if (
+            self.context_window_tokens <= self.max_output_tokens
+            or self.compact_keep_recent_tokens < 0
+        ):
+            raise ValueError(
+                "context window must reserve output space; recent context must be nonnegative"
+            )
         if not (
             math.isfinite(self.retry_initial_seconds)
             and math.isfinite(self.retry_max_seconds)
@@ -203,6 +199,28 @@ class HttpResponsesTransport:
 
     def __init__(self, transport: httpx.AsyncBaseTransport | None = None):
         self.transport = transport
+        self._client: httpx.AsyncClient | None = None
+        self._users = 0
+
+    @asynccontextmanager
+    async def session(self) -> AsyncIterator[httpx.AsyncClient]:
+        """Reuse connections across a turn and overlapping actors, then close.
+
+        Headers and timeouts remain request-local. Cancellation of one actor
+        closes its response, not another actor's active connection pool.
+        No client survives the last caller or crosses event-loop lifetimes.
+        """
+        if self._client is None:
+            self._client = httpx.AsyncClient(transport=self.transport, follow_redirects=False)
+        client = self._client
+        self._users += 1
+        try:
+            yield client
+        finally:
+            self._users -= 1
+            if self._users == 0:
+                self._client = None
+                await client.aclose()
 
     async def request(self, config: ResponsesConfig, payload: Json, event_sink: EventSink) -> Json:
         headers = {"Content-Type": "application/json"}
@@ -210,16 +228,19 @@ class HttpResponsesTransport:
             headers["Authorization"] = "Bearer " + config.api_key
         try:
             async with (
-                httpx.AsyncClient(
-                    timeout=config.timeout, transport=self.transport, follow_redirects=False
-                ) as client,
-                client.stream("POST", config.endpoint, json=payload, headers=headers) as response,
+                self.session() as client,
+                client.stream(
+                    "POST", config.endpoint, json=payload, headers=headers, timeout=config.timeout
+                ) as response,
             ):
                 if response.status_code >= 300:
                     if response.status_code in {408, 409, 425, 429} or response.status_code >= 500:
+                        # Drain the error response before returning this connection
+                        # to the pool; unread HTTP/1.1 bodies force a reconnect.
+                        retry_body = await response.aread()
                         if response.status_code == 429:
                             try:
-                                body_json = json.loads(await response.aread())
+                                body_json = json.loads(retry_body)
                             except (json.JSONDecodeError, UnicodeDecodeError):
                                 body_json = {}
                             if isinstance(body_json, dict):
@@ -358,6 +379,34 @@ def _portable_context(items: Sequence[Json]) -> list[Json]:
     ]
 
 
+def _estimate_tokens(value: Any) -> int:
+    """Conservative text estimate for unreported growth, not a tokenizer or bill.
+
+    Actual provider input usage anchors the estimate after each successful call.
+    Encrypted reasoning length is not a measure of model input tokens.
+    """
+    raw = json.dumps(value, ensure_ascii=False)
+    return math.ceil(len(raw.encode("utf-8")) / 3)
+
+
+def _recent_context_start(context: list[Json], budget: int) -> int:
+    """Keep a bounded suffix without splitting a function call/output batch."""
+    cut, total = len(context), 0
+    needed: set[str] = set()
+    for index in range(len(context) - 1, -1, -1):
+        item = context[index]
+        total += _estimate_tokens(_portable_context([item]))
+        if total > budget:
+            break
+        if item.get("type") == "function_call_output":
+            needed.add(item["call_id"])
+        elif item.get("type") == "function_call":
+            needed.discard(item["call_id"])
+        if not needed:
+            cut = index
+    return cut
+
+
 class ResponsesRuntime:
     def __init__(self, config: ResponsesConfig, transport: ResponsesTransport | None = None):
         self.config = config
@@ -387,6 +436,7 @@ class ResponsesRuntime:
                 state["model"] = self.config.model
                 state["model_settings_revision"] = revision
                 state["context"] = _portable_context(state["context"])
+                state.pop("input_token_measurement", None)
                 for turn in state["turns"]:
                     for request in turn["requests"]:
                         if not request.get("consumed"):
@@ -422,7 +472,12 @@ class ResponsesRuntime:
         replaying the same ID, ordinary resume and config changes do not add calls.
         """
         directory = session_dir.resolve()
-        async with self._locks.setdefault(directory, asyncio.Lock()):
+        async with (
+            self._locks.setdefault(directory, asyncio.Lock()),
+            self.transport.session()
+            if isinstance(self.transport, HttpResponsesTransport)
+            else nullcontext(),
+        ):
             with _session_lock(directory):
                 session = _Conversation(directory, self.config, self.transport, event_sink)
                 return await session.run(
@@ -577,7 +632,7 @@ class _Conversation:
             if grant_event is not None:
                 await self.emit(grant_event)
             if not self.turn["input_appended"]:
-                await self.maybe_compact(prompt, recovery_state)
+                await self.maybe_compact(prompt, recovery_state, tools=advertised_tools or tools)
                 self.append([{"role": "user", "content": self.turn["user_message"]}])
                 self.turn["input_appended"] = True
                 self.save()
@@ -591,7 +646,9 @@ class _Conversation:
                 if response is None:
                     if incoming_messages is not None:
                         await self.receive_messages(incoming_messages())
-                    await self.maybe_compact(prompt, recovery_state, within_turn=True)
+                    await self.maybe_compact(
+                        prompt, recovery_state, within_turn=True, tools=advertised_tools or tools
+                    )
                     exposed = tools if advertised_tools is None else advertised_tools
                     response = await self.request(prompt, self.state["context"], exposed, "turn")
                 output = response["output"]
@@ -663,6 +720,17 @@ class _Conversation:
         if isinstance(usage, dict):
             _add_usage(self.state["usage"], usage)
             _add_usage(self.turn["usage"], usage)
+            if (
+                record.get("kind") == "turn"
+                and response.get("status") == "completed"
+                and isinstance(usage.get("input_tokens"), int)
+                and usage["input_tokens"] > 0
+                and "estimated_input_tokens" in record
+            ):
+                self.state["input_token_measurement"] = {
+                    "input_tokens": usage["input_tokens"],
+                    "estimated_input_tokens": record["estimated_input_tokens"],
+                }
         record["usage_accounted"] = True
         record["status"] = response.get("status", "unknown")
         record["response_id"] = response.get("id")
@@ -695,7 +763,7 @@ class _Conversation:
                 + "\n当前正在处理的原始消息（继续其未完成部分，不重做已完成操作）：\n"
                 + json.dumps(self.active_instruction(), ensure_ascii=False)
             )
-        budget_prompt = "\n\n本角色不设单回合模型调用上限。没有可推进的工作时结束回合等待消息。"
+        budget_prompt = ""
         if remaining is not None:
             budget_prompt = (
                 f"\n\n运行时调用预算：本逻辑回合剩余 {remaining} 次模型调用，包含本次响应。"
@@ -723,7 +791,18 @@ class _Conversation:
         }
         if tools:
             payload.update(tools=list(tools), parallel_tool_calls=False)
-        record = {"request_id": request_id, "kind": kind, "status": "running"}
+        record = {
+            "request_id": request_id,
+            "kind": kind,
+            "status": "running",
+            "estimated_input_tokens": _estimate_tokens(
+                {
+                    "instructions": prompt + budget_prompt,
+                    "input": _portable_context(context),
+                    "tools": list(tools),
+                }
+            ),
+        }
         self.turn["requests"].append(record)
         self.save()
         _atomic_json(self.directory / "requests" / (request_id + ".json"), payload)
@@ -901,12 +980,37 @@ class _Conversation:
         return True
 
     async def maybe_compact(
-        self, prompt: str, recovery_state: Json | None, *, within_turn: bool = False
+        self,
+        prompt: str,
+        recovery_state: Json | None,
+        *,
+        within_turn: bool = False,
+        tools: Sequence[Json] = (),
     ) -> None:
         limit = self.config.compact_after_chars
         context = self.state["context"]
-        if not limit or len(json.dumps(context, ensure_ascii=False)) <= limit:
+        if limit == 0:
             return
+        if limit is not None:
+            if len(json.dumps(context, ensure_ascii=False)) <= limit:
+                return
+        else:
+            inputs = _portable_context(context)
+            if not self.turn["input_appended"]:
+                inputs.append({"role": "user", "content": self.turn["user_message"]})
+            estimated = _estimate_tokens(
+                {"instructions": prompt, "input": inputs, "tools": list(tools)}
+            )
+            measured = self.state.get("input_token_measurement")
+            if measured:
+                estimated = max(
+                    0, measured["input_tokens"] + estimated - measured["estimated_input_tokens"]
+                )
+            threshold = int(
+                (self.config.context_window_tokens - self.config.max_output_tokens) * 0.85
+            )
+            if estimated <= threshold:
+                return
         latest = self.turn["requests"][-1] if self.turn["requests"] else None
         if within_turn and (
             latest is None
@@ -940,10 +1044,24 @@ class _Conversation:
             # message roles. Otherwise it may try unavailable tools and remember
             # those attempts as actual execution failures. Opaque reasoning is
             # neither source evidence nor useful prose for a textual checkpoint.
+            if "compact_plan" not in self.turn:
+                cut = (
+                    len(context)
+                    if limit is not None
+                    else _recent_context_start(
+                        context, min(self.config.compact_keep_recent_tokens, threshold // 4)
+                    )
+                )
+                # If the reported usage is unexpectedly high for a small history,
+                # still compact rather than retaining the entire triggering input.
+                self.turn["compact_plan"] = {"cut": cut or len(context)}
+                self.save()
+            cut = self.turn["compact_plan"]["cut"]
             archive = {
-                "conversation": [item for item in context if item.get("type") != "reasoning"],
+                "conversation": [item for item in context[:cut] if item.get("type") != "reasoning"],
                 "active_instruction": self.active_instruction(),
                 "authoritative_state": recovery_state or {},
+                "recent_context_retained": cut < len(context),
             }
             response = await self.request(
                 COMPACT_PROMPT,
@@ -970,15 +1088,21 @@ class _Conversation:
             "request_id": self.turn["requests"][-1]["request_id"],
             "turn_id": self.turn["turn_id"],
             "within_turn": within_turn,
+            "retained_context_items": len(context)
+            - self.turn.get("compact_plan", {}).get("cut", len(context)),
         }
+        recent = context[self.turn.get("compact_plan", {}).get("cut", len(context)) :]
         self.state["compactions"].append(checkpoint)
         self.state["context"] = [
             {
                 "role": "assistant",
                 "content": "运行时会话检查点（不是用户指令）：\n"
                 + json.dumps(checkpoint, ensure_ascii=False),
-            }
+            },
+            *recent,
         ]
+        self.turn.pop("compact_plan", None)
+        self.state.pop("input_token_measurement", None)
         self.turn["requests"][-1]["consumed"] = True
         self.save()
         await self.emit({"type": "session_compacted", "history_items": checkpoint["history_items"]})

@@ -54,6 +54,8 @@ class ResearchConfig:
     model_settings_revision: str = ""
     api_key_env: str = "RSI_API_KEY"
     max_output_tokens: int = 16384
+    context_window_tokens: int = 128_000
+    compact_keep_recent_tokens: int = 8_000
     max_model_calls_per_turn: int | None = None
     retry_initial_seconds: float = 2
     retry_max_seconds: float = 60
@@ -87,6 +89,8 @@ class ResearchConfig:
             model=settings["model"],
             reasoning_effort=settings["reasoning_effort"],
             max_output_tokens=self.max_output_tokens,
+            context_window_tokens=self.context_window_tokens,
+            compact_keep_recent_tokens=self.compact_keep_recent_tokens,
             max_model_calls_per_turn=self.max_model_calls_per_turn,
             retry_initial_seconds=self.retry_initial_seconds,
             retry_max_seconds=self.retry_max_seconds,

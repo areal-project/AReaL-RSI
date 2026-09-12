@@ -7,6 +7,7 @@ atomic files so a partial JSONL append cannot lose subsequent progress.
 
 from __future__ import annotations
 
+import fcntl
 import fnmatch
 import hashlib
 import json
@@ -99,22 +100,55 @@ class ResearchStore:
         iteration_id: str | None = None,
         **data: Any,
     ) -> ResearchEvent:
-        with self._lock:
-            files = sorted((self.root / "events").glob("*.json"))
-            sequence = int(files[-1].stem) + 1 if files else 1
-            event = ResearchEvent(sequence, kind, now(), agent_id, iteration_id, data)
-            self.put("events", f"{sequence:012d}", event)
-            return event
+        directory = self.root / "coordination"
+        directory.mkdir(parents=True, exist_ok=True)
+        # Different ResearchStore objects (including UI/operator processes) may
+        # append concurrently. A per-instance thread lock alone cannot serialize
+        # their read/allocate/write sequence.
+        with self._lock, (directory / "events.lock").open("a+") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                sequence = self._last_event_sequence() + 1
+                event = ResearchEvent(sequence, kind, now(), agent_id, iteration_id, data)
+                self.put("events", f"{sequence:012d}", event)
+                # Commit the immutable event first. If the process dies here,
+                # _last_event_sequence discovers the unindexed tail on recovery.
+                write_json(directory / "event-index.json", {"sequence": sequence})
+                return event
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+
+    def _last_event_sequence(self) -> int:
+        index = self.root / "coordination" / "event-index.json"
+        sequence: int | None = None
+        if index.exists():
+            try:
+                value = json.loads(index.read_text()).get("sequence")
+                if type(value) is int and value >= 0:
+                    sequence = value
+            except (ValueError, AttributeError):
+                pass
+        directory = self.root / "events"
+        if sequence is None or (
+            sequence > 0 and not (directory / f"{sequence:012d}.json").is_file()
+        ):
+            # Bootstrap legacy archives once; do not decode event bodies.
+            sequence = max((int(p.stem) for p in directory.glob("*.json")), default=0)
+        while (directory / f"{sequence + 1:012d}.json").is_file():
+            sequence += 1
+        return sequence
 
     def events(self, after: int = 0) -> list[ResearchEvent]:
         # Event filenames encode their immutable sequence. Skip acknowledged
         # files before reading/decoding, rather than reparsing the full archive
         # on every workbench poll.
-        return [
-            self.decode_record(ResearchEvent, json.loads(path.read_text()))
-            for path in sorted((self.root / "events").glob("*.json"))
-            if int(path.stem) > after
-        ]
+        result = []
+        directory = self.root / "events"
+        for sequence in range(max(0, after) + 1, self._last_event_sequence() + 1):
+            path = directory / f"{sequence:012d}.json"
+            if path.is_file():  # Preserve support for legacy archives with gaps.
+                result.append(self.decode_record(ResearchEvent, json.loads(path.read_text())))
+        return result
 
     def public_record(self, ref: RecordRef) -> Any:
         """Resolve only public run records, never private verifier data or sessions.

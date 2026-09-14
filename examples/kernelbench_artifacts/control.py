@@ -7,6 +7,7 @@ import fcntl
 import hashlib
 import json
 import re
+import runpy
 import sys
 from pathlib import Path
 from typing import Any
@@ -42,8 +43,10 @@ def prepare(payload: dict[str, Any]) -> dict[str, Any]:
         level, problem = map(int, case[1:].split("P"))
         path = next((Path(env["references"]) / f"level{level}").glob(f"{problem}_*.py"))
         source = path.read_bytes()
-        if hashlib.sha256(source).hexdigest() != info["sha256"]:
+        digest = hashlib.sha256(source).hexdigest()
+        if info.get("sha256") and digest != info["sha256"]:
             raise ValueError(f"题目版本不匹配：{case}")
+        info["sha256"] = digest
         references[case] = {"source": base64.b64encode(source).decode(), "path": str(path)}
     if payload["operation"] == "check":
         if not Path(env["admin_token_file"]).is_file():
@@ -69,6 +72,12 @@ def prepare(payload: dict[str, Any]) -> dict[str, Any]:
         (control / "remote.py").write_text(payload["remote_source"])
         (control / "control.py").write_text(payload["control_source"])
         admin = Path(env["admin_token_file"]).read_text().strip()
+        exploration_budget = demo["exploration_submissions"]
+        budget = exploration_budget + 1 if exploration_budget is not None else None
+        if budget is None:
+            auth = control / "queue-auth.json"
+            save(auth, {"token_file": env["admin_token_file"]})
+            auth.chmod(0o600)
         tasks = {}
         for case, ref in references.items():
             level, problem = map(int, case[1:].split("P"))
@@ -91,7 +100,7 @@ def prepare(payload: dict[str, Any]) -> dict[str, Any]:
                         "workspace": str(workspace),
                         "level": level,
                         "problem": problem,
-                        "budget": demo["exploration_submissions"] + 1,
+                        "budget": budget,
                     },
                     token=admin,
                     url=env["gpuq_url"],
@@ -113,9 +122,10 @@ def prepare(payload: dict[str, Any]) -> dict[str, Any]:
             "remote_script": str(control / "remote.py"),
             "remote_control": str(control / "control.py"),
             "remote_manifest": str(manifest_path),
-            "submission_budget_per_task": demo["exploration_submissions"] + 1,
+            "submission_budget_per_task": budget,
             "exploration_budget_per_task": demo["exploration_submissions"],
             "exploration_seed": demo["exploration_seed"],
+            "metric": demo.get("metric", "fast_1"),
             "final_seed": demo["final_seed"],
             "protocol_id": hashlib.sha256(
                 json.dumps(protocol, sort_keys=True).encode()
@@ -133,8 +143,20 @@ def prepare(payload: dict[str, Any]) -> dict[str, Any]:
 
 def finish(manifest: dict[str, Any]) -> dict[str, Any]:
     """Close exploration before selecting code; replay final submissions by stable key."""
-    sys.path.insert(0, manifest["kb_root"])
-    from common import request
+    budget = manifest["submission_budget_per_task"]
+    exploration_budget = manifest["exploration_budget_per_task"]
+    if budget is None:
+        request = runpy.run_path(manifest["remote_script"])["task_request"]
+    else:
+        # Existing bounded runs keep their frozen bridge, which predates task_request.
+        sys.path.insert(0, manifest["kb_root"])
+        from common import request as queue_request
+
+        def request(manifest: dict[str, Any], case: str, path: str, body: Any = None) -> Any:
+            token = Path(manifest["tasks"][case]["workspace"]).parent / "gpuq-token"
+            return queue_request(
+                path, body, token=token.read_text().strip(), url=manifest["gpuq_url"], timeout=30
+            )
 
     control = Path(manifest["remote_manifest"]).parent
     with (control / "closeout.lock").open("a+") as lock:
@@ -142,8 +164,7 @@ def finish(manifest: dict[str, Any]) -> dict[str, Any]:
         (control / "exploration-closed").touch()
         task_jobs = {}
         for case, info in manifest["tasks"].items():
-            token = (Path(info["workspace"]).parent / "gpuq-token").read_text().strip()
-            jobs = request("/jobs", token=token, url=manifest["gpuq_url"], timeout=30)
+            jobs = request(manifest, case, "/jobs")
             if any(
                 j["task_id"] != info["task_id"]
                 or j["budget"] != manifest["submission_budget_per_task"]
@@ -157,7 +178,7 @@ def finish(manifest: dict[str, Any]) -> dict[str, Any]:
         if not path.exists():
             selected = {}
             for case, jobs in task_jobs.items():
-                if len(jobs) > manifest["exploration_budget_per_task"]:
+                if exploration_budget is not None and len(jobs) > exploration_budget:
                     raise ValueError("探索提交超额")
                 valid = [
                     j
@@ -166,6 +187,11 @@ def finish(manifest: dict[str, Any]) -> dict[str, Any]:
                     and j["state"] == "succeeded"
                     and (j.get("evaluation") or {}).get("correct") is True
                     and j["evaluation"].get("evaluation_policy") == "strict-fp32-v1"
+                    and (
+                        manifest.get("exploration_finished_at") is None
+                        or (j.get("finished_at") or float("inf"))
+                        <= manifest["exploration_finished_at"]
+                    )
                 ]
                 if not valid:
                     continue
@@ -182,14 +208,13 @@ def finish(manifest: dict[str, Any]) -> dict[str, Any]:
         for case, chosen in selected.items():
             info = manifest["tasks"][case]
             workspace = Path(info["workspace"])
-            token = (workspace.parent / "gpuq-token").read_text().strip()
             with (workspace.parent / "submission.lock").open("a+") as task_lock:
                 fcntl.flock(task_lock, fcntl.LOCK_EX)
                 jobs = task_jobs[case]
                 key = manifest["run_id"] + "-" + case + "-final"
                 job = next((j for j in jobs if j.get("idempotency_key") == key), None)
                 if job is None:
-                    if len(jobs) >= manifest["submission_budget_per_task"]:
+                    if budget is not None and len(jobs) >= budget:
                         raise ValueError("没有剩余最终复测额度")
                     source = base64.b64decode(chosen["source"], validate=True)
                     if hashlib.sha256(source).hexdigest() != chosen["sha256"]:
@@ -197,6 +222,8 @@ def finish(manifest: dict[str, Any]) -> dict[str, Any]:
                     (workspace / "model_new.py").write_bytes(source)
                     (workspace / "_rsi_diagnostic.py").unlink(missing_ok=True)
                     job = request(
+                        manifest,
+                        case,
                         "/jobs",
                         {
                             "kind": "eval",
@@ -205,9 +232,6 @@ def finish(manifest: dict[str, Any]) -> dict[str, Any]:
                             "idempotency_key": key,
                             "timeout_s": 300,
                         },
-                        token=token,
-                        url=manifest["gpuq_url"],
-                        timeout=30,
                     )
                 if (
                     hashlib.sha256((Path(job["cwd"]) / "model_new.py").read_bytes()).hexdigest()

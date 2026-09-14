@@ -57,6 +57,12 @@ def evaluate(
 ) -> None:
     source = input_source(workspace, candidate)
     submit_and_wait(manifest, output, task, "submit", source=source)
+    feedback = json.loads((output / "feedback.json").read_text())
+    if feedback.get("correct") is True:
+        # Publish this job's exact input, never another branch's global best.
+        artifact = output / "candidate" / task
+        artifact.mkdir(parents=True, exist_ok=True)
+        (artifact / "model_new.py").write_bytes(base64.b64decode(source, validate=True))
 
 
 def input_source(workspace: Path, candidate: str) -> str:
@@ -103,7 +109,9 @@ def submit_and_wait(
                 job = remote(manifest, operation, task=task, key=output.name, **sources)
             write_json(record_path, job)
             budget_message = (
-                f"本题已用 {job['task_budget_used']}/{budget} 次 GPU 提交，"
+                f"本题已提交 {job.get('task_budget_used', job['budget_used'])} 次，次数不限"
+                if budget is None
+                else f"本题已用 {job['task_budget_used']}/{budget} 次 GPU 提交，"
                 f"剩余 {job['task_budget_remaining']} 次"
                 if "task_budget_used" in job
                 else f"本次回执计数 {job['budget_used']}/{budget}；最新总数请查 status"
@@ -204,6 +212,12 @@ def score_bundle(
         evidence[task] = {"sha256": digest, "job": chosen, "matching_evaluations": len(matches)}
     score = sum(metrics[task + "_fast1"] for task in manifest["tasks"]) / len(manifest["tasks"])
     metrics["fast_1"] = score
+    if manifest.get("metric") == "speedup":
+        if len(manifest["tasks"]) != 1:
+            raise ValueError("speedup 指标仅用于单题研究")
+        task = next(iter(manifest["tasks"]))
+        score = metrics[task + "_speedup"]
+        metrics["speedup"] = score
     return score, metrics, evidence
 
 
@@ -310,9 +324,9 @@ def main() -> None:
             "status": "completed",
             "simulated": False,
             "phase": args.phase,
-            "metric": "fast_1",
+            "metric": manifest.get("metric", "fast_1"),
             "score": score,
-            "passed": True,
+            "passed": score > 0 if manifest.get("metric") == "speedup" else True,
             "metrics": metrics,
             "candidate_id": metadata["candidate_id"],
             "candidate_digest": metadata["candidate_digest"],

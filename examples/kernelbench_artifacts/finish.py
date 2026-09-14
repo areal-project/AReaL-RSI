@@ -6,6 +6,7 @@ import argparse
 import base64
 import hashlib
 import json
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -17,6 +18,11 @@ from areal_rsi.base.storage import write_json
 
 def finish(manifest: dict, output: Path) -> None:
     output.mkdir(parents=True, exist_ok=True)
+    if os.environ.get("RSI_EXPLORATION_FINISHED_AT"):
+        manifest = {
+            **manifest,
+            "exploration_finished_at": float(os.environ["RSI_EXPLORATION_FINISHED_AT"]),
+        }
     while True:
         try:
             result = control_request(manifest, {"operation": "finish", "manifest": manifest})

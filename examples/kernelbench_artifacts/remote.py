@@ -13,6 +13,40 @@ from pathlib import Path
 from typing import Any
 
 
+def task_request(manifest: dict[str, Any], name: str, path: str, body: Any = None) -> Any:
+    """Keep unlimited administrative queue access behind the same run/task boundary."""
+    sys.path.insert(0, manifest["kb_root"])
+    from common import request
+
+    task = manifest["tasks"][name]
+    workspace = Path(task["workspace"])
+    unlimited = manifest.get("submission_budget_per_task", 11) is None
+    if unlimited and body is not None:
+        auth = Path(manifest["remote_manifest"]).parent / "queue-auth.json"
+        token_path = Path(json.loads(auth.read_text())["token_file"])
+        level, problem = map(int, name[1:].split("P"))
+        body = {
+            **body,
+            "task_id": task["task_id"],
+            "cwd": str(workspace),
+            "level": level,
+            "problem": problem,
+        }
+    else:
+        token_path = workspace.parent / "gpuq-token"
+    value = request(
+        path, body, token=token_path.read_text().strip(), url=manifest["gpuq_url"], timeout=30
+    )
+    jobs = value if path == "/jobs" and body is None else [value]
+    if any(
+        job["task_id"] != task["task_id"]
+        or job["budget"] != manifest.get("submission_budget_per_task", 11)
+        for job in jobs
+    ):
+        raise ValueError("Unexpected task ownership or budget")
+    return value
+
+
 def summarize(
     job: dict[str, Any], external_used: int = 0, *, task_used: int | None = None
 ) -> dict[str, Any]:
@@ -42,13 +76,17 @@ def summarize(
                 "run_seconds",
             )
         },
-        "budget_used": job["budget_used"] + external_used,
+        "budget_used": (
+            job["budget_used"] + external_used if job["budget_used"] is not None else task_used
+        ),
         "queue_budget_used": job["budget_used"],
         "external_budget_used": external_used,
         **(
             {
                 "task_budget_used": task_used,
-                "task_budget_remaining": max(0, job["budget"] - task_used),
+                "task_budget_remaining": (
+                    max(0, job["budget"] - task_used) if job["budget"] is not None else None
+                ),
             }
             if task_used is not None
             else {}
@@ -114,14 +152,11 @@ def external_submissions(workspace: Path, task_id: str) -> list[dict[str, Any]]:
 
 
 def handle(manifest: dict[str, Any], request_data: dict[str, Any]) -> Any:
-    sys.path.insert(0, manifest["kb_root"])
-    from common import request
-
     operation = request_data["operation"]
     # Older manifests used a fixed eleven-submission protocol.
     budget = manifest.get("submission_budget_per_task", 11)
-    if type(budget) is not int or budget <= 0:
-        raise ValueError("Submission budget must be a positive integer")
+    if budget is not None and (type(budget) is not int or budget <= 0):
+        raise ValueError("Submission budget must be a positive integer or null (unlimited)")
     excluded = request_data.get("exclude_sha256", [])
     if not isinstance(excluded, list) or any(
         not isinstance(digest, str)
@@ -142,11 +177,10 @@ def handle(manifest: dict[str, Any], request_data: dict[str, Any]) -> Any:
             continue
         workspace = Path(task["workspace"])
         external = external_submissions(workspace, task["task_id"])
-        token = (workspace.parent / "gpuq-token").read_text().strip()
 
-        def query(path: str, body: Any = None, token: str = token) -> Any:
+        def query(path: str, body: Any = None, name: str = name) -> Any:
             try:
-                return request(path, body, token=token, url=manifest["gpuq_url"], timeout=30)
+                return task_request(manifest, name, path, body)
             except urllib.error.HTTPError as exc:
                 error = json.loads(exc.read()).get("error", "request rejected")
                 raise RuntimeError(f"GPUQ HTTP {exc.code}: {error}") from exc
@@ -186,7 +220,7 @@ def handle(manifest: dict[str, Any], request_data: dict[str, Any]) -> Any:
                     if (Path(manifest["remote_manifest"]).parent / "exploration-closed").exists():
                         raise ValueError("Exploration is closed; final confirmation is in progress")
                     exploration_budget = manifest.get("exploration_budget_per_task", budget)
-                    if task_used >= exploration_budget:
+                    if exploration_budget is not None and task_used >= exploration_budget:
                         raise ValueError(
                             "GPU feedback budget exhausted (including external GPU work)"
                         )
@@ -237,11 +271,11 @@ def handle(manifest: dict[str, Any], request_data: dict[str, Any]) -> Any:
         used = len(jobs) + len(external)
         public = [summarize(j, len(external), task_used=used) for j in jobs]
         public.sort(key=lambda j: j["created_at"])
-        if used > budget:
+        if budget is not None and used > budget:
             raise ValueError("GPU submission cap was exceeded")
         value: dict[str, Any] = {
             "used": used,
-            "remaining": max(0, budget - used),
+            "remaining": max(0, budget - used) if budget is not None else None,
             "queue_used": len(public),
             "external_used": len(external),
             "external_submissions": external,

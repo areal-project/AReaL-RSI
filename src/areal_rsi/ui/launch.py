@@ -117,10 +117,18 @@ def main(argv: list[str] | None = None) -> int:
         "--check", action="store_true", help="仅检查 demo 环境，不注册任务或运行模型/GPU"
     )
     parser.add_argument("--resume", help="继续同一个 demo，保留会话和提交额度")
+    parser.add_argument(
+        "--web-research",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="demo 新研究默认允许联网调研；--no-web-research 用于不联网的 baseline 对照",
+    )
     args = parser.parse_args(argv)
     try:
-        if args.type != "demo" and (args.check or args.resume):
-            raise ValueError("--check / --resume 仅用于 --type demo")
+        if args.type != "demo" and (args.check or args.resume or args.web_research is not None):
+            raise ValueError("--check / --resume / --[no-]web-research 仅用于 --type demo")
+        if args.resume and args.web_research is not None:
+            raise ValueError("恢复研究沿用原联网设置；修改条件请新建研究")
         prepare = (
             runpy.run_path(str(REPOSITORY / "examples/kernelbench_artifacts/demo.py"))["prepare"]
             if args.type == "demo"
@@ -152,7 +160,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("找不到这个 run 的启动记录；请核对 --resume 的研究 ID")
             if not environment.exists():
                 write_json(environment, json.loads(args.environment.read_text()), immutable=True)
-            config = prepare(root, environment, rid)
+            config = prepare(root, environment, rid, web_research=args.web_research)
             # A reused service may have different default credentials from this shell.
             settings = {name: config[name] for name in ("base_url", "model", "reasoning_effort")}
             settings["api_key"] = os.environ.get(config.get("api_key_env", "RSI_API_KEY"), "")

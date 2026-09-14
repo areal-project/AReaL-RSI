@@ -1,0 +1,53 @@
+# 固定 KernelBench 题目的研究接入
+
+此示例优化各题的 `ModelNew`，通过既有 GPUQ 队列执行原评分器。它不部署队列、不改变评分，也不调用额外的 Task 模型。
+
+操作员在已有队列为每个 run、每道题注册独立任务，将队列 `budget` 与 manifest 的 `submission_budget_per_task` 设为相同的正整数（例如 10），把 `remote.py` 和不含凭证的 manifest 放在该 run 的控制目录。旧 manifest 缺少该字段时兼容原来的 11 次。任务 token 保留在远端对应 workspace 的父目录。manifest 固定题号、task ID、workspace、SSH/Slurm 入口、评分程序与题目集合的摘要；研究员不能重新注册或借用其他任务额度。
+
+`client.py` 提供五个操作：
+
+| 操作 | 用途 | GPU 提交 |
+| --- | --- | --- |
+| `evaluate` | 上传冻结工作区中的单个自包含 Python 候选，提交并等待正式结果 | 一次；幂等恢复不重复扣费 |
+| `diagnose` | 上传 Python 诊断脚本及可选候选，运行逐层数值对照等 GPU 实验并取回日志 | 一次；与正式评测共用每题额度 |
+| `status` | 查看各题用量、最佳速度和最近反馈 | 无 |
+| `collect` | 从远端实际评测快照收集每题历史最佳正确源码及来源 | 无 |
+| `verify` | 核对本地候选集合的源码哈希与真实评测记录，生成通用 `content` 验证结果 | 无 |
+
+将 `evaluate` 配置为 `ApprovedCommand`，声明 `workspace / output / task / candidate` 四个参数，前两者由系统绑定。研究员通过 `run_job(wait=true)` 提交并休眠等待，结果直接带回已发布的 `feedback.json`；需要细节再用 `read_job_output_file`。旧的提交、订阅等待、读文件流程仍可使用。反馈包含 `task` 题号；应结合任务参数和反馈确认评测归属，不能从 Job ID 猜测。远端排队、执行状态和每题额度写入作业的 `progress.json`。同输入独立复测可用 `rerun_job`，仍消耗本题一次提交。
+
+反馈中的 `task_budget_used` / `task_budget_remaining` 是查询时该题的总用量和剩余额度，包含已审计的队列外实验。`queue_budget_used` 是该作业的原队列提交序号，兼容字段 `budget_used` 为该序号加已审计的外部次数，不能作为查询时的题目总数。并行提交时，旧作业回执是 3/11、题目总数已变为 4/11 属于正常情况；作业进度优先显示题目总数。已保存的反馈不会随未来提交自动更新，安排下一次提交前可用 `status` 读取当前用量；最终硬上限仍由提交入口检查。
+
+普通 `bash` 在研究员的本地工作区执行；直接 SSH 登录的主机也不一定是评分环境。需要查看评分环境的 Torch 版本、头文件或做 CPU 检查时，应使用本 run manifest 中的 `host`、`continue_script`、`slurm_job` 进入对应容器，再调用容器的 Python。`client.py` 的 `remote()` 展示了这条入口；不能因为 SSH 主机上没有 Torch 就断定评测容器缺少依赖。明确的 CPU 检查可设置 `CUDA_VISIBLE_DEVICES=""`，并输出实际 Python 与库路径。读取库源码应限定在确认过的库目录，避免搜索其他 run 的研究文件。
+
+上述入口用于只读检查和 CPU 工作；实际 CUDA tensor、kernel 或模型执行仍须通过已注册题目的 `evaluate` / `diagnose` 队列并计入同一额度。恢复环境访问不意味着增加提交次数，也不覆盖 RSI 对当前任务的诊断限制。
+
+将 `diagnose` 配置为 `diagnose_task` 命令，声明 `workspace / output / task / script / candidate` 参数。`script` 和可选 `candidate` 都是冻结工作区内的相对路径；仅运行参考实现时，`candidate` 传空字符串。远端工作区含公开题目 `reference.py`，候选统一保存为 `model_new.py`，脚本保存为 `_rsi_diagnostic.py`。脚本使用远端 Python/Torch 环境、1 张 GPU，最长运行 300 秒；提交前检查 Python 语法，输入总大小不超过 2 MB。所有输入随队列作业保存独立快照。
+
+诊断直接启动脚本，不经过正式评分器，不能假定 Torch 默认设置与评分协议一致。用于定位正式正确性问题时，应在诊断脚本中先复现并打印固定协议的精度设置，再以相同参数、输入和训练态对照两侧。例如 `strict-fp32-v1` 要求 `torch.backends.cuda.matmul.allow_tf32=False`、`torch.backends.cudnn.allow_tf32=False`、`torch.set_float32_matmul_precision("highest")`；Torch 默认的 cuDNN TF32 开关可能为开启。上述设置属于诊断启动条件，不能写入 `ModelNew` 或改动评分器。条件不一致的诊断只能说明该实验自身的结果，不能直接用于解释正式评测误差。
+
+诊断结束后读取 `stdout.log`、`stderr.log` 和 `feedback.json`。日志各保留前 1 MB，是否截断及来源记录在 `diagnostic-logs.json`；远端完整日志不可读时回退到队列日志尾部并明确标记。`kind=run` 的诊断记录用于分析，即使脚本写出评分字段，也不会进入 `collect` 或 `verify` 的正式成绩。应先设计能定位问题的实验，再消耗剩余额度；诊断失败同样计数。
+
+候选编译失败、正确性失败等是实际反馈，结束本地作业并保留结果。临时连接故障查询同一远端 Job ID，尚未拿到 ID 时复用同一提交意图；不能靠重复 CLI 调用恢复不确定的提交。任务额度用完会明确返回，不能持续尝试新增提交。所有 GPU 调试和正式评测共用该题额度，查询、等待、汇总不消耗额度。
+
+若操作员从轨迹确认有绕过队列的 GPU 实验，须在该题 workspace 的父目录 `external-submissions/<event_id>.json` 追加审计记录，包含相同的 `event_id`、`task_id`、`count: 1` 和证据说明。适配器按“队列提交 + 已审计的外部实验”计算已用额度，并在总数达到配置上限时拒绝新的提交；原作业仍可幂等恢复。外部实验不因此变成正式成绩，也不重写原队列记录。此账本用于纠正已确认的漏计，不是允许绕过队列；拥有远端任意执行权限的 Agent 仍需环境隔离才能实现安全层面的强制约束。
+
+用于汇总的候选目录按 `<题号>/model_new.py` 保存。将 `collect --output {output}` 配成命令后，RSI 可用 `collect_job_output(destination="", as_candidate=true)` 直接保存汇总候选，避免反复复制文件；手动使用 `collect --workspace <独立目录>` 仍兼容。`verify` 作为可信验证命令配置，输出 `evaluation.json`，公共反馈为 `public/feedback.json`，身份适配器使用 `content`。它从本地作业元数据绑定候选 ID 和内容摘要，通过本 run 的任务凭据只读查询原始队列记录，不接受 Agent 自报分数。
+
+此只读汇总器应在 `ApprovedCommand` 中配置 `final_candidate_policy="multiple"`，允许再次汇总不同候选；它不会查询新的隐藏测试数据或增加 GPU 提交。通用验证器仍默认为 `single`，保护只允许一个最终候选的隐藏测试池。单题研究员通常只需提交实测报告，由 RSI 汇总整个题目集合再验证；根目录的单个 `model_new.py` 不是上述汇总目录。
+
+源码审查发现某个已测版本不符合任务语义时，可给 `collect` 传入 `--exclude-sha256 <完整哈希>`；可重复传入以排除多个版本。它从剩余正式正确记录中选择最佳，并复制当次评测的冻结源码，校验哈希后写入汇总目录；排除清单随 `evaluation-sources.json` 留档。原始反馈、历史分数和已用次数仍保留，排除项不改变评分协议。若某题没有可选源码且目标目录还留有该题文件，命令会要求改用新目录，避免混入旧文件。不要从研究员仍在修改的工作文件中反复复制：研究方向切换后，同一路径可能已属于另一题。已有 CandidateSnapshot 也可作为稳定的合并来源。
+
+`search` 汇总每份源码已测正确的最佳速度；`final` 要求同一源码至少有两次独立正式记录，并使用最后一次结果。未评测、源码不匹配或不符合严格 FP32 规则的题目计 0。主指标是固定题目集合中正确且 `speedup > 1` 的比例；全部题目满足时才达到 `fast_1=1`。应在每题配置的额度中预留最终复测，不能另增次数。
+
+测试覆盖提交幂等性、跨题拒绝、代码哈希绑定、最终复测、失败结果不能被旧成功掩盖，以及预算用完后终止。SSH/GPUQ 地址和可用 Slurm Job 由操作员提供，不能将示例环境当成永久可用的服务。
+
+## 将已有单题研究的成绩接入工作台
+
+`verify_existing.py` 用于已经通过 GPUQ 运行、但尚未配置工作台验证器的单题研究。它只查询原任务，核对冻结的 `model_new.py`、评分入口、题号、随机种子和严格 FP32 结果，不注册任务、不提交 GPU，也不改原有评测额度。候选仍需自包含；源码合规性审查不能由分数代替。
+
+操作员将脚本复制到远端控制目录，并在本地 manifest 中固定 `host`、`continue_script`、`slurm_job`、`python`、`remote_script`、`reader_sha256`、`kb_root`、`token_file`、`gpuq_url`、`task_id`、`budget`、`level`、`problem`、`seed`、`worker_hashes`、`metric`、`protocol_id` 和 `manifest_id`。凭据只保留在远端 token 文件；`worker_hashes` 应覆盖实际分发入口及 strict/instrumented worker。身份摘要由操作员根据原评分协议和原任务生成，不能借接入修改已约定条件。
+
+将该脚本配置为零 GPU 的 `verifier`，固定 manifest 路径，声明 `workspace / output / phase` 参数与 `public_output_subdir: "public"`；`verification_identity` 使用 `content`，为 search、final 分别声明相同的协议与任务身份。处于 `execution_setup=pending` 的运行可由 RSI 调用 `load_execution_config`、`freeze_execution` 接入，无需重启研究。RSI 将选中源码保存为候选目录根部的 `model_new.py`，再调用 `verify_candidate`。
+
+search 使用该源码已测正确的最佳加速比；final 要求至少两条独立正式记录并使用最新一条，且必须严格大于 1 才通过。诊断、单次评测中的 100 次计时、旧源码的成功记录均不能替代最终复测。读取的是 GPUQ 的完整 `evaluation.json`：stdout 中的结果标记可能早于严格精度身份写入，不能作为完整验证记录。

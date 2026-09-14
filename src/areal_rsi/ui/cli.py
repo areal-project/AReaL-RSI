@@ -307,7 +307,7 @@ def main() -> None:
     research = commands.add_parser("research", help="运行开放式多 Agent 研究，并保留可恢复状态")
     source = research.add_mutually_exclusive_group(required=True)
     source.add_argument("--config", type=Path, help="可信操作员配置 JSON")
-    source.add_argument("--example", choices=("kernelbench", "cuhkx"), help="使用工作流模拟示例")
+    source.add_argument("--example", choices=("kernelbench",), help="使用工作流模拟示例")
     source.add_argument("--resume", help="恢复 run 的已归档配置与会话")
     research.add_argument(
         "--simulate-gpu", action="store_true", help="模拟 GPU/Task 作业；研究模型仍调用真实 API"

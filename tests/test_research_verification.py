@@ -29,8 +29,6 @@ def fixture(
         source = tmp_path / "seed"
         source.mkdir()
         (source / "model.py").write_text("raise RuntimeError('Never import the candidate')")
-        (source / "trained").mkdir()
-        (source / "trained/checkpoint.pt").write_bytes(b"frozen weights")
         candidate = await c.store.snapshot(source, agent_id="operator", description="candidate")
         root = c.store.root / "execution-inputs" / "job-one"
         write_json(root / "snapshot.json", candidate.content)
@@ -58,7 +56,6 @@ def fixture(
         "protocol_id": "protocol-" + phase,
         "manifest_id": "manifest-" + phase,
         "target_model": "fixed-target",
-        "prepared_protocol_id": "prepared",
         "split": phase,
     }
     identity = {"adapter": adapter, "phases": {phase: fields}}
@@ -79,18 +76,12 @@ def fixture(
         if p.is_file()
     }
     result["harness_id"] = hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
-    result["candidate_sha256"] = hashlib.sha256(
-        json.dumps(
-            [{"path": path, "sha256": digest} for path, digest in files.items()], sort_keys=True
-        ).encode()
-    ).hexdigest()
-    result["checkpoint_sha256"] = files["trained/checkpoint.pt"]
     output = store.root / "execution-outputs" / job.job_id / "evaluation.json"
     write_json(output, result)
     return store, job, candidate, identity, result, output
 
 
-@pytest.mark.parametrize("adapter", ["content", "kernelbench", "cuhkx"])
+@pytest.mark.parametrize("adapter", ["content", "kernelbench"])
 @pytest.mark.parametrize("phase", ["search", "final"])
 def test_real_result_binds_frozen_candidate_contract_and_phase(
     tmp_path: Path, adapter: str, phase: str

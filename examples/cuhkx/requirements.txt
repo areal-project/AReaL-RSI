@@ -1,5 +1,0 @@
-# Install in a separate training environment, not the RSI controller environment.
-# On NVIDIA GPUs install the matching CUDA torch wheel as documented by PyTorch.
-torch>=2.6,<3
-Pillow>=10,<13
-numpy>=1.26,<3

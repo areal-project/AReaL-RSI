@@ -41,56 +41,11 @@ def example_config(name: str, *, repository: Path) -> ResearchConfig:
             ),
         )
         seed = repository / "examples" / "kernelbench" / "seed"
-    elif name == "cuhkx":
-        brief = TaskBrief(
-            "调研并优化 CUHK-X 小模型训练与设计",
-            "针对 CUHK-X 的 40 类人体活动识别任务，优化架构、训练与允许的多模态设计。"
-            "不得使用 RGB 摄像头输入、大型预训练骨干或超过 100 MB 的模型。"
-            "用户已确认主办方允许本次 LLM 辅助工作流。搜索真实论文和主流方法支持规划，"
-            "在 Agent 数量上限内自主决定有价值的方向。"
-            "提供的小型 CNN 仅作为参考源码，没有已评测 baseline。"
-            "验证 subject 与训练分开，推理路径匿名。本次演练明确模拟训练、GPU 和验证分数。"
-            "请演练论文调研、必要时的多方向探索、共享证据、明确的下一项任务和最终验证，"
-            "不能据此声称取得比赛成绩。",
-            ResearchLimits(
-                max_agents=2,
-                max_nodes=8,
-                max_model_calls=150,
-                max_total_tokens=3_000_000,
-                max_verify_calls=6,
-            ),
-            VerificationContract(
-                "accuracy",
-                target=0.65,
-                description="在固定、按 subject 隔离且匿名的验证集上计算 clip 准确率",
-                identity={
-                    "example": "cuhkx",
-                    "classes": 40,
-                    "max_model_bytes": 100_000_000,
-                    "require_final_confirmation": True,
-                },
-            ),
-        )
-        seed = repository / "examples" / "cuhkx" / "seed"
     else:
         raise ValueError("Unknown example template")
-    if name == "cuhkx":
-        brief.instructions += (
-            "这是有边界的流程演练：查看足以选择可行方向的一手证据，然后执行，不需要穷尽文献。"
-            "模拟作业只发布 simulation.json，不产生权重；模拟 verifier 接受冻结的纯源码候选，"
-            "不要求实际 checkpoint。请演练候选改进与报告决策，不等待真实训练、凭据或 GPU 资源。"
-            "报告和公共证据摘要保持简洁，详细文献另行归档。"
-        )
     return ResearchConfig(
         brief=brief,
         seed_dir=str(seed),
-        commands=(
-            ApprovedCommand(
-                "train", ("simulated-training", "{workspace}", "{output}"), ("workspace", "output")
-            ),
-        )
-        if name == "cuhkx"
-        else (),
         verifier=ApprovedCommand(
             "verify", ("simulated-verification", "{workspace}", "{output}"), ("workspace", "output")
         ),

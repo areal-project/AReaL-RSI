@@ -21,7 +21,7 @@ async def prepare_example(
     from areal_rsi.coordination.intake import reject_credentials
 
     adapter = arguments["adapter"]
-    if adapter not in {"kernelbench", "cuhkx"}:
+    if adapter not in {"kernelbench"}:
         raise ValueError("没有这个内置适配器；其他任务可接入普通命令或导入执行配置")
     settings = json.loads(arguments["settings_json"])
     if not isinstance(settings, dict):

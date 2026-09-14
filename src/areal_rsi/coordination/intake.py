@@ -193,13 +193,13 @@ class ResearchIntake:
             ),
             definition(
                 "get_adapter_guide",
-                "查看可选内置适配器的环境字段和接入说明。adapter 为 kernelbench 或 cuhkx。"
+                "查看可选内置适配器的环境字段和接入说明。adapter 为 kernelbench。"
                 "这些是参考格式，不应直接把占位路径交给用户填写。",
                 adapter=STRING,
             ),
             definition(
                 "prepare_adapter",
-                "可选的现成执行适配器：根据已讨论的环境准备 KernelBench 或 CUHK-X 的正式配置。"
+                "可选的现成执行适配器：根据已讨论的环境准备 KernelBench 的正式配置。"
                 "只检查环境和固定协议，不调用目标模型或执行候选。"
                 "settings_json 为操作员环境 JSON；已有 prepared_data 可直接提供，"
                 "KernelBench 也可提供 repository 和 dataset_config 来准备用户指定的题池。"
@@ -383,8 +383,8 @@ class ResearchIntake:
             args = call.arguments
             if call.name == "get_adapter_guide":
                 adapter = args["adapter"]
-                if adapter not in {"kernelbench", "cuhkx"}:
-                    raise ValueError("内置适配器为 kernelbench 和 cuhkx；其他任务使用通用执行配置")
+                if adapter not in {"kernelbench"}:
+                    raise ValueError("内置适配器为 kernelbench；其他任务使用通用执行配置")
                 folder = self.repository / "examples" / adapter
                 return ToolResult(
                     {

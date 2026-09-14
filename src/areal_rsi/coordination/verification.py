@@ -8,8 +8,7 @@ The operator supplies ``identity`` from config.metadata["verification_identity"]
         "final": {"protocol_id": "...", "manifest_id": "...",
                   "target_model": "fixed-target", "split": "final"}}}
 
-CUHK-X requires protocol_id, prepared_protocol_id, manifest_id and split per
-phase. The generic ``content`` adapter requires protocol_id and manifest_id;
+The generic ``content`` adapter requires protocol_id and manifest_id;
 its wrapper must echo candidate_id and candidate_digest (the CAS directory
 digest). Additional configured identity fields are compared exactly.
 
@@ -35,7 +34,6 @@ from areal_rsi.execution import JobRecord
 
 IDENTITY_FIELDS = {
     "kernelbench": {"protocol_id", "manifest_id", "target_model", "split"},
-    "cuhkx": {"protocol_id", "prepared_protocol_id", "manifest_id", "split"},
     "content": {"protocol_id", "manifest_id"},
 }
 
@@ -117,16 +115,6 @@ def _candidate_identity(
         digest = hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
         if result.get("harness_id") != digest:
             raise ValueError("Verifier evaluated a different harness")
-    elif adapter == "cuhkx":
-        entries = [{"path": name, "sha256": digest} for name, digest in files.items()]
-        digest = hashlib.sha256(
-            json.dumps(entries, sort_keys=True, allow_nan=False).encode()
-        ).hexdigest()
-        if result.get("candidate_sha256") != digest:
-            raise ValueError("Verifier evaluated a different inference candidate")
-        checkpoint = files.get("trained/checkpoint.pt")
-        if checkpoint is None or result.get("checkpoint_sha256") != checkpoint:
-            raise ValueError("Verifier evaluated a different checkpoint")
     elif adapter == "content":
         if (
             result.get("candidate_id") != candidate.candidate_id
@@ -230,6 +218,6 @@ def read_trusted_result(
     metrics = {key: _number(value, "metric " + key) for key, value in raw_metrics.items()}
     if contract.metric in metrics and metrics[contract.metric] != score:
         raise ValueError("Verifier score disagrees with its primary metric")
-    if adapter in {"kernelbench", "cuhkx"} and not 0 <= score <= 1:
+    if adapter == "kernelbench" and not 0 <= score <= 1:
         raise ValueError("Example accuracy/fast_1 score must be between zero and one")
     return VerifiedResult(**kwargs, status="succeeded", score=score, passed=passed, metrics=metrics)

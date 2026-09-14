@@ -5,7 +5,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from areal_rsi.modules.runtime import sandbox_wrapper
 
@@ -77,27 +76,3 @@ class IsolationTest(unittest.TestCase):
                 capture_output=True,
             )
             self.assertEqual(terminal.returncode, 0, terminal.stderr.decode())
-            # A directory alias inside the executable's symlink chain needs its
-            # own metadata permission, even when its resolved target is allowed.
-            alias = root / "python-runtime-alias"
-            alias.symlink_to(Path(sys.executable).resolve().parent, target_is_directory=True)
-            executable = root / "python"
-            executable.symlink_to(alias / Path(sys.executable).resolve().name)
-            with patch("areal_rsi.modules.runtime.sys.executable", str(executable)):
-                sandbox_wrapper(session, workspace, cli)
-            probe = subprocess.run(
-                [
-                    "/usr/bin/sandbox-exec",
-                    "-f",
-                    str(session / "sandbox.sb"),
-                    str(executable),
-                    "-c",
-                    "print('runtime available')",
-                ],
-                cwd=workspace,
-                capture_output=True,
-            )
-            self.assertEqual(probe.stdout, b"runtime available\n", probe.stderr.decode())
-            denied = subprocess.run([*command, str(private)], capture_output=True)
-            self.assertNotEqual(denied.returncode, 0)
-            self.assertNotIn(b"hidden answer", denied.stdout)

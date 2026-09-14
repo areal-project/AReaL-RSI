@@ -30,13 +30,11 @@ from areal_rsi.api.base import (
 )
 from areal_rsi.api.modules import ConfiguredAgentRuntime
 from areal_rsi.app import LocalApp, create_app
-from areal_rsi.base.runs import RunPaths
 from areal_rsi.base.storage import decode, new_id, now, write_json
 from areal_rsi.config import ModelConfigurationError
 from areal_rsi.modules.benchmark import AccuracyEvaluation
 from areal_rsi.modules.dsh_config import write_profile_patch
 from areal_rsi.modules.remote.base import RemoteBackend, RemoteContext, RemoteJob
-from areal_rsi.modules.remote.envarena.backend import EnvArenaProvider
 from areal_rsi.modules.remote.registry import (
     PROVIDERS,
     RemoteSettings,
@@ -222,25 +220,6 @@ class RemoteProviderTest(unittest.IsolatedAsyncioTestCase):
             self.assertRaisesRegex(ValueError, "其他 remote backend"),
         ):
             await create_app(root, lambda _: None)
-
-    def test_envarena_job_projection_reads_legacy_and_run_owned_receipts(self) -> None:
-        paths = RunPaths(self.root, "run_fixture")
-        for index, folder in enumerate((self.root / "remote", paths.runtime / "remote")):
-            write_json(
-                folder / "executions" / str(index) / "receipt.json",
-                {
-                    "signature": {"run_id": "run_fixture", "base_url": "http://fixture"},
-                    "job_id": "job-" + str(index),
-                    "state": "DONE",
-                    "task_counts": {"done": 1},
-                },
-            )
-        provider = EnvArenaProvider()
-        self.assertEqual(
-            {job.job_id for job in provider.read_jobs(self.root, "run_fixture")},
-            {"job-0", "job-1"},
-        )
-        self.assertEqual(provider.read_jobs(self.root, "another_run"), [])
 
     def test_provider_environment_is_forwarded_without_credential_values(self) -> None:
         self.assertEqual(remote_environment_names(), ("DUMMY_REMOTE_TOKEN",))

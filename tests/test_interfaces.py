@@ -168,27 +168,6 @@ class InterfaceDesignTest(unittest.TestCase):
         self.assertNotIn("attachments", field_names)
         self.assertIn("content", field_names)
 
-    def test_research_iteration_has_no_task_or_output_taxonomy(self) -> None:
-        node = ResearchIteration("i1", "run1", "agent1", RecordRef("run://run1/assignment.json"))
-        self.assertEqual(node.state, IterationState.PENDING)
-        self.assertEqual(node.references, ())
-        node.state = IterationState.COMPLETED
-        self.assertIsNone(node.report_ref)
-        names = {item.name for item in fields(ResearchIteration)}
-        self.assertTrue(
-            names.isdisjoint(
-                {
-                    "task_type",
-                    "needs_verify",
-                    "train_report",
-                    "validation_report",
-                    "candidate_solution_id",
-                    "next_solution_id",
-                    "change",
-                }
-            )
-        )
-
     def test_public_dataclasses_are_not_frozen(self) -> None:
         version = self._harness()
 

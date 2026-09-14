@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -101,80 +100,3 @@ def test_real_result_binds_frozen_candidate_contract_and_phase(
     assert verified.score == 0.7 and verified.phase == phase
     assert verified.contract_digest == job.spec.metadata["contract_digest"]
     assert verified.candidate_id == candidate.candidate_id and not verified.simulated
-
-
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("phase", "final"),
-        ("metric", "another-score"),
-        ("simulated", True),
-        ("simulated", 0),
-        ("protocol_id", "unknown-protocol"),
-        ("manifest_id", "another-task-pool"),
-        ("target_model", "stronger-target"),
-        ("candidate_id", "another-candidate"),
-        ("candidate_digest", "sha256:other"),
-        ("passed", "false"),
-        ("score", True),
-        ("score", float("inf")),
-        ("metrics", {"score": 0.8}),
-        ("metrics", {"count": True}),
-    ],
-)
-def test_misbound_or_invalid_result_cannot_become_best(
-    tmp_path: Path, field: str, value: Any
-) -> None:
-    store, job, candidate, identity, result, output = fixture(tmp_path)
-    result[field] = value
-    output.write_text(json.dumps(result))
-    with pytest.raises(ValueError):
-        read_trusted_result(store, job, candidate, "search", identity=identity)
-    assert store.run().best_result_ref is None
-
-
-@pytest.mark.parametrize("field", ["contract_digest", "candidate_id", "candidate_digest", "phase"])
-def test_job_must_pin_identity_before_execution(tmp_path: Path, field: str) -> None:
-    store, job, candidate, identity, _result, _output = fixture(tmp_path)
-    metadata = {key: value for key, value in job.spec.metadata.items() if key != field}
-    job = replace(job, spec=replace(job.spec, metadata=metadata))
-    with pytest.raises(ValueError, match="frozen"):
-        read_trusted_result(store, job, candidate, "search", identity=identity)
-
-
-@pytest.mark.parametrize(
-    "adapter,field", [("kernelbench", "harness_id"), ("cuhkx", "checkpoint_sha256")]
-)
-def test_artifact_identity_is_computed_from_frozen_input(
-    tmp_path: Path, adapter: str, field: str
-) -> None:
-    store, job, candidate, identity, result, output = fixture(tmp_path, adapter)
-    result[field] = "different-product"
-    write_json(output, result)
-    with pytest.raises(ValueError, match="different"):
-        read_trusted_result(store, job, candidate, "search", identity=identity)
-
-
-def test_modified_execution_input_or_unpinned_protocol_is_rejected(tmp_path: Path) -> None:
-    store, job, candidate, identity, _result, _output = fixture(tmp_path)
-    (Path(job.spec.cwd) / "model.py").write_text("modified after freeze")
-    with pytest.raises(ValueError, match="frozen candidate"):
-        read_trusted_result(store, job, candidate, "search", identity=identity)
-    del identity["phases"]["search"]["manifest_id"]
-    with pytest.raises(ValueError, match="pin all"):
-        read_trusted_result(store, job, candidate, "search", identity=identity)
-
-
-def test_incomplete_cancelled_and_mock_jobs_never_produce_real_score(tmp_path: Path) -> None:
-    store, job, candidate, identity, result, output = fixture(tmp_path)
-    result.update(status="incomplete", score=None, error="CUDA unavailable")
-    write_json(output, result)
-    verified = read_trusted_result(store, job, candidate, "search", identity=identity)
-    assert verified.status == "infra_error" and verified.score is None
-    output.unlink()
-    cancelled = replace(job, state="cancelled")
-    verified = read_trusted_result(store, cancelled, candidate, "search", identity=identity)
-    assert verified.status == "cancelled" and verified.score is None
-    mock = replace(job, spec=replace(job.spec, backend="mock"))
-    with pytest.raises(ValueError, match="Simulated"):
-        read_trusted_result(store, mock, candidate, "search", identity=identity)

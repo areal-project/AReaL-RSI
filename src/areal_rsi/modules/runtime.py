@@ -20,6 +20,26 @@ from areal_rsi.base.storage import FileContentStore, FileTrajectoryStore, new_id
 from areal_rsi.modules.dsh import ensure_cli
 
 
+def _runtime_symlinks(paths: Collection[Path]) -> set[str]:
+    """Metadata needed to traverse runtime aliases, without opening their parents."""
+    pending = [path.absolute() for path in paths]
+    seen: set[Path] = set()
+    links: set[str] = set()
+    while pending:
+        path = pending.pop()
+        for component in (path, *path.parents):
+            if component in seen:
+                continue
+            seen.add(component)
+            if component.is_symlink():
+                links.add(str(component))
+                target = component.readlink()
+                if not target.is_absolute():
+                    target = component.parent / target
+                pending.append(target / path.relative_to(component))
+    return links
+
+
 def sandbox_wrapper(directory: Path, workspace: Path, cli: Path) -> Path:
     """MVP 的 macOS sandbox-exec 继承到所有 Bash/编辑器子进程。"""
     if sys.platform != "darwin":
@@ -49,6 +69,10 @@ def sandbox_wrapper(directory: Path, workspace: Path, cli: Path) -> Path:
         profile.append(f"(allow file-read* (subpath {json.dumps(root)}))")
     # Node realpath 会逐级 lstat 安装路径；只允许这些祖先目录的元数据。
     ancestors = {str(parent) for root in roots for parent in Path(root).parents}
+    # uv's venv executable can traverse a second, unversioned directory symlink.
+    # Its resolved Python root is readable already; only that alias's metadata
+    # was missing. Do not grant reads to the surrounding installation directory.
+    ancestors.update(_runtime_symlinks((Path(sys.executable), Path(node))))
     for ancestor in sorted(ancestors):
         profile.append(f"(allow file-read-metadata (literal {json.dumps(ancestor)}))")
     for writable in (directory.resolve(), workspace.resolve()):

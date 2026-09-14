@@ -597,11 +597,6 @@ socks = [
     { name = "socksio" },
 ]
 
-[package.optional-dependencies]
-socks = [
-    { name = "socksio" },
-]
-
 [[package]]
 name = "httpx2"
 version = "2.12.0"

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import json
+import os
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -115,13 +116,15 @@ class ResearchApp:
         return config
 
     def model_settings(self, c: Coordinator) -> dict[str, Any]:
+        config = self.config(c)
         return {
-            **self.config(c).model_settings(),
+            **config.model_settings(),
+            "has_credentials": bool(config.api_key()),
             "editable": c.state["status"] == "planned" and not c.state.get("started_at"),
         }
 
     async def set_model_settings(self, c: Coordinator, values: dict[str, Any]) -> None:
-        settings = validate_model_settings(values)
+        settings, key = self.parse_model_settings(values)
         async with self.run_lock(c):
             c = self.coordinator(c.store.run_id)
             if not self.model_settings(c)["editable"]:
@@ -130,14 +133,19 @@ class ResearchApp:
             if active:
                 active.task.cancel()
                 await asyncio.gather(active.task, return_exceptions=True)
+                # Cancellation before serve() starts never reaches its finally.
+                active.execution.close(cancel=False)
+                await active.tools.close()
                 self.active.pop(c.store.run_id, None)
             # An Interaction tool may have updated other config fields before
             # cancellation. Reload them instead of replacing the whole config.
             config = self.config(c)
-            for key, value in settings.items():
-                setattr(config, key, value)
+            for field, value in settings.items():
+                setattr(config, field, value)
             config.model_settings_pinned = True
             config.model_settings_revision = new_id("model")
+            if key:
+                self.save_credentials(c, config, key)
             directory = c.store.root / "coordination"
             write_json(
                 directory / "configurations" / f"{config.model_settings_revision}.json",
@@ -150,6 +158,27 @@ class ResearchApp:
                 # Resume the same delivery and session, including an interrupted
                 # API retry. The attach path also handles a later process restart.
                 await self.attach(c)
+
+    @staticmethod
+    def parse_model_settings(values: dict[str, Any]) -> tuple[dict[str, str], str]:
+        if not isinstance(values, dict):
+            raise ValueError("模型设置须为对象")
+        values = dict(values)
+        key = values.pop("api_key", "")
+        if not isinstance(key, str) or len(key) > 8192 or any(c.isspace() for c in key.strip()):
+            raise ValueError("API Key 格式无效")
+        return validate_model_settings(values), key.strip()
+
+    @staticmethod
+    def save_credentials(c: Coordinator, config: ResearchConfig, key: str) -> None:
+        # Credentials belong to this run, never to event, prompt or public config payloads.
+        path = c.store.root / "coordination" / "credentials.json"
+        temporary = path.with_suffix(".tmp")
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            json.dump({"api_key": key}, handle)
+        temporary.replace(path)
+        config.credential_file = str(path)
 
     async def create(self, params: dict[str, Any]) -> dict[str, Any]:
         conversation = bool(
@@ -183,6 +212,13 @@ class ResearchApp:
                 "This template is for workflow simulation; configure real runners first"
             )
         config.pin_model_settings()
+        if "model_settings" in params:
+            settings, key = self.parse_model_settings(params["model_settings"])
+            for field, value in settings.items():
+                setattr(config, field, value)
+        else:
+            key = ""
+        key = key or config.api_key()
         if not conversation and config.seed_dir and not Path(config.seed_dir).is_dir():
             raise FileNotFoundError(f"Seed directory does not exist: {config.seed_dir}")
         if (
@@ -193,6 +229,8 @@ class ResearchApp:
         ):
             raise ValueError("Real verification requires a frozen verification_identity")
         c = Coordinator.create(self.root, config.brief, simulated=simulated)
+        if key:
+            self.save_credentials(c, config, key)
         write_json(c.store.root / "coordination" / "config.json", config.public(), immutable=True)
         if conversation:
             c.state["intake"] = {"status": "discussing", "summary": "", "environment": ""}
@@ -584,7 +622,12 @@ class ResearchApp:
 
     async def call(self, action: str, params: dict[str, Any]) -> Any:
         if action == "bootstrap":
+            config = self.default_config or ResearchConfig(TaskBrief("新的研究", ""))
             return {
+                "default_model_settings": {
+                    **config.model_settings(),
+                    "has_credentials": bool(config.api_key()),
+                },
                 "allow_simulation": self.allow_simulation,
                 "default_simulated": self.allow_simulation and self.default_config is None,
                 "has_config": self.default_config is not None,
@@ -715,4 +758,7 @@ class ResearchApp:
         for active in self.active.values():
             active.task.cancel()
         await asyncio.gather(*(a.task for a in self.active.values()), return_exceptions=True)
+        for active in self.active.values():
+            active.execution.close(cancel=False)
+            await active.tools.close()
         self.active.clear()

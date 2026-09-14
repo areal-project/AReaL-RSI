@@ -295,6 +295,7 @@ class ResearchIntake:
                         raise ValueError("接入不能改变已约定的验证条件：" + key)
         config.model, config.reasoning_effort = current.model, current.reasoning_effort
         config.base_url, config.api_key_env = current.base_url, current.api_key_env
+        config.credential_file = current.credential_file
         config.model_settings_pinned = current.model_settings_pinned
         config.model_settings_revision = current.model_settings_revision
         config.brief.limits.gpu_ids = incoming.limits.gpu_ids

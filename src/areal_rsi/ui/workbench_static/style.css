@@ -1383,3 +1383,18 @@ main {
   .graph-lane { max-width: 300px; }
   .live-meta { gap: 6px 10px; }
 }
+
+/* Connection settings are editable before the first research turn. */
+.model-settings-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.model-settings-fields .dropdown { margin-top: 7px; }
+.create-dialog { width: min(640px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); overflow: auto; border: 1px solid var(--line); border-radius: 18px; padding: 24px; color: var(--ink); background: #fff; box-shadow: 0 24px 80px #162a2433; }
+.create-dialog::backdrop { background: #17282066; backdrop-filter: blur(3px); }
+.create-dialog .card-heading { padding: 0; border: 0; }
+.create-dialog > form > p { margin: 12px 0; }
+.create-dialog textarea { width: 100%; resize: vertical; border: 1px solid var(--line); border-radius: 9px; padding: 12px; font: inherit; }
+.create-message-label { display: block; font-size: 13px; margin: 22px 0 10px; }
+.form-error { color: #a13c32; }
+@media (max-width: 560px) {
+  .model-settings-fields { grid-template-columns: 1fr; }
+  .create-dialog { padding: 18px; }
+}

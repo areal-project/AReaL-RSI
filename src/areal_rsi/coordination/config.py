@@ -28,9 +28,11 @@ def validate_model_settings(value: dict[str, Any]) -> dict[str, str]:
     ):
         raise ValueError("请填写 API 地址、模型和推理强度")
     settings = {key: value[key].strip() for key in MODEL_FIELDS}
-    if settings["model"] not in MODEL_EFFORTS:
-        raise ValueError("模型仅支持 GPT-5.6 Luna、Sol、Terra 和 GPT-6 Astra")
-    if settings["reasoning_effort"] not in MODEL_EFFORTS[settings["model"]]:
+    if len(settings["model"]) > 200 or any(c.isspace() for c in settings["model"]):
+        raise ValueError("模型名称不能包含空格，且不能超过 200 字")
+    if settings["reasoning_effort"] not in MODEL_EFFORTS.get(
+        settings["model"], ("none", "low", "medium", "high", "xhigh", "max")
+    ):
         raise ValueError("该模型不支持所选推理强度")
     # Reuse the actual transport's URL validation; no request or credential is needed.
     try:
@@ -53,6 +55,7 @@ class ResearchConfig:
     model_settings_pinned: bool = False
     model_settings_revision: str = ""
     api_key_env: str = "RSI_API_KEY"
+    credential_file: str | None = None
     max_output_tokens: int = 16384
     context_window_tokens: int = 128_000
     compact_keep_recent_tokens: int = 8_000
@@ -79,7 +82,7 @@ class ResearchConfig:
         self.model_settings_pinned = True
 
     def runtime(self) -> ResponsesConfig:
-        key = os.environ.get(self.api_key_env, "")
+        key = self.api_key()
         if not key:
             raise ValueError(f"Set {self.api_key_env} before starting model agents")
         settings = self.model_settings()
@@ -95,6 +98,11 @@ class ResearchConfig:
             retry_initial_seconds=self.retry_initial_seconds,
             retry_max_seconds=self.retry_max_seconds,
         )
+
+    def api_key(self) -> str:
+        if self.credential_file:
+            return str(json.loads(Path(self.credential_file).read_text())["api_key"])
+        return os.environ.get(self.api_key_env, "")
 
     def public(self) -> dict[str, Any]:
         """Configuration is useful for recovery, but not a public web projection."""

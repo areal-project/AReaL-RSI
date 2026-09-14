@@ -26,6 +26,8 @@ const state = {
   latestAppliedSequence: 0,
   creating: false,
   models: [],
+  defaultModelSettings: {},
+  createEffort: "xhigh",
   modelDrafts: new Map(),
   modelFormRun: null,
   modelSavingRun: null,
@@ -46,6 +48,7 @@ const modelDropdown = new WorkbenchDropdown($("research-model"), {
   onChange: (value) => {
     const draft = modelDraft();
     draft.model = value;
+    $("model-name").value = value;
     const supported = state.models.find((model) => model.id === value)?.efforts || [];
     if (!supported.includes(draft.reasoning_effort)) draft.reasoning_effort = "medium";
     renderModelSettings();
@@ -65,7 +68,7 @@ function modelDraft() {
     const saved = state.run?.model_settings || {};
     state.modelDrafts.set(state.runId, {
       base_url: saved.base_url || "", model: saved.model || "",
-      reasoning_effort: saved.reasoning_effort || "",
+      reasoning_effort: saved.reasoning_effort || "", api_key: "",
     });
   }
   return state.modelDrafts.get(state.runId);
@@ -75,7 +78,7 @@ function modelSettingsChanged() {
   const saved = state.run?.model_settings;
   const draft = state.modelDrafts.get(state.runId);
   return !!saved?.editable && !!draft &&
-    ["base_url", "model", "reasoning_effort"].some((key) => draft[key] !== saved[key]);
+    (!!draft.api_key || ["base_url", "model", "reasoning_effort"].some((key) => draft[key] !== saved[key]));
 }
 
 function renderModelSettings() {
@@ -92,11 +95,16 @@ function renderModelSettings() {
   $("model-settings-summary").textContent = `${saved.model} · ${saved.reasoning_effort}${saved.editable ? "" : " · 已锁定"}`;
   if ($("model-base-url").value !== draft.base_url) $("model-base-url").value = draft.base_url;
   $("model-base-url").disabled = disabled;
+  $("model-name").value = draft.model;
+  $("model-name").disabled = disabled;
+  $("model-api-key").value = draft.api_key || "";
+  $("model-api-key").disabled = disabled;
+  $("model-api-key").placeholder = saved.has_credentials ? "已配置 · 留空沿用当前密钥" : "请输入 API Key";
   const models = state.models.map((model) => ({ value: model.id, text: model.id }));
   if (!models.some((model) => model.value === draft.model))
     models.push({ value: draft.model, text: draft.model, disabled: true });
   modelDropdown.update(models, draft.model, disabled);
-  const efforts = [...(state.models.find((model) => model.id === draft.model)?.efforts || [])];
+  const efforts = [...(state.models.find((model) => model.id === draft.model)?.efforts || Object.keys(effortLabels))];
   if (!efforts.includes(draft.reasoning_effort)) efforts.push(draft.reasoning_effort);
   effortDropdown.update(efforts.map((value) => ({ value, text: effortLabels[value] || value })), draft.reasoning_effort, disabled);
   $("save-model-settings").hidden = !saved.editable;
@@ -108,6 +116,9 @@ function renderModelSettings() {
     : "用于本研究的 Interaction、RSI 和 Research Agents；开始研究后锁定。";
 }
 
+for (const [id, field] of [["model-name", "model"], ["model-api-key", "api_key"]]) {
+  $(id).addEventListener("input", () => { modelDraft()[field] = $(id).value; renderModelSettings(); });
+}
 $("model-base-url").addEventListener("input", () => {
   modelDraft().base_url = $("model-base-url").value;
   renderModelSettings();
@@ -1237,13 +1248,17 @@ async function control(action, params = {}) {
   }
 }
 
-async function createConversation(message = "") {
+async function createConversation(message = "", modelSettings) {
   if (state.creating) return;
   state.creating = true;
   $("new-run").disabled = $("mobile-new").disabled = $("welcome-send").disabled = true;
   notice();
   try {
-    const result = await api("/api/runs", { message, message_id: crypto.randomUUID() });
+    $("create-submit").disabled = true;
+    $("create-submit").textContent = "正在创建…";
+    const result = await api("/api/runs", { message, message_id: crypto.randomUUID(), ...(modelSettings ? {model_settings: modelSettings} : {}) });
+    $("create-dialog").close();
+    $("create-api-key").value = "";
     if (!result.run_id) throw new Error("未能读取研究记录，请刷新列表。");
     await loadRuns();
     state.runId = null;
@@ -1252,18 +1267,58 @@ async function createConversation(message = "") {
     $("welcome-input").value = "";
     $("chat-input").focus();
   } catch (error) {
+    $("create-error").textContent = error.message;
+    $("create-error").hidden = false;
     notice(error.message);
   } finally {
+    $("create-submit").disabled = false;
+    $("create-submit").textContent = "创建研究";
     state.creating = false;
     $("new-run").disabled = $("mobile-new").disabled = $("welcome-send").disabled = false;
   }
 }
-$("new-run").addEventListener("click", () => createConversation());
-$("mobile-new").addEventListener("click", () => createConversation());
+const createPreset = new WorkbenchDropdown($("create-model-preset"), {
+  label: "常用模型", onChange: (value) => { $("create-model").value = value; updateCreateModels(); },
+});
+const createEffort = new WorkbenchDropdown($("create-effort"), {
+  label: "推理强度", onChange: (value) => { state.createEffort = value; },
+});
+function updateCreateModels() {
+  const model = $("create-model").value;
+  const efforts = state.models.find((item) => item.id === model)?.efforts || Object.keys(effortLabels);
+  if (!efforts.includes(state.createEffort)) state.createEffort = "medium";
+  createPreset.update(state.models.map((item) => ({value: item.id, text: item.id})), model);
+  createEffort.update(efforts.map((value) => ({value, text: effortLabels[value]})), state.createEffort);
+}
+function openCreate(message = "") {
+  if (state.creating) return;
+  const defaults = state.defaultModelSettings;
+  $("create-base-url").value = defaults.base_url || "https://4ipic.com";
+  $("create-model").value = defaults.model || "gpt-6-astra";
+  $("create-api-key").value = "";
+  $("create-api-key").placeholder = defaults.has_credentials ? "留空使用默认密钥（已配置）" : "请输入 API Key";
+  $("create-message").value = message;
+  $("create-error").hidden = true;
+  state.createEffort = defaults.reasoning_effort || "xhigh";
+  updateCreateModels();
+  $("create-dialog").showModal();
+}
+$("create-model").addEventListener("input", updateCreateModels);
+$("create-cancel").addEventListener("click", () => { if (!state.creating) $("create-dialog").close(); });
+$("create-dialog").addEventListener("cancel", (event) => { if (state.creating) event.preventDefault(); });
+$("create-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  createConversation($("create-message").value.trim(), {
+    base_url: $("create-base-url").value.trim(), api_key: $("create-api-key").value.trim(),
+    model: $("create-model").value.trim(), reasoning_effort: state.createEffort,
+  });
+});
+$("new-run").addEventListener("click", () => openCreate());
+$("mobile-new").addEventListener("click", () => openCreate());
 $("welcome-form").addEventListener("submit", (event) => {
   event.preventDefault();
   const message = $("welcome-input").value.trim();
-  if (message) createConversation(message);
+  if (message) openCreate(message);
 });
 $("welcome-input").addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
@@ -1355,6 +1410,7 @@ async function bootstrap() {
   const config = await api("/api/bootstrap");
   state.token = config.csrf_token;
   state.models = config.models || [];
+  state.defaultModelSettings = config.default_model_settings || {};
 }
 
 async function boot() {

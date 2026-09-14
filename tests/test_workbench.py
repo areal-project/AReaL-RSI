@@ -377,6 +377,7 @@ class WorkbenchHttpTest(unittest.TestCase):
                     "default_simulated": default_simulated,
                     "has_config": has_config,
                     "models": [],
+                    "default_model_settings": {},
                 },
             )
             self.assertNotIn(PRIVATE, body.decode())

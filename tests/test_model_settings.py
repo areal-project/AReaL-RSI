@@ -78,6 +78,7 @@ def test_settings_are_independent_persisted_and_locked_after_start(
             assert (await observer.detail(run_id))["model_settings"] == {
                 **SETTINGS,
                 "editable": True,
+                "has_credentials": True,
             }
             assert (await observer.detail(second["run_id"]))["model_settings"] == second[
                 "model_settings"
@@ -231,7 +232,7 @@ def test_settings_waiting_for_start_cannot_overwrite_started_configuration(
         {"base_url": "https://secret@example.com"},
         {"base_url": "https://example.com?key=secret"},
         {"base_url": "https://exa mple.com"},
-        {"model": "unlisted-model"},
+        {"model": "invalid model"},
         {"model": "gpt-6-astra", "reasoning_effort": "none"},
         {"reasoning_effort": "unsupported"},
     ],
@@ -241,7 +242,8 @@ def test_invalid_settings_are_rejected(changes: dict[str, Any]) -> None:
         validate_model_settings({**SETTINGS, **changes})
 
 
-def test_model_settings_http_contract_and_projection(tmp_path: Path) -> None:
+def test_model_settings_http_contract_and_projection(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("RSI_API_KEY", raising=False)
     app = ResearchApp(tmp_path)
     server = WorkbenchServer(app, port=0)
     worker = threading.Thread(target=server.serve_forever, daemon=True)
@@ -268,7 +270,7 @@ def test_model_settings_http_contract_and_projection(tmp_path: Path) -> None:
         assert exc.value.code == 403
         request(f"/api/runs/{run_id}/model-settings", SETTINGS, token)
         view = request(f"/api/runs/{run_id}")
-        assert view["model_settings"] == {**SETTINGS, "editable": True}
+        assert view["model_settings"] == {**SETTINGS, "editable": True, "has_credentials": False}
         assert "config" not in view and "api_key" not in json.dumps(view)
         assert view["budget"]["model_calls"] == 0
     finally:
@@ -276,3 +278,67 @@ def test_model_settings_http_contract_and_projection(tmp_path: Path) -> None:
         asyncio.run_coroutine_threadsafe(app.close(), server.loop).result(5)
         server.server_close()
         worker.join(5)
+
+
+def test_new_run_credentials_are_private_persisted_and_used_on_first_call(tmp_path, monkeypatch):
+    monkeypatch.setenv("RSI_API_KEY", "default-test-secret")
+
+    async def scenario():
+        seen = []
+
+        class Transport(WaitingTransport):
+            async def request(self, config, payload, sink):
+                seen.append((config.model, config.api_key))
+                return response(
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "请描述研究目标。"}],
+                    }
+                )
+
+        app = ResearchApp(
+            tmp_path, runtime_factory=lambda cfg: ResponsesRuntime(cfg.runtime(), Transport())
+        )
+        try:
+            first = await app.create(
+                {
+                    "model_settings": {
+                        **SETTINGS,
+                        "model": "custom-model",
+                        "api_key": "run-test-secret",
+                    },
+                    "message": "开始讨论",
+                }
+            )
+            second = await app.create({})
+            await idle(app, first["run_id"])
+            assert seen == [("custom-model", "run-test-secret")]
+            observer = ResearchApp(tmp_path)
+            c = observer.coordinator(first["run_id"])
+            assert observer.config(c).runtime().api_key == "run-test-secret"
+            assert (
+                observer.config(observer.coordinator(second["run_id"])).runtime().api_key
+                == "default-test-secret"
+            )
+            secret = c.store.root / "coordination/credentials.json"
+            assert secret.stat().st_mode & 0o777 == 0o600
+            assert "run-test-secret" not in json.dumps(await observer.detail(first["run_id"]))
+            assert "run-test-secret" not in (c.store.root / "coordination/config.json").read_text()
+            await app.call(
+                "model-settings",
+                {"run_id": first["run_id"], **SETTINGS, "api_key": "updated-test-secret"},
+            )
+            assert (
+                observer.config(observer.coordinator(first["run_id"])).runtime().api_key
+                == "updated-test-secret"
+            )
+            await app.call("model-settings", {"run_id": first["run_id"], **SETTINGS, "api_key": ""})
+            assert (
+                observer.config(observer.coordinator(first["run_id"])).runtime().api_key
+                == "updated-test-secret"
+            )
+        finally:
+            await app.close()
+
+    asyncio.run(scenario())

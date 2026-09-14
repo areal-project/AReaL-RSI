@@ -112,7 +112,7 @@ def public_detail(value: Json) -> Json:
     result["brief"] = _brief(value.get("brief"))
     result["intake"] = _fields(value.get("intake"), "status summary environment execution_required")
     result["model_settings"] = _fields(
-        value.get("model_settings"), "base_url model reasoning_effort editable"
+        value.get("model_settings"), "base_url model reasoning_effort editable has_credentials"
     )
     result["pending_agents"] = [a for a in value.get("pending_agents", []) if isinstance(a, str)]
     result["execution_blocker"] = _fields(value.get("execution_blocker"), "job_id error created_at")
@@ -337,6 +337,10 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                             for name in ("allow_simulation", "default_simulated", "has_config")
                         },
                         "models": [_fields(model, "id efforts") for model in raw.get("models", [])],
+                        "default_model_settings": _fields(
+                            raw.get("default_model_settings"),
+                            "base_url model reasoning_effort has_credentials",
+                        ),
                     },
                 )
                 return
@@ -399,9 +403,12 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             parts, _ = self._path()
             if parts == ["api", "runs"]:
                 action = "create"
-                if set(params) - {"message", "message_id"}:
+                if set(params) - {"message", "message_id", "model_settings"}:
                     raise ValueError("请直接发送研究需求，由 Interaction 整理配置")
-                params = {**_fields(params, "message message_id"), "conversation": True}
+                params = {
+                    **_fields(params, "message message_id model_settings"),
+                    "conversation": True,
+                }
             elif (
                 len(parts) == 4 and parts[:2] == ["api", "runs"] and IDENTIFIER.fullmatch(parts[2])
             ):
@@ -413,7 +420,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                     "resume": "",
                     "stop": "reason",
                     "retry": "agent_id",
-                    "model-settings": "base_url model reasoning_effort",
+                    "model-settings": "base_url model reasoning_effort api_key",
                 }
                 if action not in allowed:
                     self._json(404, {"error": "操作不存在"})

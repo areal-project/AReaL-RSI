@@ -110,6 +110,7 @@ def public_detail(value: Json) -> Json:
         "worker_alive waiting_for_user budget_stop_reason execution_setup",
     )
     result["brief"] = _brief(value.get("brief"))
+    result["finalization"] = _fields(value.get("finalization"), "status error")
     result["intake"] = _fields(value.get("intake"), "status summary environment execution_required")
     result["model_settings"] = _fields(
         value.get("model_settings"), "base_url model reasoning_effort editable has_credentials"
@@ -210,7 +211,7 @@ class WorkbenchServer(ThreadingHTTPServer):
         self,
         backend: WorkbenchBackend,
         *,
-        port: int = 8766,
+        port: int = 8197,
         loop: asyncio.AbstractEventLoop | None = None,
         backend_timeout: float = 30,
     ):
@@ -332,6 +333,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                     200,
                     {
                         "csrf_token": self.server.csrf_token,
+                        **_fields(raw, "service api_version capabilities data_root"),
                         **{
                             name: raw.get(name) is True
                             for name in ("allow_simulation", "default_simulated", "has_config")
@@ -409,11 +411,11 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             parts, _ = self._path()
             if parts == ["api", "runs"]:
                 action = "create"
-                if set(params) - {"message", "message_id", "model_settings"}:
-                    raise ValueError("请直接发送研究需求，由 Interaction 整理配置")
+                if set(params) - {"message", "message_id", "model_settings", "config", "run_id"}:
+                    raise ValueError("请发送研究需求，或提供完整的 config")
                 params = {
-                    **_fields(params, "message message_id model_settings"),
-                    "conversation": True,
+                    **_fields(params, "message message_id model_settings config run_id"),
+                    "conversation": "config" not in params,
                 }
             elif (
                 len(parts) == 4 and parts[:2] == ["api", "runs"] and IDENTIFIER.fullmatch(parts[2])

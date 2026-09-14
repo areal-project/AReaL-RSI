@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
+import hashlib
 import json
 import os
 import shutil
@@ -28,6 +29,7 @@ from areal_rsi.coordination.config import (
     MODEL_EFFORTS,
     MODEL_FIELDS,
     ResearchConfig,
+    config_from_dict,
     validate_model_settings,
 )
 from areal_rsi.coordination.coordinator import Coordinator
@@ -181,8 +183,23 @@ class ResearchApp:
         config.credential_file = str(path)
 
     async def create(self, params: dict[str, Any]) -> dict[str, Any]:
+        supplied = params.get("config")
+        run_id = params.get("run_id")
+        creation_digest = hashlib.sha256(json.dumps(params, sort_keys=True).encode()).hexdigest()
+        if run_id:
+            from areal_rsi.base.storage import safe_name
+
+            safe_name(run_id)
+            if (self.root / "runs" / run_id / "run.json").exists():
+                previous = self.coordinator(run_id)
+                if previous.state.get("creation_digest") != creation_digest:
+                    raise ValueError("该 run_id 已用于不同的创建请求")
+                return await self.detail(run_id)
         conversation = bool(
-            params.get("conversation", self.default_config is None and not self.allow_simulation)
+            params.get(
+                "conversation",
+                supplied is None and self.default_config is None and not self.allow_simulation,
+            )
         )
         simulated = False if conversation else bool(params.get("simulated", self.allow_simulation))
         message = str(params.get("message", "")).strip()
@@ -190,7 +207,10 @@ class ResearchApp:
             raise ValueError("消息不能超过 12000 字")
         if simulated and not self.allow_simulation:
             raise ValueError("Restart with simulation enabled to create simulated runs")
-        if self.default_config is None:
+        if supplied is not None:
+            config = config_from_dict(supplied)
+            conversation = False
+        elif self.default_config is None:
             config = (
                 ResearchConfig(TaskBrief("新的研究", ""))
                 if conversation
@@ -228,7 +248,13 @@ class ResearchApp:
             and not config.metadata.get("verification_identity")
         ):
             raise ValueError("Real verification requires a frozen verification_identity")
-        c = Coordinator.create(self.root, config.brief, simulated=simulated)
+        if supplied is not None:
+            issues = validate_execution(config)
+            if issues:
+                raise ValueError("；".join(issues))
+        c = Coordinator.create(self.root, config.brief, simulated=simulated, run_id=run_id)
+        c.state["creation_digest"] = creation_digest
+        c.save()
         if key:
             self.save_credentials(c, config, key)
         write_json(c.store.root / "coordination" / "config.json", config.public(), immutable=True)
@@ -471,6 +497,15 @@ class ResearchApp:
         async def serve() -> None:
             try:
                 await engine.serve()
+                execution.close(cancel=True)
+                if (
+                    config.finalizer
+                    and c.state["status"] in {"stopped", "succeeded"}
+                    and not c.state.get("user_stopped")
+                ):
+                    from areal_rsi.coordination.finalization import finalize
+
+                    await finalize(c, config)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -489,6 +524,7 @@ class ResearchApp:
     ) -> dict[str, Any]:
         c = self.coordinator(run_id)
         summary = c.summary()
+        summary["finalization"] = c.state.get("finalization")
         run = c.store.run()
         actors = {actor["agent_id"]: actor for actor in summary["agents"]}
         evidence = encode(c.store.records("evidence", EvidenceRecord))
@@ -623,9 +659,42 @@ class ResearchApp:
         }
 
     async def call(self, action: str, params: dict[str, Any]) -> Any:
+        if action == "recover":
+            for run in FileRunStore(self.root).list(ExperimentRun):
+                if run.plan.workflow != "research":
+                    continue
+                try:
+                    c = self.coordinator(run.run_id)
+                    config = self.config(c)
+                except (OSError, ValueError, KeyError):
+                    continue
+                finalization = c.state.get("finalization") or {}
+                if (
+                    config.metadata.get("auto_resume")
+                    and c.state.get("started_at")
+                    and not c.state.get("user_stopped")
+                    and (
+                        c.state["status"] == "running"
+                        or (
+                            config.finalizer
+                            and c.state["status"] in {"stopped", "succeeded"}
+                            and finalization.get("status") not in {"completed", "failed"}
+                        )
+                    )
+                    and not self.worker_elsewhere(c)
+                ):
+                    try:
+                        await self.attach(c)
+                    except Exception as exc:
+                        c.store.event("recovery_failed", error=type(exc).__name__)
+            return {}
         if action == "bootstrap":
             config = self.default_config or ResearchConfig(TaskBrief("新的研究", ""))
             return {
+                "service": "areal-rsi",
+                "api_version": 1,
+                "capabilities": ["configured-runs", "automatic-finalization"],
+                "data_root": str(self.root),
                 "default_model_settings": {
                     **config.model_settings(),
                     "has_credentials": bool(config.api_key()),
@@ -692,6 +761,13 @@ class ResearchApp:
         elif action == "resume":
             async with self.run_lock(c):
                 c = self.coordinator(c.store.run_id)
+                c.state.pop("user_stopped", None)
+                c.save()
+                if self.config(c).finalizer and c.state.get("finalization"):
+                    if c.state["finalization"]["status"] == "completed":
+                        raise ValueError("最终复测已完成；继续探索请新建研究")
+                    active = await self.attach(c)
+                    return await self.detail(c.store.run_id)
                 if c.state["status"] == "paused":
                     c.resume()
                 elif c.state["status"] == "stopped":
@@ -709,6 +785,7 @@ class ResearchApp:
         elif action == "stop":
             async with self.run_lock(c):
                 c = self.coordinator(c.store.run_id)
+                c.state["user_stopped"] = True
                 c.stop("Stopped by user")
                 if c.store.run_id in self.active:
                     active = self.active[c.store.run_id]

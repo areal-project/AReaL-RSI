@@ -95,6 +95,8 @@ def _research_summary(detail: dict[str, Any], *, status: str | None = None) -> d
 
 
 def _idle_reason(detail: dict[str, Any]) -> str | None:
+    if (detail.get("finalization") or {}).get("status") == "running":
+        return None
     if detail.get("status") == "paused":
         return "paused"
     if (
@@ -183,7 +185,11 @@ async def run_research(
                 print(serialized, flush=True)
                 last_printed = serialized
             status = detail["status"]
-            if status in {"succeeded", "failed", "stopped", "cancelled"}:
+            if status in {"succeeded", "failed", "stopped", "cancelled"} and not detail.get(
+                "worker_alive"
+            ):
+                if (detail.get("finalization") or {}).get("status") == "failed":
+                    return 1
                 return 0 if status == "succeeded" else 1
             if stopped.is_set() or (timeout is not None and loop.time() - began >= timeout):
                 exit_status = "interrupted" if stopped.is_set() else "timeout"
@@ -246,6 +252,7 @@ def serve_workbench(*, port: int, config_file: Path | None, simulate_gpu: bool) 
     config = load_config(config_file) if config_file else None
     app = ResearchApp(data_root(), config=config, allow_simulation=simulate_gpu)
     server = WorkbenchServer(app, port=port)
+    server.invoke("recover", {})
     previous = signal.getsignal(signal.SIGTERM)
     terminated = False
 
@@ -299,7 +306,7 @@ def main() -> None:
     web.add_argument("--root", type=Path, help="实验工作区，优先于 RSI_DATA_ROOT")
     web.add_argument("--run", dest="run_id")
     workbench = commands.add_parser("workbench", help="打开可交互的本地研究工作台")
-    workbench.add_argument("--port", type=int, default=8766)
+    workbench.add_argument("--port", type=int, default=8197)
     workbench.add_argument("--config", type=Path, help="可信操作员配置 JSON")
     workbench.add_argument(
         "--simulate-gpu", action="store_true", help="允许模拟 GPU/Task 作业；研究模型仍调用真实 API"

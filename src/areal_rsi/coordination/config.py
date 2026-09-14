@@ -64,6 +64,7 @@ class ResearchConfig:
     retry_max_seconds: float = 60
     commands: tuple[ApprovedCommand, ...] = ()
     verifier: ApprovedCommand | None = None
+    finalizer: ApprovedCommand | None = None
     execution_env: dict[str, str] = field(default_factory=dict)
     simulation_scores: tuple[float, ...] = (0.3, 0.5, 0.7)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -110,15 +111,21 @@ class ResearchConfig:
         return result
 
 
-def load_config(path: Path) -> ResearchConfig:
-    value = json.loads(path.read_text())
+def config_from_dict(value: dict[str, Any]) -> ResearchConfig:
     if "api_key" in value:
         raise ValueError("Use api_key_env; credentials must not be saved in research configuration")
     config: ResearchConfig = decode(ResearchConfig, value)
-    if config.seed_dir is not None:
-        seed = Path(config.seed_dir).expanduser()
-        config.seed_dir = str((path.parent / seed).resolve() if not seed.is_absolute() else seed)
     names = [command.name for command in config.commands]
     if len(set(names)) != len(names):
         raise ValueError("Execution command names must be unique")
+    if config.finalizer and (config.verifier is None or config.finalizer.parameters != ("output",)):
+        raise ValueError("Finalizer requires a verifier and exactly one output parameter")
+    return config
+
+
+def load_config(path: Path) -> ResearchConfig:
+    config = config_from_dict(json.loads(path.read_text()))
+    if config.seed_dir is not None:
+        seed = Path(config.seed_dir).expanduser()
+        config.seed_dir = str((path.parent / seed).resolve() if not seed.is_absolute() else seed)
     return config

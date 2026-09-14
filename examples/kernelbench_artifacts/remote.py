@@ -183,6 +183,8 @@ def handle(manifest: dict[str, Any], request_data: dict[str, Any]) -> Any:
                 task_used = len(jobs) + len(external)
                 old = next((j for j in jobs if j.get("idempotency_key") == key), None)
                 if old is None:
+                    if (Path(manifest["remote_manifest"]).parent / "exploration-closed").exists():
+                        raise ValueError("Exploration is closed; final confirmation is in progress")
                     exploration_budget = manifest.get("exploration_budget_per_task", budget)
                     if task_used >= exploration_budget:
                         raise ValueError(
@@ -209,6 +211,7 @@ def handle(manifest: dict[str, Any], request_data: dict[str, Any]) -> Any:
                         body = {
                             "kind": "eval",
                             "candidate": "model_new.py",
+                            "seed": manifest.get("exploration_seed", 42),
                             "idempotency_key": key,
                         }
                     old = query("/jobs", body)

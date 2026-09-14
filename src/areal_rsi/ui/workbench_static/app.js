@@ -486,7 +486,10 @@ function render() {
   const needsResume = run.worker_alive === false && (
     run.status === "running" || (run.status === "planned" && run.pending_agents?.length)
   );
-  $("run-status").textContent = needsResume ? "待恢复"
+  $("run-status").textContent = run.finalization?.status === "running" ? "最终复测与归档中"
+    : run.finalization?.status === "failed" ? "收尾失败 · 可恢复"
+    : run.finalization?.status === "completed" ? (run.status === "succeeded" ? "已达标" : "已完成 · 未达标")
+    : needsResume ? "待恢复"
     : run.status === "running" && run.execution_setup === "pending"
     ? "研究中 · 接入准备" : label(run.status);
   $("run-status").className = `status ${run.status}`;
@@ -496,9 +499,11 @@ function render() {
   );
   $("pause").hidden = run.status !== "running";
   $("resume").hidden = run.status !== "paused" && !(run.status === "stopped" && run.started_at) && !needsResume;
-  $("resume").textContent = run.status === "stopped" ? "恢复研究" : needsResume
+  $("resume").hidden ||= ["running", "completed"].includes(run.finalization?.status);
+  $("resume").textContent = run.finalization?.status === "failed" ? "恢复收尾" : run.status === "stopped" ? "恢复研究" : needsResume
     ? (run.status === "planned" ? "继续对话" : "恢复执行") : "继续";
-  $("stop").hidden = !["planned", "running", "paused"].includes(run.status);
+  $("stop").hidden = !["planned", "running", "paused"].includes(run.status)
+    && run.finalization?.status !== "running";
   $("stop").textContent = run.status === "planned" ? "结束对话" : "停止";
   $("best-score").textContent = score(run.best?.score);
   $("best-caption").textContent = run.best

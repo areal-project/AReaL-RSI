@@ -23,7 +23,7 @@ def remote(manifest: dict[str, Any], operation: str, **values: Any) -> Any:
         manifest["continue_script"],
         manifest["slurm_job"],
         "--",
-        "/opt/.venv/bin/python",
+        manifest.get("python", "/opt/.venv/bin/python"),
         "-B",
         manifest["remote_script"],
         manifest["remote_manifest"],
@@ -177,6 +177,12 @@ def score_bundle(
             if j["correct"]
             and (j.get("evaluation") or {}).get("evaluation_policy") == "strict-fp32-v1"
         ]
+        if phase == "search" and "exploration_seed" in manifest:
+            valid = [
+                j
+                for j in valid
+                if (j.get("evaluation") or {}).get("seed") == manifest["exploration_seed"]
+            ]
         if phase == "final":
             chosen = max(matches, key=lambda j: j["created_at"], default=None)
             if len(matches) < 2 or chosen not in valid:

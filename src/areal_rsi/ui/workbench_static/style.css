@@ -1403,3 +1403,31 @@ main {
 .spinner { display: inline-block; width: 15px; height: 15px; border: 2px solid #d8e1d5; border-top-color: #52764c; border-radius: 50%; animation: spin .85s linear infinite; vertical-align: middle; margin-right: 8px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+
+/* A full-width graph; completed jobs remain available on demand and in node details. */
+.metrics { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.metrics.without-score { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.metric strong { white-space: nowrap; }
+#run-elapsed { font-size: 22px; }
+.graph-card { margin-bottom: 20px; }
+.graph-card .card-heading { gap: 12px; flex-wrap: wrap; }
+.graph-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.zoom-controls { display: flex; border: 1px solid var(--line); border-radius: 8px; }
+.zoom-controls button { min-width: 34px; padding: 7px 8px; }
+.graph-viewport { height: 460px; cursor: grab; }
+.graph-viewport:active { cursor: grabbing; }
+.graph-viewport.expanded { height: 75dvh; }
+.graph-surface { position: relative; overflow: hidden; }
+.graph-canvas { position: absolute; min-width: 0; min-height: 0; transform-origin: 0 0; }
+.graph-node { min-height: 137px; padding-bottom: 29px; cursor: pointer; }
+.node-timing { position: absolute; bottom: 9px; left: 13px; font-size: 11px; color: var(--muted); }
+.detail-timing { padding: 12px 0; font-size: 14px; }
+.detail-timing small { display: block; margin-top: 7px; font-size: 11px; }
+.node-job-links { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 14px; }
+@media (max-width: 900px) { .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 560px) {
+  .metrics, .metrics.without-score { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .graph-viewport { height: 400px; }
+  .graph-card .card-heading { padding: 14px; }
+  .graph-controls button { font-size: 11px; padding: 7px; }
+}

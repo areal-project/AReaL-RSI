@@ -25,6 +25,8 @@ const state = {
   drafts: new Map(),
   replyTargets: new Map(),
   graphRunId: null,
+  graphZoom: 1,
+  graphAllJobs: false,
   detailNodeId: null,
   refreshSequence: 0,
   latestAppliedSequence: 0,
@@ -235,6 +237,25 @@ function duration(start, end) {
   if (seconds < 60) return `${seconds} 秒`;
   const minutes = Math.floor(seconds / 60);
   return minutes < 60 ? `${minutes} 分 ${seconds % 60} 秒` : `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分`;
+}
+function elapsed(start, end, className = "") {
+  const text = element("span", className, duration(start, end));
+  if (start) {
+    text.dataset.elapsedStart = String(start);
+    if (end) text.dataset.elapsedEnd = String(end);
+  }
+  return text;
+}
+function nodeTimes(run, node) {
+  const start = node.created_at || node.assignment?.created_at;
+  const end = node.report?.created_at || (!activeNode(node) ? node.updated_at : null) || run.finished_at;
+  return [start, end];
+}
+function tickElapsed() {
+  for (const item of document.querySelectorAll("[data-elapsed-start]")) {
+    const parse = (value) => value && /^\d+(\.\d+)?$/.test(value) ? Number(value) : value;
+    item.textContent = duration(parse(item.dataset.elapsedStart), parse(item.dataset.elapsedEnd));
+  }
 }
 const activeJob = (job) => ["pending", "queued", "starting", "running"].includes(job.status);
 const activeNode = (node) => ["pending", "running"].includes(node.state);
@@ -504,6 +525,7 @@ function render() {
   $("plan").classList.toggle("muted", !run.plan);
   $("score-metric").hidden = $("baseline-metric").hidden = !run.brief?.verification;
   $("metrics").classList.toggle("without-score", !run.brief?.verification);
+  $("run-elapsed").replaceChildren(elapsed(run.started_at, run.finished_at));
   renderIntake(run);
   renderOverview(run);
   renderDirections(run);
@@ -732,13 +754,15 @@ function renderDirections(run) {
 
 function renderGraph(run) {
   // Jobs are display objects, not persisted ResearchIterations or research outcomes.
-  const nodes = [...(run.nodes || []), ...(run.jobs || []).map((job) => ({
+  const nodes = [...(run.nodes || []), ...(run.jobs || []).filter((job) => state.graphAllJobs || activeJob(job)).map((job) => ({
     iteration_id: `job:${job.job_id}`, agent_id: job.agent_id, state: job.status,
     parent_iteration_id: job.iteration_id, title: jobTitle(job), job,
   }))];
   const active = nodes.filter((node) => node.job ? activeJob(node.job) : activeNode(node));
   $("graph-count").textContent = `${run.nodes?.length || 0} 个研究节点 · ${run.jobs?.length || 0} 个作业 · ${active.length} 个待执行 / 进行中`;
   $("graph-active").hidden = !active.length;
+  $("graph-jobs").textContent = state.graphAllJobs ? "收起已结束作业" : "显示全部作业";
+  $("graph-jobs").setAttribute("aria-pressed", String(state.graphAllJobs));
   const selected = state.selected.get(run.run_id);
   const signature = JSON.stringify([
     run.run_id,
@@ -761,6 +785,8 @@ function renderGraph(run) {
       scroll = { left: 0, top: 0 };
     }
     state.graphRunId = run.run_id;
+    const savedZoom = Number(localStorage.getItem(`rsi.workbench.zoom.${run.run_id}`));
+    state.graphZoom = savedZoom > 0 ? Math.max(.2, Math.min(2, savedZoom)) : 1;
   }
   const focused = document.activeElement?.dataset.node;
   const canvas = $("graph-canvas");
@@ -768,12 +794,12 @@ function renderGraph(run) {
   canvas.hidden = !nodes.length;
   $("graph-empty").hidden = !!nodes.length;
   if (!nodes.length) {
-    viewport.style.height = "210px";
+    $("graph-surface").style.width = $("graph-surface").style.height = "0px";
     return;
   }
   const byId = new Map(nodes.map((node) => [node.iteration_id, node]));
   const agents = [...new Set(nodes.map((node) => node.agent_id))].sort((a, b) => a === b ? 0 : a === "rsi" ? -1 : b === "rsi" ? 1 : 0);
-  viewport.style.height = `${Math.min(520, Math.max(210, agents.length * 174 + 25))}px`;
+
   const positions = new Map();
   function depth(node, visited = new Set()) {
     if (!node?.parent_iteration_id || visited.has(node.iteration_id)) return 0;
@@ -786,11 +812,11 @@ function renderGraph(run) {
   let widest = 1;
   agents.forEach((agentId, row) => {
     const direction =
-      (agentId === "rsi" ? "RSI 执行" : run.agents?.find((agent) => agent.agent_id === agentId)?.direction) ||
+      (agentId === "rsi" ? "RSI 历史作业" : run.agents?.find((agent) => agent.agent_id === agentId)?.direction) ||
       agentName(agentId);
     const lane = element("div", "graph-lane", direction);
     lane.title = direction;
-    lane.style.top = `${row * 174 + 20}px`;
+    lane.style.top = `${row * 204 + 20}px`;
     canvas.append(lane);
     let nextColumn = 0, attempt = 0;
     nodes
@@ -806,7 +832,7 @@ function renderGraph(run) {
         const column = Math.max(nextColumn, depth(node));
         nextColumn = column + 1;
         widest = Math.max(widest, column + 1);
-        const position = { x: 24 + column * 246, y: row * 174 + 46 };
+        const position = { x: 24 + column * 246, y: row * 204 + 46 };
         positions.set(node.iteration_id, position);
         const ongoing = node.job ? activeJob(node.job) : activeNode(node);
         const button = element(
@@ -840,6 +866,10 @@ function renderGraph(run) {
               score(node.verification.score),
             ),
           );
+        const [started, finished] = node.job ? [node.job.started_at || node.job.created_at, node.job.finished_at || run.finished_at] : nodeTimes(run, node);
+        const timing = element("div", "node-timing");
+        timing.append(document.createTextNode("历时 "), elapsed(started, finished));
+        button.append(timing);
         button.setAttribute(
           "aria-pressed",
           String(selected === node.iteration_id),
@@ -868,9 +898,9 @@ function renderGraph(run) {
       target = positions.get(edge.target);
     if (!source || !target || edge.source === edge.target) continue;
     const x1 = source.x + 214,
-      y1 = source.y + 46,
+      y1 = source.y + 65,
       x2 = target.x,
-      y2 = target.y + 46;
+      y2 = target.y + 65;
     const line = element(
       "div",
       `graph-edge ${["reference", "merge", "execution"].includes(edge.kind) ? edge.kind : "parent"}`,
@@ -887,7 +917,8 @@ function renderGraph(run) {
     canvas.prepend(line);
   }
   canvas.style.width = `${widest * 246 + 22}px`;
-  canvas.style.height = `${agents.length * 174 + 16}px`;
+  canvas.style.height = `${agents.length * 204 + 16}px`;
+  applyGraphZoom();
   viewport.scrollTo({ left: scroll.left, top: scroll.top });
   if (focused)
     [...canvas.querySelectorAll("button")]
@@ -951,7 +982,21 @@ function renderNode(run) {
     element("h3", "", "本轮任务"),
     element("p", "muted", node.iteration_id),
   );
-  const blocks = [heading, assignmentDetails(run, node)];
+  const [started, finished] = nodeTimes(run, node);
+  const timing = element("p", "detail-timing");
+  timing.append(document.createTextNode("本轮历时 "), elapsed(started, finished));
+  if (started) timing.append(element("small", "muted", `开始 ${new Date(timestamp(started)).toLocaleString("zh-CN")}${finished ? ` · 结束 ${new Date(timestamp(finished)).toLocaleString("zh-CN")}` : " · 进行中"}`));
+  const blocks = [heading, timing, assignmentDetails(run, node)];
+  const jobs = (run.jobs || []).filter((job) => job.iteration_id === node.iteration_id);
+  if (jobs.length) {
+    const links = element("div", "node-job-links");
+    for (const job of jobs) {
+      const link = element("button", "quiet", `${jobTitle(job)} · ${label(job.status)}`);
+      link.addEventListener("click", () => selectWork(run, `job:${job.job_id}`));
+      links.append(link);
+    }
+    blocks.push(links);
+  }
   if (node.report?.message) {
     const report = element("section", "detail-section");
     const body = element("div", "message-content");
@@ -1357,14 +1402,69 @@ $("graph-active").addEventListener("click", () => {
   const current = active.findIndex((node) => node.dataset.node === state.selected.get(state.runId));
   const next = active[(current + 1) % active.length];
   if (!next) return;
-  const position = {left: Math.max(0, next.offsetLeft - 24), top: Math.max(0, next.offsetTop - 46)};
+  const position = {left: Math.max(0, next.offsetLeft * state.graphZoom - 24), top: Math.max(0, next.offsetTop * state.graphZoom - 46)};
   selectWork(state.run, next.dataset.node);
   $("graph-viewport").scrollTo(position);
   [...$("graph-canvas").querySelectorAll("button")].find((node) => node.dataset.node === next.dataset.node)?.focus({preventScroll: true});
 });
-$("graph-reset").addEventListener("click", () =>
-  $("graph-viewport").scrollTo({ left: 0, top: 0, behavior: "smooth" }),
-);
+function applyGraphZoom() {
+  const canvas = $("graph-canvas"), surface = $("graph-surface");
+  canvas.style.transform = `scale(${state.graphZoom})`;
+  surface.style.width = `${parseFloat(canvas.style.width || 0) * state.graphZoom}px`;
+  surface.style.height = `${parseFloat(canvas.style.height || 0) * state.graphZoom}px`;
+  $("graph-reset").textContent = `${Math.round(state.graphZoom * 100)}%`;
+  $("graph-zoom-out").disabled = state.graphZoom <= .2;
+  $("graph-zoom-in").disabled = state.graphZoom >= 2;
+}
+function zoomGraph(value, point) {
+  const viewport = $("graph-viewport");
+  const anchor = point || {x: viewport.clientWidth / 2, y: viewport.clientHeight / 2};
+  const x = (viewport.scrollLeft + anchor.x) / state.graphZoom;
+  const y = (viewport.scrollTop + anchor.y) / state.graphZoom;
+  state.graphZoom = Math.max(.2, Math.min(2, value));
+  applyGraphZoom();
+  viewport.scrollTo({left: x * state.graphZoom - anchor.x, top: y * state.graphZoom - anchor.y});
+  if (state.runId) localStorage.setItem(`rsi.workbench.zoom.${state.runId}`, String(state.graphZoom));
+}
+$("graph-reset").addEventListener("click", () => zoomGraph(1));
+$("graph-zoom-in").addEventListener("click", () => zoomGraph(state.graphZoom * 1.2));
+$("graph-zoom-out").addEventListener("click", () => zoomGraph(state.graphZoom / 1.2));
+$("graph-fit").addEventListener("click", () => {
+  const canvas = $("graph-canvas"), viewport = $("graph-viewport");
+  zoomGraph(Math.min(1, viewport.clientWidth / (parseFloat(canvas.style.width) || 1), viewport.clientHeight / (parseFloat(canvas.style.height) || 1)));
+  viewport.scrollTo({left: 0, top: 0});
+});
+$("graph-jobs").addEventListener("click", () => { state.graphAllJobs = !state.graphAllJobs; if (state.run) renderGraph(state.run); });
+$("graph-expand").addEventListener("click", () => {
+  const expanded = $("graph-viewport").classList.toggle("expanded");
+  $("graph-expand").setAttribute("aria-pressed", String(expanded));
+  $("graph-expand").textContent = expanded ? "收起画布 ⛶" : "展开画布 ⛶";
+});
+$("graph-viewport").addEventListener("wheel", (event) => {
+  if (!event.ctrlKey && !event.metaKey) return;
+  event.preventDefault();
+  const rect = event.currentTarget.getBoundingClientRect();
+  zoomGraph(state.graphZoom * Math.exp(-event.deltaY * .005), {x: event.clientX - rect.left, y: event.clientY - rect.top});
+}, {passive: false});
+$("graph-viewport").addEventListener("keydown", (event) => {
+  if (event.target.closest("button")) return;
+  if (["+", "=", "-", "0"].includes(event.key)) {
+    event.preventDefault();
+    zoomGraph(event.key === "0" ? 1 : state.graphZoom * (event.key === "-" ? 1 / 1.2 : 1.2));
+  }
+});
+let graphDrag = null;
+$("graph-viewport").addEventListener("pointerdown", (event) => {
+  if (event.button !== 0 || event.target.closest("button") || event.pointerType === "touch") return;
+  const viewport = event.currentTarget;
+  graphDrag = {x: event.clientX, y: event.clientY, left: viewport.scrollLeft, top: viewport.scrollTop};
+  viewport.setPointerCapture(event.pointerId);
+});
+$("graph-viewport").addEventListener("pointermove", (event) => {
+  if (graphDrag) event.currentTarget.scrollTo({left: graphDrag.left + graphDrag.x - event.clientX, top: graphDrag.top + graphDrag.y - event.clientY});
+});
+for (const name of ["pointerup", "pointercancel", "lostpointercapture"])
+  $("graph-viewport").addEventListener(name, () => { graphDrag = null; });
 $("graph-viewport").addEventListener(
   "scroll",
   () => {
@@ -1462,4 +1562,5 @@ async function boot() {
     if (!document.hidden) await refresh();
   }, 1500);
 }
+setInterval(tickElapsed, 1000);
 boot();

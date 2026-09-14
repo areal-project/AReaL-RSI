@@ -119,27 +119,25 @@
             <span>模型调用 / Token</span><strong id="model-count">0</strong
             ><small id="token-count">尚未调用模型</small>
           </div>
+          <div class="metric"><span>研究历时</span><strong id="run-elapsed">尚未开始</strong><small id="elapsed-caption">从开始研究计时，含等待和暂停</small></div>
         </section>
-        <div class="workspace-grid">
-          <div class="research-column">
-            <section class="card live-overview" id="live-overview" aria-label="当前进展" hidden></section>
-            <section class="card intake-card" id="intake-overview" hidden>
-              <div class="card-heading"><h2>研究准备</h2><span id="intake-status" class="status"></span></div>
-              <div class="intake-body">
-                <p id="intake-summary" class="preserve"></p>
-                <div id="intake-environment" class="preserve muted"></div>
-                <div id="intake-retry"></div>
-              </div>
-            </section>
             <section class="card graph-card">
               <div class="card-heading">
                 <div>
                   <h2>研究图</h2>
                   <span id="graph-count" class="muted graph-count"></span>
                 </div>
-                <div class="graph-controls"><button id="graph-active" class="quiet" hidden>定位进行中 ◎</button><button id="graph-reset" class="quiet" title="返回研究图起点">
-                  回到起点 ↖
-                </button></div>
+                <div class="graph-controls">
+                  <button id="graph-active" class="quiet" hidden>定位进行中 ◎</button>
+                  <button id="graph-jobs" class="quiet" aria-pressed="false">显示全部作业</button>
+                  <div class="zoom-controls" role="group" aria-label="研究图缩放">
+                    <button id="graph-zoom-out" class="quiet" aria-label="缩小研究图">−</button>
+                    <button id="graph-reset" class="quiet" title="恢复 100%" aria-label="恢复研究图原始比例">100%</button>
+                    <button id="graph-zoom-in" class="quiet" aria-label="放大研究图">＋</button>
+                  </div>
+                  <button id="graph-fit" class="quiet">适应画布</button>
+                  <button id="graph-expand" class="quiet" aria-pressed="false">展开画布 ⛶</button>
+                </div>
               </div>
               <div class="graph-legend">
                 <span><i class="legend-line"></i>继续探索</span
@@ -150,13 +148,24 @@
                 id="graph-viewport"
                 class="graph-viewport"
                 tabindex="0"
-                aria-label="研究图，可横向滚动"
+                aria-label="研究图，可拖动画布，按加减号或 Ctrl 加滚轮缩放"
               >
                 <div id="graph-empty" class="graph-empty">
                   <span class="empty-symbol">◎</span>
                   <h3>研究方向将在这里展开</h3>
                 </div>
-                <div id="graph-canvas" class="graph-canvas" hidden></div>
+                <div id="graph-surface" class="graph-surface"><div id="graph-canvas" class="graph-canvas" hidden></div></div>
+              </div>
+            </section>
+        <div class="workspace-grid">
+          <div class="research-column">
+            <section class="card live-overview" id="live-overview" aria-label="当前进展" hidden></section>
+            <section class="card intake-card" id="intake-overview" hidden>
+              <div class="card-heading"><h2>研究准备</h2><span id="intake-status" class="status"></span></div>
+              <div class="intake-body">
+                <p id="intake-summary" class="preserve"></p>
+                <div id="intake-environment" class="preserve muted"></div>
+                <div id="intake-retry"></div>
               </div>
             </section>
             <section class="card plan-card">

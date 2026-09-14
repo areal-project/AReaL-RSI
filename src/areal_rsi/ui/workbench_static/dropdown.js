@@ -37,7 +37,8 @@ class WorkbenchDropdown {
     this.menu.setAttribute("role", "listbox");
     this.menu.setAttribute("aria-label", label);
     this.menu.hidden = true;
-    document.body.append(this.menu);
+    // A modal makes nodes outside it inert, including portalled menus.
+    (root.closest("dialog") || document.body).append(this.menu);
     this.trigger.setAttribute("aria-controls", this.menu.id);
     this.trigger.addEventListener("click", () => this.isOpen ? this.close() : this.open());
     this.trigger.addEventListener("keydown", (event) => this.keydown(event));

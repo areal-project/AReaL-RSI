@@ -76,17 +76,19 @@ def test_event_write_survives_index_write_failure(
     assert recovered.event("third").sequence == 3
 
 
-def test_recent_events_skip_old_bodies_and_keep_incremental_cursor(tmp_path, monkeypatch):
+def test_recent_events_skip_old_bodies_and_keep_incremental_cursor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     store = ResearchStore(tmp_path, "recent")
     for _ in range(25):
         store.event("observed")
     read_text = Path.read_text
     reads = []
 
-    def track(path, *args, **kwargs):
+    def track(path: Path, *args: object, **kwargs: object) -> str:
         if path.parent.name == "events":
             reads.append(path.name)
-        return read_text(path, *args, **kwargs)
+        return read_text(path)
 
     monkeypatch.setattr(Path, "read_text", track)
     recent = store.events(limit=5)

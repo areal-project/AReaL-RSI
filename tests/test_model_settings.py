@@ -242,7 +242,9 @@ def test_invalid_settings_are_rejected(changes: dict[str, Any]) -> None:
         validate_model_settings({**SETTINGS, **changes})
 
 
-def test_model_settings_http_contract_and_projection(tmp_path: Path, monkeypatch) -> None:
+def test_model_settings_http_contract_and_projection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.delenv("RSI_API_KEY", raising=False)
     app = ResearchApp(tmp_path)
     server = WorkbenchServer(app, port=0)
@@ -280,14 +282,16 @@ def test_model_settings_http_contract_and_projection(tmp_path: Path, monkeypatch
         worker.join(5)
 
 
-def test_new_run_credentials_are_private_persisted_and_used_on_first_call(tmp_path, monkeypatch):
+def test_new_run_credentials_are_private_persisted_and_used_on_first_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("RSI_API_KEY", "default-test-secret")
 
-    async def scenario():
+    async def scenario() -> None:
         seen = []
 
         class Transport(WaitingTransport):
-            async def request(self, config, payload, sink):
+            async def request(self, config: Any, payload: Any, sink: Any) -> dict[str, Any]:
                 seen.append((config.model, config.api_key))
                 return response(
                     {

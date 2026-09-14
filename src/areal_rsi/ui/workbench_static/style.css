@@ -1431,3 +1431,9 @@ main {
   .graph-card .card-heading { padding: 14px; }
   .graph-controls button { font-size: 11px; padding: 7px; }
 }
+
+.chat-feedback { margin: 0 18px 12px; padding: 13px 15px; border: 1px solid #dce8d5; background: #f4f8ef; border-radius: 10px; }
+.chat-feedback-title { font-size: 13px; font-weight: 600; color: #3f5e38; }
+.chat-feedback small { display: block; margin-top: 6px; }
+.chat-feedback small:empty { display: none; }
+.delivery-status { display: block; margin-top: 8px; color: var(--muted); }

@@ -20,7 +20,8 @@ const state = {
   messageSignature: "",
   tab: "chat",
   polling: false,
-  sending: false,
+  sending: new Set(),
+  outgoing: new Map(),
   busy: false,
   drafts: new Map(),
   replyTargets: new Map(),
@@ -540,7 +541,7 @@ function render() {
   const ended = !["planned", "running", "paused"].includes(run.status);
   const responding = (run.agents || []).find((agent) => agent.agent_id === target.recipient);
   $("chat-input").disabled = ended;
-  $("send-message").disabled = ended || state.sending || target.stale;
+  $("send-message").disabled = ended || state.sending.has(run.run_id) || target.stale;
   $("chat-input-label").textContent = `向 ${agentName(target.recipient)} 发送消息`;
   $("chat-input").placeholder = target.reply_to
     ? "回答这个问题，或说明处理进展…"
@@ -551,11 +552,12 @@ function render() {
     ? "该问题已回复，请重新选择发送对象"
     : run.status === "paused"
     ? "研究已暂停，消息将在继续后处理"
-    : state.sending
+    : state.sending.has(run.run_id)
     ? "正在发送…"
     : responding?.state === "running"
       ? `${agentName(target.recipient)} 正在处理…`
       : "Enter 发送 · Shift+Enter 换行";
+  renderChatFeedback(run, target, responding);
   if (run.budget_stop_reason) notice(run.budget_stop_reason);
 }
 
@@ -594,7 +596,7 @@ function renderReplyTarget(run) {
     choices.unshift(target);
   }
   recipientDropdown.update(choices, selected.value,
-    state.sending || !["planned", "running", "paused"].includes(run.status));
+    state.sending.has(run.run_id) || !["planned", "running", "paused"].includes(run.status));
   const pending = $("pending-questions");
   pending.hidden = !questions.length;
   const questionSignature = JSON.stringify([run.run_id, questions, selected.value]);
@@ -1102,10 +1104,29 @@ function renderJobDetail(run, job) {
   $("node-panel").scrollTop = scroll;
 }
 
+function renderChatFeedback(run, target, agent) {
+  const box = $("chat-feedback");
+  const sending = state.sending.has(run.run_id);
+  const pending = (run.pending_agents || []).includes(target.recipient);
+  const working = agent?.state === "running";
+  const open = ["planned", "running"].includes(run.status);
+  const unserved = run.worker_alive === false && (pending || working);
+  box.hidden = !open || !(sending || pending || working);
+  if (box.hidden) return;
+  const status = sending ? "正在发送消息…" : unserved ? "消息已保存，等待恢复服务"
+    : working ? `等待 ${agentName(target.recipient)} 回复` : `消息已收到，等待 ${agentName(target.recipient)} 处理`;
+  const row = element("div", "chat-feedback-title");
+  if (!unserved) { const spinner = element("span", "spinner"); spinner.setAttribute("aria-hidden", "true"); row.append(spinner); }
+  row.append(document.createTextNode(status));
+  const detail = unserved ? "点击继续对话或恢复执行。" : working ? agentAction(run, agent) : "";
+  box.replaceChildren(row, element("small", "muted", detail));
+}
+
 function renderMessages(run) {
-  const messages = run.messages || [];
-  const busy = (run.agents || []).filter(agent => agent.state === "running");
-  const signature = JSON.stringify([run.run_id, messages, busy, run.agent_activity]);
+  const messages = [...(run.messages || [])];
+  const pending = state.outgoing.get(run.run_id);
+  if (pending && !messages.some((message) => message.message_id === pending.message_id)) messages.push(pending);
+  const signature = JSON.stringify([run.run_id, messages]);
   if (signature === state.messageSignature) return;
   state.messageSignature = signature;
   if (!messages.length) {
@@ -1140,6 +1161,19 @@ function renderMessages(run) {
     if (message.sender === "user") content.textContent = message.text;
     else appendFormattedText(content, message.text || "");
     block.append(heading, content);
+    if (message.delivery) {
+      block.append(element("small", "delivery-status", message.delivery === "failed" ? "发送未确认，请重试" : "正在发送…"));
+      if (message.delivery === "failed") {
+        const retry = element("button", "quiet", "重试发送");
+        retry.addEventListener("click", () => {
+          $("chat-input").value = message.text;
+          state.replyTargets.set(run.run_id, {value: message.reply_to || message.recipient, explicit: true});
+          render();
+          $("chat-form").requestSubmit();
+        });
+        block.append(retry);
+      }
+    }
     if (message.sender === "user" && message.reply_to) {
       const question = messages.find((item) => item.message_id === message.reply_to);
       if (question) block.insertBefore(
@@ -1147,17 +1181,6 @@ function renderMessages(run) {
     }
     return block;
   });
-  for (const agent of busy) {
-    const activity = run.agent_activity?.[agent.agent_id];
-    const action = agentAction(run, agent);
-    const progress = element("article", "message assistant progress-message");
-    progress.setAttribute("role", "status");
-    const name = agent.direction || agentName(agent.agent_id);
-    progress.append(element("div", "message-label", `${name} · 进行中`),
-      element("p", "", action),
-      element("time", "muted", activity?.updated_at ? `最近活动 ${time(activity.updated_at)}` : ""));
-    blocks.push(progress);
-  }
   container.replaceChildren(...blocks);
   container.scrollTop = follow ? container.scrollHeight : previous;
 }
@@ -1490,7 +1513,7 @@ for (const name of ["jobs", "activity"])
 $("chat-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const text = $("chat-input").value.trim();
-  if (!text || !state.runId || state.sending) return;
+  if (!text || !state.run || state.sending.has(state.runId)) return;
   if (modelSettingsChanged() || state.modelSavingRun) {
     notice("请先保存模型设置。");
     return;
@@ -1498,26 +1521,35 @@ $("chat-form").addEventListener("submit", async (event) => {
   const target = renderReplyTarget(state.run);
   if (target.stale) return;
   const runId = state.runId;
-  state.sending = true;
-  $("send-message").disabled = true;
-  $("chat-status").textContent = "正在发送…";
+  const previous = state.outgoing.get(runId);
+  const same = previous?.text === text && previous.recipient === target.recipient && previous.reply_to === target.reply_to;
+  const message = {sender: "user", recipient: target.recipient, reply_to: target.reply_to,
+    text, message_id: same ? previous.message_id : crypto.randomUUID(),
+    created_at: same ? previous.created_at : new Date().toISOString(), delivery: "sending"};
+  state.outgoing.set(runId, message);
+  state.sending.add(runId);
+  render();
+  $("messages").scrollTop = $("messages").scrollHeight;
   try {
     await api(`/api/runs/${encodeURIComponent(runId)}/chat`, {
       text,
-      message_id: crypto.randomUUID(),
+      message_id: message.message_id,
       ...(target.reply_to ? { reply_to: target.reply_to } : { recipient: target.recipient }),
     });
     state.drafts.set(runId, "");
     state.replyTargets.delete(runId);
     if (state.runId === runId && $("chat-input").value.trim() === text)
       $("chat-input").value = "";
-    await refresh(true);
-    $("messages").scrollTop = $("messages").scrollHeight;
+    message.delivery = null;
+    if (state.runId === runId) {
+      await refresh(true);
+      $("messages").scrollTop = $("messages").scrollHeight;
+    }
   } catch (error) {
-    notice(error.message);
+    message.delivery = "failed";
+    if (state.runId === runId) notice(error.message);
   } finally {
-    state.sending = false;
-    $("send-message").disabled = false;
+    state.sending.delete(runId);
     if (state.run) render();
   }
 });

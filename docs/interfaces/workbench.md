@@ -17,23 +17,25 @@ server.serve_forever()
 
 | HTTP | action | params / 返回值 |
 | --- | --- | --- |
-| GET `/api/bootstrap` | `bootstrap` | `{}` → `{allow_simulation, default_simulated, has_config, models: [{id, efforts}]}`；HTTP 层追加 `csrf_token` |
+| GET `/api/bootstrap` | `bootstrap` | `{}` → `{allow_simulation, default_simulated, has_config, models: [{id, efforts}], default_model_settings}`；HTTP 层追加 `csrf_token` |
 | GET `/api/runs` | `list` | `{}` → `{"runs": [...]}` |
-| POST `/api/runs` | `create` | `{message?, message_id?}` → `{run_id}` |
-| GET `/api/runs/{id}?after=N` | `detail` | `{run_id, after}` → 下方快照 |
+| POST `/api/runs` | `create` | `{message?, message_id?, model_settings?}` → `{run_id}` |
+| GET `/api/runs/{id}?after=N&event_limit=100` | `detail` | `{run_id, after, event_limit?}` → 下方快照 |
 | POST `/api/runs/{id}/chat` | `chat` | `{run_id, text, message_id?, reply_to?, recipient?}` → `{run_id, message_id, status}` |
-| POST `/api/runs/{id}/model-settings` | `model-settings` | `{run_id, base_url, model, reasoning_effort}` → `{run_id, status}` |
+| POST `/api/runs/{id}/model-settings` | `model-settings` | `{run_id, base_url, model, reasoning_effort, api_key?}` → `{run_id, status}` |
 | POST `/api/runs/{id}/start` | `start` | `{run_id}` → `{status}` |
 | POST `/api/runs/{id}/pause` | `pause` | `{run_id}` → `{status}` |
 | POST `/api/runs/{id}/resume` | `resume` | `{run_id}` → `{status}` |
 | POST `/api/runs/{id}/stop` | `stop` | `{run_id, reason?}` → `{status}` |
 | POST `/api/runs/{id}/retry` | `retry` | `{run_id, agent_id}` → `{status}` |
 
-创建请求只接受首条消息和消息 ID，也可以用 `{}` 新建空对话。HTTP 层固定传入 `conversation=true`，不接受模板选择或模拟模式。Interaction 在准备阶段逐步保存 brief 与执行配置，用 `prepare_research` 发布总结；用户后续明确要求开始，才调用 `start_research`。按钮 `start` 使用相同的准备状态检查。
+创建请求接受可选首条消息、消息 ID 和 `model_settings`，也可以用 `{}` 新建空对话。模型设置在第一轮对话前保存。HTTP 层固定传入 `conversation=true`，不接受模板选择或模拟模式。Interaction 逐步保存需求与执行条件；用户已明确授权开始时，可用 `handoff_research` 交接给 RSI，否则先发布总结供用户确认。
 
 chat/control 在消息或状态持久化后返回，不等待模型完整回合。Web 不提供通用产物导出入口；候选快照与研究结论按 run 保存。内部应用的旧归档操作不属于 Web API。
 
-模型设置仅在 `status=planned` 且没有 `started_at` 时可写。后端串行处理保存与启动，拒绝开始后的变更；暂停、停止不解除锁定。地址必须是不含凭证、查询参数或片段的 HTTP(S) 地址；模型与推理强度由 `models` 目录校验。三个设置独立保存在 run 的 `coordination/config.json`，修改快照存入 `coordination/configurations/`。准备阶段的显式切换会中断当前 Interaction 请求，沿用原会话恢复；已完成的工具操作不会重做。公共接口仅暴露这三个设置和 `editable`，不返回完整配置或凭证。
+模型设置仅在 `status=planned` 且没有 `started_at` 时可写。后端串行处理保存与启动，拒绝开始后的变更；暂停、停止不解除锁定。地址必须是不含凭证、查询参数或片段的 HTTP(S) 地址。模型支持预设和自定义名称；预设按 `models` 目录校验推理强度。`create.model_settings` 与 `model-settings` 接受地址、模型、推理强度及可选 `api_key`；创建时省略设置则继承服务端默认值。空密钥沿用当前值。
+
+公开设置包含 `base_url / model / reasoning_effort / editable / has_credentials`，不返回密钥。普通配置存入 `coordination/config.json`，修订存入 `configurations/`；密钥独立保存在 run 内的 `credentials.json`，权限 `0600`，配置只保存文件引用。`bootstrap.default_model_settings` 提供默认模型设置及密钥是否已配置，不包含密钥值。准备阶段修改配置会中断当前 Interaction 请求，沿用原会话恢复；已经完成的工具不会重做。即使工作线程尚未进入循环，取消时也会释放资源。
 
 已经开始过的研究即使被停止，也会显示「恢复研究」。用户调用 `resume` 后接续原 run、会话、报告和候选；已完成作业不重放，取消的未完成任务由 RSI 重新安排。单独被停止的方向不自动恢复。最新验证为基础设施错误时，概览显示 `execution_blocker: {job_id, error, created_at}`；RSI 应提问并等待处理，不能将环境阻塞作为结束研究的理由。
 
@@ -47,7 +49,7 @@ chat/control 在消息或状态持久化后返回，不等待模型完整回合�
 run_id, objective, status, simulated, started_at?, finished_at?, worker_alive?
 brief: { objective, instructions, limits: ResearchLimits, verification: contract|null }
 intake: { status: discussing|ready, summary?, environment?, execution_required? }
-model_settings: { base_url, model, reasoning_effort, editable }
+model_settings: { base_url, model, reasoning_effort, editable, has_credentials }
 pending_agents: [agent_id]
 plan: string
 agents: [{ agent_id, direction?, state, current_iteration_id?, wait_reason?, error? }]
@@ -76,7 +78,7 @@ budget_stop_reason?: string
 
 ## 执行进度
 
-研究图同时展示未完成的 ResearchIteration 和独立执行作业。作业使用 `job:<job_id>` 作为前端选择标识，不创建额外的 ResearchIteration；有 `iteration_id` 时连接其所属研究节点。RSI 直接提交的作业显示在「RSI 执行」一行。节点、作业和当前进展卡都可打开对应详情，「定位进行中」在未完成任务之间切换。
+研究图展示所有 ResearchIteration，默认仅附加未结束的执行作业；展开后可查看全部作业。作业使用 `job:<job_id>` 作为前端选择标识，不创建额外的 ResearchIteration；有 `iteration_id` 时连接其所属研究节点。历史记录中 RSI 直接提交的作业显示在「RSI 历史作业」一行；当前角色约定由研究员承担实际执行。节点、作业和当前进展卡都可打开对应详情，「定位进行中」在未完成任务之间切换。
 
 `rsi` 是提交者 ID，界面显示为 RSI Agent；`search` 是迭代验证阶段，不是联网搜索。起点候选的 `search` 验证显示「起点评测」，其他候选显示「迭代验证」，`final` 显示「最终验证」，`diagnostic` 显示「诊断检查」。起点仍然可为空。
 
@@ -108,8 +110,16 @@ budget_stop_reason?: string
 
 准备阶段显示对话和需求摘要，研究开始后展示计划、搜索图和执行记录。没有验证协议时隐藏成绩卡。`agents[].direction` 是 RSI 为当前方向起的名称，不由前端填写固定场景标题。配置、环境变量和密钥不进入 intake 公共投影。
 
-消息接收对象和手机端研究切换共用 `dropdown.js` 的 `WorkbenchDropdown`，以 `update(choices, value, disabled)` 更新选项、当前值与禁用状态。按钮和弹出菜单均使用工作台样式；支持键盘选择、文字定位、Esc/外部点击关闭、长列表滚动和视口内定位。菜单渲染在卡片之外，后台刷新保留当前浏览位置。
+消息接收对象和手机端研究切换共用 `dropdown.js` 的 `WorkbenchDropdown`，以 `update(choices, value, disabled)` 更新选项、当前值与禁用状态。按钮和弹出菜单均使用工作台样式；支持键盘选择、文字定位、Esc/外部点击关闭、长列表滚动和视口内定位。菜单渲染在卡片之外；新建研究弹窗内的菜单挂载在弹窗中，保持可交互。后台刷新保留当前浏览位置。
 
 浏览器每 1.5 秒获取公共状态，不会触发模型。事件游标断开后继续获取，节点选择和图的滚动位置按 run 保存在浏览器；刷新不会变成新的模型任务。对话输入和节点详情独立更新，后台刷新不会重置正在输入的消息或当前详情滚动位置。模型和作业状态由 backend 提供。正式 ResearchApp 默认过滤模拟记录并拒绝访问其详情；原始数据的来源标记不被改写。
 
 验收 fixture：`.venv/bin/python tests/test_workbench.py --serve`，在 `http://127.0.0.1:8877` 展示模拟研究和创建/聊天/开始/控制交互。fixture 只用于界面验收；真实应用需连接 Coordinator 和 ResearchEngine。HTTP 测试覆盖这些操作、事件游标、空分数/零分数、字段投影和跨站防护。
+
+## 加载与耗时
+
+`event_limit` 可选，范围 1–1000。工作台请求最近 100 个增量事件；后端通过事件序号直接跳过旧文件。省略参数仍返回完整增量事件，兼容其他消费者。`event_cursor` 用于下一次请求，限制窗口不删除磁盘事件。前端按 run 保留快照与游标，切换时取消过时请求，并拒绝把其他研究的迟到响应写进当前页面。
+
+研究历时取 `started_at → finished_at`，未结束时取当前时间；包括等待和暂停。节点历时取 `created_at → report.created_at`，无报告的结束节点取 `updated_at`；研究已结束时不继续累加残留节点的时间。界面不据此推算模型计算时长或剩余时间。
+
+前端 DOM 交互回归：`npm ci --prefix tests/frontend && npm test --prefix tests/frontend`。覆盖切换竞态、节点耗时、缩放、作业过滤、消息重试与新建配置。它不替代真实浏览器的视觉验收。

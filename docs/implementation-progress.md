@@ -1,7 +1,8 @@
 # Research workbench delivery ledger
 
-Implemented on `zwh/dev`, starting at `b97fa80`. All changes are local commits;
-nothing has been pushed. The original fixed evolution workflows remain available.
+This is the historical delivery ledger, originally developed on `zwh/dev` after
+`b97fa80`. The current commit organization is documented in
+[development-history.md](development-history.md). The original fixed evolution workflows remain available.
 The open research entry uses generic nodes and does not require a baseline,
 Solution, verification, or `EvolutionResult` for every task.
 

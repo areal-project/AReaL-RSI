@@ -1,6 +1,6 @@
 # Python RSI Infra 架构边界
 
-本文说明固定 Harness / Artifact 工作流。开放研究工作台使用独立的 Interaction → RSI → Research 编排，见[设计说明](rsi-research-design.md)和[使用说明](research-workbench.md)。两种入口共享基础存储与工具能力。
+本文说明固定 Harness / Artifact 工作流。开放研究工作台使用独立的 Interaction → RSI → Research 编排，见[设计说明](rsi-research-design.md)和[启动指南](../README.md)。两种入口共享基础存储与工具能力。
 
 ## 1. 组件与数据流
 

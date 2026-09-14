@@ -70,7 +70,7 @@ COMMON = [
     ),
     definition(
         "read_candidate_file",
-        "读取已保存候选中的文本文件，不切换工作区。提供 candidate_id 和相对文件路径。",
+        "读取已保存产物中的文本文件，不切换工作区。path 为空时列出实际文件路径。",
         candidate_id=STRING,
         path=STRING,
     ),
@@ -124,7 +124,8 @@ RSI = [
     ),
     definition(
         "spawn_researcher",
-        "新建一个研究方向，下发首轮阶段问题，并说明拿到什么证据或结论后上报。",
+        "研究的任何阶段都可新建方向，下发首轮阶段问题与汇报点。"
+        "max_agents 限制同时存活数量，非累计创建数；停止旧研究员后可复用名额。",
         direction=STRING,
         instruction=STRING,
         references=REFERENCES,
@@ -138,7 +139,8 @@ RSI = [
     ),
     definition(
         "stop_researcher",
-        "停止这个研究方向，系统会取消该研究员正在进行的执行。",
+        "停止这个研究方向并释放研究员名额，系统会取消该研究员正在进行的执行；"
+        "历史会话、报告与产物仍保留。等待回复不会释放名额。",
         agent_id=STRING,
         reason=STRING,
     ),
@@ -409,6 +411,16 @@ class ResearchActions:
             candidate = c.store.get("candidates", args["candidate_id"], CandidateSnapshot)
             manifest = await c.store.content.read_json(candidate.content)
             assert isinstance(manifest, dict) and isinstance(manifest["files"], dict)
+            if not args["path"] or args["path"] not in manifest["files"]:
+                files = sorted(manifest["files"])
+                return ToolResult(
+                    {
+                        "candidate_id": candidate.candidate_id,
+                        "files": files[:1000],
+                        "truncated": len(files) > 1000,
+                        "notice": "请选择产物中的实际路径" if args["path"] else "",
+                    }
+                )
             relative_name = safe_relative(args["path"]).as_posix()
             from areal_rsi.api.base import ContentRef
 

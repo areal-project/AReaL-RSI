@@ -551,7 +551,10 @@ class Coordinator:
         if not any(a.agent_id == agent_id for a in run.research_agents):
             active = sum(a.state != AgentState.STOPPED for a in run.research_agents)
             if active >= self.store.brief().limits.max_agents:
-                raise ValueError("Research agent limit reached; stop a direction before adding one")
+                raise ValueError(
+                    "Research Agent 同时存活数量已达上限（包含等待中的研究员）；"
+                    "先 stop_researcher 释放名额，再创建新方向。累计创建数量不限。"
+                )
             if not direction.strip():
                 raise ValueError("Research direction must be concrete")
             run.research_agents += (

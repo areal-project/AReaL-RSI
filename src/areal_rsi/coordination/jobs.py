@@ -54,6 +54,7 @@ class ResearchExecution:
         self.instructions = ""
         self.simulated, self.mock_duration = simulated, mock_duration
         self.inline_wait_seconds = 1.0
+        self._poll_lock = asyncio.Lock()
         limits = self.c.store.brief().limits
         self.manager = JobManager(
             self.c.store.root,
@@ -165,6 +166,7 @@ class ResearchExecution:
                                 ],
                                 "output_subdir": cmd.output_subdir,
                                 "feedback_file": cmd.feedback_file,
+                                "auto_verify_output": cmd.auto_verify_output,
                             }
                             for cmd in self.commands.values()
                         ],
@@ -444,7 +446,9 @@ class ResearchExecution:
         spec = command.bind(
             values, cwd=str(workspace), agent_id=agent_id, verification=str(verification).lower()
         )
-        if source_job_id:
+        if source_job_id and source_content is not None:
+            # Replaying an execution must retain its command. Verification of
+            # a published artifact has provenance too, but is a different command.
             old = self.manager.get(source_job_id)
             old_values = dict(values)
             for name, value in {
@@ -497,6 +501,7 @@ class ResearchExecution:
             "output_subdir": command.output_subdir,
             "public_output_subdir": command.public_output_subdir,
             "feedback_file": command.feedback_file,
+            "auto_verify_output": command.auto_verify_output if not verification else None,
             "created_at": now(),
             "spec": encode(spec),
         }
@@ -524,6 +529,9 @@ class ResearchExecution:
             "parameters": info.get("parameters"),
             "candidate_id": info.get("candidate_id"),
             "source_job_id": info.get("source_job_id"),
+            "published_candidate_id": info.get("published_candidate_id"),
+            "verification_job_id": info.get("verification_job_id"),
+            "publication_error": info.get("publication_error"),
             "phase": info.get("phase") if info["verification"] else None,
             "state": record.state,
             "gpu_ids": list(record.assigned_gpu_ids),
@@ -645,7 +653,64 @@ class ResearchExecution:
             subscription["notified"] = True
             self.save()
 
+    async def publish_candidate(self, record: JobRecord) -> None:
+        """Archive configured outputs and request trusted scoring without a model turn.
+
+        Stable candidate/job IDs make recovery replayable. The command's receipt
+        remains feedback only; it cannot supply a trusted score.
+        """
+        info = self.jobs[record.job_id]
+        subdir = info.get("auto_verify_output")
+        if subdir is None or record.state != "succeeded":
+            return
+        output = Path(info["output"])
+        source = output if subdir == "." else output / safe_relative(subdir)
+        if not source.resolve().is_relative_to(output.resolve()):
+            raise ValueError("Configured artifact path escapes job output")
+        if source.is_symlink() or any(p.is_symlink() for p in source.rglob("*")):
+            raise ValueError("Job output must not contain symbolic links")
+        if not source.is_dir() or not any(p.is_file() for p in source.rglob("*")):
+            return  # A diagnostic or failed attempt need not produce a candidate.
+        candidate_id = effect_id("candidate", "output:" + record.job_id)
+        candidate_path = self.c.store.root / "candidates" / f"{candidate_id}.json"
+        if not candidate_path.exists():
+            await self.c.store.snapshot(
+                source,
+                agent_id=info["agent_id"],
+                description="作业产物：" + record.job_id,
+                parent_candidate_id=info.get("candidate_id"),
+                candidate_id=candidate_id,
+                scope_base_candidate_id=self.c.state["seed_candidate_id"],
+            )
+        self.c.link_reference(
+            info["agent_id"],
+            self.c.store.paths.reference(candidate_path),
+            iteration_id=info["iteration_id"],
+        )
+        info["published_candidate_id"] = candidate_id
+        self.save()
+        if self.c.state["status"] != "running":
+            return
+        result = await self.submit(
+            info["agent_id"],
+            ToolCall(
+                name="verify_candidate",
+                arguments={"candidate_id": candidate_id, "phase": "search"},
+                call_id="auto-verify:" + record.job_id,
+            ),
+            source_job_id=record.job_id,
+        )
+        job_id = result.output["job_id"]
+        self.jobs[job_id]["iteration_id"] = info["iteration_id"]
+        self.jobs[job_id]["automatic"] = True
+        info["verification_job_id"] = job_id
+        self.save()
+
     async def poll(self) -> bool:
+        async with self._poll_lock:
+            return await self._poll()
+
+    async def _poll(self) -> bool:
         # A crash after the intent is stored but before manager.submit is safe:
         # the job has a stable identity and immutable input snapshot.
         verify_calls = sum(bool(info["verification"]) for info in self.jobs.values())
@@ -663,7 +728,7 @@ class ResearchExecution:
             if self.find_job(key) is None:
                 self.manager.submit(decode(JobSpec, info["spec"]), job_id=key)
             must_cancel = (
-                actor_stopped
+                (actor_stopped and not info.get("automatic"))
                 or self.c.state["status"] in {"stopped", "succeeded", "failed"}
                 or self.c.state.get("budget_stop_reason") == "Run wall-time budget exhausted"
             )
@@ -773,11 +838,17 @@ class ResearchExecution:
                 iteration_id=info["iteration_id"],
             )
             self.publish_feedback(record)
+            try:
+                await self.publish_candidate(record)
+            except Exception as exc:
+                # Scoring/publication failure must not discard useful experiment
+                # feedback or strand its owner. It stays visible and can be retried.
+                info["publication_error"] = f"{type(exc).__name__}: {exc}"
             self.notify_completion(record)
             info["processed"] = True
             self.save()
             self.c.store.event("job_completed", agent_id=info["agent_id"], job=self.public(record))
-        return any(not record.terminal for record in records)
+        return any(not self.manager.get(key).terminal for key in self.jobs)
 
     def close(self, *, cancel: bool = False) -> None:
         self.manager.close(preserve_running=not cancel)

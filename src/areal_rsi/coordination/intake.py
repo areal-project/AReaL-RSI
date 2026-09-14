@@ -85,6 +85,12 @@ def validate_execution(config: ResearchConfig) -> list[str]:
             issues.append(f"{cmd.name} 的超时必须大于零")
         if Path(cmd.output_subdir).is_absolute() or ".." in Path(cmd.output_subdir).parts:
             issues.append(f"{cmd.name} 的公开输出目录必须是作业内的相对路径")
+        if cmd.auto_verify_output is not None and (
+            not cmd.auto_verify_output
+            or Path(cmd.auto_verify_output).is_absolute()
+            or ".." in Path(cmd.auto_verify_output).parts
+        ):
+            issues.append(f"{cmd.name} 的产物目录必须是作业内的相对路径")
         for arg in cmd.command:
             placeholder = re.fullmatch(r"\{([A-Za-z_]\w*)\}", arg)
             if placeholder and placeholder[1] not in cmd.parameters:
@@ -302,7 +308,7 @@ class ResearchIntake:
         config.brief.limits.allowed_paths = (
             incoming.limits.allowed_paths if allowed == ("*",) else allowed
         )
-        config.metadata["execution_instructions"] = incoming.instructions
+        config.metadata.setdefault("execution_instructions", incoming.instructions)
         if config.brief.verification is None:
             config.brief.verification = incoming.verification
         elif incoming.verification:
@@ -378,7 +384,11 @@ class ResearchIntake:
                     raise ValueError("当前没有待完成的 RSI 执行接入")
                 await self.freeze_execution()
                 return ToolResult({"ready": True})
-            if self.c.state["status"] != "planned" and not preparing:
+            if (
+                self.c.state["status"] != "planned"
+                and not preparing
+                and call.name not in {"inspect_environment", "get_adapter_guide"}
+            ):
                 raise ValueError("研究已经开始，执行方式和评测条件不能再改；需要变更时新建研究")
             args = call.arguments
             if call.name == "get_adapter_guide":

@@ -10,6 +10,7 @@ import os
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +25,7 @@ from areal_rsi.api.research import (
 from areal_rsi.base.runs import FileRunStore
 from areal_rsi.base.storage import decode, encode, new_id, now, write_json
 from areal_rsi.coordination.actions import ResearchActions
-from areal_rsi.coordination.agent_tools import AgentTools
+from areal_rsi.coordination.agent_tools import TOOL_PROMPT, AgentTools
 from areal_rsi.coordination.config import (
     MODEL_EFFORTS,
     MODEL_FIELDS,
@@ -332,6 +333,13 @@ class ResearchApp:
         config.brief = c.store.brief()
         write_json(c.store.root / "coordination" / "config.json", config.public())
         pending_setup = c.state.get("execution_setup") == "pending"
+        # A complete operator configuration imported during intake needs no
+        # second model turn to approve the same commands after the clock starts.
+        prepared_setup = (
+            pending_setup
+            and bool(config.commands or config.verifier)
+            and not validate_execution(config)
+        )
         if "intake" in c.state and not pending_setup:
             issues = validate_execution(config)
             if issues:
@@ -340,12 +348,17 @@ class ResearchApp:
         # Configuration may have changed over several Interaction turns. Bind its
         # final revision before RSI can submit any jobs.
         active.config = config
+        active.tools.tool_prompt = config.metadata.get("agent_tool_instructions", TOOL_PROMPT)
+        register_sources(active.actions, enabled=config.metadata.get("allow_web_access", True))
         active.execution.commands = {item.name: item for item in config.commands}
         active.execution.verifier = config.verifier
         active.execution.execution_env = config.execution_env
         active.execution.read_verification = self._verification_reader(c, config)
         active.execution.instructions = str(config.metadata.get("execution_instructions", ""))
         active.engine.max_concurrent_turns = config.brief.limits.max_agents + 2
+        if prepared_setup:
+            await self.freeze_execution(c)
+            pending_setup = False
         if not pending_setup:
             await self._seed(c, config)
         await active.actions.initialize_workspace("rsi")
@@ -369,12 +382,15 @@ class ResearchApp:
             raise ValueError("；".join(issues))
         active = self.active[c.store.run_id]
         active.config = config
+        active.tools.tool_prompt = config.metadata.get("agent_tool_instructions", TOOL_PROMPT)
+        register_sources(active.actions, enabled=config.metadata.get("allow_web_access", True))
         active.execution.commands = {item.name: item for item in config.commands}
         active.execution.verifier = config.verifier
         active.execution.execution_env = config.execution_env
         active.execution.read_verification = self._verification_reader(c, config)
         active.execution.instructions = str(config.metadata.get("execution_instructions", ""))
         await self._seed(c, config)
+        await active.actions.initialize_workspace("rsi")
         write_json(
             c.store.root / "coordination" / "execution-config.json", config.public(), immutable=True
         )
@@ -450,8 +466,7 @@ class ResearchApp:
             await runtime.reconfigure_session(session, config.model_settings_revision)
         actions = ResearchActions(c)
         await actions.initialize_workspace("rsi")
-        if config.metadata.get("allow_web_access", True):
-            register_sources(actions)
+        register_sources(actions, enabled=config.metadata.get("allow_web_access", True))
         agent_tools = AgentTools(
             actions,
             self.root,
@@ -477,6 +492,21 @@ class ResearchApp:
         )
 
         async def poll() -> bool:
+            current = self.active[c.store.run_id].config
+            limit = current.brief.limits.max_wall_seconds
+            reserve = current.metadata.get("finalization_reserve_seconds", 0)
+            started = c.state.get("started_at")
+            if (
+                current.finalizer
+                and limit
+                and reserve
+                and current.metadata.get("time_limit_scope", "total") == "total"
+                and started
+                and c.state["status"] == "running"
+            ):
+                elapsed = datetime.now().timestamp() - datetime.fromisoformat(started).timestamp()
+                if elapsed >= limit - reserve:
+                    c.stop("已到探索时间上限，预留剩余时间自动复测最佳版本")
             if c.state["status"] == "stopped":
                 execution.close(cancel=True)
                 return False
@@ -498,14 +528,15 @@ class ResearchApp:
             try:
                 await engine.serve()
                 execution.close(cancel=True)
+                current = self.active[c.store.run_id].config
                 if (
-                    config.finalizer
+                    current.finalizer
                     and c.state["status"] in {"stopped", "succeeded"}
                     and not c.state.get("user_stopped")
                 ):
                     from areal_rsi.coordination.finalization import finalize
 
-                    await finalize(c, config)
+                    await finalize(c, current)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -626,6 +657,10 @@ class ResearchApp:
                         "error": record["error"],
                         "simulated": c.state["simulated"],
                         "result": info.get("result"),
+                        "published_candidate_id": info.get("published_candidate_id"),
+                        "verification_job_id": info.get("verification_job_id"),
+                        "source_job_id": info.get("source_job_id"),
+                        "publication_error": info.get("publication_error"),
                         "progress": read_progress(Path(info["output"])),
                     }
                 )

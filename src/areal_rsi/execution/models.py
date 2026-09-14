@@ -100,6 +100,9 @@ class ApprovedCommand:
     # Hidden final pools default to one candidate. Read-only result aggregation
     # and reusable public validators can explicitly accept several candidates.
     final_candidate_policy: Literal["single", "multiple"] = "single"
+    # Optional operator-owned artifact directory relative to output. Successful
+    # jobs publish a snapshot and run the trusted search verifier automatically.
+    auto_verify_output: str | None = None
 
     def __post_init__(self) -> None:
         if self.final_candidate_policy not in {"single", "multiple"}:

@@ -9,7 +9,13 @@ from areal_rsi.coordination.web_tools import ResearchWebClient
 from areal_rsi.modules.responses import ToolCall, ToolHandler, ToolResult
 
 
-def register_sources(actions: ResearchActions, client: ResearchWebClient | None = None) -> None:
+def register_sources(
+    actions: ResearchActions, client: ResearchWebClient | None = None, *, enabled: bool = True
+) -> None:
+    if not enabled:
+        for name in ("search_web", "fetch_url"):
+            actions.extras.pop(name, None)
+        return
     web = client or ResearchWebClient()
 
     def factory(agent_id: str) -> ToolHandler:
@@ -46,7 +52,8 @@ def register_sources(actions: ResearchActions, client: ResearchWebClient | None 
     actions.register(
         definition(
             "search_web",
-            "联网查找方法、论文和实现。搜索结果是调研线索，需要阅读和判断后形成结论。",
+            "联网查找资料。每次查询聚焦一个问题，结果是线索，须阅读原文并判断相关性。"
+            "没有相关结果时调整关键词或来源，不把检索失败当作不存在可行方案。",
             query=STRING,
         ),
         factory,

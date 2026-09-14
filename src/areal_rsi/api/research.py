@@ -12,7 +12,9 @@ from areal_rsi.api.base import JsonValue as JsonValue  # Recursive JsonObject ty
 
 @dataclass(slots=True)
 class ResearchLimits:
-    max_agents: int = 1
+    max_agents: int = (
+        1  # Simultaneously live researchers, including waiting; not lifetime creations.
+    )
     max_nodes: int | None = 20
     max_model_calls: int | None = 200
     max_total_tokens: int | None = 1_000_000

@@ -110,7 +110,9 @@ def public_detail(value: Json) -> Json:
         "worker_alive waiting_for_user budget_stop_reason execution_setup",
     )
     result["brief"] = _brief(value.get("brief"))
-    result["finalization"] = _fields(value.get("finalization"), "status error")
+    result["finalization"] = _fields(
+        value.get("finalization"), "status error exploration_finished_at"
+    )
     result["intake"] = _fields(value.get("intake"), "status summary environment execution_required")
     result["model_settings"] = _fields(
         value.get("model_settings"), "base_url model reasoning_effort editable has_credentials"
@@ -180,7 +182,8 @@ def public_detail(value: Json) -> Json:
                 job,
                 "job_id agent_id status title description created_at started_at finished_at error "
                 "gpu_ids progress_message agent_name iteration_id candidate_id phase "
-                "verification is_baseline",
+                "verification is_baseline published_candidate_id verification_job_id "
+                "source_job_id publication_error",
             ),
             "progress": public_progress(job.get("progress")),
             "result": _score(job.get("result")),

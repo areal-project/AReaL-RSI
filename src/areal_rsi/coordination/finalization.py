@@ -12,6 +12,7 @@ import hashlib
 import json
 import shutil
 from dataclasses import replace
+from datetime import datetime
 from typing import Any
 
 from areal_rsi.api.base import RunState
@@ -31,21 +32,57 @@ async def finalize(c: Coordinator, config: ResearchConfig) -> None:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         with JobManager(c.store.root, max_jobs=None, auto_monitor=False) as manager:
             try:
-                c.state["finalization"] = {"status": "running"}
+                cutoff = c.state.get("finalization", {}).get("exploration_finished_at")
+                if cutoff is None:
+                    finished = c.store.run().finished_at
+                    cutoff = (
+                        datetime.fromisoformat(finished).timestamp()
+                        if finished
+                        else (datetime.now().timestamp())
+                    )
+                    if c.state.get("started_at") and config.brief.limits.max_wall_seconds:
+                        cutoff = min(
+                            cutoff,
+                            datetime.fromisoformat(c.state["started_at"]).timestamp()
+                            + config.brief.limits.max_wall_seconds,
+                        )
+                c.state["finalization"] = {
+                    "status": "running",
+                    "exploration_finished_at": cutoff,
+                }
                 c.save()
                 run = c.store.run()
                 run.finished_at = None
                 c.store.save_run(run)
                 c.store.event("finalization_started", summary="探索已结束，正在自动复测和归档")
-                await _finish(c, config, manager)
+                seconds = config.brief.limits.max_wall_seconds
+                started = c.state.get("started_at")
+                remaining = (
+                    max(
+                        0,
+                        seconds
+                        - (
+                            datetime.now().timestamp() - datetime.fromisoformat(started).timestamp()
+                        ),
+                    )
+                    if seconds is not None
+                    and started
+                    and config.metadata.get("time_limit_scope", "total") == "total"
+                    else None
+                )
+                async with asyncio.timeout(remaining):
+                    await _finish(c, config, manager)
             except asyncio.CancelledError:
-                c.state["finalization"] = {"status": "interrupted"}
+                c.state["finalization"].update(status="interrupted")
                 c.save()
                 if c.state.get("user_stopped"):
                     manager.close(preserve_running=False)
                 raise
             except Exception as exc:
-                c.state["finalization"] = {"status": "failed", "error": str(exc)[:500]}
+                if isinstance(exc, TimeoutError):
+                    manager.close(preserve_running=False)
+                    exc = TimeoutError("研究已到总时间上限，停止最终复测；已验证的最佳版本仍保留")
+                c.state["finalization"].update(status="failed", error=str(exc)[:500])
                 c.save()
                 c.store.event(
                     "finalization_failed",
@@ -101,9 +138,12 @@ async def _finish(c: Coordinator, config: ResearchConfig, manager: JobManager) -
                 phase=phase,
             )
         output.mkdir(parents=True, exist_ok=True)
-        spec = replace(
-            command.bind(values, cwd=str(workspace), **metadata), env=dict(config.execution_env)
-        )
+        env = dict(config.execution_env)
+        if config.metadata.get("time_limit_scope") == "exploration":
+            env["RSI_EXPLORATION_FINISHED_AT"] = str(
+                c.state["finalization"]["exploration_finished_at"]
+            )
+        spec = replace(command.bind(values, cwd=str(workspace), **metadata), env=env)
         jobs.setdefault(
             key,
             {
@@ -174,7 +214,7 @@ async def _finish(c: Coordinator, config: ResearchConfig, manager: JobManager) -
     assert final is not None
     c.state.update(
         selected_candidate_id=candidate_id,
-        finalization={"status": "completed"},
+        finalization={**c.state["finalization"], "status": "completed"},
         verify_calls=sum(bool(item["verification"]) for item in jobs.values()),
     )
     contract = c.store.brief().verification
@@ -196,7 +236,7 @@ async def _finish(c: Coordinator, config: ResearchConfig, manager: JobManager) -
     c.save()
     message = (
         f"自动收尾完成，最终 {contract.metric if contract else 'score'}={final.score}。"
-        "冻结源码、逐题成绩和提交记录已归档。"
+        "冻结产物、验证结果和执行记录已归档。"
     )
     c.enqueue("runtime", "user", message, key="automatic-finalization-completed")
     c.store.event("finalization_completed", summary=message)

@@ -1,6 +1,6 @@
 """Public web/paper retrieval for application agents, independent of Codex tools.
 
-Sources: DuckDuckGo's documented HTML search, the arXiv Atom API, and Crossref's
+Sources: Brave and DuckDuckGo HTML search, Bing RSS, the arXiv Atom API, and Crossref's
 public works API. Search snippets are leads, not verified findings. Returned web
 content is untrusted input and must never override agent or tool instructions.
 
@@ -32,6 +32,7 @@ import time
 import xml.etree.ElementTree as ET
 import zlib
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Any
@@ -43,6 +44,8 @@ Resolver = Callable[[str, int], Awaitable[list[str]]]
 _USER_AGENT = "AReaL-RSI/0.1 (+https://github.com/areal-project/AReaL-RSI)"
 _ARXIV_LOCK = threading.Lock()
 _ARXIV_NEXT_REQUEST = 0.0
+_BRAVE_LOCK = threading.Lock()
+_BRAVE_NEXT_REQUEST = 0.0
 _VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "wbr"}
 _BLOCK_TAGS = {"p", "div", "article", "section", "main", "li", "h1", "h2", "h3", "h4", "tr", "pre"}
 _ARXIV_ID = re.compile(r"(?:\d{4}\.\d{4,5}|[a-zA-Z.-]+/\d{7})(?:v\d+)?$")
@@ -211,6 +214,77 @@ class _DuckResults(HTMLParser):
             self.results[-1][self.capture[0]] += data
 
 
+class _BraveResults(_DuckResults):
+    """Extract ordinary linked results, excluding generated answers and widgets."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.result_depth: int | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag not in _VOID_TAGS:
+            self.depth += 1
+        attributes = dict(attrs)
+        classes = (attributes.get("class") or "").split()
+        if "snippet" in classes and attributes.get("data-type") == "web":
+            self.result_depth = self.depth
+            self.results.append({"title": "", "url": "", "snippet": ""})
+        if self.result_depth is None:
+            return
+        if tag == "a" and "l1" in classes:
+            with suppress(WebFetchError):
+                self.results[-1]["url"] = str(_url(attributes.get("href") or ""))
+        elif "search-snippet-title" in classes:
+            self.capture = ("title", self.depth)
+        elif "generic-snippet" in classes:
+            self.capture = ("snippet", self.depth)
+
+    def handle_endtag(self, tag: str) -> None:
+        if self.depth == self.result_depth:
+            self.result_depth = None
+        super().handle_endtag(tag)
+
+
+def _relevant(query: str, results: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Reject obviously broadened fallback hits, not rank scientific merit.
+
+    No domain-specific vocabulary: site filters and a small lexical overlap
+    check guard against providers returning results for only the first word.
+    """
+    sites = re.findall(r"\bsite:([\w.-]+)", query.lower())
+    text = re.sub(r"\bsite:[\w.-]+", "", query.lower())
+    stop = {
+        "the",
+        "a",
+        "an",
+        "and",
+        "or",
+        "of",
+        "to",
+        "in",
+        "for",
+        "with",
+        "how",
+        "what",
+        "is",
+        "are",
+        "on",
+        "by",
+        "from",
+    }
+    terms = {term for term in re.findall(r"[\w-]+", text) if len(term) > 2 and term not in stop}
+    selected = []
+    for item in results:
+        host = urlsplit(item["url"]).hostname or ""
+        if sites and not any(host == site or host.endswith("." + site) for site in sites):
+            continue
+        content = " ".join(item.values()).lower()
+        if len(terms) >= 3 and sum(term in content for term in terms) < math.ceil(len(terms) / 2):
+            continue
+        selected.append(item)
+    return selected
+
+
 @dataclass(frozen=True)
 class _Page:
     url: str
@@ -254,11 +328,22 @@ class ResearchWebClient:
         if configured_proxy and urlsplit(configured_proxy).scheme not in {"socks5", "socks5h"}:
             raise ValueError("Research web proxy must be SOCKS5 to preserve pinned TLS hostnames")
         self.proxy = configured_proxy if transport is None else None
+        # Run-local client: repeated pages/queries reuse bounded retrievals for
+        # five minutes. Each agent call still archives its own source reference.
+        self._cache: dict[str, tuple[float, _Page]] = {}
 
     async def _request(self, value: str) -> _Page:
+        cached = self._cache.get(value)
+        if cached and time.monotonic() - cached[0] < 300:
+            return cached[1]
         try:
             async with asyncio.timeout(self.timeout_seconds):
-                return await self._request_with_redirects(value)
+                page = await self._request_with_redirects(value)
+                if page.status == 200:
+                    self._cache[value] = (time.monotonic(), page)
+                    while len(self._cache) > 8:
+                        self._cache.pop(next(iter(self._cache)))
+                return page
         except TimeoutError as error:
             raise WebFetchError("Public web request timed out") from error
         except (httpx.HTTPError, OSError) as error:
@@ -409,10 +494,44 @@ class ResearchWebClient:
         }
 
     async def search_web(self, query: str, max_results: int = 5) -> dict[str, Any]:
+        global _BRAVE_NEXT_REQUEST
         query = " ".join(query.split())
         if not query or len(query) > 600 or not 1 <= max_results <= 10:
             raise ValueError("Search needs a nonempty query of at most 600 chars and 1–10 results")
         limitations: list[str] = []
+        try:
+            # Share request pacing, not source content, across concurrent runs.
+            with _BRAVE_LOCK:
+                current_time = time.monotonic()
+                delay = max(0, _BRAVE_NEXT_REQUEST - current_time)
+                _BRAVE_NEXT_REQUEST = max(current_time, _BRAVE_NEXT_REQUEST) + 3
+            await asyncio.sleep(delay)
+            page = await self._request(
+                str(
+                    httpx.URL(
+                        "https://search.brave.com/search", params={"q": query, "source": "web"}
+                    )
+                )
+            )
+            brave_parser = _BraveResults()
+            brave_parser.feed(page.text)
+            results = [
+                {key: " ".join(value.split())[:1200] for key, value in item.items()}
+                for item in brave_parser.results
+                if item["title"] and item["url"]
+            ]
+            results = _relevant(query, results)[:max_results]
+            if results:
+                return {
+                    "query": query,
+                    "results": results,
+                    "provider": "brave_html",
+                    "limitations": [],
+                    "untrusted": True,
+                }
+            limitations.append("Brave returned no relevant parseable results.")
+        except WebFetchError as error:
+            limitations.append(f"Brave unavailable: {error}")
         try:
             page = await self._request(
                 str(httpx.URL("https://html.duckduckgo.com/html/").copy_add_param("q", query))
@@ -429,18 +548,35 @@ class ResearchWebClient:
                 }
                 for result in parser.results
                 if result["title"].strip()
-            ][:max_results]
+            ]
+            results = _relevant(query, results)[:max_results]
             if results:
                 return {
                     "query": query,
                     "results": results,
                     "provider": "duckduckgo_html",
-                    "limitations": [],
+                    "limitations": limitations,
                     "untrusted": True,
                 }
             limitations.append("DuckDuckGo returned no parseable results.")
         except WebFetchError as error:
-            limitations.append(f"General web search unavailable: {error}")
+            limitations.append(f"DuckDuckGo unavailable: {error}")
+        try:
+            results = _relevant(query, await self._bing(query, 10))[:max_results]
+            if results:
+                limitations.append(
+                    "Bing RSS may relax search terms or operators; check result relevance."
+                )
+                return {
+                    "query": query,
+                    "results": results,
+                    "provider": "bing_rss",
+                    "limitations": limitations,
+                    "untrusted": True,
+                }
+            limitations.append("Bing returned no relevant results; broad first-word hits omitted.")
+        except WebFetchError as error:
+            limitations.append(f"Bing unavailable: {error}")
         limitations.append(
             "Fallback searches scholarly metadata only; these are not general web results."
         )
@@ -459,7 +595,7 @@ class ResearchWebClient:
             else:
                 providers.append(name)
                 combined.extend(alternative)
-        unique = {item["url"]: item for item in combined}
+        unique = {item["url"]: item for item in _relevant(query, combined)}
         return {
             "query": query,
             "results": list(unique.values())[:max_results],
@@ -467,6 +603,28 @@ class ResearchWebClient:
             "limitations": limitations,
             "untrusted": True,
         }
+
+    async def _bing(self, query: str, count: int) -> list[dict[str, str]]:
+        page = await self._request(
+            str(httpx.URL("https://www.bing.com/search", params={"q": query, "format": "rss"}))
+        )
+        if page.download_truncated or re.search(r"<!\s*(?:DOCTYPE|ENTITY)", page.text, re.I):
+            raise WebFetchError("Unsafe or truncated Bing RSS")
+        try:
+            feed = ET.fromstring(page.text)
+        except ET.ParseError as error:
+            raise WebFetchError("Invalid Bing RSS response") from error
+        results = []
+        for item in feed.findall("./channel/item"):
+            title = " ".join((item.findtext("title") or "").split())
+            link = item.findtext("link") or ""
+            if not title or not link:
+                continue
+            _, snippet = _extract(item.findtext("description") or "")
+            results.append(
+                {"title": title[:500], "url": str(_url(link)), "snippet": snippet[:1200]}
+            )
+        return results[:count]
 
     async def _arxiv(self, query: str, count: int) -> list[dict[str, str]]:
         global _ARXIV_NEXT_REQUEST

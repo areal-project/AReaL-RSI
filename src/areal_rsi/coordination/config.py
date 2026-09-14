@@ -115,9 +115,15 @@ def config_from_dict(value: dict[str, Any]) -> ResearchConfig:
     if "api_key" in value:
         raise ValueError("Use api_key_env; credentials must not be saved in research configuration")
     config: ResearchConfig = decode(ResearchConfig, value)
+    if config.metadata.get("time_limit_scope", "total") not in {"total", "exploration"}:
+        raise ValueError("time_limit_scope must be total or exploration")
     names = [command.name for command in config.commands]
     if len(set(names)) != len(names):
         raise ValueError("Execution command names must be unique")
+    if config.verifier is None and any(
+        command.auto_verify_output is not None for command in config.commands
+    ):
+        raise ValueError("Automatic artifact verification requires a trusted verifier")
     if config.finalizer and (config.verifier is None or config.finalizer.parameters != ("output",)):
         raise ValueError("Finalizer requires a verifier and exactly one output parameter")
     return config

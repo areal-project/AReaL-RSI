@@ -124,14 +124,14 @@ RSI = [
     ),
     definition(
         "spawn_researcher",
-        "新建一个研究方向，向研究员下发第一项具体任务。",
+        "新建一个研究方向，下发首轮阶段问题，并说明拿到什么证据或结论后上报。",
         direction=STRING,
         instruction=STRING,
         references=REFERENCES,
     ),
     definition(
         "assign",
-        "针对研究员的最新报告作出回复，并下发下一项任务。",
+        "针对最新报告作出判断，下发下一轮阶段问题与汇报点，延续研究员的原会话。",
         agent_id=STRING,
         instruction=STRING,
         references=REFERENCES,
@@ -171,7 +171,8 @@ RSI = [
 RESEARCH = [
     definition(
         "submit_report",
-        "用自然语言结束本轮并等待 RSI 回复。也可以直接给出最终回复，系统会自动归档为报告。",
+        "上报阶段结论或需要 RSI 决策的问题，结束本轮并等待回复；研究方向可以尚未完成。"
+        "也可以直接给出最终回复，系统会自动归档为报告。",
         message=STRING,
         references=REFERENCES,
     )

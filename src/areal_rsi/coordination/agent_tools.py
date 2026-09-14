@@ -58,6 +58,11 @@ class AgentTools:
     def instructions(self, agent_id: str) -> str:
         return (
             self.tool_prompt
+            + (
+                "\nRSI 使用工具只为调研、核查证据、协调与收尾；候选实现和实验循环交给研究员。"
+                if agent_id == "rsi"
+                else ""
+            )
             + "\n你的默认工作区："
             + str(self.actions.workspace(agent_id).resolve())
         )

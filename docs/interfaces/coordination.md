@@ -99,7 +99,15 @@ process/container isolation for executed code.
 Role prompts live in `agents/interaction/prompt.py`, `agents/rsi/prompt.py` and
 `agents/research/prompt.py`. They preserve the autonomy to choose research order
 and methods, while requiring concrete assignments, bounded reports and evidence
-for claimed results. They do not prescribe research task categories.
+for claimed results. Assignments distinguish a continuing direction from the
+current question and specify when to report. Initial conclusions, persistent
+blockers and proposed changes in scope or substantial effort prompt a handoff
+before the direction's budget is exhausted. RSI replies to available reports
+without waiting for unrelated directions. This is prompt guidance, with no fixed
+report count, experiment cadence or prescribed research task categories; the
+existing report-stop-reply protocol remains authoritative.
 
 Model-facing state, tool visibility and published verifier feedback are described in
 [the simplification design](../research-simplification.md).
+
+RSI owns planning, research decisions and coordination. It may investigate sources and inspect raw evidence, but delegates candidate implementation, tuning and experiment loops to researchers. Hypotheses remain revisable; the coordinator must not turn its own assumptions into additional user constraints.

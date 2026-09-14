@@ -6,6 +6,10 @@ const state = {
   runId: new URLSearchParams(window.location.search).get("run") ||
     localStorage.getItem("rsi.workbench.run") || null,
   run: null,
+  runCache: new Map(),
+  eventCache: new Map(),
+  refreshController: null,
+  loading: false,
   runs: [],
   events: new Map(),
   cursors: new Map(),
@@ -304,10 +308,11 @@ function connected(ok) {
     ? `${time(Date.now())} 更新`
     : "重新连接中…";
 }
-async function api(path, body) {
+async function api(path, body, signal) {
   const options = {
     headers: {},
     cache: "no-store",
+    signal,
     credentials: "same-origin",
   };
   if (body !== undefined) {
@@ -376,10 +381,12 @@ async function selectRun(runId) {
   if (state.runId) state.drafts.set(state.runId, $("chat-input").value);
   state.runId = runId;
   $("chat-input").value = state.drafts.get(runId) || "";
-  state.run = null;
+  state.refreshController?.abort();
+  state.run = state.runCache.get(runId) || null;
+  state.events = state.eventCache.get(runId) || new Map();
+  state.eventCache.set(runId, state.events);
   state.graphSignature = state.detailSignature = state.messageSignature = "";
-  state.events.clear();
-  state.cursors.set(runId, 0);
+
   localStorage.setItem("rsi.workbench.run", runId);
   const url = new URL(window.location.href);
   url.searchParams.set("run", runId);
@@ -388,6 +395,10 @@ async function selectRun(runId) {
   if (saved) state.selected.set(runId, saved);
   notice();
   renderRuns();
+  $("workspace").hidden = !state.run;
+  $("welcome").hidden = true;
+  $("run-loading").hidden = !!state.run;
+  if (state.run) render();
   await refresh(true);
 }
 
@@ -395,11 +406,14 @@ async function refresh(force = false) {
   if (!state.runId || (state.polling && !force)) return;
   const runId = state.runId;
   const sequence = ++state.refreshSequence;
+  state.refreshController?.abort();
+  const controller = new AbortController();
+  state.refreshController = controller;
   state.polling = true;
   try {
     const after = state.cursors.get(runId) || 0;
     const run = await api(
-      `/api/runs/${encodeURIComponent(runId)}?after=${after}`,
+      `/api/runs/${encodeURIComponent(runId)}?after=${after}&event_limit=100`, undefined, controller.signal,
     );
     if (state.runId !== runId || sequence < state.latestAppliedSequence) return;
     state.latestAppliedSequence = sequence;
@@ -411,6 +425,13 @@ async function refresh(force = false) {
       state.events.delete(state.events.keys().next().value);
     state.cursors.set(runId, run.event_cursor ?? after);
     state.run = run;
+    state.runCache.set(runId, run);
+    // Keep a bounded set of full projections, retaining independent event cursors.
+    if (state.runCache.size > 12) {
+      const oldest = [...state.runCache.keys()].find((key) => key !== runId);
+      state.runCache.delete(oldest);
+    }
+    $("run-loading").hidden = true;
     const listed = state.runs.find((item) => item.run_id === runId);
     if (
       listed &&
@@ -422,10 +443,11 @@ async function refresh(force = false) {
     render();
     connected(true);
   } catch (error) {
+    if (error.name === "AbortError" || state.runId !== runId) return;
     connected(false);
     if (force) notice(error.message);
   } finally {
-    state.polling = false;
+    if (state.refreshController === controller) state.polling = false;
   }
 }
 
@@ -666,7 +688,7 @@ function renderOverview(run) {
   }
   if (!jobs.length && !busy.length) {
     const rsi = run.agents?.find((a) => a.agent_id === "rsi");
-    const latest = (state.events.get(run.run_id) || []).at(-1);
+    const latest = [...state.events.values()].at(-1);
     blocks.push(element("p", "live-idle", waiting ? "等待你的补充，再继续推进研究。"
       : run.status !== "running" ? label(run.status)
       : rsi?.error || (rsi?.wait_reason && !["message", "user", "rsi_reply"].includes(rsi.wait_reason)

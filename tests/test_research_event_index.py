@@ -74,3 +74,25 @@ def test_event_write_survives_index_write_failure(
     recovered = ResearchStore(tmp_path, "events")
     assert [event.kind for event in recovered.events()] == ["first", "second"]
     assert recovered.event("third").sequence == 3
+
+
+def test_recent_events_skip_old_bodies_and_keep_incremental_cursor(tmp_path, monkeypatch):
+    store = ResearchStore(tmp_path, "recent")
+    for _ in range(25):
+        store.event("observed")
+    read_text = Path.read_text
+    reads = []
+
+    def track(path, *args, **kwargs):
+        if path.parent.name == "events":
+            reads.append(path.name)
+        return read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", track)
+    recent = store.events(limit=5)
+    assert [event.sequence for event in recent] == [21, 22, 23, 24, 25]
+    assert len(reads) == 5
+    store.event("next")
+    assert [event.sequence for event in store.events(after=25, limit=5)] == [26]
+    assert store.events(after=26, limit=5) == []
+    assert len(store.events()) == 26

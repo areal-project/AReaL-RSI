@@ -362,7 +362,13 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                 after = int(query.get("after", ["0"])[0])
                 if after < 0:
                     raise ValueError("事件位置无效")
-                raw = self.server.invoke("detail", {"run_id": parts[2], "after": after})
+                params = {"run_id": parts[2], "after": after}
+                if "event_limit" in query:
+                    limit = int(query["event_limit"][0])
+                    if not 1 <= limit <= 1000:
+                        raise ValueError("事件数量须为 1 到 1000")
+                    params["event_limit"] = limit
+                raw = self.server.invoke("detail", params)
                 if not isinstance(raw, dict):
                     raise TypeError("Invalid backend detail result")
                 self._json(200, public_detail(raw))

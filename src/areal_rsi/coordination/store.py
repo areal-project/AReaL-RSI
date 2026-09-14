@@ -138,13 +138,19 @@ class ResearchStore:
             sequence += 1
         return sequence
 
-    def events(self, after: int = 0) -> list[ResearchEvent]:
+    def events(self, after: int = 0, *, limit: int | None = None) -> list[ResearchEvent]:
         # Event filenames encode their immutable sequence. Skip acknowledged
         # files before reading/decoding, rather than reparsing the full archive
         # on every workbench poll.
         result = []
         directory = self.root / "events"
-        for sequence in range(max(0, after) + 1, self._last_event_sequence() + 1):
+        last = self._last_event_sequence()
+        start = max(0, after)
+        if limit is not None:
+            if not 1 <= limit <= 1000:
+                raise ValueError("事件数量须为 1 到 1000")
+            start = max(start, last - limit)
+        for sequence in range(start + 1, last + 1):
             path = directory / f"{sequence:012d}.json"
             if path.is_file():  # Preserve support for legacy archives with gaps.
                 result.append(self.decode_record(ResearchEvent, json.loads(path.read_text())))

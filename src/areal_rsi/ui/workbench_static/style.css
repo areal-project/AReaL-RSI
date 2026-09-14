@@ -1398,3 +1398,8 @@ main {
   .model-settings-fields { grid-template-columns: 1fr; }
   .create-dialog { padding: 18px; }
 }
+
+.run-loading { padding: 80px 24px; text-align: center; color: var(--muted); }
+.spinner { display: inline-block; width: 15px; height: 15px; border: 2px solid #d8e1d5; border-top-color: #52764c; border-radius: 50%; animation: spin .85s linear infinite; vertical-align: middle; margin-right: 8px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }

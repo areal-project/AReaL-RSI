@@ -484,7 +484,9 @@ class ResearchApp:
         self.active[c.store.run_id] = active
         return active
 
-    async def detail(self, run_id: str, after: int = 0) -> dict[str, Any]:
+    async def detail(
+        self, run_id: str, after: int = 0, *, event_limit: int | None = None
+    ) -> dict[str, Any]:
         c = self.coordinator(run_id)
         summary = c.summary()
         run = c.store.run()
@@ -595,7 +597,7 @@ class ResearchApp:
                     for public_node in nodes:
                         if public_node["iteration_id"] == info.get("iteration_id"):
                             public_node["verification"] = info["result"]
-        events = c.store.events(after)
+        events = c.store.events(after, limit=event_limit)
         return {
             **summary,
             "objective": c.store.brief().objective,
@@ -657,7 +659,9 @@ class ResearchApp:
         if c.state["simulated"] and not self.allow_simulation:
             raise ValueError("该记录属于开发测试，请在独立的测试工作台查看")
         if action == "detail":
-            return await self.detail(c.store.run_id, int(params.get("after", 0)))
+            return await self.detail(
+                c.store.run_id, int(params.get("after", 0)), event_limit=params.get("event_limit")
+            )
         if action != "export" and self.worker_elsewhere(c):
             raise ValueError(
                 "This run is controlled by another live process. Close that worker "

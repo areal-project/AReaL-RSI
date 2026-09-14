@@ -179,7 +179,7 @@ class ExperimentController:
             "state": run.state.value,
             "goal": run.plan.goal[:500],
             "workflow": run.plan.workflow,
-            "target": run.plan.target.value,
+            "target": run.plan.target.value if run.plan.target is not None else None,
             "benchmark": run.plan.benchmark,
             "mode": run.plan.config.get("mode"),
             "research_harness": run.plan.config.get("research_harness"),

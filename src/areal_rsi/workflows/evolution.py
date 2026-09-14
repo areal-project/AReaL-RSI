@@ -392,6 +392,8 @@ class HarnessEvolutionWorkflow:
                 change = decode(self._change_type, json.loads(change_path.read_text()))
             else:
                 self.update_progress(agent.agent_id, phase="propose")
+                if self.state.plan.target is None:
+                    raise ValueError("固定演化工作流需要明确的优化目标")
                 change = await researcher.propose(
                     self.state.plan.goal, self.state.plan.target, current, train_report, bundle
                 )
@@ -466,7 +468,10 @@ class HarnessEvolutionWorkflow:
         self.state.best_solution_id = max(candidates, key=lambda r: (r.passed, r.score)).solution_id
         if (
             record.next_solution_id is None
-            or iteration >= self.state.plan.max_iterations
+            or (
+                self.state.plan.max_iterations is not None
+                and iteration >= self.state.plan.max_iterations
+            )
             or (self.state.plan.stop_when_goal_reached and record.validation_report.passed)
         ):
             agent.state = AgentState.STOPPED

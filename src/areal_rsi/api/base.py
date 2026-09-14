@@ -452,8 +452,8 @@ class ExperimentPlan:
     workflow: str
     benchmark: str
     baseline_solution_id: str | None
-    target: EvolutionTarget
-    max_iterations: int
+    target: EvolutionTarget | None
+    max_iterations: int | None
     research_agent_count: int = 1
     stop_when_goal_reached: bool = True
     config: JsonObject = field(default_factory=dict)
@@ -469,3 +469,7 @@ class ExperimentRun:
     started_at: str | None = None
     finished_at: str | None = None
     error: str | None = None
+    brief_ref: RecordRef | None = None
+    baseline_result_ref: RecordRef | None = None
+    best_result_ref: RecordRef | None = None
+    final_result_ref: RecordRef | None = None

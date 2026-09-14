@@ -37,7 +37,7 @@ from areal_rsi.base.evidence import FileEvidenceStore
 from areal_rsi.base.runs import FileRunStore
 from areal_rsi.base.storage import decode, encode, new_id, now, safe_name, write_json
 from areal_rsi.framework.verifier import VerifierExecutor
-from areal_rsi.workflows.records import EvolutionResult, evolution_history
+from areal_rsi.workflows.records import EvolutionResult, decode_evolution_result, evolution_history
 
 PRUNED = "RSI Agent 已停止此研究线"
 
@@ -370,7 +370,7 @@ class HarnessEvolutionWorkflow:
         folder = self.folder / safe_name(agent.agent_id) / f"iteration-{iteration}"
         completed = folder / "completed.json"
         if completed.exists():
-            record = decode(EvolutionResult, json.loads(completed.read_text()))
+            record = decode_evolution_result(json.loads(completed.read_text()))
             if record.iteration != iteration:
                 raise ValueError("轮次检查点不匹配")
         else:

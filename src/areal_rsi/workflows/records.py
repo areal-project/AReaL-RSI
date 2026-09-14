@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from areal_rsi.api.base import (
     ContentRef,
@@ -27,7 +28,7 @@ class EvolutionResult:
     iteration: int
     input_solution_id: str
     train_report: EvaluationReport
-    trajectories: ContentRef
+    evidence: ContentRef
     change: ResearchChange
     candidate_solution_id: str
     validation_report: EvaluationReport
@@ -39,7 +40,15 @@ class EvolutionResult:
 def evolution_result(store: FileRunStore, node: ResearchIteration) -> EvolutionResult:
     if node.state != IterationState.COMPLETED or node.report_ref is None:
         raise ValueError("Evolution node has no completed result")
-    result: EvolutionResult = decode(EvolutionResult, store.read_json(node.report_ref))
+    return decode_evolution_result(store.read_json(node.report_ref))
+
+
+def decode_evolution_result(value: dict[str, Any]) -> EvolutionResult:
+    data = dict(value)
+    # Both historical layouts remain readable without rewriting source records.
+    if "trajectories" in data:
+        data.setdefault("evidence", data.pop("trajectories"))
+    result: EvolutionResult = decode(EvolutionResult, data)
     return result
 
 

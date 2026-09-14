@@ -58,6 +58,8 @@ from areal_rsi.modules.gateway import GatewayProxy
 from areal_rsi.modules.harness import LocalHarnessBuilder
 from areal_rsi.modules.runtime_package import PackageAgentRuntime, RuntimeSettings
 from areal_rsi.workflows.service import LocalExperimentService
+from areal_rsi.workflows.records import evolution_history
+from areal_rsi.base.runs import FileRunStore
 
 TASK_MESSAGE = "Read TARGET.md and CAPABILITIES.md, then implement src/model.js."
 GENERATION_ENVIRONMENT = ENVIRONMENT_VERSION
@@ -363,6 +365,7 @@ async def assemble_app(
             benchmark.name,
             benchmark_description=scope + "; only prompt.md may change; no new tools/dependencies",
             target_model_name=models["task-agent"].name,
+            run_store=FileRunStore(service_root or root),
         )
         verifier = ThreeModelVerifier(root / "verification", content, emit, environment=environment)
         researcher = DefaultResearchAgent(
@@ -665,7 +668,7 @@ async def main(
             raise RuntimeError(f"Full workflow did not finish: {result.error}")
         # Export the final iteration, not the first intermediate prompt.
         candidate = await versions.get_solution(
-            result.research_agents[0].iterations[-1].candidate_solution_id
+            evolution_history(service.records, result.research_agents[0])[-1].candidate_solution_id
         )
         await content.materialize(candidate.harness.content, root / "candidate-harness")
         emit(f"Finished. Result: {root / 'result.json'}")

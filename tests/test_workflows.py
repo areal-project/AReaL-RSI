@@ -229,6 +229,34 @@ class WorkflowTest(unittest.IsolatedAsyncioTestCase):
         run = await self.service.start(self.plan)
         return await self.service.tasks[run.run_id]
 
+    async def test_legacy_evolution_reports_support_both_evidence_names(self) -> None:
+        run = await self.execute()
+        self.assertEqual(run.state, RunState.SUCCEEDED, run.error)
+        result = evolution_history(self.service.records, run.research_agents[0])[0]
+        for field in ("evidence", "trajectories"):
+            with self.subTest(field=field):
+                legacy = encode(run)
+                legacy["run_id"] = "legacy_" + field
+                report = encode(result)
+                report[field] = report.pop("evidence")
+                legacy["research_agents"] = [
+                    {
+                        "agent_id": "research-agent-1",
+                        "state": "succeeded",
+                        "iterations": [report],
+                        "error": None,
+                    }
+                ]
+                path = self.root / "run-states" / f"{legacy['run_id']}.json"
+                write_json(path, legacy)
+                original = path.read_bytes()
+                restored = self.service.records.get(legacy["run_id"], ExperimentRun)
+                assert restored is not None
+                self.assertEqual(
+                    evolution_history(self.service.records, restored.research_agents[0]), [result]
+                )
+                self.assertEqual(path.read_bytes(), original)
+
     async def test_bounded_tasks_and_verifier_resume_reuse_generated_outputs(self) -> None:
         self.plan.research_agent_count = 1
         self.plan.max_iterations = 1
@@ -250,7 +278,7 @@ class WorkflowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.runtime.calls, 3)
         self.assertEqual(calls, 3)
         self.assertEqual(self.runtime.peak, 2)
-        folder = self.root / "runs" / run.run_id / "baseline/validate"
+        folder = self.service.records.paths(run.run_id).workflow / "baseline/validate"
         self.assertEqual(len(list(folder.glob("generation-*.json"))), 3)
         self.assertEqual(len(list(folder.glob("task-*.json"))), 2)
         resumed = await self.service.resume(run.run_id)

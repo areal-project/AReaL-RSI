@@ -7,6 +7,7 @@ from pathlib import Path
 
 from areal_rsi.api.base import ModelVersion, SolutionVersion, VerifierSpec
 from areal_rsi.api.modules import ConfiguredAgentRuntime
+from areal_rsi.base.runs import RunPaths
 from areal_rsi.base.storage import decode, encode, new_id, safe_name, write_json
 from areal_rsi.modules.remote.base import RemoteBackend, RemoteContext, RemoteJob
 from areal_rsi.modules.remote.envarena.benchmark import ArenaBenchmark
@@ -83,6 +84,8 @@ class EnvArenaProvider:
             baseline = await context.versions.create_solution(model, harness)
             write_json(baseline_file, baseline, immutable=True)
 
+        researchers: list[ArenaResearchAgent] = []
+
         def researcher(
             agent_id: str, runtime: ConfiguredAgentRuntime, model: ModelVersion
         ) -> ArenaResearchAgent:
@@ -96,21 +99,31 @@ class EnvArenaProvider:
                 context.root / "research-workspaces",
                 file_tools_only=True,
             )
+            researchers.append(agent)
             agent.allowed_changes = config.allowed_changes
             return agent
+
+        runtime = ArenaHarnessRuntime(
+            client,
+            context.content,
+            context.trajectories,
+            benchmark,
+            config,
+            context.root / "remote",
+            context.emit,
+        )
+
+        def bind_run(paths: RunPaths) -> None:
+            # Existing receipt paths also own idempotency locks; retain them on resume.
+            runtime.root = context.root / "remote" if paths.legacy else paths.runtime / "remote"
+            for agent in researchers:
+                agent.root = paths.agent(agent.agent_id) / "workspace"
 
         return RemoteBackend(
             baseline=baseline,
             benchmark=benchmark,
-            harness_runtime=ArenaHarnessRuntime(
-                client,
-                context.content,
-                context.trajectories,
-                benchmark,
-                config,
-                context.root / "remote",
-                context.emit,
-            ),
+            harness_runtime=runtime,
+            bind_run=bind_run,
             verifier=ArenaVerifier(context.content),
             verifier_spec=VerifierSpec(
                 verifier_id=(
@@ -132,7 +145,11 @@ class EnvArenaProvider:
 
     def read_jobs(self, root: Path, run_id: str) -> list[RemoteJob]:
         jobs = []
-        for path in sorted((root / "remote" / "executions").glob("*/receipt.json")):
+        paths = RunPaths(root, run_id)
+        folders = (root / "remote", paths.runtime / "remote")
+        for path in sorted(
+            p for folder in folders for p in (folder / "executions").glob("*/receipt.json")
+        ):
             record = json.loads(path.read_text())
             if record.get("signature", {}).get("run_id") != run_id:
                 continue

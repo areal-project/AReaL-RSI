@@ -8,10 +8,11 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from areal_rsi.agents.rsi import DefaultRsiAgent
-from areal_rsi.api.base import ExperimentPlan, JsonObject
+from areal_rsi.api.base import ExperimentPlan, ExperimentRun, JsonObject
 from areal_rsi.api.workflow import WorkflowContext
 from areal_rsi.app import LocalApp
 from areal_rsi.base.catalog import LocalModelCatalog
+from areal_rsi.base.runs import FileRunStore, RunPaths
 from areal_rsi.base.storage import (
     DIRECTORY_TYPE,
     FileContentStore,
@@ -35,6 +36,7 @@ from areal_rsi.workflows.service import LocalExperimentService, WorkflowFactory
 
 class RemoteApp(LocalApp):
     remote_backend_name: str
+    _bind_backend_run: Callable[[RunPaths], None] | None
 
     @classmethod
     async def create(
@@ -80,17 +82,21 @@ class RemoteApp(LocalApp):
         self = cls()
         self.root, self.runtime_settings = root, runtime_settings
         self.remote_backend_name = settings.backend
+        self._run_id = None
+        preparation = root / "runtime" / "preparation"
+        self._audit_root = preparation / "gateway"
         self.interaction_model_name = model_settings.interaction_name()
         self.content = FileContentStore(root / "content")
         self.versions = FileVersionManager(root / "versions")
-        self.trajectories = FileTrajectoryStore(root / "trajectories", self.content)
-        self.memory = FileMemory(root / "memory")
+        self.trajectories = FileTrajectoryStore(preparation / "trajectories", self.content)
+        self.memory = FileMemory(preparation / "memory")
         context = RemoteContext(
             root, self.content, self.memory, self.trajectories, self.versions, emit
         )
         # Reserve the directory before provider code can create backend-specific records.
         write_json(root / "remote" / "backend.json", {"backend": settings.backend}, immutable=True)
         backend = await get_provider(settings.backend).create(context, settings.config_path)
+        self._bind_backend_run = backend.bind_run
         self.baseline = backend.baseline
         self.target_model = self.baseline.model
         catalog = LocalModelCatalog(self.root, self.versions)
@@ -110,7 +116,7 @@ class RemoteApp(LocalApp):
             key = (connection, json.dumps(selection, sort_keys=True))
             if key not in runtimes:
                 runtimes[key] = PackageAgentRuntime(
-                    self.root / "sessions",
+                    preparation / "agents",
                     self.content,
                     self.trajectories,
                     settings=runtime_settings,
@@ -121,6 +127,7 @@ class RemoteApp(LocalApp):
                     max_tokens=research_max_tokens,
                     dsh_root=self.root,
                     credential_env_names=model_settings.credential_env_names,
+                    agent_directories=True,
                 )
             self.agent_proxies[agent_id] = proxies[connection]
             self.agent_runtimes[agent_id] = runtimes[key]
@@ -133,6 +140,7 @@ class RemoteApp(LocalApp):
             research_agent_count=research_agent_count,
             target_model_name=self.baseline.model.name,
             model_plan_config=self.model_plan_config(),
+            run_store=FileRunStore(root),
         )
         researchers = tuple(
             backend.research_agent_factory(
@@ -155,8 +163,18 @@ class RemoteApp(LocalApp):
             backend.evaluation,
             backend.harness_builder,
         )
-        self.service = LocalExperimentService(root, workflow_context, emit)
+        self.service = LocalExperimentService(
+            root, workflow_context, emit, context_factory=self._bind_run
+        )
         return self
+
+    async def _bind_run(self, run: ExperimentRun) -> WorkflowContext:
+        if self._run_id == run.run_id:
+            return self.service.context
+        context = await self._bind_run_storage(run)
+        if self._bind_backend_run is not None:
+            self._bind_backend_run(self.service.records.paths(run.run_id))
+        return context
 
     def model_plan_config(self) -> JsonObject:
         return {

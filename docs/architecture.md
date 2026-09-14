@@ -1,5 +1,7 @@
 # Python RSI Infra 架构边界
 
+本文说明固定 Harness / Artifact 工作流。开放研究工作台使用独立的 Interaction → RSI → Research 编排，见[设计说明](rsi-research-design.md)和[使用说明](research-workbench.md)。两种入口共享基础存储与工具能力。
+
 ## 1. 组件与数据流
 
 ```text
@@ -23,7 +25,7 @@
 └────────────────────────────────────────────────────────┘
 ```
 
-本地 AgentRuntime 由 `PackageAgentRuntime` 接入 ARealAgentRuntime，按角色选择 DSH、Codex 等 Harness；已有原创算术与 GSM8K Benchmark，KernelBench 暂缓。Remote mode 由选定 backend 执行 Task 和 Reward，EnvArena 是其中一种实现。本地研究运行时与远端任务运行时独立。核心 API 不出现具体框架或 Benchmark 名称。
+本地 AgentRuntime 由 `PackageAgentRuntime` 接入 ARealAgentRuntime，按角色选择 DSH、Codex 等 Harness；已有原创算术与 GSM8K Benchmark；开放研究入口另提供 KernelBench 适配器。Remote mode 由选定 backend 执行 Task 和 Reward，EnvArena 是其中一种实现。本地研究运行时与远端任务运行时独立。核心 API 不出现具体框架或 Benchmark 名称。
 
 三层边界与设计文档一致：User Interface 负责对话和实验控制；Evolver 由 RSI Agent、ResearchAgent、Task 执行和固定 Workflow 组成；Base Module 提供运行、存储、版本、训练、构建与评测能力。AgentSpec 显式列出 Runtime、Model、Prompt Template、Skill、Tool 和 MCP 依赖，避免把组合关系隐藏在不透明配置文件中。
 
@@ -39,6 +41,8 @@ DSH Session ID 标识对话，RSI Run ID 标识实验。后台进程使用文件
 Interaction Agent、RSI Agent 和 ResearchAgent 组分别解析模型连接，默认使用 teacher；`RSI_AGENT_MODELS` 可覆盖这三个角色。所有 ResearchAgent 共用 `research-agent` 的有效连接，不支持单条研究线覆盖。Task Agent 是 target 的 Harness 执行器，local 使用 `RSI_TARGET_*`，remote 使用 backend 配置的 Model 引用，不再定义第二份模型配置。相同的完整连接配置可复用代理；不同模型和认证信息分别路由。`SolutionVersion.model` 表示 target，计划的 `config.agent_models` 只保存 RSI Agent 和各 ResearchAgent 的模型引用，target 随基线 Solution 记录。Interaction Agent 模型单独记录，不约束后台 Run 的恢复。
 
 Local 数据目录不绑定某个模型。模型描述按内容复用，基线按 target 模型与初始 Harness 快照索引；改变研究 Agent 或Interaction Agent 模型不创建另一份目标基线，同一目录可以保存不同 target 的实验。旧 `baseline.json` 只作兼容读取，不覆盖。每个 Run 继续引用自己的不可变 Solution，恢复时核对对应配置。
+
+Local / Remote 固定工作流使用 `FileRunStore`，实验列表、CLI 和多实验 TUI 同时读取新旧布局。新 run 的 memory、轨迹、会话和网关记录归属 `runs/<run_id>/`；EnvArena 作业回执保存在该 run 的 `runtime/remote/`。Remote provider 可通过可选的 `RemoteBackend.bind_run(paths)` 绑定自己的可写目录；旧回执和锁保留原路径，避免恢复时重复提交作业。Provider 配置与初始版本仍属于所属实验目录。
 
 ## 2. 独立研究线
 
@@ -68,6 +72,8 @@ ModelVersion + HarnessVersion + ArtifactVersion[] = SolutionVersion
 - SolutionVersion：一次实际运行和评测使用的 Model/Harness/Artifact 组合。
 
 版本只记录父版本。版本由哪个 Run、ResearchAgent 和 iteration 产生，可从节点关联的工作流结果追溯。ResearchIteration 不再直接保存候选和评测字段；当前流程使用 EvolutionResult 承载这些字段，通过版本 ID 关联 SolutionVersion。EvolutionResult 是 workflow 层可选择使用的结果格式，通用节点无需生成它；其他工作流可以采用自己的报告与材料记录。后续单独演进 Solution 模型。
+
+`EvolutionResult.evidence` 引用固定工作流的证据包；读取兼容旧记录的 `trajectories` 字段，历史文件不改写。此格式仍是具体工作流的可选结果，不是通用研究节点的必需产出。
 
 ## 4. 一轮研究
 

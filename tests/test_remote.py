@@ -30,17 +30,20 @@ from areal_rsi.api.base import (
 )
 from areal_rsi.api.modules import ConfiguredAgentRuntime
 from areal_rsi.app import LocalApp, create_app
+from areal_rsi.base.runs import RunPaths
 from areal_rsi.base.storage import decode, new_id, now, write_json
 from areal_rsi.config import ModelConfigurationError
 from areal_rsi.modules.benchmark import AccuracyEvaluation
 from areal_rsi.modules.dsh_config import write_profile_patch
 from areal_rsi.modules.remote.base import RemoteBackend, RemoteContext, RemoteJob
+from areal_rsi.modules.remote.envarena.backend import EnvArenaProvider
 from areal_rsi.modules.remote.registry import (
     PROVIDERS,
     RemoteSettings,
     remote_environment_names,
     stored_backend,
 )
+from areal_rsi.remote_app import RemoteApp
 from areal_rsi.ui.web import RunReader
 
 
@@ -176,6 +179,7 @@ class RemoteProviderTest(unittest.IsolatedAsyncioTestCase):
     async def test_other_provider_runs_workflow_and_supplies_web_jobs(self) -> None:
         root = self.root / "data"
         app = await create_app(root, lambda _: None)
+        assert isinstance(app, RemoteApp)
         try:
             plan = ExperimentPlan(
                 "provider test",
@@ -193,6 +197,16 @@ class RemoteProviderTest(unittest.IsolatedAsyncioTestCase):
             result = await app.service.tasks[run.run_id]
             self.assertEqual(result.state, RunState.SUCCEEDED, result.error)
             self.assertEqual(len(result.research_agents[0].iterations), 1)
+            paths = app.service.records.paths(run.run_id)
+            self.assertEqual(app.memory.records.root, paths.root / "memory")
+            self.assertEqual(app.trajectories.records.root, paths.root / "trajectories")
+            self.assertTrue(list((paths.root / "trajectories").glob("*.json")))
+            await app.memory.add("first run only", source=run.run_id)
+            second = await app.service.start(plan)
+            completed = await app.service.tasks[second.run_id]
+            self.assertEqual(completed.state, RunState.SUCCEEDED, completed.error)
+            self.assertEqual(await app.memory.search("first run only"), [])
+            self.assertFalse((root / "trajectories").exists())
             view = RunReader(root).detail(run.run_id)
             self.assertEqual(view["remote_jobs"][0]["url"], "https://dummy.example/jobs/dummy-job")
             plan.config["remote_backend"] = "other"
@@ -209,6 +223,25 @@ class RemoteProviderTest(unittest.IsolatedAsyncioTestCase):
         ):
             await create_app(root, lambda _: None)
 
+    def test_envarena_job_projection_reads_legacy_and_run_owned_receipts(self) -> None:
+        paths = RunPaths(self.root, "run_fixture")
+        for index, folder in enumerate((self.root / "remote", paths.runtime / "remote")):
+            write_json(
+                folder / "executions" / str(index) / "receipt.json",
+                {
+                    "signature": {"run_id": "run_fixture", "base_url": "http://fixture"},
+                    "job_id": "job-" + str(index),
+                    "state": "DONE",
+                    "task_counts": {"done": 1},
+                },
+            )
+        provider = EnvArenaProvider()
+        self.assertEqual(
+            {job.job_id for job in provider.read_jobs(self.root, "run_fixture")},
+            {"job-0", "job-1"},
+        )
+        self.assertEqual(provider.read_jobs(self.root, "another_run"), [])
+
     def test_provider_environment_is_forwarded_without_credential_values(self) -> None:
         self.assertEqual(remote_environment_names(), ("DUMMY_REMOTE_TOKEN",))
         path = write_profile_patch(self.root / "data", self.root, "model")
@@ -224,14 +257,17 @@ class RemoteProviderTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(RemoteSettings.from_environment().backend, "dummy")
         with patch.dict("os.environ", {"RSI_ARENA_CONFIG": str(self.config)}, clear=True):
             self.assertEqual(RemoteSettings.from_environment().config_path, self.config.resolve())
-        with patch.dict(
-            "os.environ",
-            {
-                "RSI_REMOTE_BACKEND": "dummy",
-                "RSI_ARENA_CONFIG": str(self.config),
-            },
-            clear=True,
-        ), self.assertRaisesRegex(ValueError, "RSI_REMOTE_CONFIG"):
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "RSI_REMOTE_BACKEND": "dummy",
+                    "RSI_ARENA_CONFIG": str(self.config),
+                },
+                clear=True,
+            ),
+            self.assertRaisesRegex(ValueError, "RSI_REMOTE_CONFIG"),
+        ):
             RemoteSettings.from_environment()
         with (
             patch.dict("os.environ", {"RSI_REMOTE_BACKEND": "unknown"}),

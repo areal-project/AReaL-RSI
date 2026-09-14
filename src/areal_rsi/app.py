@@ -240,7 +240,7 @@ class LocalApp:
                 )
                 proxy.requests.clear()
 
-    async def _bind_run(self, run: ExperimentRun) -> WorkflowContext:
+    async def _bind_run_storage(self, run: ExperimentRun) -> WorkflowContext:
         if self._run_id == run.run_id:
             return self.service.context
         await self.rsi.close()
@@ -249,17 +249,26 @@ class LocalApp:
         paths = self.service.records.paths(run.run_id)
         self._run_id = run.run_id
         self._audit_root = paths.runtime / "gateway"
-        self.memory = FileMemory(paths.root / "memory")
-        self.trajectories = FileTrajectoryStore(
+        self.memory.records = FileMemory(paths.root / "memory").records
+        trajectories = FileTrajectoryStore(
             paths.root / "trajectories",
             self.content,
             legacy_root=self.root / "trajectories" if paths.legacy else None,
         )
+        self.trajectories.records = trajectories.records
+        self.trajectories.legacy = trajectories.legacy
         for runtime in dict.fromkeys(self.agent_runtimes.values()):
             runtime.root = paths.root / "agents"
             runtime.trajectories = self.trajectories
         context = self.service.context
         context.memory, context.trajectories = self.memory, self.trajectories
+        return context
+
+    async def _bind_run(self, run: ExperimentRun) -> WorkflowContext:
+        if self._run_id == run.run_id:
+            return self.service.context
+        context = await self._bind_run_storage(run)
+        paths = self.service.records.paths(run.run_id)
         for researcher in context.research_agents:
             assert isinstance(researcher, DefaultResearchAgent)
             researcher.memory = self.memory

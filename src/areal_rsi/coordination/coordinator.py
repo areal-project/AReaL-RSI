@@ -80,6 +80,7 @@ class Coordinator:
             store.root / "coordination" / "state.json",
             {
                 "status": "planned",
+                "created_at": now(),
                 "simulated": simulated,
                 "inboxes": {},
                 "active": {},

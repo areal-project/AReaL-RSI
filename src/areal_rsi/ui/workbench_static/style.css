@@ -1389,6 +1389,10 @@ main {
 .model-settings-fields .dropdown { margin-top: 7px; }
 .create-dialog { width: min(640px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); overflow: auto; border: 1px solid var(--line); border-radius: 18px; padding: 24px; color: var(--ink); background: #fff; box-shadow: 0 24px 80px #162a2433; }
 .create-dialog::backdrop { background: #17282066; backdrop-filter: blur(3px); }
+.delete-dialog { width: min(460px, calc(100vw - 32px)); }
+.delete-name { font-weight: 600; overflow-wrap: anywhere; }
+.delete-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
+button.primary.destructive { background: var(--red); }
 .create-dialog .card-heading { padding: 0; border: 0; }
 .create-dialog > form > p { margin: 12px 0; }
 .create-dialog textarea { width: 100%; resize: vertical; border: 1px solid var(--line); border-radius: 9px; padding: 12px; font: inherit; }

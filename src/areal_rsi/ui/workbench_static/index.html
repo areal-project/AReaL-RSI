@@ -79,6 +79,7 @@
             <button class="quiet danger" data-action="stop" id="stop">
               停止
             </button>
+            <button class="quiet danger" id="delete-run">删除研究</button>
           </div>
         </section>
         <details class="card model-settings" id="model-settings" hidden>
@@ -269,6 +270,18 @@
       </div>
     </main>
 
+    <dialog id="delete-dialog" class="create-dialog delete-dialog" aria-labelledby="delete-title" aria-describedby="delete-description">
+      <form id="delete-form">
+        <h2 id="delete-title">删除研究？</h2>
+        <p id="delete-name" class="delete-name"></p>
+        <p id="delete-description" class="muted">将永久删除这项研究的本地对话、研究记录和工作目录。外部环境与共享数据不受影响。</p>
+        <p id="delete-error" class="form-error" role="alert" hidden></p>
+        <div class="delete-actions">
+          <button type="button" id="delete-cancel" class="secondary" autofocus>取消</button>
+          <button type="submit" id="delete-submit" class="primary destructive">确认删除</button>
+        </div>
+      </form>
+    </dialog>
     <dialog id="create-dialog" class="create-dialog" aria-labelledby="create-title">
       <form id="create-form">
         <div class="card-heading"><h2 id="create-title">新建研究</h2><button type="button" id="create-cancel" class="quiet" aria-label="关闭新建研究">✕</button></div>

@@ -354,7 +354,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                     200,
                     {
                         "runs": [
-                            _fields(run, "run_id objective status simulated started_at")
+                            _fields(run, "run_id objective status simulated started_at created_at")
                             for run in raw.get("runs", [])
                         ]
                     },
@@ -427,6 +427,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                     "pause": "",
                     "resume": "",
                     "stop": "reason",
+                    "delete": "",
                     "retry": "agent_id",
                     "model-settings": "base_url model reasoning_effort api_key",
                 }

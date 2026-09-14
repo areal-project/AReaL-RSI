@@ -658,6 +658,40 @@ class ResearchApp:
             "finished_at": run.finished_at,
         }
 
+    async def delete(self, c: Coordinator) -> dict[str, Any]:
+        async with self.run_lock(c):
+            c = self.coordinator(c.store.run_id)
+            if (
+                c.state["status"] in {"running", "paused"}
+                or (c.state.get("finalization") or {}).get("status") == "running"
+            ):
+                raise ValueError("研究仍在运行或暂停中，请先停止研究再删除")
+            if self.worker_elsewhere(c):
+                raise ValueError("研究由其他进程运行，请先停止该进程再删除")
+            active = self.active.get(c.store.run_id)
+            if active:
+                active.task.cancel()
+                await asyncio.gather(active.task, return_exceptions=True)
+                active.execution.close(cancel=True)
+                await active.tools.close()
+                self.active.pop(c.store.run_id, None)
+            # Hold the same lock as CLI workers until the directory leaves the
+            # run index. Reclaim files off the event loop after the atomic move.
+            c.store.paths.execution_lock.parent.mkdir(parents=True, exist_ok=True)
+            with c.store.paths.execution_lock.open("a+") as handle:
+                try:
+                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    raise ValueError("研究由其他进程运行，请先停止该进程再删除") from None
+                manager = JobManager(c.store.root, auto_monitor=False, scheduling_enabled=False)
+                manager.close(preserve_running=False)
+                destination = self.root / ".deleting" / new_id("research")
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                c.store.paths.legacy_state.unlink(missing_ok=True)
+                c.store.root.rename(destination)
+            await asyncio.to_thread(shutil.rmtree, destination)
+        return {"run_id": c.store.run_id, "status": "deleted"}
+
     async def call(self, action: str, params: dict[str, Any]) -> Any:
         if action == "recover":
             for run in FileRunStore(self.root).list(ExperimentRun):
@@ -709,18 +743,40 @@ class ResearchApp:
             }
         if action == "list":
             runs = FileRunStore(self.root).list(ExperimentRun)
+
+            def created_at(run: ExperimentRun) -> str:
+                c = self.coordinator(run.run_id)
+                if c.state.get("created_at"):
+                    return str(c.state["created_at"])
+                # Older runs predate the timestamp field. Their first immutable
+                # event records creation, unlike file modification time.
+                event = c.store.root / "events" / "000000000001.json"
+                return (
+                    str(json.loads(event.read_text())["created_at"])
+                    if event.exists()
+                    else (run.started_at or "")
+                )
+
             return {
-                "runs": [
-                    {
-                        "run_id": r.run_id,
-                        "objective": r.plan.goal,
-                        "status": self.coordinator(r.run_id).state["status"],
-                        "simulated": self.coordinator(r.run_id).state["simulated"],
-                    }
-                    for r in runs
-                    if r.plan.workflow == "research"
-                    and (self.allow_simulation or not self.coordinator(r.run_id).state["simulated"])
-                ]
+                "runs": sorted(
+                    [
+                        {
+                            "run_id": r.run_id,
+                            "objective": r.plan.goal,
+                            "status": self.coordinator(r.run_id).state["status"],
+                            "simulated": self.coordinator(r.run_id).state["simulated"],
+                            "created_at": created_at(r),
+                        }
+                        for r in runs
+                        if r.plan.workflow == "research"
+                        and (
+                            self.allow_simulation
+                            or not self.coordinator(r.run_id).state["simulated"]
+                        )
+                    ],
+                    key=lambda r: (r["created_at"], r["run_id"]),
+                    reverse=True,
+                )
             }
         if action == "create":
             return await self.create(params)
@@ -731,6 +787,8 @@ class ResearchApp:
             return await self.detail(
                 c.store.run_id, int(params.get("after", 0)), event_limit=params.get("event_limit")
             )
+        if action == "delete":
+            return await self.delete(c)
         if action != "export" and self.worker_elsewhere(c):
             raise ValueError(
                 "This run is controlled by another live process. Close that worker "

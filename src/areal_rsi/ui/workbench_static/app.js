@@ -23,6 +23,8 @@ const state = {
   sending: new Set(),
   outgoing: new Map(),
   busy: false,
+  deleting: false,
+  deleteTarget: null,
   drafts: new Map(),
   replyTargets: new Map(),
   graphRunId: null,
@@ -399,6 +401,7 @@ function renderRuns() {
   );
 }
 async function selectRun(runId) {
+  if (state.deleting) return;
   if (state.runId === runId && state.run) return;
   if (state.runId) state.drafts.set(state.runId, $("chat-input").value);
   state.runId = runId;
@@ -425,7 +428,7 @@ async function selectRun(runId) {
 }
 
 async function refresh(force = false) {
-  if (!state.runId || (state.polling && !force)) return;
+  if (!state.runId || state.deleting || (state.polling && !force)) return;
   const runId = state.runId;
   const sequence = ++state.refreshSequence;
   state.refreshController?.abort();
@@ -437,7 +440,7 @@ async function refresh(force = false) {
     const run = await api(
       `/api/runs/${encodeURIComponent(runId)}?after=${after}&event_limit=100`, undefined, controller.signal,
     );
-    if (state.runId !== runId || sequence < state.latestAppliedSequence) return;
+    if (state.deleting || state.runId !== runId || sequence < state.latestAppliedSequence) return;
     state.latestAppliedSequence = sequence;
     if (Number.isInteger(run.event_cursor) && run.event_cursor < after)
       state.events.clear();
@@ -488,7 +491,7 @@ function render() {
   );
   $("run-status").textContent = run.finalization?.status === "running" ? "最终复测与归档中"
     : run.finalization?.status === "failed" ? "收尾失败 · 可恢复"
-    : run.finalization?.status === "completed" ? (run.status === "succeeded" ? "已达标" : "已完成 · 未达标")
+    : run.finalization?.status === "completed" ? (run.status === "succeeded" ? "已达标" : run.brief?.verification?.target == null ? "已完成" : "已完成 · 未达标")
     : needsResume ? "待恢复"
     : run.status === "running" && run.execution_setup === "pending"
     ? "研究中 · 接入准备" : label(run.status);
@@ -505,6 +508,8 @@ function render() {
   $("stop").hidden = !["planned", "running", "paused"].includes(run.status)
     && run.finalization?.status !== "running";
   $("stop").textContent = run.status === "planned" ? "结束对话" : "停止";
+  $("delete-run").disabled = state.busy || state.sending.has(run.run_id) || !!state.modelSavingRun;
+  $("delete-run").title = deletionBlocked(run) ? "请先停止研究再删除" : "删除这项研究的本地记录";
   $("best-score").textContent = score(run.best?.score);
   $("best-caption").textContent = run.best
     ? `${run.brief?.verification?.metric || "验证分数"} · 同一验证条件`
@@ -1221,7 +1226,7 @@ function renderBrief(run) {
   ];
   const grid = element("dl", "brief-grid");
   const rows = [
-    ["Research Agents 上限", limits.max_agents],
+    ["同时存活研究员上限", limits.max_agents],
     ["节点上限", budgetLimit(limits.max_nodes)],
     ["模型调用上限", budgetLimit(limits.max_model_calls)],
     ["Token 上限", budgetLimit(limits.max_total_tokens)],
@@ -1258,7 +1263,8 @@ function renderJobs(run) {
             element(
               "p",
               "",
-              job.error || job.progress?.message || job.progress_message || job.progress?.stage || label(job.status),
+              job.publication_error ? `产物归档或验证失败：${job.publication_error}` :
+                job.error || job.progress?.message || job.progress_message || job.progress?.stage || label(job.status),
             ),
             element("p", "job-meta", `${job.agent_name || agentName(job.agent_id)} · ${job.started_at ? `已运行 ${duration(job.started_at, job.finished_at)}` : "等待启动"}${progressText(job) ? ` · ${progressText(job)}` : ""}`),
             progressBar(job),
@@ -1343,6 +1349,67 @@ async function control(action, params = {}) {
   }
 }
 
+function deletionBlocked(run) {
+  return ["running", "paused"].includes(run.status) || run.finalization?.status === "running";
+}
+$("delete-run").addEventListener("click", () => {
+  if (!state.run || state.busy) return;
+  if (deletionBlocked(state.run)) {
+    notice("请先停止研究，再删除记录。");
+    return;
+  }
+  state.deleteTarget = state.runId;
+  $("delete-name").textContent = state.run.objective || "未命名研究";
+  $("delete-error").hidden = true;
+  $("delete-dialog").showModal();
+});
+$("delete-cancel").addEventListener("click", () => $("delete-dialog").close());
+$("delete-dialog").addEventListener("cancel", (event) => {
+  if (state.deleting) event.preventDefault();
+});
+$("delete-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const runId = state.deleteTarget;
+  if (!runId || state.busy) return;
+  state.busy = state.deleting = true;
+  state.refreshController?.abort();
+  $("delete-submit").disabled = $("delete-cancel").disabled = true;
+  $("delete-submit").textContent = "正在删除…";
+  $("delete-error").hidden = true;
+  try {
+    await api(`/api/runs/${encodeURIComponent(runId)}/delete`, {});
+    for (const cache of [state.runCache, state.eventCache, state.cursors, state.selected,
+      state.drafts, state.replyTargets, state.outgoing, state.modelDrafts]) cache.delete(runId);
+    localStorage.removeItem(`rsi.workbench.node.${runId}`);
+    localStorage.removeItem(`rsi.workbench.zoom.${runId}`);
+    localStorage.removeItem("rsi.workbench.run");
+    const url = new URL(window.location.href);
+    url.searchParams.delete("run");
+    window.history.replaceState(null, "", url);
+    state.runs = state.runs.filter((run) => run.run_id !== runId);
+    state.runId = state.run = null;
+    state.events = new Map();
+    state.deleting = false;
+    $("delete-dialog").close();
+    renderRuns();
+    $("workspace").hidden = true;
+    $("run-loading").hidden = true;
+    $("welcome").hidden = state.runs.length > 0;
+    $("run-short").textContent = "准备开始";
+    $("chat-input").value = "";
+    if (state.runs.length) await selectRun(state.runs[0].run_id);
+    notice("研究已删除。");
+  } catch (error) {
+    $("delete-error").textContent = error.message;
+    $("delete-error").hidden = false;
+  } finally {
+    state.busy = state.deleting = false;
+    $("delete-submit").disabled = $("delete-cancel").disabled = false;
+    $("delete-submit").textContent = "确认删除";
+    if (state.run) render();
+  }
+});
+
 async function createConversation(message = "", modelSettings) {
   if (state.creating) return;
   state.creating = true;
@@ -1423,7 +1490,7 @@ $("welcome-input").addEventListener("keydown", (event) => {
 });
 for (const name of ["chat", "node", "brief"])
   $(`${name}-tab`).addEventListener("click", () => switchTab(name));
-for (const button of $("controls").querySelectorAll("button"))
+for (const button of $("controls").querySelectorAll("button[data-action]"))
   button.addEventListener("click", () => control(button.dataset.action));
 $("graph-active").addEventListener("click", () => {
   const active = [...$("graph-canvas").querySelectorAll(".active-node")];

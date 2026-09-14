@@ -131,6 +131,11 @@ def test_conversation_can_bind_real_cpu_execution_without_template_or_baseline(
             blocked = await tools(ToolCall("set_execution", {"execution_json": "{}"}, "late"))
             assert "已经开始" in blocked.output["error"]
             assert (await app.detail(c.store.run_id))["best"] is None
+            with pytest.raises(ValueError, match="先停止"):
+                await app.call("delete", {"run_id": c.store.run_id})
+            await app.call("stop", {"run_id": c.store.run_id})
+            await app.call("delete", {"run_id": c.store.run_id})
+            assert not c.store.root.exists()
         finally:
             await app.close()
 

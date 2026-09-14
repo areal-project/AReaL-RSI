@@ -1,5 +1,7 @@
 # 2026-09-14 提交整理
 
+本文前半部分记录首次整理时的边界、提交 SHA 和验证结果。随后已 rebase 到 main 的 `6253e00`，当前集成状态见文末；CSV 的 `rebased_commits` 列对应 rebase 后的提交。
+
 ## 边界与保留
 
 本分支以 PR #23 创建时的数据模型提交 `b97fa80` 为基础。将其后至 `20c8e91` 的 95 条 Wenhao Zhou 提交，按最终功能归并为 13 个提交；同一功能的后续修复已折叠到对应提交。
@@ -49,3 +51,11 @@
 - 本次浏览器连接返回 `ERR_BLOCKED_BY_CLIENT`，无法打开本地工作台；尚未完成真实浏览器视觉验收。DOM 回归不等同于截图验收。
 - 测试使用隔离数据与替代模型响应，没有启动新的模型研究或 GPU 实验。
 - 工作台已重载到此版本；重载前后 59012 份研究记录、事件与会话文件的 SHA-256 相同，研究状态保持不变。
+
+## Rebase 到最新 main
+
+- 基于 `6253e00` 重新整合全部提交，保留 main 的 Runtime package、Remote provider、多实验 TUI、benchmark 注册和新增示例。
+- `dbf9b18` 单独处理集成兼容：新旧 run 定位、按 agent 归档 Runtime 会话、远程 run 的 memory/轨迹/作业归属、历史 evidence 字段与 3D 结果读取；修复 Python 多层符号链接下的沙箱启动。
+- 旧 `trajectories` 与 main 的 `evidence` 结果均可读取；`EvolutionResult` 仍是固定工作流的可选结果格式。旧记录和执行锁不改写，恢复测试验证已完成的生成不会重复执行。
+- 最终回归：686 passed、20 skipped；前端 5 项测试、Ruff 和 Mypy 通过。测试未调用真实研究模型或 GPU。真实浏览器视觉验收仍待完成。
+- PR #23 已关闭，PR #27 以 `zwh/dev-0914` 为来源、main 为目标，描述覆盖相对 main 的完整改动。

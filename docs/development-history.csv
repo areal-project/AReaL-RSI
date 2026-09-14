@@ -1,101 +1,101 @@
-original_commit,subject,organized_commits
-5afdfd98e812c94055ab4c51445eebe3e6fc7e2e,docs: record research workbench delivery and acceptance plan,2d7124f0
-9baddb3f6dd0513eb86d0caea25bdabf1b9bdd83,feat(research): add run briefs reports evidence and optional candidate records,bd845627
-71b92a18df72213b801a1958899d0f2ddee7bdab,feat(runtime): persist resumable Responses sessions and stop inference while waiting,3f7440ca
-e930f2357dc900733e5e0796c9ca641d2ee19f56,fix(runtime): support proxy environments and add real API preflight,3f7440ca
-8b8ad9674ee6db3c85456dcdea92f394a0cf6e46,feat(agents): define research roles and enforce report reply coordination,5fee460b 9960f5c6 bd845627 d529395f
-aa06de86556c6efe6dfe65ed295b212174f38220,feat(execution): add durable background jobs and resource scheduling,d1e265e6
-3024c6a48c3b68655f69e3bc4068ca2ceab45142,feat(coordination): schedule continuous agents with durable budgets and recovery,5fee460b
-1423201e34a6674ccf110e2bb8237644f6c15d5f,feat(examples): add CUHK-X training prediction and trusted clip scoring,72cb960d edbc70ff
-7b44a0fc623125085b0793a1757ef19e8a6e063a,feat(research): retrieve public web and paper sources with bounded network access,b6aa40bd
-4581e6dc70cdc2adc6569224a16bb058bc009b9a,feat(cuhkx): isolate training and bind search and final evaluation protocols,72cb960d
-b2c0e68997ad1935436e36922aad4a666ec95b24,fix(execution): reserve GPUs across runs and preserve ownership through recovery,d1e265e6
-8ec76a0379199ef545e59ae9537166af1e4fcdfc,fix(research): preserve candidate ancestry and require matching final confirmation,5fee460b bd845627 d529395f
-4e13dd95ef90e8c35f1022a2bdc2f6c2a6a15fb0,feat(verification): bind scores to frozen candidates and operator protocols,d529395f
-99df3c9838225020aa8786ed75705fcadb9f8c6c,feat(coordination): connect frozen background jobs to trusted results and agent wakeups,d1e265e6 d529395f
-a368a2a8ac3650f50c1ea606714b74f22bbd5cdc,feat(evidence): archive retrieved sources within research runs,b6aa40bd
-913378ffa21beab97aaae6e6ab957bce46d4b252,feat(kernelbench): run fixed-target harnesses with separate development and validation pools,edbc70ff
-b20475b24903e6ec2c1579f6103c08fe287a0053,feat(workbench): add local chat research graph evidence and run controls,0b6c261b
-5c163544f1fae3648d6b1e14411bf1315ce77507,feat(app): assemble resumable research runs and example workflow simulations,abd5d37c bd845627 d529395f
-25222eb451f79a3ccae503998bd4c5e339832116,feat(examples): preflight real research configurations and verify CPU integration,72cb960d abd5d37c edbc70ff
-e18238295d25aa34703d9d23a2bdf1726c553909,fix(research): bound evidence previews and focus reports on current decisions,5fee460b abd5d37c d529395f
-e58156775277e3103b500c9df7eb9eb917e5e467,fix(app): protect live run ownership and publish interaction replies,5fee460b abd5d37c
-d857d2233c8829c107551a7d8b54eca15f46168d,fix(runtime): compact long turns safely and recover explicit retries without replay,3f7440ca 5fee460b 9960f5c6
-5409f9ff290d58eb914a48aa542557d3459fefd8,feat(cli): launch research workbenches and resume headless runs,2d7124f0 abd5d37c
-b1c40d813434d6b9c0dbbb358cc6052a7dc41596,fix(workbench): clarify simulation settings and restore stopped workers and failed agents,0b6c261b
-251828fd7cc6ef348b63b220967098780383136a,perf(coordination): avoid rewriting unchanged run state while waiting,d529395f
-f2cf9b37c038bd99639226ee08a789447f29e529,feat(coordination): let RSI stop unmet research without claiming success,5fee460b d529395f
-dfd1c30b580d92001be53b65d85d05c465d78a08,docs: synchronize research architecture and document staged delivery,2d7124f0
-07b21b6ccc343fb0c327e3ca153fbae0e0acd37f,fix(interaction): preserve unmet targets when discussing research closure,5fee460b
-40fc8975d2ebe3a2c243621dfd069af3ef192398,fix(workbench): keep reports visible beneath long task instructions,0b6c261b
-d6122d1063482ae79f89101517074fc52178241f,docs: record real-model rehearsals CPU execution and browser acceptance,2d7124f0 abd5d37c
-3bcbe83a54744f92c8cdaba7e2239a6c25909822,feat(prompts): use Chinese research instructions and default summaries,2d7124f0 3f7440ca 5fee460b 9960f5c6 abd5d37c
-683908de313024b6c50e517e3a30ee027daa4696,feat(execution): bind per-run environment and command usage notes,d529395f
-28649b119937a05ba68a149be131ac311c09329f,feat(research): prepare real research runs through conversation,5fee460b 9960f5c6 abd5d37c d529395f
-3a2c79e773bc2689db8024b613f28028a1c1fa9d,refine(prompts): use natural Chinese research and recovery instructions,3f7440ca 5fee460b abd5d37c b6aa40bd
-c25db0a5feee3fb4e32125a432c5706bf23ee873,feat(workbench): center research setup on conversation and simplify progress views,0b6c261b abd5d37c
-f9eea678df43d2873cfc1e6f6573d6c0a4ac19fc,fix(research): verify saved deliverables and await cancellation acknowledgements,5fee460b d529395f
-4db015bc7a24d81809246819ce7309d25c3ca2b5,fix(intake): allow research without a verification budget,abd5d37c bd845627
-cdb5af0913f58b569e3f0377b509cbd2b268f56c,fix(runtime): allow metadata traversal of Python runtime aliases,edbc70ff
-02cb4b40bab3a87f536a078d43d80f93c688607b,refine(workbench): keep research views compact and cancel setup cleanly,0b6c261b 5fee460b abd5d37c
-94b4d0683f614575f19c240f5027221d40f96284,docs: describe formal workbench usage and real execution acceptance,0b6c261b 2d7124f0 abd5d37c
-6f21781b2637f183e1653b69d40ec593e0dea0df,feat(coordination): let RSI ask users and resume from direct replies,5fee460b 9960f5c6 abd5d37c d529395f
-96adfd702732fd284c5e6f410e2c1854a4385484,feat(workbench): show question authors and route user replies,0b6c261b
-9c48e16fd666f1f067bba1377f154300c4822afd,docs: describe direct RSI questions and recovery acceptance,0b6c261b 2d7124f0 abd5d37c
-775fe3bce31c76c34386eb3d2baed4d0389f74a7,feat(workbench): replace native selects with shared styled dropdowns,0b6c261b
-87202cdbdcc3176e149916d6140e4d1a96391575,Add durable DSH tool bridge for existing agent sessions,b6aa40bd
-85fd3a65c6b291ad31b4945636e9506a6ca84a3c,Enable shared agentic tools for all workbench roles,5fee460b abd5d37c b6aa40bd
-6a139899e61a7190c209702a91bd99d045e1b9b4,Document DSH capabilities and conversation upgrade verification,2d7124f0 abd5d37c b6aa40bd
-943bba57e5e3d64d42ac428301e6c05f98072933,Keep compaction instructions separate from user tasks,2d7124f0 3f7440ca 5fee460b
-e35d89b75025da6df39392be8ee6f97485da61ae,Keep Interaction responsive with unlimited turns and durable user steering,3f7440ca 5fee460b 9960f5c6 d529395f
-46fabfc0718ade5fd01d44f21256d49ecfe3a2b1,Hand authorized research to RSI before execution setup is complete,5fee460b abd5d37c d529395f
-af33d1606609e042c35f31d9218365f32a317a0d,Show agent activity and keep long conversations within the workbench,0b6c261b
-34403d1178745b83f9ca6add67b9e7752784b642,Allow authorized runners to use their existing authentication,5fee460b abd5d37c b6aa40bd
-1eaf1a710c0f5605d683bdbcc915ca44a4866d87,Retry connection setup failures without replaying submitted requests,3f7440ca 9960f5c6
-2778139c79614172411c9ad7bb9ccad1dd4f01e0,Let RSI update and recover an active research task,3f7440ca 5fee460b 9960f5c6 abd5d37c d529395f
-f912716caa6aad3f6e80a3ceff2debf0e5b7f8f2,Avoid duplicating DSH shell output in model context,abd5d37c b6aa40bd
-c877aa9d9c18a0febf842e6b5bc51fb4e54fe80c,Summarize archived conversations without executing their agent instructions,3f7440ca 5fee460b abd5d37c
-03c7cbd120fe79f6d70c3f6367aef8b95b443737,Archive maintenance chat without deleting research context,0b6c261b abd5d37c
-9d5c22bc34d8be4db47a34afca01b164bb7c2b02,Expose structured job progress and readable verification metadata,0b6c261b abd5d37c d1e265e6
-74af14befac70e48870293bd312e3926c4a40bbc,Show active research and execution progress across the workbench,0b6c261b
-75c0e16df98b8c1277fdee16ae0336ddd99087aa,Recover durable job completion subscriptions across agent turns,2d7124f0 5fee460b d529395f
-d496be43a58a8505a1e3b716442f70642b21ac00,Add isolated pinned-source execution and public failure diagnostics,d1e265e6
-fd4d341652e89cc212e0937829fad5618f5a0683,Preserve research through infrastructure failures and allow user recovery,0b6c261b 5fee460b 9960f5c6 abd5d37c d1e265e6 d529395f
-44ddbe3df8c506f2bc6b74ea8cb086648adb268a,Continuously retry transient API failures with durable backoff,0b6c261b 3f7440ca 5fee460b 9960f5c6 d529395f
-1db27d4d1774ee237e1bd8b3d006ac8e10fb3f6d,refactor: simplify research messages and model context,0b6c261b 3f7440ca 5fee460b 9960f5c6 abd5d37c b6aa40bd bd845627 d529395f
-5d37661567709473194c08859c8cf87f7bfcea13,fix: share published job feedback across research directions,5fee460b b6aa40bd d1e265e6 d529395f
-ae917761423986848e2481fdc6d9f66f90efca73,fix: make DSH file reads accommodate normal source files,b6aa40bd
-0bf477a4a9507858d898678598f52daa8dea6b0a,test: add extended research team evaluations and design notes,0b6c261b 2d7124f0 3f7440ca 5fee460b abd5d37c bd845627
-779bd7faa11325422f7271096849933db1b443f4,fix: support direct links to workbench research runs,0b6c261b
-f23299d2444320a07a1bda46581026fb6de00fb7,feat: configure research models per run before starting,0b6c261b 3f7440ca abd5d37c d529395f
-fca4432cae430f18deab80a086a6371e0e2cdf00,fix: honor explicitly unlimited research budgets,0b6c261b 5fee460b 9960f5c6 abd5d37c bd845627 d1e265e6 d529395f
-50ca544ec9918da23e6aefc6c7e08a10356b7c4c,feat: connect capped KernelBench artifact studies to existing GPUQ jobs,c1b8bc02
-57075d74d80c59206089f2e1b31a7f4702df17b6,test: annotate GPUQ verification fixtures,c1b8bc02
-199a31fca4afcc709be95d72eb4650a6005cbd39,fix: reject malformed verification contracts before saving briefs,bd845627 d529395f
-6ce54b4b74a5c48d0f72918cb9bf51905df7874f,fix: preserve execution rules in agent command discovery,d529395f
-d95efb664e62385f62da820114d592a18fceab4a,fix: show saved candidate workspace and file inventory,d529395f
-01790d17015b9e553b907a8be71387309de8a86c,fix: include task identity in research job receipts,5fee460b c1b8bc02 d529395f
-1dfa673c9bc85af2d03eb7cb70f4f77db9579e80,fix: report invalid bash working directories clearly,b6aa40bd
-cf6b1c21bebd4fd4fbdb63fde70f2fbb5912d42e,Preserve researcher assignments in recovery context,5fee460b
-98a620d5158c4d5ff4cd470ecd153ce53fd0d099,Make historical research materials identifiable in discovery,5fee460b 9960f5c6 d529395f
-72fc1209f3d60ce34829516bd86f198cd7244b8b,Avoid rereading acknowledged events during workbench polling,5fee460b 9960f5c6 bd845627
-873acb572d121bd0cac4ef097306a62c286dacc8,Deliver researcher reports within active RSI turns,5fee460b 9960f5c6
-229f804e44c60891aea6efc50d6dd46523cfbc40,Add capped GPU diagnostics to KernelBench artifact studies,c1b8bc02
-7e9f829ec4126e8fba7ac191893aefca151ae812,Read agent states once per job polling cycle,d529395f
-51cec55aa2bcd6ab7f6f6466ace3876768bd03bc,Count audited out-of-queue GPU experiments against task limits,c1b8bc02
-9a7cf41d05dfbdc277391c4d8f67ef37a322b7f2,Document precision setup for KernelBench diagnostics,c1b8bc02
-a0ad5eab8f832da9c800b16e36bd822ac0d1aa8e,Read research detail records once per request,abd5d37c
-c6c898d7ff22fdf879bbae4ac6f393b2758e9c16,Keep task constraints in their original form during compaction,3f7440ca
-30b7af19aaba38a5b0597bc8b934f4d6be2bc65f,Clarify where KernelBench environment checks run,c1b8bc02
-bd123281e1b519108b15c7c41b8f1d0645e99d5a,Collect reviewed KernelBench snapshots without mutable workspace copies,c1b8bc02
-73214d204112eba246e6cd56957dac498935a4b3,Distinguish current task budget from job receipt counts,c1b8bc02
-941e75e065e621b262890b1b13adceb4ba1fd26f,Keep provider attribution out of live budget state,5fee460b abd5d37c
-47febb19e63c6792c0db5dbe3785d267d321cc43,Connect existing GPUQ results to workbench verification,c1b8bc02
-68265a7e54264383ad10593c80a935bfb689d5ab,fix(runtime): preserve research progress and compact by token usage,3f7440ca 5fee460b 9960f5c6 bd845627 d529395f
-5d7020eec6593edb81442f4b2cf63535fb8194f0,feat(execution): return job feedback and reuse frozen experiment inputs,5fee460b c1b8bc02 d1e265e6 d529395f
-20c8e9125ddbe23def9f868be9d31b855812cc29,refactor(agents): simplify research prompts and configurable tool access,2d7124f0 5fee460b abd5d37c b6aa40bd
-01bf64288aedad35a4f3e2e7c8e4c6384406999b,refactor(agents): keep RSI focused on research decisions and coordination,0e1d214b
-3475b7d55e7b99b1a9def6e00dde4bfef7f54073,feat(workbench): configure run models and private credentials before research,330f3cdc
-8db187fc9907b29c9152cb89a908fe21fb9797ef,perf(workbench): cache run views and read only recent events,1a830fc6
-25b944c93804152f7cb78a0890b6f02d0cf25394,feat(workbench): enlarge the research graph and show elapsed times,e1b99be7
-df8b25223de9732fcc5dae1cf8f21ad65f4b705f,feat(workbench): clarify chat delivery and add interaction regression coverage,527dcb02
+original_commit,subject,organized_commits,rebased_commits
+5afdfd98e812c94055ab4c51445eebe3e6fc7e2e,docs: record research workbench delivery and acceptance plan,2d7124f0,a3a7ee98
+9baddb3f6dd0513eb86d0caea25bdabf1b9bdd83,feat(research): add run briefs reports evidence and optional candidate records,bd845627,f208fba7
+71b92a18df72213b801a1958899d0f2ddee7bdab,feat(runtime): persist resumable Responses sessions and stop inference while waiting,3f7440ca,d3b71ef4
+e930f2357dc900733e5e0796c9ca641d2ee19f56,fix(runtime): support proxy environments and add real API preflight,3f7440ca,d3b71ef4
+8b8ad9674ee6db3c85456dcdea92f394a0cf6e46,feat(agents): define research roles and enforce report reply coordination,5fee460b 9960f5c6 bd845627 d529395f,31d202b6 9328d736 f208fba7 d4c0dfe9
+aa06de86556c6efe6dfe65ed295b212174f38220,feat(execution): add durable background jobs and resource scheduling,d1e265e6,c419715b
+3024c6a48c3b68655f69e3bc4068ca2ceab45142,feat(coordination): schedule continuous agents with durable budgets and recovery,5fee460b,31d202b6
+1423201e34a6674ccf110e2bb8237644f6c15d5f,feat(examples): add CUHK-X training prediction and trusted clip scoring,72cb960d edbc70ff,adeb95d4 a2ca3ae5
+7b44a0fc623125085b0793a1757ef19e8a6e063a,feat(research): retrieve public web and paper sources with bounded network access,b6aa40bd,33251384
+4581e6dc70cdc2adc6569224a16bb058bc009b9a,feat(cuhkx): isolate training and bind search and final evaluation protocols,72cb960d,adeb95d4
+b2c0e68997ad1935436e36922aad4a666ec95b24,fix(execution): reserve GPUs across runs and preserve ownership through recovery,d1e265e6,c419715b
+8ec76a0379199ef545e59ae9537166af1e4fcdfc,fix(research): preserve candidate ancestry and require matching final confirmation,5fee460b bd845627 d529395f,31d202b6 f208fba7 d4c0dfe9
+4e13dd95ef90e8c35f1022a2bdc2f6c2a6a15fb0,feat(verification): bind scores to frozen candidates and operator protocols,d529395f,d4c0dfe9
+99df3c9838225020aa8786ed75705fcadb9f8c6c,feat(coordination): connect frozen background jobs to trusted results and agent wakeups,d1e265e6 d529395f,c419715b d4c0dfe9
+a368a2a8ac3650f50c1ea606714b74f22bbd5cdc,feat(evidence): archive retrieved sources within research runs,b6aa40bd,33251384
+913378ffa21beab97aaae6e6ab957bce46d4b252,feat(kernelbench): run fixed-target harnesses with separate development and validation pools,edbc70ff,a2ca3ae5
+b20475b24903e6ec2c1579f6103c08fe287a0053,feat(workbench): add local chat research graph evidence and run controls,0b6c261b,68bf7db0
+5c163544f1fae3648d6b1e14411bf1315ce77507,feat(app): assemble resumable research runs and example workflow simulations,abd5d37c bd845627 d529395f,00c5a616 f208fba7 d4c0dfe9
+25222eb451f79a3ccae503998bd4c5e339832116,feat(examples): preflight real research configurations and verify CPU integration,72cb960d abd5d37c edbc70ff,adeb95d4 00c5a616 a2ca3ae5
+e18238295d25aa34703d9d23a2bdf1726c553909,fix(research): bound evidence previews and focus reports on current decisions,5fee460b abd5d37c d529395f,31d202b6 00c5a616 d4c0dfe9
+e58156775277e3103b500c9df7eb9eb917e5e467,fix(app): protect live run ownership and publish interaction replies,5fee460b abd5d37c,31d202b6 00c5a616
+d857d2233c8829c107551a7d8b54eca15f46168d,fix(runtime): compact long turns safely and recover explicit retries without replay,3f7440ca 5fee460b 9960f5c6,d3b71ef4 31d202b6 9328d736
+5409f9ff290d58eb914a48aa542557d3459fefd8,feat(cli): launch research workbenches and resume headless runs,2d7124f0 abd5d37c,a3a7ee98 00c5a616
+b1c40d813434d6b9c0dbbb358cc6052a7dc41596,fix(workbench): clarify simulation settings and restore stopped workers and failed agents,0b6c261b,68bf7db0
+251828fd7cc6ef348b63b220967098780383136a,perf(coordination): avoid rewriting unchanged run state while waiting,d529395f,d4c0dfe9
+f2cf9b37c038bd99639226ee08a789447f29e529,feat(coordination): let RSI stop unmet research without claiming success,5fee460b d529395f,31d202b6 d4c0dfe9
+dfd1c30b580d92001be53b65d85d05c465d78a08,docs: synchronize research architecture and document staged delivery,2d7124f0,a3a7ee98
+07b21b6ccc343fb0c327e3ca153fbae0e0acd37f,fix(interaction): preserve unmet targets when discussing research closure,5fee460b,31d202b6
+40fc8975d2ebe3a2c243621dfd069af3ef192398,fix(workbench): keep reports visible beneath long task instructions,0b6c261b,68bf7db0
+d6122d1063482ae79f89101517074fc52178241f,docs: record real-model rehearsals CPU execution and browser acceptance,2d7124f0 abd5d37c,a3a7ee98 00c5a616
+3bcbe83a54744f92c8cdaba7e2239a6c25909822,feat(prompts): use Chinese research instructions and default summaries,2d7124f0 3f7440ca 5fee460b 9960f5c6 abd5d37c,a3a7ee98 d3b71ef4 31d202b6 9328d736 00c5a616
+683908de313024b6c50e517e3a30ee027daa4696,feat(execution): bind per-run environment and command usage notes,d529395f,d4c0dfe9
+28649b119937a05ba68a149be131ac311c09329f,feat(research): prepare real research runs through conversation,5fee460b 9960f5c6 abd5d37c d529395f,31d202b6 9328d736 00c5a616 d4c0dfe9
+3a2c79e773bc2689db8024b613f28028a1c1fa9d,refine(prompts): use natural Chinese research and recovery instructions,3f7440ca 5fee460b abd5d37c b6aa40bd,d3b71ef4 31d202b6 00c5a616 33251384
+c25db0a5feee3fb4e32125a432c5706bf23ee873,feat(workbench): center research setup on conversation and simplify progress views,0b6c261b abd5d37c,68bf7db0 00c5a616
+f9eea678df43d2873cfc1e6f6573d6c0a4ac19fc,fix(research): verify saved deliverables and await cancellation acknowledgements,5fee460b d529395f,31d202b6 d4c0dfe9
+4db015bc7a24d81809246819ce7309d25c3ca2b5,fix(intake): allow research without a verification budget,abd5d37c bd845627,00c5a616 f208fba7
+cdb5af0913f58b569e3f0377b509cbd2b268f56c,fix(runtime): allow metadata traversal of Python runtime aliases,edbc70ff,a2ca3ae5
+02cb4b40bab3a87f536a078d43d80f93c688607b,refine(workbench): keep research views compact and cancel setup cleanly,0b6c261b 5fee460b abd5d37c,68bf7db0 31d202b6 00c5a616
+94b4d0683f614575f19c240f5027221d40f96284,docs: describe formal workbench usage and real execution acceptance,0b6c261b 2d7124f0 abd5d37c,68bf7db0 a3a7ee98 00c5a616
+6f21781b2637f183e1653b69d40ec593e0dea0df,feat(coordination): let RSI ask users and resume from direct replies,5fee460b 9960f5c6 abd5d37c d529395f,31d202b6 9328d736 00c5a616 d4c0dfe9
+96adfd702732fd284c5e6f410e2c1854a4385484,feat(workbench): show question authors and route user replies,0b6c261b,68bf7db0
+9c48e16fd666f1f067bba1377f154300c4822afd,docs: describe direct RSI questions and recovery acceptance,0b6c261b 2d7124f0 abd5d37c,68bf7db0 a3a7ee98 00c5a616
+775fe3bce31c76c34386eb3d2baed4d0389f74a7,feat(workbench): replace native selects with shared styled dropdowns,0b6c261b,68bf7db0
+87202cdbdcc3176e149916d6140e4d1a96391575,Add durable DSH tool bridge for existing agent sessions,b6aa40bd,33251384
+85fd3a65c6b291ad31b4945636e9506a6ca84a3c,Enable shared agentic tools for all workbench roles,5fee460b abd5d37c b6aa40bd,31d202b6 00c5a616 33251384
+6a139899e61a7190c209702a91bd99d045e1b9b4,Document DSH capabilities and conversation upgrade verification,2d7124f0 abd5d37c b6aa40bd,a3a7ee98 00c5a616 33251384
+943bba57e5e3d64d42ac428301e6c05f98072933,Keep compaction instructions separate from user tasks,2d7124f0 3f7440ca 5fee460b,a3a7ee98 d3b71ef4 31d202b6
+e35d89b75025da6df39392be8ee6f97485da61ae,Keep Interaction responsive with unlimited turns and durable user steering,3f7440ca 5fee460b 9960f5c6 d529395f,d3b71ef4 31d202b6 9328d736 d4c0dfe9
+46fabfc0718ade5fd01d44f21256d49ecfe3a2b1,Hand authorized research to RSI before execution setup is complete,5fee460b abd5d37c d529395f,31d202b6 00c5a616 d4c0dfe9
+af33d1606609e042c35f31d9218365f32a317a0d,Show agent activity and keep long conversations within the workbench,0b6c261b,68bf7db0
+34403d1178745b83f9ca6add67b9e7752784b642,Allow authorized runners to use their existing authentication,5fee460b abd5d37c b6aa40bd,31d202b6 00c5a616 33251384
+1eaf1a710c0f5605d683bdbcc915ca44a4866d87,Retry connection setup failures without replaying submitted requests,3f7440ca 9960f5c6,d3b71ef4 9328d736
+2778139c79614172411c9ad7bb9ccad1dd4f01e0,Let RSI update and recover an active research task,3f7440ca 5fee460b 9960f5c6 abd5d37c d529395f,d3b71ef4 31d202b6 9328d736 00c5a616 d4c0dfe9
+f912716caa6aad3f6e80a3ceff2debf0e5b7f8f2,Avoid duplicating DSH shell output in model context,abd5d37c b6aa40bd,00c5a616 33251384
+c877aa9d9c18a0febf842e6b5bc51fb4e54fe80c,Summarize archived conversations without executing their agent instructions,3f7440ca 5fee460b abd5d37c,d3b71ef4 31d202b6 00c5a616
+03c7cbd120fe79f6d70c3f6367aef8b95b443737,Archive maintenance chat without deleting research context,0b6c261b abd5d37c,68bf7db0 00c5a616
+9d5c22bc34d8be4db47a34afca01b164bb7c2b02,Expose structured job progress and readable verification metadata,0b6c261b abd5d37c d1e265e6,68bf7db0 00c5a616 c419715b
+74af14befac70e48870293bd312e3926c4a40bbc,Show active research and execution progress across the workbench,0b6c261b,68bf7db0
+75c0e16df98b8c1277fdee16ae0336ddd99087aa,Recover durable job completion subscriptions across agent turns,2d7124f0 5fee460b d529395f,a3a7ee98 31d202b6 d4c0dfe9
+d496be43a58a8505a1e3b716442f70642b21ac00,Add isolated pinned-source execution and public failure diagnostics,d1e265e6,c419715b
+fd4d341652e89cc212e0937829fad5618f5a0683,Preserve research through infrastructure failures and allow user recovery,0b6c261b 5fee460b 9960f5c6 abd5d37c d1e265e6 d529395f,68bf7db0 31d202b6 9328d736 00c5a616 c419715b d4c0dfe9
+44ddbe3df8c506f2bc6b74ea8cb086648adb268a,Continuously retry transient API failures with durable backoff,0b6c261b 3f7440ca 5fee460b 9960f5c6 d529395f,68bf7db0 d3b71ef4 31d202b6 9328d736 d4c0dfe9
+1db27d4d1774ee237e1bd8b3d006ac8e10fb3f6d,refactor: simplify research messages and model context,0b6c261b 3f7440ca 5fee460b 9960f5c6 abd5d37c b6aa40bd bd845627 d529395f,68bf7db0 d3b71ef4 31d202b6 9328d736 00c5a616 33251384 f208fba7 d4c0dfe9
+5d37661567709473194c08859c8cf87f7bfcea13,fix: share published job feedback across research directions,5fee460b b6aa40bd d1e265e6 d529395f,31d202b6 33251384 c419715b d4c0dfe9
+ae917761423986848e2481fdc6d9f66f90efca73,fix: make DSH file reads accommodate normal source files,b6aa40bd,33251384
+0bf477a4a9507858d898678598f52daa8dea6b0a,test: add extended research team evaluations and design notes,0b6c261b 2d7124f0 3f7440ca 5fee460b abd5d37c bd845627,68bf7db0 a3a7ee98 d3b71ef4 31d202b6 00c5a616 f208fba7
+779bd7faa11325422f7271096849933db1b443f4,fix: support direct links to workbench research runs,0b6c261b,68bf7db0
+f23299d2444320a07a1bda46581026fb6de00fb7,feat: configure research models per run before starting,0b6c261b 3f7440ca abd5d37c d529395f,68bf7db0 d3b71ef4 00c5a616 d4c0dfe9
+fca4432cae430f18deab80a086a6371e0e2cdf00,fix: honor explicitly unlimited research budgets,0b6c261b 5fee460b 9960f5c6 abd5d37c bd845627 d1e265e6 d529395f,68bf7db0 31d202b6 9328d736 00c5a616 f208fba7 c419715b d4c0dfe9
+50ca544ec9918da23e6aefc6c7e08a10356b7c4c,feat: connect capped KernelBench artifact studies to existing GPUQ jobs,c1b8bc02,18d0ef1e
+57075d74d80c59206089f2e1b31a7f4702df17b6,test: annotate GPUQ verification fixtures,c1b8bc02,18d0ef1e
+199a31fca4afcc709be95d72eb4650a6005cbd39,fix: reject malformed verification contracts before saving briefs,bd845627 d529395f,f208fba7 d4c0dfe9
+6ce54b4b74a5c48d0f72918cb9bf51905df7874f,fix: preserve execution rules in agent command discovery,d529395f,d4c0dfe9
+d95efb664e62385f62da820114d592a18fceab4a,fix: show saved candidate workspace and file inventory,d529395f,d4c0dfe9
+01790d17015b9e553b907a8be71387309de8a86c,fix: include task identity in research job receipts,5fee460b c1b8bc02 d529395f,31d202b6 18d0ef1e d4c0dfe9
+1dfa673c9bc85af2d03eb7cb70f4f77db9579e80,fix: report invalid bash working directories clearly,b6aa40bd,33251384
+cf6b1c21bebd4fd4fbdb63fde70f2fbb5912d42e,Preserve researcher assignments in recovery context,5fee460b,31d202b6
+98a620d5158c4d5ff4cd470ecd153ce53fd0d099,Make historical research materials identifiable in discovery,5fee460b 9960f5c6 d529395f,31d202b6 9328d736 d4c0dfe9
+72fc1209f3d60ce34829516bd86f198cd7244b8b,Avoid rereading acknowledged events during workbench polling,5fee460b 9960f5c6 bd845627,31d202b6 9328d736 f208fba7
+873acb572d121bd0cac4ef097306a62c286dacc8,Deliver researcher reports within active RSI turns,5fee460b 9960f5c6,31d202b6 9328d736
+229f804e44c60891aea6efc50d6dd46523cfbc40,Add capped GPU diagnostics to KernelBench artifact studies,c1b8bc02,18d0ef1e
+7e9f829ec4126e8fba7ac191893aefca151ae812,Read agent states once per job polling cycle,d529395f,d4c0dfe9
+51cec55aa2bcd6ab7f6f6466ace3876768bd03bc,Count audited out-of-queue GPU experiments against task limits,c1b8bc02,18d0ef1e
+9a7cf41d05dfbdc277391c4d8f67ef37a322b7f2,Document precision setup for KernelBench diagnostics,c1b8bc02,18d0ef1e
+a0ad5eab8f832da9c800b16e36bd822ac0d1aa8e,Read research detail records once per request,abd5d37c,00c5a616
+c6c898d7ff22fdf879bbae4ac6f393b2758e9c16,Keep task constraints in their original form during compaction,3f7440ca,d3b71ef4
+30b7af19aaba38a5b0597bc8b934f4d6be2bc65f,Clarify where KernelBench environment checks run,c1b8bc02,18d0ef1e
+bd123281e1b519108b15c7c41b8f1d0645e99d5a,Collect reviewed KernelBench snapshots without mutable workspace copies,c1b8bc02,18d0ef1e
+73214d204112eba246e6cd56957dac498935a4b3,Distinguish current task budget from job receipt counts,c1b8bc02,18d0ef1e
+941e75e065e621b262890b1b13adceb4ba1fd26f,Keep provider attribution out of live budget state,5fee460b abd5d37c,31d202b6 00c5a616
+47febb19e63c6792c0db5dbe3785d267d321cc43,Connect existing GPUQ results to workbench verification,c1b8bc02,18d0ef1e
+68265a7e54264383ad10593c80a935bfb689d5ab,fix(runtime): preserve research progress and compact by token usage,3f7440ca 5fee460b 9960f5c6 bd845627 d529395f,d3b71ef4 31d202b6 9328d736 f208fba7 d4c0dfe9
+5d7020eec6593edb81442f4b2cf63535fb8194f0,feat(execution): return job feedback and reuse frozen experiment inputs,5fee460b c1b8bc02 d1e265e6 d529395f,31d202b6 18d0ef1e c419715b d4c0dfe9
+20c8e9125ddbe23def9f868be9d31b855812cc29,refactor(agents): simplify research prompts and configurable tool access,2d7124f0 5fee460b abd5d37c b6aa40bd,a3a7ee98 31d202b6 00c5a616 33251384
+01bf64288aedad35a4f3e2e7c8e4c6384406999b,refactor(agents): keep RSI focused on research decisions and coordination,0e1d214b,081b124a
+3475b7d55e7b99b1a9def6e00dde4bfef7f54073,feat(workbench): configure run models and private credentials before research,330f3cdc,5f721a7b
+8db187fc9907b29c9152cb89a908fe21fb9797ef,perf(workbench): cache run views and read only recent events,1a830fc6,8a341ae0
+25b944c93804152f7cb78a0890b6f02d0cf25394,feat(workbench): enlarge the research graph and show elapsed times,e1b99be7,dd295047
+df8b25223de9732fcc5dae1cf8f21ad65f4b705f,feat(workbench): clarify chat delivery and add interaction regression coverage,527dcb02,dd17c9ad

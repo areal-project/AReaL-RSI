@@ -1,0 +1,45 @@
+- id: dsh-tui
+  config:
+    provider: deepseek-official
+    model: ""
+    cwd: ""
+    effort: "off"
+    preset: rsi
+    fullscreen: true
+
+- id: system-prompt
+  config:
+    persona: ""
+
+- id: llm-deepseek
+  config:
+    thinking: disabled
+    maxTokens: 8192
+    defaultContextWindow: 32768
+    models: []
+
+# Some compatible models merge the activity marker and reply onto one line.
+# dsh-TUI strips that line, so disable narration while retaining activity UI.
+- id: working-activity
+  config:
+    publish: false
+    publishIntervalMs: 500
+    narrate: false
+
+- id: dsh-tui-auth
+  disabled: true
+
+- id: session-title-llm
+  disabled: true
+
+- insert:
+    - id: rsi-mcp
+      name: "@deepseek-ai/dsh-mcp-client"
+      config:
+        serverName: rsi
+        transport: stdio
+        command: ""
+        args: []
+        cwd: ""
+        env: ""
+        failOnStartupError: true

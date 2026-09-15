@@ -40,4 +40,4 @@ Benchmark 提供公开 Task；TaskResult 引用输出和轨迹；Verifier 接收
 | `POST /api/runs/<id>/pause`、`resume`、`stop` | 控制同一研究 |
 | `POST /api/runs/<id>/delete` | 删除已停止的研究 |
 
-TUI 的 `/start`、`/pause` 等命令直接使用这些 API，不另建 Agent 或实验状态。
+DSH TUI 的 Interaction 通过 `rsi_plan / rsi_start / rsi_status / rsi_control / rsi_message` MCP 工具使用这些 API。MCP 不运行研究循环，RSI 和研究员仍由 ResearchEngine 执行。

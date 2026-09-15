@@ -41,15 +41,29 @@ uv run --env-file .env --locked rsi tui --config .rsi/configs/gsm8k/research.jso
 # LCB 换成 .rsi/configs/lcb/research.json
 ```
 
-进入终端后输入 `/start` 开始研究。直接输入文字与 Agent 对话；`/list` 列出研究，`/use ID` 切换，`/pause`、`/resume`、`/stop` 控制当前研究，`/quit` 退出终端。PgUp/PgDn 滚动历史。
+这里启动原生 **DSH TUI plugin**（`@deepseek-harness-tui/dsh-tui`），保留全屏交互、自然语言对话与 DSH 会话历史。直接说“开始这项研究”，Interaction Agent 会通过 MCP 启动当前配置。
 
-TUI 自动启动或复用本地工作台服务，退出终端不会停止后台研究。同一研究也能在浏览器查看和操作。再次打开：
+也可以不传配置，直接启动 `rsi tui`，然后自然对话：
+
+> 用内置算术 case 准备一个最多 1 名研究员的数学实验，先展示计划，不要开始。
+
+> 开始这个研究。
+
+> 查看进度。／暂停当前研究。／继续当前研究。
+
+数学可以指定 `gsm8k` 和数据目录；LCB 可以说“用内置 LCB case 准备研究”。MCP 的准备操作不启动后台模型，明确要求开始后才启动。普通聊天不创建研究。
+
+研究仍由统一工作台后台执行，输入 DSH 的 `/exit` 退出前台不会停止研究。同一研究也能在 Web 查看和操作。
 
 ```bash
+# 绑定已有研究
 uv run --env-file .env --locked rsi tui --resume <run_id>
+# 恢复原 DSH 对话历史（session ID 在 /exit 时显示）
+uv run --env-file .env --locked rsi tui --session <dsh_session_id>
+# 可组合 --session 和 --resume，同时恢复对话并绑定研究
 ```
 
-`--resume` 选择原研究；若研究已暂停，再输入 `/resume`。新建空白对话用 `rsi tui`，已有配置也可在终端输入 `/new /absolute/path/research.json`。
+首次需要 pnpm 安装固定版本 DSH TUI plugin；可先运行 `rsi tui --setup-only`。研究模型使用 `RSI_*` 或已有 `RSI_TEACHER_*` 配置；前台可通过 `RSI_AGENT_MODELS` 的 `interaction-agent` 单独覆盖。没有另一套旧研究模式。
 
 ### Web
 
@@ -88,7 +102,7 @@ uv run --env-file .env --locked python run.py --type demo
 
 ## 数据与扩展
 
-`RSI_DATA_ROOT` 默认 `.rsi/research-lab`。会话、任务、报告、作业、候选及验证记录在 `runs/<run_id>/`。不读取旧固定流程的 `run-states/`，不提供旧计划、DSH 会话或旧 Runtime 配置迁移。旧数据不会被删除。
+`RSI_DATA_ROOT` 默认 `.rsi/research-lab`。会话、任务、报告、作业、候选及验证记录在 `runs/<run_id>/`。不读取旧固定流程的 `run-states/`，不提供旧固定计划或旧 Runtime 配置迁移。旧数据不会被删除。
 
 新任务通过 `ResearchConfig` 提供执行命令与可信验证器，见[架构](docs/architecture.md)、[接口](docs/interfaces/README.md)和[研究设计](docs/rsi-research-design.md)。远端评测仍保留固定版本、原始回执、取消与重连逻辑。
 

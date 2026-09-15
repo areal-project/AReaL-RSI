@@ -15,7 +15,7 @@ uv run --env-file .env --locked rsi prepare --case lcb \
 uv run --env-file .env --locked rsi tui --config .rsi/configs/lcb/research.json
 ```
 
-TUI 输入 `/start`。直接运行可使用：
+在 DSH TUI 中说“开始这项研究”。直接运行可使用：
 
 ```bash
 uv run --env-file .env --locked rsi research --config .rsi/configs/lcb/research.json

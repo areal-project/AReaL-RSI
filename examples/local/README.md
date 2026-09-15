@@ -8,6 +8,6 @@ uv run --env-file .env --locked rsi prepare --case arithmetic \
 uv run --env-file .env --locked rsi tui --config .rsi/configs/arithmetic/research.json
 ```
 
-输入 `/start` 开始。也可用 `rsi research --config .rsi/configs/arithmetic/research.json` 直接运行。配置研究模型的 `RSI_*` 和被测模型的 `RSI_TARGET_*`，本地 Task Agent 需要 macOS sandbox-exec、Node 与 pnpm。
+在 DSH TUI 中说“开始这项研究”。也可用 `rsi research --config .rsi/configs/arithmetic/research.json` 直接运行。配置研究模型的 `RSI_*` 和被测模型的 `RSI_TARGET_*`，本地 Task Agent 需要 macOS sandbox-exec、Node 与 pnpm。
 
 不再读取 local YAML、RSI_BENCHMARK 或旧固定工作流配置。所有入口共用 ResearchEngine。

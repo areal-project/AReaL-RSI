@@ -54,6 +54,18 @@ uv run --locked python scripts/audit_research.py --root <RSI_DATA_ROOT> --run <r
 
 自动化检查：`make check` 通过，141 tests / 71 subtests，Ruff 与 Mypy 通过；前端 `npm test --prefix tests/frontend` 为 5/5 通过。
 
-## TUI 验证
+## 初次迁移的终端验证（后续已恢复 DSH plugin）
 
-已在真实 PTY 中执行 `/new`、`/list`、`/quit`，确认终端退出后工作台服务仍在。新的 TUI 通过 HTTP 使用与 Web 相同的 ResearchApp，不运行另一个研究 Agent。LCB 最终复验还验证了配置创建、`/start` 和退出后后台继续执行。
+已在真实 PTY 中执行 `/new`、`/list`、`/quit`，确认终端退出后工作台服务仍在。该次验收使用过渡的命令式终端；当前已按用户要求恢复原生 DSH TUI plugin，由新的 MCP 桥接到同一个 ResearchApp。LCB 最终复验还验证了配置创建、`/start` 和退出后后台继续执行。
+
+## DSH TUI plugin 恢复验证
+
+按用户要求恢复原生 `@deepseek-harness-tui/dsh-tui@0.10.0-beta.5`，删除过渡 curses 终端。保留新 ResearchEngine，MCP 只桥接其 HTTP API。
+
+- 在真实 PTY 启动原生 DSH 全屏界面，用 gpt-5.5 完成普通中文对话，没有创建后台研究。
+- 退出并用 `--session 02240037-7b42-4499-bd06-e31b94c076d5` 恢复相同 DSH 对话。
+- 自然语言要求准备 arithmetic 实验、不启动；DSH 调用 MCP 创建 `research_10d0d9bcb0824bd6`。HTTP 核验 status=planned、max_agents=1、model_calls=0、verify_calls=0。
+- MCP 自动化测试通过真实 stdio 和 HTTP 连接新 ResearchApp，覆盖准备、启动、消息去重、暂停、恢复和停止；仅模型推理使用测试替身。
+- DSH profile 安装幂等、原生进程与 session 参数、凭据只在运行时传递均有回归测试。
+
+当前 TUI 使用自然对话操作研究；旧命令式终端的 `/start`、`/pause` 等示例仅属于上面的历史验收记录。退出使用 DSH 自带 `/exit`。

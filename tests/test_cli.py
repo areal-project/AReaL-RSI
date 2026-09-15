@@ -22,4 +22,6 @@ def test_tui_can_select_a_research_config_or_existing_run() -> None:
     )
     assert "--config" in result.stdout
     assert "--resume" in result.stdout
+    assert "--session" in result.stdout
+    assert "--setup-only" in result.stdout
     assert "--mode" not in result.stdout

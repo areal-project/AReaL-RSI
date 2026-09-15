@@ -236,9 +236,12 @@ def main() -> None:
         command = commands.add_parser(name)
         command.add_argument("--port", type=int, default=8197)
         command.add_argument("--config", type=Path)
-        command.add_argument("--simulate-gpu", action="store_true")
+        if name == "workbench":
+            command.add_argument("--simulate-gpu", action="store_true")
         if name == "tui":
-            command.add_argument("--resume", help="选择同一研究，不创建新的 Agent 会话")
+            command.add_argument("--resume", help="绑定已有研究 run_id")
+            command.add_argument("--session", help="恢复原 DSH 对话 session ID")
+            command.add_argument("--setup-only", action="store_true", help="只安装 DSH TUI plugin")
     research = commands.add_parser("research", help="前台运行或恢复研究")
     source = research.add_mutually_exclusive_group(required=True)
     source.add_argument("--config", type=Path)
@@ -284,14 +287,15 @@ def main() -> None:
                 )
             )
         else:
-            from areal_rsi.ui.tui import launch_tui
+            from areal_rsi.ui.dsh import launch_tui
 
             code = launch_tui(
                 data_root(),
                 port=getattr(args, "port", 8197),
                 config=getattr(args, "config", None),
                 resume=getattr(args, "resume", None),
-                simulated=getattr(args, "simulate_gpu", False),
+                session=getattr(args, "session", None),
+                setup_only=getattr(args, "setup_only", False),
             )
     except (ValueError, OSError) as exc:
         parser.exit(2, f"研究配置或启动错误：{exc}\n")

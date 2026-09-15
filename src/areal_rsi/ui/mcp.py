@@ -92,7 +92,7 @@ class ResearchBridge:
         config_path: str | None = None,
         dataset: str | None = None,
         limit: int = 2,
-        max_agents: int | None = None,
+        max_research_agents: int | None = None,
         instructions: str = "",
     ) -> dict[str, Any]:
         if not goal.strip() or len(goal) > 4000:
@@ -102,8 +102,8 @@ class ResearchBridge:
         if config_path:
             config = load_config(Path(config_path).expanduser().resolve())
             config.brief.objective = goal
-            if max_agents is not None:
-                config.brief.limits.max_agents = max_agents
+            if max_research_agents is not None:
+                config.brief.limits.max_research_agents = max_research_agents
                 config.brief.limits.__post_init__()
         elif case:
             if case not in {"arithmetic", "gsm8k", "lcb"}:
@@ -115,7 +115,7 @@ class ResearchBridge:
                 if dataset
                 else Path.cwd() / ".rsi/datasets/gsm8k",
                 limit=limit,
-                max_agents=max_agents if max_agents is not None else 1,
+                max_research_agents=max_research_agents if max_research_agents is not None else 1,
                 remote_config=Path(__file__).parents[1] / "resources/presets/livecodebench.yaml",
             )
             config.brief.objective = goal
@@ -123,7 +123,13 @@ class ResearchBridge:
             model = ModelConfig.from_environment()
             config = ResearchConfig(
                 TaskBrief(
-                    goal, "", ResearchLimits(max_agents=max_agents if max_agents is not None else 1)
+                    goal,
+                    "",
+                    ResearchLimits(
+                        max_research_agents=max_research_agents
+                        if max_research_agents is not None
+                        else 1
+                    ),
                 ),
                 model=model.model,
                 base_url=model.base_url,
@@ -198,7 +204,7 @@ def create_server(bridge: ResearchBridge) -> MCPServer:
         config_path: str | None = None,
         dataset: str | None = None,
         limit: int = 2,
-        max_agents: int | None = None,
+        max_research_agents: int | None = None,
         instructions: str = "",
     ) -> str:
         """准备研究并返回 run_id、目标、范围、预算，不启动模型研究。case 或 config_path 二选一。"""
@@ -209,7 +215,7 @@ def create_server(bridge: ResearchBridge) -> MCPServer:
                 config_path=config_path,
                 dataset=dataset,
                 limit=limit,
-                max_agents=max_agents,
+                max_research_agents=max_research_agents,
                 instructions=instructions,
             )
         )

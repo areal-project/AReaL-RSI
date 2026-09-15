@@ -90,7 +90,7 @@ def _brief(value: Any) -> Json:
     result = _fields(value, "objective instructions")
     result["limits"] = _fields(
         value.get("limits"),
-        "max_agents max_nodes max_model_calls max_total_tokens max_wall_seconds "
+        "max_research_agents max_research_tasks max_model_calls max_total_tokens max_wall_seconds "
         "max_verify_calls max_jobs gpu_ids allowed_paths",
     )
     verification = value.get("verification")

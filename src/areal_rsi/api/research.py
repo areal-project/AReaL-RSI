@@ -12,10 +12,11 @@ from areal_rsi.api.base import JsonValue as JsonValue  # Recursive JsonObject ty
 
 @dataclass(slots=True)
 class ResearchLimits:
-    max_agents: int = (
+    max_research_agents: int = (
         1  # Simultaneously live researchers, including waiting; not lifetime creations.
     )
-    max_nodes: int | None = 20
+    # Run-wide cumulative assignments, including failed/cancelled tasks; None means unlimited.
+    max_research_tasks: int | None = 20
     max_model_calls: int | None = 200
     max_total_tokens: int | None = 1_000_000
     max_wall_seconds: float | None = 14400
@@ -26,8 +27,8 @@ class ResearchLimits:
 
     def __post_init__(self) -> None:
         for name in (
-            "max_agents",
-            "max_nodes",
+            "max_research_agents",
+            "max_research_tasks",
             "max_model_calls",
             "max_total_tokens",
             "max_wall_seconds",
@@ -35,7 +36,7 @@ class ResearchLimits:
             "max_jobs",
         ):
             value = getattr(self, name)
-            if value is None and name != "max_agents":
+            if value is None and name != "max_research_agents":
                 continue  # Explicit null means no run-level cap.
             if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
                 raise ValueError(f"{name} must be a valid nonnegative number")
@@ -52,6 +53,20 @@ class ResearchLimits:
             for p in self.allowed_paths
         ):
             raise ValueError("allowed_paths must contain relative file patterns")
+
+
+def normalize_brief_limits(value: dict[str, Any]) -> dict[str, Any]:
+    """Read earlier research records without changing their limits or source files."""
+    limits = dict(value.get("limits", {}))
+    for previous, current in (
+        ("max_agents", "max_research_agents"),
+        ("max_nodes", "max_research_tasks"),
+    ):
+        if previous in limits:
+            if current in limits:
+                raise ValueError(f"Specify only {current}, not both limit names")
+            limits[current] = limits.pop(previous)
+    return {**value, "limits": limits}
 
 
 @dataclass(slots=True)

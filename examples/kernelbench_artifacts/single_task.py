@@ -15,7 +15,9 @@ def main() -> None:
     parser.add_argument("--run-id", required=True, help="当前工作台研究 ID")
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--environment", type=Path, default=HERE / "et15.json")
-    parser.add_argument("--max-agents", type=int, default=3, help="同时存活的研究员上限，含等待")
+    parser.add_argument(
+        "--max-research-agents", type=int, default=3, help="同时存活的研究员上限，含等待"
+    )
     parser.add_argument("--time-limit", type=int, default=3600, help="时间上限（秒）")
     parser.add_argument(
         "--time-scope",
@@ -39,7 +41,7 @@ def main() -> None:
         args.environment.resolve(),
         args.run_id,
         task=args.task,
-        max_agents=args.max_agents,
+        max_research_agents=args.max_research_agents,
         max_wall_seconds=args.time_limit,
         check_credentials=False,
         web_research=args.web_research,

@@ -24,6 +24,7 @@ from areal_rsi.api.research import (
     ResearchReport,
     TaskBrief,
     VerifiedResult,
+    normalize_brief_limits,
 )
 from areal_rsi.base.runs import FileRunStore
 from areal_rsi.base.storage import (
@@ -84,7 +85,7 @@ class ResearchStore:
         ref = self.run().brief_ref
         if ref is None:
             raise ValueError("This run has no research brief")
-        return decode(TaskBrief, self.runs.read_json(ref))  # type: ignore[no-any-return]
+        return decode(TaskBrief, normalize_brief_limits(self.runs.read_json(ref)))  # type: ignore[no-any-return]
 
     def contract_digest(self) -> str:
         contract = self.brief().verification

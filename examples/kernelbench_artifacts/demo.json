@@ -2,7 +2,7 @@
   "model": "gpt-6-astra",
   "reasoning_effort": "xhigh",
   "base_url": "https://4ipic.com",
-  "max_agents": 5,
+  "max_research_agents": 5,
   "target": 1.0,
   "exploration_submissions": 10,
   "exploration_seed": 42,

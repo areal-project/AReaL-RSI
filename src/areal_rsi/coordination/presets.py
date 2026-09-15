@@ -22,8 +22,8 @@ def example_config(name: str, *, repository: Path) -> ResearchConfig:
             "并至少验证一次 RSI 明确回复后继续研究的过程。最终确认和文件导出只证明流程连通，"
             "不能据此声称 KernelBench 性能提升。",
             ResearchLimits(
-                max_agents=1,
-                max_nodes=6,
+                max_research_agents=1,
+                max_research_tasks=6,
                 max_model_calls=100,
                 max_total_tokens=2_000_000,
                 max_verify_calls=6,

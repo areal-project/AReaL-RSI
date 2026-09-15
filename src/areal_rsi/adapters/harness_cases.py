@@ -61,7 +61,7 @@ async def prepare(
     dataset: Path,
     limit: int = 2,
     remote_config: Path,
-    max_agents: int = 1,
+    max_research_agents: int = 1,
 ) -> ResearchConfig:
     from areal_rsi.config import ModelConfig
 
@@ -154,8 +154,8 @@ async def prepare(
             f"{case} Harness 研究",
             instructions,
             ResearchLimits(
-                max_agents=max_agents,
-                max_nodes=4,
+                max_research_agents=max_research_agents,
+                max_research_tasks=4,
                 max_model_calls=100,
                 max_total_tokens=1_000_000,
                 max_verify_calls=4,
@@ -383,7 +383,7 @@ def main() -> None:
         type=Path,
         default=Path(__file__).parents[1] / "resources/presets/livecodebench.yaml",
     )
-    prep.add_argument("--max-agents", type=int, default=1)
+    prep.add_argument("--max-research-agents", type=int, default=1)
     run = commands.add_parser("evaluate")
     for name in ("operator", "workspace", "output"):
         run.add_argument("--" + name, type=Path, required=True)

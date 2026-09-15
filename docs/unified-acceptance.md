@@ -64,7 +64,7 @@ uv run --locked python scripts/audit_research.py --root <RSI_DATA_ROOT> --run <r
 
 - 在真实 PTY 启动原生 DSH 全屏界面，用 gpt-5.5 完成普通中文对话，没有创建后台研究。
 - 退出并用 `--session 02240037-7b42-4499-bd06-e31b94c076d5` 恢复相同 DSH 对话。
-- 自然语言要求准备 arithmetic 实验、不启动；DSH 调用 MCP 创建 `research_10d0d9bcb0824bd6`。HTTP 核验 status=planned、max_agents=1、model_calls=0、verify_calls=0。
+- 自然语言要求准备 arithmetic 实验、不启动；DSH 调用 MCP 创建 `research_10d0d9bcb0824bd6`。HTTP 核验 status=planned、max_research_agents=1、model_calls=0、verify_calls=0。
 - MCP 自动化测试通过真实 stdio 和 HTTP 连接新 ResearchApp，覆盖准备、启动、消息去重、暂停、恢复和停止；仅模型推理使用测试替身。
 - DSH profile 安装幂等、原生进程与 session 参数、凭据只在运行时传递均有回归测试。
 

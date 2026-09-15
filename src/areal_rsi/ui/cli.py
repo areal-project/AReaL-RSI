@@ -255,7 +255,7 @@ def main() -> None:
     prepare.add_argument("--output", type=Path, required=True)
     prepare.add_argument("--dataset", type=Path, default=Path(".rsi/datasets/gsm8k"))
     prepare.add_argument("--limit", type=int, default=2)
-    prepare.add_argument("--max-agents", type=int, default=1)
+    prepare.add_argument("--max-research-agents", type=int, default=1)
     prepare.add_argument(
         "--remote-config",
         type=Path,

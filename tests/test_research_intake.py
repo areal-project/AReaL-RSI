@@ -58,7 +58,7 @@ def test_conversation_can_bind_real_cpu_execution_without_template_or_baseline(
         active = await app.attach(c)
         tools = active.actions.handler("interaction")
         brief = TaskBrief("研究文本处理", "比较规则与结果，保留具体观察")
-        brief.limits.max_agents = 3
+        brief.limits.max_research_agents = 3
         await tools(ToolCall("update_brief", {"brief_json": json.dumps(encode(brief))}, "brief"))
         command = ApprovedCommand(
             "inspect",

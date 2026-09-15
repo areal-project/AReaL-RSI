@@ -149,3 +149,14 @@ test('creation configures the first conversation and modal dropdowns stay intera
   assert.equal(ui.$('create-api-key').value, '');
   assert.equal(ui.$('objective').textContent, '研究 new');
 });
+
+test('research limits display canonical fields and user-facing task labels', async (t) => {
+  const record = run('a');
+  record.brief.limits = {max_research_agents: 2, max_research_tasks: 4};
+  const ui = await setup(t, {a: record});
+  const values = new Map([...ui.window.document.querySelectorAll('.brief-grid dt')]
+    .map((label) => [label.textContent, label.nextElementSibling.textContent]));
+  assert.equal(values.get('研究员数量上限'), '2');
+  assert.equal(values.get('研究任务总数上限'), '4');
+  assert.equal(values.has('节点上限'), false);
+});

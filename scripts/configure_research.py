@@ -47,8 +47,8 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument(
         "--instructions-file", type=Path, help="Additional user guidance as UTF-8 text"
     )
-    result.add_argument("--max-agents", type=int, help="Default: 1")
-    result.add_argument("--max-nodes", type=integer_limit, default=12)
+    result.add_argument("--max-research-agents", type=int, help="Default: 1")
+    result.add_argument("--max-research-tasks", type=integer_limit, default=12)
     result.add_argument("--max-model-calls", type=integer_limit, default=200)
     result.add_argument("--max-total-tokens", type=integer_limit, default=2_000_000)
     result.add_argument("--max-verify-calls", type=integer_limit, default=6)
@@ -182,8 +182,8 @@ def build_config(args: argparse.Namespace) -> ResearchConfig:
         raise ValueError("Private prepared data must be outside the candidate seed")
     ids = gpu_ids(operator, example)
     limits = ResearchLimits(
-        max_agents=args.max_agents if args.max_agents is not None else 1,
-        max_nodes=args.max_nodes,
+        max_research_agents=args.max_research_agents if args.max_research_agents is not None else 1,
+        max_research_tasks=args.max_research_tasks,
         max_model_calls=args.max_model_calls,
         max_total_tokens=args.max_total_tokens,
         max_verify_calls=args.max_verify_calls,

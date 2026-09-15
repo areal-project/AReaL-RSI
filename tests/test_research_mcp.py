@@ -81,7 +81,7 @@ def test_native_mcp_controls_new_research_without_old_workflow(tmp_path: Path) -
                 assert isinstance(block, TextContent)
                 return json.loads(block.text)  # type: ignore[no-any-return]
 
-            plan = await call("rsi_plan", {"goal": "只准备一个通用研究", "max_agents": 1})
+            plan = await call("rsi_plan", {"goal": "只准备一个通用研究", "max_research_agents": 1})
             assert plan["status"] == "planned" and plan["budget"]["model_calls"] == 0
             run_id = plan["run_id"]
             assert (await call("rsi_status", {}))["run_id"] == run_id

@@ -125,7 +125,7 @@ RSI = [
     definition(
         "spawn_researcher",
         "研究的任何阶段都可新建方向，下发首轮阶段问题与汇报点。"
-        "max_agents 限制同时存活数量，非累计创建数；停止旧研究员后可复用名额。",
+        "max_research_agents 限制同时存活数量，非累计创建数；停止旧研究员后可复用名额。",
         direction=STRING,
         instruction=STRING,
         references=REFERENCES,
@@ -528,8 +528,8 @@ class ResearchActions:
             run = c.store.run()
             run.brief_ref = c.store.put("briefs", key, brief)
             run.plan.goal = brief.objective
-            run.plan.max_iterations = brief.limits.max_nodes
-            run.plan.research_agent_count = brief.limits.max_agents
+            run.plan.max_iterations = brief.limits.max_research_tasks
+            run.plan.research_agent_count = brief.limits.max_research_agents
             c.store.save_run(run)
             if "intake" in c.state:
                 config_path = c.store.root / "coordination" / "config.json"

@@ -79,7 +79,7 @@ class ResearchEngine:
         )
         self.tools_factory = tools_factory
         self.max_concurrent_turns = (
-            coordinator.store.brief().limits.max_agents + 2
+            coordinator.store.brief().limits.max_research_agents + 2
             if max_concurrent_turns is None
             else max_concurrent_turns
         )

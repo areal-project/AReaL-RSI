@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from areal_rsi.api.research import TaskBrief
+from areal_rsi.api.research import TaskBrief, normalize_brief_limits
 from areal_rsi.base.storage import decode, encode
 from areal_rsi.execution import ApprovedCommand
 from areal_rsi.modules.responses import ResponsesConfig
@@ -114,6 +114,7 @@ class ResearchConfig:
 def config_from_dict(value: dict[str, Any]) -> ResearchConfig:
     if "api_key" in value:
         raise ValueError("Use api_key_env; credentials must not be saved in research configuration")
+    value = {**value, "brief": normalize_brief_limits(value["brief"])}
     config: ResearchConfig = decode(ResearchConfig, value)
     if config.metadata.get("time_limit_scope", "total") not in {"total", "exploration"}:
         raise ValueError("time_limit_scope must be total or exploration")

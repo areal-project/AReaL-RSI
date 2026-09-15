@@ -64,8 +64,8 @@ class Coordinator:
                     "",
                     None,
                     None,
-                    brief.limits.max_nodes,
-                    brief.limits.max_agents,
+                    brief.limits.max_research_tasks,
+                    brief.limits.max_research_agents,
                 ),
                 RunState.PLANNED,
                 brief_ref=brief_ref,
@@ -550,7 +550,7 @@ class Coordinator:
         run = self.store.run()
         if not any(a.agent_id == agent_id for a in run.research_agents):
             active = sum(a.state != AgentState.STOPPED for a in run.research_agents)
-            if active >= self.store.brief().limits.max_agents:
+            if active >= self.store.brief().limits.max_research_agents:
                 raise ValueError(
                     "Research Agent 同时存活数量已达上限（包含等待中的研究员）；"
                     "先 stop_researcher 释放名额，再创建新方向。累计创建数量不限。"
@@ -603,12 +603,13 @@ class Coordinator:
                 if reply_to_report_id is not None and reply_to_report_id != report.report_id:
                     raise ValueError("Continuation must reply to the latest report explicitly")
                 reply_to_report_id = report.report_id
-            max_nodes = self.store.brief().limits.max_nodes
+            max_research_tasks = self.store.brief().limits.max_research_tasks
             if (
-                max_nodes is not None
-                and sum(len(a.iterations) for a in self.store.run().research_agents) >= max_nodes
+                max_research_tasks is not None
+                and sum(len(a.iterations) for a in self.store.run().research_agents)
+                >= max_research_tasks
             ):
-                raise ValueError("Research node budget exhausted")
+                raise ValueError("Research task budget exhausted")
             path = self.store.root / "assignments" / f"{assignment_id}.json"
             if path.exists():
                 assignment = self.store.get("assignments", assignment_id, Assignment)

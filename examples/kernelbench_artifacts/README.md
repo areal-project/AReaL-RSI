@@ -45,7 +45,7 @@ uv run --project <仓库目录> python <仓库目录>/examples/kernelbench_artif
 
 若要做 20 分钟、GPU 提交不限次数的研究，在需求中说明并给准备脚本加 `--time-limit 1200 --submissions unlimited --name L1P77-20分钟-不限次数`。此时可通过作业工具按需评测、调试和比较参数，无需逐次批准；仍保留全部作业记录和独立最终复测，系统在第 18 分钟结束探索并开始收尾。联网只能调研通用方法，禁止搜索答案或获取本题现成的完整实现。
 
-只限制探索时间、最终复测另计时，加 `--time-scope exploration`；例如 `--time-limit 1800 --time-scope exploration --submissions unlimited --max-agents 6`。单题正式正确产物会自动归档、验证并更新工作台，不需要 agent 手动刷新成绩。
+只限制探索时间、最终复测另计时，加 `--time-scope exploration`；例如 `--time-limit 1800 --time-scope exploration --submissions unlimited --max-research-agents 6`。单题正式正确产物会自动归档、验证并更新工作台，不需要 agent 手动刷新成绩。
 
 ## Baseline 与 RSI 结果参考
 

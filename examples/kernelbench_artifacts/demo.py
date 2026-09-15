@@ -72,7 +72,7 @@ def prepare(
     *,
     check: bool = False,
     task: str | None = None,
-    max_agents: int = 3,
+    max_research_agents: int = 3,
     max_wall_seconds: int = 3600,
     check_credentials: bool = True,
     web_research: bool | None = None,
@@ -88,7 +88,7 @@ def prepare(
     ):
         raise ValueError("探索提交次数应为正整数或 null（不限次数）")
     if task:
-        ResearchLimits(max_agents=max_agents, max_wall_seconds=max_wall_seconds)
+        ResearchLimits(max_research_agents=max_research_agents, max_wall_seconds=max_wall_seconds)
     demo = json.loads((HERE / "demo.json").read_text())
     demo["exploration_submissions"] = exploration_submissions
     if task:
@@ -97,7 +97,7 @@ def prepare(
         if not re.fullmatch(r"L[123]P[1-9][0-9]*", task):
             raise ValueError("题号格式应为 L3P10")
         demo["tasks"] = {task: demo["tasks"].get(task, {})}
-        demo.update(max_agents=max_agents, target=None, metric="speedup")
+        demo.update(max_research_agents=max_research_agents, target=None, metric="speedup")
     title = name or (f"KernelBench {task} 单题研究" if task else "KernelBench 八题研究")
     env = json.loads(environment.read_text())
     config = ResearchConfig(
@@ -113,6 +113,9 @@ def prepare(
     config_path = setup / "research.json"
     if not check and config_path.exists():
         existing = json.loads(config_path.read_text())
+        from areal_rsi.api.research import normalize_brief_limits
+
+        existing["brief"] = normalize_brief_limits(existing["brief"])
         previous_demo = json.loads((setup / "demo.json").read_text())
         if existing["metadata"].get("time_limit_scope", "total") != time_limit_scope:
             raise ValueError("此研究已有不同的时间口径；请新建研究")
@@ -124,7 +127,7 @@ def prepare(
             raise ValueError("此研究已有不同的联网设置；请新建研究，不能改变已登记实验条件")
         if task and (
             list(json.loads((setup / "demo.json").read_text())["tasks"]) != [task]
-            or existing["brief"]["limits"]["max_agents"] != max_agents
+            or existing["brief"]["limits"]["max_research_agents"] != max_research_agents
             or existing["brief"]["limits"]["max_wall_seconds"] != max_wall_seconds
         ):
             raise ValueError("此研究已有不同的单题配置；请新建研究，不能重置提交额度")
@@ -227,7 +230,8 @@ def prepare(
         + "、".join(demo["tasks"])
         + " 的完整 ModelNew。先保证正确性，再提高整题加速比。"
         "阅读自己工作区 RULES.md 和 tasks/<题号>/reference.py；不读取其他 run 或历史解法。"
-        f"同时最多 {demo['max_agents']} 名研究员（含等待），停止后名额可复用，累计创建数不限；"
+        f"同时最多 {demo['max_research_agents']} 名研究员（含等待），"
+        "停止后名额可复用，累计创建数不限；"
         "RSI 自主决定方向、分工和阶段汇报点；"
         "实现和实验交给研究员。"
         + budget_policy
@@ -249,8 +253,8 @@ def prepare(
             else "不另设总时间或模型调用上限。"
         ),
         ResearchLimits(
-            max_agents=demo["max_agents"],
-            max_nodes=None,
+            max_research_agents=demo["max_research_agents"],
+            max_research_tasks=None,
             max_model_calls=None,
             max_total_tokens=None,
             max_wall_seconds=max_wall_seconds if task else None,

@@ -225,8 +225,8 @@ class ResearchApp:
             config.brief.objective = str(params["objective"])
         if params.get("instructions"):
             config.brief.instructions += "\nUser instructions:\n" + str(params["instructions"])
-        if "max_agents" in params:
-            config.brief.limits.max_agents = int(params["max_agents"])
+        if "max_research_agents" in params:
+            config.brief.limits.max_research_agents = int(params["max_research_agents"])
             config.brief.limits.__post_init__()
         if config.metadata.get("simulation_only") and not simulated:
             raise ValueError(
@@ -355,7 +355,7 @@ class ResearchApp:
         active.execution.execution_env = config.execution_env
         active.execution.read_verification = self._verification_reader(c, config)
         active.execution.instructions = str(config.metadata.get("execution_instructions", ""))
-        active.engine.max_concurrent_turns = config.brief.limits.max_agents + 2
+        active.engine.max_concurrent_turns = config.brief.limits.max_research_agents + 2
         if prepared_setup:
             await self.freeze_execution(c)
             pending_setup = False

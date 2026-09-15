@@ -1226,8 +1226,8 @@ function renderBrief(run) {
   ];
   const grid = element("dl", "brief-grid");
   const rows = [
-    ["同时存活研究员上限", limits.max_agents],
-    ["节点上限", budgetLimit(limits.max_nodes)],
+    ["研究员数量上限", limits.max_research_agents],
+    ["研究任务总数上限", budgetLimit(limits.max_research_tasks)],
     ["模型调用上限", budgetLimit(limits.max_model_calls)],
     ["Token 上限", budgetLimit(limits.max_total_tokens)],
     ["验证次数上限", budgetLimit(limits.max_verify_calls)],

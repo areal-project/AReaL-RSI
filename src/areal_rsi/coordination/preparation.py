@@ -74,8 +74,8 @@ async def prepare_example(
         str(output),
     ]
     for name in (
-        "max_agents",
-        "max_nodes",
+        "max_research_agents",
+        "max_research_tasks",
         "max_model_calls",
         "max_total_tokens",
         "max_verify_calls",

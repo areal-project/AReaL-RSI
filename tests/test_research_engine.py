@@ -88,7 +88,7 @@ class EngineTest(unittest.IsolatedAsyncioTestCase):
             TaskBrief(
                 "Research an open problem",
                 "A baseline is optional",
-                limits or ResearchLimits(max_agents=2),
+                limits or ResearchLimits(max_research_agents=2),
             ),
         )
         if start:

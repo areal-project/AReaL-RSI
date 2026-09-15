@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from areal_rsi.api.base import AgentSpec, Trajectory, TrajectoryRef
-from areal_rsi.base.storage import FileContentStore, FileTrajectoryStore, new_id, now
+from areal_rsi.base.storage import FileContentStore, FileTrajectoryStore, new_id, now, safe_name
 
 
 class RuntimeSettings:
@@ -159,13 +159,16 @@ def sandbox_command(
         f"(deny file-read* (subpath {json.dumps(str(Path(__file__).resolve().parents[1]))}))"
     )
     for executable in (Path(sys.executable), *executable_aliases):
-        if executable.is_symlink():
+        seen: set[Path] = set()
+        while executable.is_symlink() and executable not in seen:
+            seen.add(executable)
             alias = Path(os.readlink(executable))
             if not alias.is_absolute():
                 alias = executable.parent / alias
             profile.append(
                 f"(allow file-read-metadata (subpath {json.dumps(str(alias.parent.parent))}))"
             )
+            executable = alias
     for parent in sorted({p for root in roots for p in root.parents}):
         profile.append(f"(allow file-read-metadata (literal {json.dumps(str(parent))}))")
     for path in (directory.resolve(), workspace.resolve()):
@@ -319,6 +322,7 @@ class PackageAgentRuntime:
         max_tokens: int = 4096,
         dsh_root: Path | None = None,
         credential_env_names: Any = (),
+        agent_directories: bool = False,
         **_: Any,
     ):
         self.root, self.content, self.trajectories = root.resolve(), content, trajectories
@@ -327,6 +331,7 @@ class PackageAgentRuntime:
         self.base_url, self.api_key, self.timeout = base_url, api_key, timeout
         self.max_tokens, self.dsh_root = max_tokens, dsh_root
         self.credential_env_names = credential_env_names
+        self.agent_directories = agent_directories
         self.mcp_registry: dict[str, dict[str, Any]] = {}
         self.sessions: set[PackageSession] = set()
 
@@ -337,15 +342,23 @@ class PackageAgentRuntime:
         if unknown:
             raise ValueError(f"Unmapped RSI tools: {sorted(unknown)}")
         session_id = new_id("trajectory")
-        directory = self.root / session_id
+        parent = (
+            self.root / safe_name(agent.agent_id) / "sessions"
+            if self.agent_directories
+            else self.root
+        )
+        directory = parent / session_id
         directory.mkdir(parents=True)
         modules = directory / "worker-code/areal_rsi/modules"
         modules.mkdir(parents=True)
         (modules.parent / "__init__.py").write_text("")
         (modules / "__init__.py").write_text("")
         for name in (
-            "runtime_worker.py", "runtime_mcp.py", "runtime_mcp.schema.json",
-            "runtime_storage.py", "runtime_storage.schema.json",
+            "runtime_worker.py",
+            "runtime_mcp.py",
+            "runtime_mcp.schema.json",
+            "runtime_storage.py",
+            "runtime_storage.schema.json",
         ):
             shutil.copyfile(Path(__file__).parent / name, modules / name)
         workspace = Path(workspace_root).resolve() if workspace_root else directory / "workspace"

@@ -95,11 +95,11 @@ Each TUI plan has an independent directory under
 choose a different output directory. The status response includes
 the worker log path, which identifies that directory.
 
-- `workers/RUN_ID.log`: chronological execution log.
-- `run-states/RUN_ID.json`: status, scores, versions and iterations.
+- `runs/RUN_ID/runtime/worker.log`: chronological execution log.
+- `runs/RUN_ID/run.json`: run status and references to agent/iteration records.
 - `tasks/*/workspace/src/model.js`: generated models, with `inputs.json` in the
   task directory identifying the solution and task.
-- `runs/RUN_ID/`: per-stage checkpoints and evidence references.
+- `runs/RUN_ID/workflow/`: per-stage checkpoints and evidence references.
 - `research-workspaces/`: authorized evidence files and candidate prompt.
 
 TRAIN and VALIDATE intentionally use the same public case. A completed workflow

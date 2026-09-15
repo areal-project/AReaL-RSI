@@ -270,23 +270,45 @@ select(
 
 EvaluationReport 中的 solution_id 可以通过 VersionManager.get_solution 查询完整 Model、Harness、Artifact 和父版本。ResearchAgent 实现需要把 VersionManager 作为只读工具提供给选版 Session，因此无需把完整 Solution 重复放进每份报告。
 
-ResearchIteration 保存一轮完整记录：
+### ResearchIteration 与工作流结果
+
+ResearchIteration 是通用研究节点，不限定任务类别、产出形式或执行顺序：
 
 ```python
 class ResearchIteration:
-    iteration: int
-    input_solution_id: str
-    train_report: EvaluationReport
-    evidence: ContentRef
-    change: HarnessChange | ModelChange | ArtifactChange
-    candidate_solution_id: str
-    validation_report: EvaluationReport
-    next_solution_id: str | None
-    started_at: str
-    finished_at: str
+    iteration_id: str
+    run_id: str
+    agent_id: str
+    assignment_ref: RecordRef
+    state: IterationState = IterationState.PENDING
+    parent_iteration_id: str | None = None
+    report_ref: RecordRef | None = None
+    references: tuple[RecordRef, ...] = ()
+    created_at: str | None = None
+    updated_at: str | None = None
 ```
 
-ResearchIteration 只记录已经成功完成的一轮，不保存构建中、评测中等半成品状态。`next_solution_id=None` 唯一表示本轮完成后结束研究线；中途失败写入 ResearchAgentState.error 和 Trajectory。ResearchAgentState 只保存 Agent 状态和 iteration 列表，current 可以从最后一次 next_solution_id 推导，best 可以从历史 validation_report 计算。
+`RecordRef(uri)` 引用指令、报告或组件记录；本地 RunStore 支持 `run://<run_id>/<path>`、`content://<digest>` 及旧记录兼容引用。引用可带 JSON pointer，解析会检查路径边界；引用本身不代表访问授权。节点状态为 `pending / running / completed / failed / cancelled`。不要求每个节点都有候选或评测，失败节点也保留已有材料。
+
+三种对象的职责不同：
+
+| 对象 | 职责 | 是否为通用节点必需 |
+| --- | --- | --- |
+| ResearchIteration | 一项研究任务的归属、执行状态、报告和材料引用 | 它本身就是通用节点 |
+| EvolutionResult | 现有 Harness / Artifact 迭代的修改、候选、评测及下一版本记录 | 否，由具体工作流选择使用 |
+| SolutionVersion | 可执行、可评测的 Model / Harness / Artifacts 版本组合 | 否，当前版本模型由具体执行工具使用 |
+
+当前固定工作流仍使用上面的 propose / select 接口，将完成结果保存为 `workflows.records.EvolutionResult`，由节点 report_ref 引用；`evolution_history` 读取这些结果供选版和恢复使用。EvolutionResult 中的 input_solution_id、candidate_solution_id 和 next_solution_id 指向 SolutionVersion，版本正文仍由 VersionManager 管理。
+
+**可选指工作流可以完全不采用 EvolutionResult，不是要求把它的每个字段都改为 Optional。** 当前 Harness / Artifact 工作流仍需要这种完整记录才能恢复自己的固定流程；通用 ResearchIteration 和 RunStore 不要求报告符合该结构。其他工作流直接引用自身报告或组件记录，不需要生成占位 EvolutionResult，也不应为没有候选或评测的任务补造 SolutionVersion。
+
+`report_ref` 的具体内容格式由工作流决定，不能把所有报告都按 EvolutionResult 解码。完成一项研究任务也不等同于生成可执行版本或通过评测；报告的内容要求由任务与协作协议规定。
+
+ResearchAgentState 使用独立的 `AgentState`：`created / running / waiting / paused / stopping / stopped / failed`，另外记录方向、当前节点、等待原因、会话 ID 和检查点引用。当前工作流已区分运行、停止、失败和取消后的暂停；等待回复、连续会话和动态调度尚待实现，不能由枚举存在推定行为已接入。
+
+`ExperimentPlan.baseline_solution_id` 与 `ExperimentRun.best_solution_id` 可为空。通用 Service 接受无起点计划；当前 Harness / Artifact 执行路径自行要求起点。新 run 的最佳版本初始为空，由工作流在真实评测后更新。
+
+磁盘上 run、Agent 和 ResearchIteration 分别保存在 `runs/<run_id>/run.json`、`agents/<agent_id>/agent.json`、`iterations/<iteration_id>.json`；父记录仅保存子记录 ID。`FileRunStore.get/list` 还原为现有嵌套内存对象，调用方无需重复拼装。Memory、轨迹索引及后台运行数据按 run 装配。
 
 ## 3. 基础模块接口
 

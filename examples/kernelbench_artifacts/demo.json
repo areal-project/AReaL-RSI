@@ -1,0 +1,96 @@
+{
+  "model": "gpt-6-astra",
+  "reasoning_effort": "xhigh",
+  "base_url": "https://4ipic.com",
+  "max_agents": 5,
+  "target": 1.0,
+  "exploration_submissions": 10,
+  "exploration_seed": 42,
+  "final_seed": 137,
+  "hardware": "NVIDIA L20X",
+  "protocol_files": {
+    "kb_worker.py": "4a279246695f8827f5347747d86d958a65c057808945e1a9490303ada86b439f",
+    "full_eval/strict_worker.py": "93156ff41ebedaf7f837bef498e359a7240c3b443b786e88a01e79d05cf946dc",
+    "codex_eval/instrumented_worker.py": "f6a3333de05008a1003bd0131889bd58c11f6a01014aab79ec777548c4495ce1"
+  },
+  "tasks": {
+    "L1P63": {
+      "sha256": "18b1d4ea7b3a52714f3607268b8a38b7457b2adcce2dc918bcdbf33cc267b463",
+      "reference_baseline": {
+        "mode": "baseline",
+        "correct": true,
+        "ref_ms": 17.2,
+        "ref_us": 17200.0,
+        "evaluation_policy": "strict-fp32-v1"
+      }
+    },
+    "L2P14": {
+      "sha256": "8bd6a36d6dafc8916d9b47d413f668fb7a4c25444378717a4c09f495b3891cd2",
+      "reference_baseline": {
+        "mode": "baseline",
+        "available": false,
+        "reason": "The archived reference pre-run failed. Every formal eval also measures the reference."
+      }
+    },
+    "L3P10": {
+      "sha256": "ab5fab154c73fe7ab056c534c820286ce7ad8e0fc0b3e6bdefb27ffa10f81380",
+      "reference_baseline": {
+        "mode": "baseline",
+        "correct": true,
+        "ref_ms": 9.61,
+        "ref_us": 9610.0,
+        "evaluation_policy": "strict-fp32-v1"
+      }
+    },
+    "L3P28": {
+      "sha256": "f537369b6a72f9e5b976927a74944a272443c509c3db23e1216fd5c8bb2fef8f",
+      "reference_baseline": {
+        "mode": "baseline",
+        "correct": true,
+        "ref_ms": 1.51,
+        "ref_us": 1510.0,
+        "evaluation_policy": "strict-fp32-v1"
+      }
+    },
+    "L1P77": {
+      "sha256": "a16f0026c2249c9f6e3a151fbf3b42db29dd17640a0ef9f001cbd1d09d5f9444",
+      "reference_baseline": {
+        "mode": "baseline",
+        "correct": true,
+        "ref_ms": 5.08,
+        "ref_us": 5080.0,
+        "evaluation_policy": "strict-fp32-v1"
+      }
+    },
+    "L2P71": {
+      "sha256": "412f9c4244239814ab3cc6d58c0837c7ffbc94e5d63453c88f8388fb28309fad",
+      "reference_baseline": {
+        "mode": "baseline",
+        "correct": true,
+        "ref_ms": 1.55,
+        "ref_us": 1550.0,
+        "evaluation_policy": "strict-fp32-v1"
+      }
+    },
+    "L2P80": {
+      "sha256": "44dff2e3c3e9b014df3f41f40e3678aa17830ecc7b161d2f142f556f87ee134c",
+      "reference_baseline": {
+        "mode": "baseline",
+        "correct": true,
+        "ref_ms": 2.72,
+        "ref_us": 2720.0,
+        "evaluation_policy": "strict-fp32-v1"
+      }
+    },
+    "L3P19": {
+      "sha256": "7c18cb9e79f8fa0e5442b64a472c1a5bfc1b3b5098f4e11fdf1d1c271fe4ce5a",
+      "reference_baseline": {
+        "mode": "baseline",
+        "correct": true,
+        "ref_ms": 1.41,
+        "ref_us": 1410.0,
+        "evaluation_policy": "strict-fp32-v1"
+      }
+    }
+  }
+}

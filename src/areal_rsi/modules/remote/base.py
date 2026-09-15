@@ -18,6 +18,7 @@ from areal_rsi.api.modules import (
     Verifier,
 )
 from areal_rsi.api.workflow import ResearchAgent
+from areal_rsi.base.runs import RunPaths
 from areal_rsi.base.storage import (
     FileContentStore,
     FileMemory,
@@ -51,6 +52,7 @@ class RemoteBackend:
     harness_builder: HarnessBuilder
     research_agent_factory: ResearchAgentFactory
     description: str
+    bind_run: Callable[[RunPaths], None] | None = None
 
 
 @dataclass(frozen=True)

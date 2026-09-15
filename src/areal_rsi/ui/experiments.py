@@ -16,7 +16,16 @@ from pathlib import Path
 from typing import Any, Protocol, TypeAlias
 
 from areal_rsi.agents.rsi import DefaultRsiAgent
-from areal_rsi.api.base import ExperimentPlan, ExperimentRun, JsonObject, RunState, SolutionVersion
+from areal_rsi.api.base import (
+    AgentState,
+    ExperimentPlan,
+    ExperimentRun,
+    IterationState,
+    JsonObject,
+    RunState,
+    SolutionVersion,
+)
+from areal_rsi.base.runs import FileRunStore
 from areal_rsi.base.storage import FileRecords, decode, encode, new_id, now, safe_name, write_json
 from areal_rsi.experiment_config import launch_digest, plan_environment
 from areal_rsi.workflows.service import LocalExperimentService
@@ -117,17 +126,19 @@ class ExperimentController:
         self.worker_command = tuple(
             worker_command or (sys.executable, "-m", "areal_rsi", "_experiment-worker")
         )
-        self.runs = FileRecords(self.root / "run-states")
+        self.runs = FileRunStore(self.root)
         self.plans = FileRecords(self.root / "experiment-plans")
         self.workers = self.root / "workers"
         self.workers.mkdir(parents=True, exist_ok=True)
         self._children: dict[str, subprocess.Popen[bytes]] = {}
 
     def _worker_path(self, run_id: str) -> Path:
-        return self.workers / f"{safe_name(run_id)}.json"
+        return self.runs.paths(run_id).worker_file("state")
 
     def _worker_lock(self, run_id: str) -> Path:
-        return self.workers / f"{safe_name(run_id)}.lock"
+        path = self.runs.paths(run_id).worker_file("lock")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
 
     def _read_worker(self, run_id: str) -> dict[str, Any] | None:
         path = self._worker_path(run_id)
@@ -144,7 +155,7 @@ class ExperimentController:
         if child is not None and child.poll() is not None:
             self._children.pop(run_id)
         worker = self._read_worker(run_id)
-        log_path = str(self.workers / f"{safe_name(run_id)}.log")
+        log_path = str(self.runs.paths(run_id).worker_file("log"))
         if worker is None:
             return {"pid": None, "active": False, "status": "unmanaged", "log_path": log_path}
         held = _lock_held(self._worker_lock(run_id))
@@ -168,7 +179,7 @@ class ExperimentController:
             "state": run.state.value,
             "goal": run.plan.goal[:500],
             "workflow": run.plan.workflow,
-            "target": run.plan.target.value,
+            "target": run.plan.target.value if run.plan.target is not None else None,
             "benchmark": run.plan.benchmark,
             "mode": run.plan.config.get("mode"),
             "research_harness": run.plan.config.get("research_harness"),
@@ -179,7 +190,11 @@ class ExperimentController:
                 "target_model_name", run.plan.config.get("model_name")
             ),
             "best_solution_id": run.best_solution_id,
-            "completed_iterations": sum(len(agent.iterations) for agent in run.research_agents),
+            "completed_iterations": sum(
+                step.state == IterationState.COMPLETED
+                for agent in run.research_agents
+                for step in agent.iterations
+            ),
             "max_iterations": run.plan.max_iterations,
             "research_agent_count": run.plan.research_agent_count,
             "started_at": run.started_at,
@@ -224,7 +239,7 @@ class ExperimentController:
         return {**record, "confirmation_required": True}
 
     def _launch(self, run: ExperimentRun) -> None:
-        if _lock_held(self.root / "locks" / f"{run.run_id}.lock"):
+        if _lock_held(self.runs.paths(run.run_id).execution_lock):
             raise ValueError("实验已由另一个进程执行")
         with self._worker_lock(run.run_id).open("a+") as lock:
             try:
@@ -243,7 +258,8 @@ class ExperimentController:
                 "--lock-fd",
                 str(lock.fileno()),
             ]
-            log_path = self.workers / f"{run.run_id}.log"
+            log_path = self.runs.paths(run.run_id).worker_file("log")
+            log_path.parent.mkdir(parents=True, exist_ok=True)
             with log_path.open("ab", buffering=0) as log:
                 # 继承锁覆盖 spawn 到 worker 初始化的窗口；父入口退出不取消子实验。
                 child = subprocess.Popen(
@@ -294,7 +310,6 @@ class ExperimentController:
                     new_id("run"),
                     plan,
                     RunState.PLANNED,
-                    plan.baseline_solution_id,
                     started_at=now(),
                 )
                 self.runs.save(run.run_id, run)
@@ -306,10 +321,10 @@ class ExperimentController:
     async def status(self, run_id: str | None = None) -> dict[str, Any]:
         if run_id is not None:
             return self._summary(self._run(run_id))
-        paths = sorted(
-            self.runs.root.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True
+        identifiers = sorted(
+            self.runs.ids(), key=lambda key: self.runs.state_path(key).stat().st_mtime, reverse=True
         )[:20]
-        return {"runs": [self._summary(self._run(path.stem)) for path in paths]}
+        return {"runs": [self._summary(self._run(key)) for key in identifiers]}
 
     async def stop(self, run_id: str) -> dict[str, Any]:
         with _locked(self.workers / "control.lock"):
@@ -323,7 +338,7 @@ class ExperimentController:
                 raise ValueError("worker 的 PID 身份不匹配，拒绝停止")
             if requested:
                 write_json(
-                    self.workers / f"{run_id}-stop.json",
+                    self.runs.paths(run_id).worker_file("stop"),
                     {
                         "token": worker["token"],
                         "pid": worker["pid"],
@@ -381,7 +396,7 @@ async def run_worker(
         loop.add_signal_handler(sig, current.cancel)
 
     async def watch_stop() -> None:
-        path = controller.workers / f"{run_id}-stop.json"
+        path = controller.runs.paths(run_id).worker_file("stop")
         while True:
             if path.exists():
                 request = json.loads(path.read_text())
@@ -412,7 +427,7 @@ async def run_worker(
     except BaseException as exc:
         if app is not None:
             await app.service.stop(run_id)
-        execution_lock = controller.root / "locks" / f"{run_id}.lock"
+        execution_lock = controller.runs.paths(run_id).execution_lock
         execution_lock.parent.mkdir(parents=True, exist_ok=True)
         with execution_lock.open("a+") as lock:
             try:
@@ -431,8 +446,13 @@ async def run_worker(
                 )
                 run.error, run.finished_at = f"{type(exc).__name__}: {exc}", now()
                 for agent in run.research_agents:
-                    if agent.state == RunState.RUNNING:
-                        agent.state, agent.error = run.state, run.error
+                    if agent.state == AgentState.RUNNING:
+                        agent.state = (
+                            AgentState.PAUSED
+                            if run.state == RunState.CANCELLED
+                            else AgentState.FAILED
+                        )
+                        agent.error = run.error
                 controller.runs.save(run_id, run, immutable=False)
                 print(f"实验 {run.state.value}：{run.error}", flush=True)
     finally:

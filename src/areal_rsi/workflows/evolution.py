@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from areal_rsi.api.base import (
+    AgentState,
     BenchmarkSplit,
     ContentRef,
     EvaluationReport,
@@ -18,6 +19,7 @@ from areal_rsi.api.base import (
     ExperimentPlan,
     ExperimentRun,
     HarnessChange,
+    IterationState,
     ResearchAgentState,
     ResearchChange,
     ResearchIteration,
@@ -32,8 +34,10 @@ from areal_rsi.api.base import (
 from areal_rsi.api.modules import BatchHarnessRuntime
 from areal_rsi.api.workflow import ResearchAgent, WorkflowContext
 from areal_rsi.base.evidence import FileEvidenceStore
-from areal_rsi.base.storage import FileRecords, decode, encode, new_id, now, safe_name, write_json
+from areal_rsi.base.runs import FileRunStore
+from areal_rsi.base.storage import decode, encode, new_id, now, safe_name, write_json
 from areal_rsi.framework.verifier import VerifierExecutor
+from areal_rsi.workflows.records import EvolutionResult, decode_evolution_result, evolution_history
 
 PRUNED = "RSI Agent 已停止此研究线"
 
@@ -43,10 +47,11 @@ class HarnessEvolutionWorkflow:
     _change_type: type[ResearchChange] = HarnessChange
 
     def __init__(
-        self, root: Path, records: FileRecords, run: ExperimentRun, emit: Callable[[str], None]
+        self, root: Path, records: FileRunStore, run: ExperimentRun, emit: Callable[[str], None]
     ):
         self.root, self.records, self.state, self.emit = root, records, run, emit
-        self.folder = root / safe_name(run.run_id)
+        self.paths = records.paths(run.run_id)
+        self.folder = self.paths.workflow
         path = self.folder / "progress.json"
         self.progress: dict[str, Any] = json.loads(path.read_text()) if path.exists() else {}
 
@@ -318,17 +323,58 @@ class HarnessEvolutionWorkflow:
         baseline: SolutionVersion,
         baseline_report: EvaluationReport,
     ) -> None:
-        iteration = len(agent.iterations) + 1
+        completed = evolution_history(self.records, agent)
+        number = len(completed) + 1
+        folder = self.folder / safe_name(agent.agent_id) / f"iteration-{number}"
+        if not agent.iterations or agent.iterations[-1].state == IterationState.COMPLETED:
+            assignment = folder / "assignment.json"
+            write_json(assignment, {"instruction": self.state.plan.goal}, immutable=True)
+            node = ResearchIteration(
+                f"{agent.agent_id}-{number}",
+                self.state.run_id,
+                agent.agent_id,
+                self.paths.reference(assignment),
+                parent_iteration_id=agent.iterations[-1].iteration_id if agent.iterations else None,
+                created_at=now(),
+            )
+            agent.iterations = (*agent.iterations, node)
+        node = agent.iterations[-1]
+        node.state, node.updated_at = IterationState.RUNNING, now()
+        agent.current_iteration_id = node.iteration_id
+        self.save()
+        try:
+            await self._step(ctx, researcher, agent, baseline, baseline_report)
+        except BaseException as exc:
+            node.state = (
+                IterationState.CANCELLED
+                if isinstance(exc, asyncio.CancelledError)
+                else IterationState.FAILED
+            )
+            node.updated_at = now()
+            node.references = tuple(
+                self.paths.reference(path) for path in sorted(folder.rglob("*.json"))
+            )
+            self.save()
+            raise
+
+    async def _step(
+        self,
+        ctx: WorkflowContext,
+        researcher: ResearchAgent,
+        agent: ResearchAgentState,
+        baseline: SolutionVersion,
+        baseline_report: EvaluationReport,
+    ) -> None:
+        history = evolution_history(self.records, agent)
+        iteration = len(history) + 1
         folder = self.folder / safe_name(agent.agent_id) / f"iteration-{iteration}"
         completed = folder / "completed.json"
         if completed.exists():
-            record = decode(ResearchIteration, json.loads(completed.read_text()))
+            record = decode_evolution_result(json.loads(completed.read_text()))
             if record.iteration != iteration:
                 raise ValueError("轮次检查点不匹配")
         else:
-            current_id = (
-                agent.iterations[-1].next_solution_id if agent.iterations else baseline.solution_id
-            )
+            current_id = history[-1].next_solution_id if history else baseline.solution_id
             if current_id is None:
                 raise ValueError("已结束研究线不能继续提出修改")
             current = await ctx.versions.get_solution(current_id)
@@ -346,6 +392,8 @@ class HarnessEvolutionWorkflow:
                 change = decode(self._change_type, json.loads(change_path.read_text()))
             else:
                 self.update_progress(agent.agent_id, phase="propose")
+                if self.state.plan.target is None:
+                    raise ValueError("固定演化工作流需要明确的优化目标")
                 change = await researcher.propose(
                     self.state.plan.goal, self.state.plan.target, current, train_report, bundle
                 )
@@ -369,7 +417,7 @@ class HarnessEvolutionWorkflow:
                 folder / "validate",
                 agent_id=agent.agent_id,
             )
-            candidates = [baseline_report, *(i.validation_report for i in agent.iterations), report]
+            candidates = [baseline_report, *(i.validation_report for i in history), report]
             self.update_progress(agent.agent_id, phase="select", score=report.score)
             selection_path = folder / "selection.json"
             if selection_path.exists():
@@ -381,7 +429,7 @@ class HarnessEvolutionWorkflow:
                 write_json(selection_path, {"next_solution_id": selected}, immutable=True)
             if selected is not None and selected not in {r.solution_id for r in candidates}:
                 raise ValueError("ResearchAgent 选择了其他研究线或未评测版本")
-            record = ResearchIteration(
+            record = EvolutionResult(
                 iteration,
                 current_id,
                 train_report,
@@ -394,22 +442,42 @@ class HarnessEvolutionWorkflow:
                 now(),
             )
             write_json(completed, record, immutable=True)
-        agent.iterations = (*agent.iterations, record)
+        node = agent.iterations[-1]
+        node.state = IterationState.COMPLETED
+        node.report_ref = self.paths.reference(completed)
+        node.references = tuple(
+            self.paths.reference(folder / name)
+            for name in (
+                "change.json",
+                "candidate.json",
+                "train/evaluation.json",
+                "validate/evaluation.json",
+            )
+        )
+        node.updated_at = now()
+        agent.current_iteration_id = None
         candidates = [
             baseline_report,
-            *(i.validation_report for a in self.state.research_agents for i in a.iterations),
+            *(
+                i.validation_report
+                for a in self.state.research_agents
+                for i in evolution_history(self.records, a)
+            ),
         ]
         # 稳定顺序决定平局，异步完成顺序不会改变最终 best。
         self.state.best_solution_id = max(candidates, key=lambda r: (r.passed, r.score)).solution_id
         if (
             record.next_solution_id is None
-            or iteration >= self.state.plan.max_iterations
+            or (
+                self.state.plan.max_iterations is not None
+                and iteration >= self.state.plan.max_iterations
+            )
             or (self.state.plan.stop_when_goal_reached and record.validation_report.passed)
         ):
-            agent.state = RunState.SUCCEEDED
+            agent.state = AgentState.STOPPED
         self.update_progress(
             agent.agent_id,
-            phase="completed" if agent.state == RunState.SUCCEEDED else "iteration_completed",
+            phase="completed" if agent.state == AgentState.STOPPED else "iteration_completed",
             iteration=iteration,
             score=record.validation_report.score,
             next_solution_id=record.next_solution_id,
@@ -427,27 +495,40 @@ class HarnessEvolutionWorkflow:
             context.research_agents
         ):
             raise ValueError("ResearchAgent 数量不匹配或 ID 重复")
+        if plan.baseline_solution_id is None:
+            raise ValueError(
+                "Harness/Artifact evolution requires a baseline; the generic Run does not"
+            )
         baseline = await context.versions.get_solution(plan.baseline_solution_id)
         if baseline is None:
             raise ValueError("baseline 不存在")
         if not self.state.research_agents:
             self.state.research_agents = tuple(
-                ResearchAgentState(key, RunState.RUNNING) for key in researchers
+                ResearchAgentState(key, AgentState.RUNNING) for key in researchers
             )
         if set(researchers) != {a.agent_id for a in self.state.research_agents}:
             raise ValueError("恢复时 ResearchAgent 身份不能改变")
         self.state.state, self.state.error, self.state.finished_at = RunState.RUNNING, None, None
         for agent in self.state.research_agents:
-            if agent.state == RunState.SUCCEEDED or agent.error == PRUNED:
+            if agent.state == AgentState.STOPPED or agent.error == PRUNED:
                 continue
-            agent.state, agent.error = RunState.RUNNING, None
+            agent.state, agent.error = AgentState.RUNNING, None
             self.update_progress(agent.agent_id, phase="waiting", error=None)
         self.save()
         baseline_report, _ = await self.evaluate(
             context, baseline, BenchmarkSplit.VALIDATE, self.folder / "baseline" / "validate"
         )
+        candidates = [
+            baseline_report,
+            *(
+                i.validation_report
+                for a in self.state.research_agents
+                for i in evolution_history(self.records, a)
+            ),
+        ]
+        self.state.best_solution_id = max(candidates, key=lambda r: (r.passed, r.score)).solution_id
         self.update_progress("baseline", phase="completed", score=baseline_report.score)
-        while active := [a for a in self.state.research_agents if a.state == RunState.RUNNING]:
+        while active := [a for a in self.state.research_agents if a.state == AgentState.RUNNING]:
             work = [
                 asyncio.create_task(
                     self.step(context, researchers[a.agent_id], a, baseline, baseline_report)
@@ -463,12 +544,12 @@ class HarnessEvolutionWorkflow:
                 raise
             for agent, outcome in zip(active, outcomes, strict=True):
                 if isinstance(outcome, BaseException):
-                    agent.state = RunState.FAILED
+                    agent.state = AgentState.FAILED
                     agent.error = f"{type(outcome).__name__}: {outcome}"
                     self.update_progress(agent.agent_id, phase="failed", error=agent.error)
             self.save()
             remaining = {
-                a.agent_id for a in self.state.research_agents if a.state == RunState.RUNNING
+                a.agent_id for a in self.state.research_agents if a.state == AgentState.RUNNING
             }
             if len(remaining) > 1:
                 # 深拷贝：控制 Agent 只能返回剪枝决定，不能直接篡改状态。
@@ -478,10 +559,10 @@ class HarnessEvolutionWorkflow:
                     raise ValueError("剪枝只能选择仍在运行的研究线")
                 for agent in self.state.research_agents:
                     if agent.agent_id in stopped:
-                        agent.state, agent.error = RunState.CANCELLED, PRUNED
+                        agent.state, agent.error = AgentState.STOPPED, PRUNED
                         self.update_progress(agent.agent_id, phase="pruned", reason=PRUNED)
                 self.save()
-        failed = [a for a in self.state.research_agents if a.state == RunState.FAILED]
+        failed = [a for a in self.state.research_agents if a.state == AgentState.FAILED]
         self.state.state = RunState.FAILED if failed else RunState.SUCCEEDED
         self.state.error = "；".join(f"{a.agent_id}: {a.error}" for a in failed) or None
         self.state.finished_at = now()

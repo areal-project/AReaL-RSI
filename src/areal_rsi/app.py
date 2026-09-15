@@ -16,6 +16,7 @@ from areal_rsi.agents.research import DefaultResearchAgent
 from areal_rsi.agents.rsi import DefaultRsiAgent
 from areal_rsi.api.base import (
     ExperimentPlan,
+    ExperimentRun,
     JsonObject,
     ModelVersion,
     SolutionVersion,
@@ -23,6 +24,7 @@ from areal_rsi.api.base import (
 )
 from areal_rsi.api.workflow import WorkflowContext
 from areal_rsi.base.catalog import LocalModelCatalog
+from areal_rsi.base.runs import FileRunStore
 from areal_rsi.base.storage import (
     DIRECTORY_TYPE,
     FileContentStore,
@@ -61,6 +63,8 @@ class LocalApp:
     interaction_model_name: str | None
     rsi: DefaultRsiAgent
     service: LocalExperimentService
+    _audit_root: Path
+    _run_id: str | None
 
     @classmethod
     async def create(
@@ -109,10 +113,16 @@ class LocalApp:
         self.runtime_settings = runtime_settings
         self.interaction_model_name = model_settings.interaction_name()
         self.root = root.resolve()
+        # Programmatic conversations before a Run have their own identity.
+        # FileRecords creates directories on write, so planning creates no empty
+        # session, workspace or Memory trees.
+        preparation = self.root / "conversations" / new_id("conversation")
+        self._audit_root = preparation / "gateway"
+        self._run_id = None
         self.content = FileContentStore(self.root / "content")
         self.versions = FileVersionManager(self.root / "versions")
-        self.trajectories = FileTrajectoryStore(self.root / "trajectories", self.content)
-        self.memory = FileMemory(self.root / "memory")
+        self.trajectories = FileTrajectoryStore(preparation / "trajectories", self.content)
+        self.memory = FileMemory(preparation / "memory")
         benchmark_kind = local_config.benchmark
         bundle = create_builtin_registry(self.content).create(
             benchmark_kind,
@@ -156,7 +166,7 @@ class LocalApp:
             key = (connection, budget, json.dumps(selection, sort_keys=True))
             if key not in runtimes:
                 runtimes[key] = PackageAgentRuntime(
-                    self.root / "sessions",
+                    preparation / "agents",
                     self.content,
                     self.trajectories,
                     settings=runtime_settings,
@@ -167,6 +177,7 @@ class LocalApp:
                     max_tokens=budget,
                     dsh_root=self.root,
                     credential_env_names=model_settings.credential_env_names,
+                    agent_directories=True,
                 )
             self.agent_proxies[agent_id] = proxy
             self.agent_runtimes[agent_id] = runtimes[key]
@@ -180,6 +191,7 @@ class LocalApp:
             workflow_name=workflow_name,
             target_model_name=self.baseline.model.name,
             model_plan_config=self.model_plan_config(),
+            run_store=FileRunStore(self.root),
         )
         researchers = tuple(
             DefaultResearchAgent(
@@ -189,14 +201,14 @@ class LocalApp:
                 self.content,
                 self.memory,
                 self.versions,
-                self.root / "research-workspaces",
+                preparation / "agents" / f"research-agent-{index}" / "workspace",
             )
             for index in range(1, research_agent_count + 1)
         )
         harness_runtime = LocalHarnessRuntime(
-            self.agent_runtimes["task-agent"], self.content, self.root / "task-workspaces"
+            self.agent_runtimes["task-agent"], self.content, preparation / "task-workspaces"
         )
-        builder = LocalHarnessBuilder(self.content, self.root / "builds")
+        builder = LocalHarnessBuilder(self.content, preparation / "builds")
         context = WorkflowContext(
             self.content,
             self.memory,
@@ -214,8 +226,58 @@ class LocalApp:
             evaluation,
             builder,
         )
-        self.service = LocalExperimentService(self.root, context, emit, workflows=workflows)
+        self.service = LocalExperimentService(
+            self.root, context, emit, workflows=workflows, context_factory=self._bind_run
+        )
         return self
+
+    def _flush_requests(self) -> None:
+        for index, proxy in enumerate(dict.fromkeys(self.agent_proxies.values())):
+            if proxy.requests:
+                write_json(
+                    self._audit_root / f"{new_id('process')}-connection-{index}.json",
+                    proxy.requests,
+                )
+                proxy.requests.clear()
+
+    async def _bind_run_storage(self, run: ExperimentRun) -> WorkflowContext:
+        if self._run_id == run.run_id:
+            return self.service.context
+        await self.rsi.close()
+        self.rsi.session = None
+        self._flush_requests()
+        paths = self.service.records.paths(run.run_id)
+        self._run_id = run.run_id
+        self._audit_root = paths.runtime / "gateway"
+        self.memory.records = FileMemory(paths.root / "memory").records
+        trajectories = FileTrajectoryStore(
+            paths.root / "trajectories",
+            self.content,
+            legacy_root=self.root / "trajectories" if paths.legacy else None,
+        )
+        self.trajectories.records = trajectories.records
+        self.trajectories.legacy = trajectories.legacy
+        for runtime in dict.fromkeys(self.agent_runtimes.values()):
+            runtime.root = paths.root / "agents"
+            runtime.trajectories = self.trajectories
+        context = self.service.context
+        context.memory, context.trajectories = self.memory, self.trajectories
+        return context
+
+    async def _bind_run(self, run: ExperimentRun) -> WorkflowContext:
+        if self._run_id == run.run_id:
+            return self.service.context
+        context = await self._bind_run_storage(run)
+        paths = self.service.records.paths(run.run_id)
+        for researcher in context.research_agents:
+            assert isinstance(researcher, DefaultResearchAgent)
+            researcher.memory = self.memory
+            researcher.root = paths.agent(researcher.agent_id) / "workspace"
+        assert isinstance(context.harness_runtime, LocalHarnessRuntime)
+        context.harness_runtime.workspaces = paths.runtime / "task-workspaces"
+        assert isinstance(context.harness_builder, LocalHarnessBuilder)
+        context.harness_builder.root = paths.runtime / "builds"
+        return context
 
     def model_plan_config(self) -> JsonObject:
         models: JsonObject = {
@@ -242,6 +304,10 @@ class LocalApp:
             raise ModelConfigurationError(
                 "Run 的 Runtime 配置与当前配置不一致；旧 DSH 实验请使用原版本恢复。"
             )
+        if plan.baseline_solution_id is None:
+            # The existing local adapter executes Harness evolution. Other
+            # registered workflows can accept a baseline-free ExperimentPlan.
+            raise ModelConfigurationError("当前本地 Harness 执行路径需要起点版本。")
         baseline = await self.versions.get_solution(plan.baseline_solution_id)
         if baseline is None:
             raise ModelConfigurationError("计划引用的目标基线不存在，请检查实验数据目录。")
@@ -329,11 +395,7 @@ class LocalApp:
 
     async def _close_proxies(self, unique: list[GatewayProxy]) -> None:
         try:
-            for index, proxy in enumerate(unique):
-                write_json(
-                    self.root / "gateway" / f"{new_id('process')}-connection-{index}.json",
-                    proxy.requests,
-                )
+            self._flush_requests()
         finally:
             await asyncio.gather(*(asyncio.to_thread(proxy.close) for proxy in unique))
 

@@ -135,7 +135,7 @@ def normalize_tool_deltas(body: bytes) -> bytes:
 
 
 class GatewayProxy:
-    def __init__(self, base_url: str, api_key: str):
+    def __init__(self, base_url: str, api_key: str, *, access_token: str | None = None):
         self.requests: list[dict[str, Any]] = []
         owner = self
         upstream_root = base_url.rstrip("/")
@@ -144,6 +144,11 @@ class GatewayProxy:
             protocol_version = "HTTP/1.1"
 
             def do_POST(self) -> None:
+                if access_token is not None and self.headers.get("Authorization") != (
+                    "Bearer " + access_token
+                ):
+                    self.send_error(401, "Internal gateway authentication required")
+                    return
                 route = self.path.removeprefix("/v1")
                 route = "/chat/completions" if route in {"", "/"} else route
                 if route not in {"/chat/completions", "/responses", "/messages"}:

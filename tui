@@ -1,0 +1,8 @@
+#!/bin/sh
+# Start from the repository so configuration and experiment paths stay consistent.
+set -eu
+cd -- "$(dirname -- "$0")"
+if [ -f .env ]; then
+    exec uv run --env-file .env --locked rsi tui "$@"
+fi
+exec uv run --locked rsi tui "$@"

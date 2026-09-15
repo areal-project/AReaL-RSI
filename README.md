@@ -15,8 +15,11 @@ AReaL-RSI 是基于 DeepSeek Harness 的本地研究与自迭代工具。用户�
 会得到示例和确认步骤。
 
 ```bash
-uv run --env-file .env --locked rsi tui
+./tui
 ```
+
+快捷入口自动读取项目根目录的 `.env`（若存在），也支持 `./tui --resume DSH_SESSION_ID`。
+它等价于 `uv run --env-file .env --locked rsi tui`；没有 `.env` 时使用现有环境变量。
 
 两种模式使用相同的实验 YAML 入口：
 

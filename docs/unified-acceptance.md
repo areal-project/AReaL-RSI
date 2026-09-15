@@ -69,3 +69,11 @@ uv run --locked python scripts/audit_research.py --root <RSI_DATA_ROOT> --run <r
 - DSH profile 安装幂等、原生进程与 session 参数、凭据只在运行时传递均有回归测试。
 
 当前 TUI 使用自然对话操作研究；旧命令式终端的 `/start`、`/pause` 等示例仅属于上面的历史验收记录。退出使用 DSH 自带 `/exit`。
+
+## 执行后端与存储恢复复验
+
+恢复提交：`98c5c35`。删除范围复核见 [deletion-review.md](deletion-review.md)，结构化结果见 [runtime-restore-acceptance.json](runtime-restore-acceptance.json)。
+
+- 数学 run `research_6afabe5996f448f4` 使用准备时固定的 package DSH Runtime，完成训练、研究员报告、修改候选、search 与 final；最终 2/2。8 个实际 Task journal 均为 completed，并通过 read_journal 完整性检查。
+- LCB run `research_3dbb107416db44f4` 通过恢复的 EnvArenaProvider 装配层，真实基线 1/1；完整复验尚在运行，训练 Job 为 `rsi-lcb-remote-042a2186b53c-2609150907`。该次完整复验未计为通过，也没有取消或重复提交远端作业。
+- 回归：173 tests / 71 subtests 通过，7 项条件性跳过，Ruff/Mypy 通过；前端 6/6。实际 package worker、Remote stub、journal 失败关闭与崩溃尾、工具桥接均有覆盖。Anthropic SDK 对脚本化本机模型服务完成 3 项测试，不代表远端付费模型验收。

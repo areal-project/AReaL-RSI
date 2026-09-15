@@ -1,0 +1,44 @@
+{
+  "checked_at": "2026-09-15T09:16:37.199483+00:00",
+  "math": {
+    "run_id": "research_6afabe5996f448f4",
+    "status": "succeeded",
+    "model_calls": 23,
+    "reports": 1,
+    "changed_candidates": [
+      "candidate_b9855462aa85c18a64fe3feb"
+    ],
+    "final_candidate": "candidate_b9855462aa85c18a64fe3feb",
+    "final_score": 1.0,
+    "tasks": {
+      "final": [
+        "gsm8k_train_1444",
+        "gsm8k_train_2869"
+      ],
+      "search": [
+        "gsm8k_train_1444",
+        "gsm8k_train_2869"
+      ],
+      "train": [
+        "gsm8k_train_1336",
+        "gsm8k_train_3992"
+      ]
+    },
+    "remote_jobs": [],
+    "verification_count": 3,
+    "runtime": "package/dsh",
+    "completed_task_journals": 8
+  },
+  "lcb": {
+    "run_id": "research_3dbb107416db44f4",
+    "status": "running",
+    "verification_results": [
+      {
+        "phase": "search",
+        "status": "succeeded",
+        "score": 1.0
+      }
+    ],
+    "pending_remote_training_job": "rsi-lcb-remote-042a2186b53c-2609150907"
+  }
+}

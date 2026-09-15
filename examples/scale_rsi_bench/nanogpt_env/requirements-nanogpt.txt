@@ -1,0 +1,7 @@
+# Pinned versions from Scale RSI Bench nano-gpt-data-curation/environment/Dockerfile.
+torch==2.8.0
+numpy==1.26.4
+transformers==4.57.1
+pyarrow==17.0.0
+tokenizers==0.22.2
+huggingface_hub==0.35.3

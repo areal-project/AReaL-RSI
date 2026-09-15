@@ -2,7 +2,7 @@
 
 This example starts Harness evolution on `tb21-terminus2-full@2.1.1` with:
 
-- Model: `gpt-5-6-sol-4ipic@1.0.0`
+- Model: `gpt-6-astra-4ipic@1.0.0`
 - Initial Harness: `terminus-2-tb21@1.0.10`
 - Reward: `tb2-reward@4.0.16`, pinned by the Benchmark
 - Mutable components: `system_prompt` and supported `model_parameters`
@@ -17,7 +17,7 @@ uv run --env-file .env --locked rsi tui
 Then say:
 
 ```text
-在Arena上使用gpt-5.6-sol terminus@1.0.10优化TB2.1的表现
+使用tb21 preset进行三轮Harness优化
 ```
 
 The shortcut selects the built-in `tb21` preset and defaults to three iterations per research

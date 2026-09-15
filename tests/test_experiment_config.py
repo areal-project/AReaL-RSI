@@ -80,7 +80,7 @@ def test_tb21_demo_pins_requested_arena_versions(monkeypatch: pytest.MonkeyPatch
     config = asyncio.run(ArenaConfig.load(path, client))
     assert config.benchmark == {"key": "tb21-terminus2-full", "version": "2.1.1"}
     assert config.harness == {"key": "terminus-2-tb21", "version": "1.0.10"}
-    assert config.model == {"key": "gpt-5-6-sol-4ipic", "version": "1.0.0"}
+    assert config.model == {"key": "gpt-6-astra-4ipic", "version": "1.0.0"}
     assert config.train_cases == ("tb2-fix-ocaml-gc", "tb2-kv-store-grpc")
     assert config.validate_cases == (
         "tb2-make-doom-for-mips",

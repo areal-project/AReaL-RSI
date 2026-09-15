@@ -71,7 +71,8 @@ class LocalExperimentService:
             raise ValueError("research_retry_attempts 必须在 0 到 10 之间")
         research_backoff = plan.config.get("research_retry_backoff_seconds", 1)
         if (
-            type(research_backoff) not in (int, float)
+            not isinstance(research_backoff, (int, float))
+            or isinstance(research_backoff, bool)
             or not math.isfinite(research_backoff)
             or not 0 <= research_backoff <= 300
         ):

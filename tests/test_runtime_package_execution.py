@@ -406,7 +406,9 @@ class RealPackageExecutionTest(unittest.IsolatedAsyncioTestCase):
                         result = await asyncio.wait_for(app.service.tasks[run.run_id], 120)
                         self.assertEqual(result.state, RunState.SUCCEEDED, result.error)
                         self.assertEqual(len(result.research_agents), 2)
-                        self.assertTrue(list((app.root / "trajectories").glob("*.json")))
+                        self.assertTrue(
+                            list((app.root / "runs" / run.run_id / "trajectories").glob("*.json"))
+                        )
                     finally:
                         await app.close()
         finally:

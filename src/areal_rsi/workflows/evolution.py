@@ -6,7 +6,7 @@ import asyncio
 import json
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 from areal_rsi.api.base import (
     AgentState,
@@ -77,8 +77,8 @@ class HarnessEvolutionWorkflow:
     ) -> T:
         if self.research_slots is None:
             raise RuntimeError("ResearchAgent 并发控制器尚未初始化")
-        retries = int(plan.config.get("research_retry_attempts", 0))
-        backoff = float(plan.config.get("research_retry_backoff_seconds", 1))
+        retries = cast(int, plan.config.get("research_retry_attempts", 0))
+        backoff = cast(int | float, plan.config.get("research_retry_backoff_seconds", 1))
         for attempt in range(retries + 1):
             try:
                 async with self.research_slots:
@@ -534,7 +534,7 @@ class HarnessEvolutionWorkflow:
     async def run(self, context: WorkflowContext, plan: ExperimentPlan) -> ExperimentRun:
         self._validate_context(context, plan)
         self.research_slots = asyncio.Semaphore(
-            int(plan.config.get("research_concurrency", plan.research_agent_count))
+            cast(int, plan.config.get("research_concurrency", plan.research_agent_count))
         )
         researchers = {a.agent_id: a for a in context.research_agents}
         if len(researchers) != plan.research_agent_count or len(researchers) != len(
@@ -598,9 +598,11 @@ class HarnessEvolutionWorkflow:
                 a.agent_id for a in self.state.research_agents if a.state == AgentState.RUNNING
             }
             completed_iterations = sum(
-                len(agent.iterations) for agent in self.state.research_agents
+                step.state == IterationState.COMPLETED
+                for agent in self.state.research_agents
+                for step in agent.iterations
             )
-            minimum_iterations = int(plan.config.get("minimum_completed_iterations", 0))
+            minimum_iterations = cast(int, plan.config.get("minimum_completed_iterations", 0))
             if len(remaining) > 1 and completed_iterations >= minimum_iterations:
                 # 深拷贝：控制 Agent 只能返回剪枝决定，不能直接篡改状态。
                 snapshot = decode(ExperimentRun, encode(self.state))

@@ -13,6 +13,7 @@ from areal_rsi.api.base import (
     ExperimentRun,
     RunState,
 )
+from areal_rsi.base.runs import FileRunStore
 from areal_rsi.base.storage import write_json
 from areal_rsi.ui.terminal_scores import visualize_scores
 from areal_rsi.ui.visualization_catalog import discover
@@ -53,6 +54,24 @@ def test_nested_history_and_filter_pagination(tmp_path: Path) -> None:
     assert "没有匹配" in visualize_scores(tmp_path, query="nonexistent")
     with pytest.raises(FileNotFoundError):
         visualize_scores(tmp_path, "wrong-id")
+
+
+def test_new_run_layout_and_migrated_run_are_discovered_once(tmp_path: Path) -> None:
+    root = tmp_path / "experiment"
+    save_run(root, "migrated")
+    store = FileRunStore(root)
+    run = store.get("migrated", ExperimentRun)
+    assert run is not None
+    store.save("migrated", run, immutable=False)
+    store.save("new", ExperimentRun("new", run.plan, RunState.RUNNING, "base"))
+    write_json(
+        store.paths("new").workflow / "baseline/validate/evaluation.json",
+        {"report": EvaluationReport("base", BenchmarkSplit.VALIDATE, False, 0.75, {}, "now")},
+    )
+    entries, warnings = discover(tmp_path)
+    assert warnings == []
+    assert sorted(entry["run_id"] for entry in entries) == ["migrated", "new"]
+    assert "75.0%" in visualize_scores(tmp_path, "new")
 
 
 def test_running_requires_live_lock_and_refresh_reads_new_score(tmp_path: Path) -> None:

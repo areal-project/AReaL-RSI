@@ -58,20 +58,30 @@ def discover(root: Path) -> tuple[list[dict[str, Any]], list[str]]:
             and not (folder / name).is_symlink()
         )
         states = folder / "run-states"
+        state_paths: dict[str, Path] = {}
         if states.is_dir() and not states.is_symlink():
-            for path in sorted(states.glob("*.json")):
+            state_paths.update((path.stem, path) for path in states.glob("*.json"))
+        runs = folder / "runs"
+        if runs.is_dir() and not runs.is_symlink():
+            state_paths.update(
+                (path.parent.name, path)
+                for path in runs.glob("*/run.json")
+                if not path.parent.is_symlink()
+            )
+        if state_paths:
+            for run_id, path in sorted(state_paths.items()):
                 if path.is_symlink():
                     continue
                 try:
                     value = read_object(path)
                     plan = value["plan"]
-                    if value["run_id"] != path.stem:
+                    if value["run_id"] != run_id:
                         raise ValueError("Run identity mismatch")
                     entries.append(
                         {
                             "kind": "rsi",
                             "root": folder,
-                            "run_id": path.stem,
+                            "run_id": run_id,
                             "benchmark": plan["benchmark"],
                             "goal": plan["goal"],
                             "state": value["state"],

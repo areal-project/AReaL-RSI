@@ -7,10 +7,14 @@ from pathlib import Path
 from typing import Any
 
 from areal_rsi.api.base import ExperimentRun
+from areal_rsi.base.runs import FileRunStore
 from areal_rsi.base.storage import encode, safe_name
+from areal_rsi.workflows.records import evolution_history
 
 
-def score_history(folder: Path, run: ExperimentRun) -> list[dict[str, Any]]:
+def score_history(folder: Path, run: ExperimentRun, store: FileRunStore) -> list[dict[str, Any]]:
+    if run.plan.workflow not in {"harness-evolution", "artifact-evolution"}:
+        return []
     rows: list[dict[str, Any]] = []
 
     def append(
@@ -38,7 +42,8 @@ def score_history(folder: Path, run: ExperimentRun) -> list[dict[str, Any]]:
 
     append(folder / "baseline/validate/evaluation.json", "baseline", 0, None, "baseline")
     for agent in run.research_agents:
-        for step in agent.iterations:
+        history = evolution_history(store, agent)
+        for step in history:
             selection = (
                 "stopped"
                 if step.next_solution_id is None
@@ -58,7 +63,7 @@ def score_history(folder: Path, run: ExperimentRun) -> list[dict[str, Any]]:
                 encode(step.validation_report),
             )
         # The workflow writes evaluation.json before calling the selection agent.
-        iteration = len(agent.iterations) + 1
+        iteration = len(history) + 1
         pending = folder / safe_name(agent.agent_id) / f"iteration-{iteration}"
         candidate_path = pending / "candidate.json"
         parent = (

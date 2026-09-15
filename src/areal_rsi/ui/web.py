@@ -208,7 +208,7 @@ class RunReader:
                 ),
             },
             "best_score": best_score,
-            "score_history": score_history(folder, run),
+            "score_history": score_history(folder, run, self.records),
             "max_iterations": run.plan.max_iterations,
             "research_agent_count": run.plan.research_agent_count,
             "agents": agents,

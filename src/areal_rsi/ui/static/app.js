@@ -1,8 +1,8 @@
 "use strict";
 const colors=["#64d9c3","#91b8ff","#ffc984","#d5a1f6","#ee91b0","#b5d78d","#72c7ec","#deb687"];
-const states={planned:"待启动",running:"运行中",succeeded:"已完成",failed:"失败",cancelled:"已停止"};
+const states={planned:"待启动",created:"已创建",pending:"待执行",running:"运行中",waiting:"等待中",paused:"已暂停",stopping:"正在停止",stopped:"已停止",completed:"已完成",succeeded:"已完成",failed:"失败",cancelled:"已取消"};
+const phases={waiting:"等待中",paused:"已暂停",stopping:"正在停止",research:"分析当前版本",evaluate_train:"执行 TRAIN 评测",evaluate_validate:"执行 VALIDATE 评测",propose:"提出修改",build:"构建候选版本",select:"选择下一轮版本",iteration_completed:"本轮完成",completed:"研究完成",failed:"执行失败",cancelled:"已停止",pruned:"已剪枝"};
 const remoteStates={prepared:"准备中",submitting:"提交中",submitted:"已提交",unknown:"提交待核对",rejected:"提交被拒绝",stop_requested:"正在停止",collected:"结果已回收",RUNNING:"运行中",PENDING:"等待中",AGGREGATING:"汇总中",DONE:"已完成",STOPPING:"停止中",STOPPED:"已停止",FAILED:"失败",CANCELLED:"已取消",TIMEOUT:"超时"};
-const phases={waiting:"等待首轮",research:"分析当前版本",evaluate_train:"执行 TRAIN 评测",evaluate_validate:"执行 VALIDATE 评测",propose:"提出修改",build:"构建候选版本",select:"选择下一轮版本",iteration_completed:"本轮完成",completed:"研究完成",failed:"执行失败",cancelled:"已停止",pruned:"已剪枝"};
 const esc=value=>String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const percent=value=>typeof value==="number"&&Number.isFinite(value)?`${(value*100).toFixed(1)}%`:"—";
 const stamp=value=>value?new Date(value).toLocaleString("zh-CN",{hour12:false}):"—";
@@ -49,6 +49,7 @@ function chart(run){
 }
 function iterationCard(run,agent,entry){
   const {step,node,parent}=entry;
+  if (!Number.isFinite(step.validation_score)) return `<details data-key="${esc(agent.agent_id)}:${step.iteration}"><summary>第 ${step.iteration} 轮 · ${esc(states[step.state]||step.state)}</summary><p class="meta">节点 <code>${esc(step.iteration_id)}</code> · 更新于 ${esc(stamp(step.finished_at))}</p></details>`;
   const previous=parent?versionLink(run,parent):`<span class="missing-parent">未找到上一版本<code>${esc(step.input_solution_id||"未记录")}</code></span>`;
   return `<section class="iteration" id="${esc(versionTarget(run,node.solution_id))}" tabindex="-1" aria-label="${esc(agent.agent_id)} 第 ${step.iteration} 轮候选">
     <h4>第 ${step.iteration} 轮 <span>验证 ${percent(step.validation_score)}</span></h4>
@@ -58,14 +59,15 @@ function iterationCard(run,agent,entry){
     <p class="meta">TRAIN ${percent(step.train_score)} · ${esc(stamp(step.finished_at))}</p></details></section>`;
 }
 function agentCard(agent,index,run){
-  const baseline=run.baseline_score,latest=agent.history.at(-1),delta=latest&&typeof baseline==="number"?latest.validation_score-baseline:null;
+  const baseline=run.baseline_score,latest=agent.history.at(-1),measured=[...agent.history].reverse().find(step=>Number.isFinite(step.validation_score));
+  const delta=measured&&Number.isFinite(baseline)?measured.validation_score-baseline:null;
   const task=agent.phase.startsWith("evaluate_")&&agent.task_count?` · 任务 ${agent.task}/${agent.task_count}`:"";
   const currentReason=agent.current_reason&&(!latest||agent.iteration>latest.iteration);
   return `<article class="agent"><div class="agenthead"><h3>${esc(agent.agent_id)}</h3>${badge(agent.state)}</div>
     <p class="meta">模型 ${esc(agent.model||"未记录")} · 使用统一实验目标</p><div class="phase">${esc(phases[agent.phase]||agent.phase)}${esc(task)}</div>
     <progress value="${Number(agent.completed_iterations)}" max="${Number(agent.max_iterations)}" aria-label="${esc(agent.agent_id)} 轮次进度"></progress>
     <div class="phase">已完成 ${agent.completed_iterations} / ${agent.max_iterations} 轮</div>
-    <div class="scoreline"><strong>${percent(latest?.validation_score)}</strong><span class="${delta>0?"positive":delta<0?"negative":"muted"}">${delta===null?"尚无候选验证结果":`${delta>=0?"+":""}${(delta*100).toFixed(1)} 个百分点`}</span></div>
+    <div class="scoreline"><strong>${percent(measured?.validation_score)}</strong><span class="${delta>0?"positive":delta<0?"negative":"muted"}">${delta===null?(measured?"无基线可比较":"尚无验证结果"):`${delta>=0?"+":""}${(delta*100).toFixed(1)} 个百分点`}</span></div>
     ${agent.error?`<p class="error">${esc(agent.error)}</p>`:""}
     ${currentReason?`<p class="meta">当前修改依据：${esc(agent.current_reason)}</p>`:""}
     ${versionHistory(run,agent).steps.map(entry=>iterationCard(run,agent,entry)).join("")}</article>`;
@@ -109,7 +111,7 @@ function render(run){
     <section class="panel"><h2>验证得分 · 版本演进关系</h2><p class="meta">箭头从实际输入版本指向本轮候选；点击节点查看版本及修改原因。</p>${chart(run)}<div class="legend">${run.agents.map((a,i)=>`<span class="line-${i}">${esc(a.agent_id)}</span>`).join("")}</div></section>
     ${scorePanel(run)}
     <h2>独立研究线与迭代记录</h2><section class="agents">${run.agents.length?run.agents.map((a,i)=>agentCard(a,i,run)).join(""):'<p class="muted">研究线尚未初始化。</p>'}</section>
-    <footer>最佳版本 <code>${esc(run.best_solution_id)}</code> · 本地只读视图，每 3 秒刷新；评测错误不会作为成功样本隐藏。</footer>`;
+    <footer>最佳版本 <code>${esc(run.best_solution_id||"暂无")}</code> · 本地只读视图，每 3 秒刷新；评测错误不会作为成功样本隐藏。</footer>`;
 }
 async function get(path){const response=await fetch(path,{cache:"no-store"});const data=await response.json();if(!response.ok)throw Error(data.error||`HTTP ${response.status}`);return data;}
 async function refresh(){

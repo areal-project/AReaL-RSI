@@ -12,6 +12,7 @@ from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 
+from areal_rsi.base.runs import FileRunStore
 from areal_rsi.base.storage import new_id, safe_name, write_json
 from areal_rsi.config import ModelConfigurationError
 from areal_rsi.experiment_config import (
@@ -50,11 +51,14 @@ class ExperimentWorkspace:
 
     def locate(self, identifier: str, *, plan: bool = False) -> ExperimentController:
         identifier = safe_name(identifier)
-        folder = "experiment-plans" if plan else "run-states"
         matches = [
             root
             for root in experiment_roots(self.root)
-            if (root / folder / f"{identifier}.json").is_file()
+            if (
+                root / "experiment-plans" / f"{identifier}.json"
+                if plan
+                else FileRunStore(root).state_path(identifier)
+            ).is_file()
         ]
         if len(matches) != 1:
             raise KeyError(identifier)

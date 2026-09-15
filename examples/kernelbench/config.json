@@ -1,0 +1,8 @@
+{
+  "revision": "423217d9fda91e0c2d67e4a43bf62f96f6d104f1",
+  "tasks": {
+    "development": [{"level": 1, "problem_id": 1}],
+    "search": [{"level": 1, "problem_id": 2}],
+    "final": [{"level": 1, "problem_id": 3}]
+  }
+}

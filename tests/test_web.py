@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from areal_rsi.api.base import (
+    AgentState,
     ContentRef,
     EvolutionTarget,
     ExperimentPlan,
@@ -64,8 +65,8 @@ class WebTest(unittest.TestCase):
             RunState.RUNNING,
             "solution_base",
             research_agents=(
-                ResearchAgentState("research-agent-1", RunState.RUNNING),
-                ResearchAgentState("research-agent-2", RunState.RUNNING),
+                ResearchAgentState("research-agent-1", AgentState.RUNNING),
+                ResearchAgentState("research-agent-2", AgentState.RUNNING),
             ),
         )
         write_json(self.root / "run-states" / "run_fixture.json", self.experiment)

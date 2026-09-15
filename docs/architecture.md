@@ -1,5 +1,7 @@
 # Python RSI Infra 架构边界
 
+本文说明固定 Harness / Artifact 工作流。开放研究工作台使用独立的 Interaction → RSI → Research 编排，见[设计说明](rsi-research-design.md)和[启动指南](../README.md)。两种入口共享基础存储与工具能力。
+
 ## 1. 组件与数据流
 
 ```text
@@ -23,7 +25,7 @@
 └────────────────────────────────────────────────────────┘
 ```
 
-本地 AgentRuntime 由 `PackageAgentRuntime` 接入 ARealAgentRuntime，按角色选择 DSH、Codex 等 Harness；已有原创算术与 GSM8K Benchmark，KernelBench 暂缓。Remote mode 由选定 backend 执行 Task 和 Reward，EnvArena 是其中一种实现。本地研究运行时与远端任务运行时独立。核心 API 不出现具体框架或 Benchmark 名称。
+本地 AgentRuntime 由 `PackageAgentRuntime` 接入 ARealAgentRuntime，按角色选择 DSH、Codex 等 Harness；已有原创算术与 GSM8K Benchmark；开放研究入口另提供 KernelBench 适配器。Remote mode 由选定 backend 执行 Task 和 Reward，EnvArena 是其中一种实现。本地研究运行时与远端任务运行时独立。核心 API 不出现具体框架或 Benchmark 名称。
 
 三层边界与设计文档一致：User Interface 负责对话和实验控制；Evolver 由 RSI Agent、ResearchAgent、Task 执行和固定 Workflow 组成；Base Module 提供运行、存储、版本、训练、构建与评测能力。AgentSpec 显式列出 Runtime、Model、Prompt Template、Skill、Tool 和 MCP 依赖，避免把组合关系隐藏在不透明配置文件中。
 
@@ -40,6 +42,8 @@ Interaction Agent、RSI Agent 和 ResearchAgent 组分别解析模型连接，�
 
 Local 数据目录不绑定某个模型。模型描述按内容复用，基线按 target 模型与初始 Harness 快照索引；改变研究 Agent 或Interaction Agent 模型不创建另一份目标基线，同一目录可以保存不同 target 的实验。旧 `baseline.json` 只作兼容读取，不覆盖。每个 Run 继续引用自己的不可变 Solution，恢复时核对对应配置。
 
+Local / Remote 固定工作流使用 `FileRunStore`，实验列表、CLI 和多实验 TUI 同时读取新旧布局。新 run 的 memory、轨迹、会话和网关记录归属 `runs/<run_id>/`；EnvArena 作业回执保存在该 run 的 `runtime/remote/`。Remote provider 可通过可选的 `RemoteBackend.bind_run(paths)` 绑定自己的可写目录；旧回执和锁保留原路径，避免恢复时重复提交作业。Provider 配置与初始版本仍属于所属实验目录。
+
 ## 2. 独立研究线
 
 ```text
@@ -52,7 +56,7 @@ ExperimentRun
     └── Iteration 2：S2-1 → S2-2
 ```
 
-每个 ResearchAgent 从同一 baseline 出发，独立维护 iteration。每轮只修改一个目标，只产生一个候选。并行性来自多个 ResearchAgent，而不是单个 Agent 一次提出多个修改。
+当前 Harness / Artifact 工作流中，每个 ResearchAgent 从同一 baseline 出发，独立维护 iteration。每轮只修改一个目标，只产生一个候选。并行性来自多个 ResearchAgent，而不是单个 Agent 一次提出多个修改。这是具体工作流的约定；通用 ResearchIteration 只记录任务、状态、报告及材料引用，不要求产出候选或完成评测。
 
 RSI Agent 在外层读取 ExperimentRun，返回需要停止的 ResearchAgent ID，对广度搜索做剪枝；ResearchAgent 在各自研究线内部通过 select 做深度搜索和回溯。
 
@@ -67,7 +71,9 @@ ModelVersion + HarnessVersion + ArtifactVersion[] = SolutionVersion
 - ArtifactVersion：用户产物的一个快照，例如游戏、应用或生成的数据；
 - SolutionVersion：一次实际运行和评测使用的 Model/Harness/Artifact 组合。
 
-版本只记录父版本。版本由哪个 Run、ResearchAgent 和 iteration 产生，可以从 ResearchIteration 的嵌套关系得到，因此不再需要 VersionOrigin。
+版本只记录父版本。版本由哪个 Run、ResearchAgent 和 iteration 产生，可从节点关联的工作流结果追溯。ResearchIteration 不再直接保存候选和评测字段；当前流程使用 EvolutionResult 承载这些字段，通过版本 ID 关联 SolutionVersion。EvolutionResult 是 workflow 层可选择使用的结果格式，通用节点无需生成它；其他工作流可以采用自己的报告与材料记录。后续单独演进 Solution 模型。
+
+`EvolutionResult.evidence` 引用固定工作流的证据包；读取兼容旧记录的 `trajectories` 字段，历史文件不改写。此格式仍是具体工作流的可选结果，不是通用研究节点的必需产出。
 
 ## 4. 一轮研究
 
@@ -159,6 +165,10 @@ EnvArena 候选只修改 skill/tool/system prompt/MCP。Runtime、模型、评�
 
 第一阶段固定 Model 执行 Harness evolution，TrainingBackend 暂不实施。Workflow 使用普通 Python 类，不设计 DSL。多 ResearchAgent 从同一基线出发，同一轮并发运行，在轮次边界调用 RSI Agent 剪枝。某条线失败不抹掉其他线的完成记录；恢复只重试未完成部分，剪枝决定持久保存。相同 Run 的跨进程执行由 OS 文件锁互斥。
 
-研究线数量通过装配配置指定；所有 ResearchAgent 接收同一实验目标，不预设不同方向或改进答案。各线拥有独立 Session、workspace、迭代状态和版本分支，选版候选限定为该研究线自己的历史和共同 baseline。运行状态与详细阶段进度分别保存在 `run-states/` 和 `runs/<run_id>/progress.json`，TUI 与 Web 读取同一份记录。
+研究线数量通过装配配置指定；所有 ResearchAgent 接收同一实验目标，不预设不同方向或改进答案。各线拥有独立 Session、workspace、迭代状态和版本分支，选版候选限定为该研究线自己的历史和共同 baseline。新 run 的状态与阶段进度分别保存在 `runs/<run_id>/run.json` 和 `workflow/progress.json`，TUI 与 Web 通过统一 FileRunStore / RunPaths 读取。ResearchIteration 在开始执行时即保存，失败或取消时保留节点与已有检查点引用，恢复复用该节点。
+
+Agent 状态、节点、Memory、轨迹索引、后台会话与 worker 资料集中于各自 run；Memory 不自动读取根目录历史数据。内容和版本可在根目录去重。旧 run 兼容读取，保留其原有检查点及锁位置。详细布局见 [README](../README.md#开发检查与数据)。
+
+数据模型和通用 Service 允许没有起点、没有最佳版本；当前本地装配及 Harness / Artifact 工作流仍需要起点。新 Agent 状态还定义了等待、停止中及会话恢复字段，但每轮报告后等待 RSI 回复、连续会话、Evidence Pool 和动态任务调度属于后续实现。
 
 任务调用携带稳定的 execution_key（运行/评测目录/任务），工作流按检查点复用已完成的任务。已完成任务、提案、候选、选版、轮次均保存检查点；恢复时核对 Benchmark、题面与 Solution，不能拿旧评测缓存测新题。

@@ -16,8 +16,28 @@ import yaml  # type: ignore[import-untyped]
 from deepseek_harness import DeepSeekHarness  # type: ignore[import-untyped]
 
 from areal_rsi.api.base import AgentSpec, Trajectory, TrajectoryRef
-from areal_rsi.base.storage import FileContentStore, FileTrajectoryStore, new_id, now
+from areal_rsi.base.storage import FileContentStore, FileTrajectoryStore, new_id, now, safe_name
 from areal_rsi.modules.dsh import ensure_cli
+
+
+def _runtime_symlinks(paths: Collection[Path]) -> set[str]:
+    """Metadata needed to traverse runtime aliases, without opening their parents."""
+    pending = [path.absolute() for path in paths]
+    seen: set[Path] = set()
+    links: set[str] = set()
+    while pending:
+        path = pending.pop()
+        for component in (path, *path.parents):
+            if component in seen:
+                continue
+            seen.add(component)
+            if component.is_symlink():
+                links.add(str(component))
+                target = component.readlink()
+                if not target.is_absolute():
+                    target = component.parent / target
+                pending.append(target / path.relative_to(component))
+    return links
 
 
 def sandbox_wrapper(directory: Path, workspace: Path, cli: Path) -> Path:
@@ -49,6 +69,10 @@ def sandbox_wrapper(directory: Path, workspace: Path, cli: Path) -> Path:
         profile.append(f"(allow file-read* (subpath {json.dumps(root)}))")
     # Node realpath 会逐级 lstat 安装路径；只允许这些祖先目录的元数据。
     ancestors = {str(parent) for root in roots for parent in Path(root).parents}
+    # uv's venv executable can traverse a second, unversioned directory symlink.
+    # Its resolved Python root is readable already; only that alias's metadata
+    # was missing. Do not grant reads to the surrounding installation directory.
+    ancestors.update(_runtime_symlinks((Path(sys.executable), Path(node))))
     for ancestor in sorted(ancestors):
         profile.append(f"(allow file-read-metadata (literal {json.dumps(ancestor)}))")
     for writable in (directory.resolve(), workspace.resolve()):
@@ -172,8 +196,10 @@ class DshAgentRuntime:
         tool_registry: dict[str, list[dict[str, Any]]] | None = None,
         dsh_root: Path | None = None,
         credential_env_names: Collection[str] = (),
+        agent_directories: bool = False,
     ):
         self.root = root.resolve()
+        self.agent_directories = agent_directories
         self.dsh_root = (dsh_root or self.root.parent).resolve()
         self.credential_env_names = frozenset(credential_env_names)
         self.content = content
@@ -194,7 +220,11 @@ class DshAgentRuntime:
         if unknown:
             raise ValueError(f"未注册工具：{unknown}")
         session_id = new_id("trajectory")
-        directory = self.root / session_id
+        directory = (
+            self.root / safe_name(agent.agent_id) / "sessions" / session_id
+            if self.agent_directories
+            else self.root / session_id
+        )
         directory.mkdir(parents=True)
         workspace = Path(workspace_root).resolve() if workspace_root else directory / "workspace"
         workspace.mkdir(parents=True, exist_ok=True)

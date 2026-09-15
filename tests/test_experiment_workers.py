@@ -224,7 +224,7 @@ class ExperimentWorkersTest(unittest.IsolatedAsyncioTestCase):
         second = await other.start(plan["plan_id"], confirmed=True)
         self.assertEqual(first["run_id"], second["run_id"])
         self.assertEqual(first["worker"]["pid"], second["worker"]["pid"])
-        self.assertEqual(len(list((self.root / "run-states").glob("*.json"))), 1)
+        self.assertEqual(len(self.controller.runs.ids()), 1)
         self.assertEqual(os.getsid(first["worker"]["pid"]), first["worker"]["pid"])
         self.assertTrue(second["worker"]["active"])
         stopped = await other.stop(first["run_id"])
@@ -254,7 +254,8 @@ class ExperimentWorkersTest(unittest.IsolatedAsyncioTestCase):
         finished = await self.wait_state(run_id, "succeeded")
         self.assertEqual(finished["max_iterations"], 3)
         self.assertIn(
-            "offline worker entered", (self.root / "workers" / f"{run_id}.log").read_text()
+            "offline worker entered",
+            (self.controller.runs.paths(run_id).worker_file("log")).read_text(),
         )
         await asyncio.to_thread(resumed_child.wait, timeout=5)
         same = await other.start(plan["plan_id"], confirmed=True)
@@ -285,7 +286,7 @@ class ExperimentWorkersTest(unittest.IsolatedAsyncioTestCase):
         started = await self.controller.start(plan["plan_id"], confirmed=True)
         run_id = started["run_id"]
         await self.wait_state(run_id, "running")
-        path = self.root / "workers" / f"{run_id}.json"
+        path = self.controller.runs.paths(run_id).worker_file("state")
         original = json.loads(path.read_text())
         write_json(path, {**original, "identity": "stale-process-generation"})
         try:
@@ -305,7 +306,7 @@ class ExperimentWorkersTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "归属"):
             await self.controller.stop(run.run_id)
         with (
-            _locked(self.root / "locks" / f"{run.run_id}.lock"),
+            _locked(self.controller.runs.paths(run.run_id).execution_lock),
             self.assertRaisesRegex(ValueError, "另一个进程"),
         ):
             await self.controller.resume(run.run_id, confirmed=True)
@@ -324,7 +325,7 @@ class ExperimentWorkersTest(unittest.IsolatedAsyncioTestCase):
                     await asyncio.sleep(0.02)
             await legacy.service.resume(run_id)
             await self.wait_state(run_id, "running")
-            state_path = self.root / "run-states" / f"{run_id}.json"
+            state_path = self.controller.runs.paths(run_id).state
             original = state_path.read_bytes()
             write_json(self.root / "fixture-app-release.json", {})
             self.assertEqual(await asyncio.to_thread(child.wait, timeout=5), 1)

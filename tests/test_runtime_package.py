@@ -15,7 +15,9 @@ from areal_rsi.modules.runtime_package import PackageAgentRuntime, RuntimeSettin
 
 
 class PackageRuntimeTest(unittest.IsolatedAsyncioTestCase):
-    async def _check_composition(self, selection: dict[str, str]) -> None:
+    async def _check_composition(
+        self, selection: dict[str, str], *, agent_directories: bool = False
+    ) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp).resolve()
             content = FileContentStore(root / "content")
@@ -28,9 +30,14 @@ class PackageRuntimeTest(unittest.IsolatedAsyncioTestCase):
                 role="task-agent",
                 base_url="http://127.0.0.1:1",
                 api_key="local-proxy",
+                agent_directories=agent_directories,
             )
             model = ModelVersion("model-test", "test", await content.put_text("model"), now())
             session = await runtime.open(AgentSpec("task-agent", "deepseek-harness@v1", model))
+            expected = (
+                runtime.root / "task-agent" / "sessions" if agent_directories else runtime.root
+            )
+            self.assertEqual(session.directory.parent, expected)
             try:
                 first = await session.send("first message")
                 second = await session.send("second message")
@@ -52,15 +59,16 @@ class PackageRuntimeTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue((session.directory / "data/state").is_dir())
             self.assertEqual(list((session.directory / "data").rglob("*.sqlite*")), [])
             self.assertEqual(trace["events"], session.events)
-            self.assertEqual(
-                sum(event["type"] == "run.completed" for event in session.events), 2
-            )
+            self.assertEqual(sum(event["type"] == "run.completed" for event in session.events), 2)
             self.assertIsNotNone(session.process.returncode)
             with self.assertRaisesRegex(RuntimeError, "已结束"):
                 await session.send("late")
 
     async def test_installed_composition_multiturn_and_trajectory(self) -> None:
         await self._check_composition({"kind": "fake"})
+
+    async def test_run_owned_agent_sessions(self) -> None:
+        await self._check_composition({"kind": "fake"}, agent_directories=True)
 
     async def test_installed_entrypoint_plugin(self) -> None:
         await self._check_composition(

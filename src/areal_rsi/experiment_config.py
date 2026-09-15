@@ -116,7 +116,11 @@ def plan_environment(root: Path, plan_config: Mapping[str, Any]) -> dict[str, st
 def experiment_roots(root: Path) -> list[Path]:
     """Workspace experiments plus legacy layouts, without recursively scanning artifacts."""
     children = [path.parent for path in sorted((root / "experiments").glob("*/launch.json"))]
-    legacy = [root / mode for mode in ("local", "remote") if (root / mode / "run-states").is_dir()]
+    legacy = [
+        root / mode
+        for mode in ("local", "remote")
+        if any((root / mode / name).is_dir() for name in ("run-states", "runs"))
+    ]
     return [root, *children, *legacy]
 
 

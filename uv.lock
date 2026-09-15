@@ -126,6 +126,7 @@ source = { editable = "." }
 dependencies = [
     { name = "areal-agent-runtime", extra = ["api", "dsh"] },
     { name = "deepseek-harness-sdk" },
+    { name = "httpx", extra = ["socks"] },
     { name = "mcp" },
     { name = "pyyaml" },
 ]
@@ -155,6 +156,7 @@ requires-dist = [
     { name = "areal-agent-runtime", extras = ["claude"], marker = "extra == 'claude'", path = "vendor/areal_agent_runtime-0.4.0.dev1-py3-none-any.whl" },
     { name = "areal-agent-runtime", extras = ["codex"], marker = "extra == 'codex'", path = "vendor/areal_agent_runtime-0.4.0.dev1-py3-none-any.whl" },
     { name = "deepseek-harness-sdk", specifier = "==0.1.2rc1" },
+    { name = "httpx", extras = ["socks"], specifier = ">=0.28,<1" },
     { name = "mcp", specifier = ">=2.1,<3" },
     { name = "pyyaml", specifier = ">=6,<7" },
 ]

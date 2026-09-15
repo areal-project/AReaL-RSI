@@ -45,32 +45,21 @@ RSI_GPUS=0 RSI_CPUS=4 RSI_MEM=16G bash jailbreak_env/run.sh audit
 
 ## 2. nanoGPT：指定数据，自动打包、训练和评估
 
-最简单的数据已准备好；以下二选一即可：
+统一入口为 `bench.sh`，使用说明见 [nanoGPT README](nanogpt_env/README.md)。
 
 ```bash
-bash nanogpt_env/bench.sh nanogpt_env/baselines/random/selection.json
-# 或自动生成同一策略的确定性随机基线
+# 确定性随机选择基线
 bash nanogpt_env/bench.sh --baseline
-```
 
-自己的输入必须是 JSON 数组，例如 `[10, 27, 3, ...]`（示意，不可包含省略号）。
-ID 范围为 `0..182015`，必须为整数且不重复，顺序就是选入顺序；
-所选文档累计必须足够打包 **12M tokens**，几个 ID 的小数组通常不够。
-只改变数据选择；训练器和超参数固定：**3000 步、seed 1337**，在公开 dev 集评估。
-
-```bash
+# 自定义有序文档 ID 列表
 bash nanogpt_env/bench.sh /absolute/path/selection.json
-bash nanogpt_env/bench.sh --baseline --smoke  # 仅 2 步短测，不能用于比较成绩
 
-# 把下面路径替换成提交输出中的 run_dir
+# 查看本次作业
 bash nanogpt_env/bench.sh status /absolute/path/to/run_dir
-tail -f /absolute/path/to/run_dir/job.log
 ```
 
-成功应同时看到实验状态 `SUCCEEDED`、`result.json` 和正常 Slurm 退出状态。
-`EXPERIMENT SUCCEEDED` 表示这一轮实验流程结束，不表示取得更优成绩。
-完整结果应有 `mode=dev`、`max_iters=3000`、`token_count=12000000`；比较 `heldout_ppl`。
-每次提交自动创建 `nanogpt_env/experiments/<时间>-<随机ID>/`，不会覆盖上一次实验。
+固定使用 12M tokens、3000 步训练、seed 1337，在公开 dev 集评估。
+`--smoke` 仅用于两步环境检查。提交返回的 `run_dir` 保存本次输入、状态和输出。
 
 ## 3. OPSD：100 步训练，再完整 Avg@12 评估
 
@@ -246,7 +235,7 @@ GPU 预检失败应调整节点；裁判失败先检查四项环境变量、网�
 不要为了让流程显示成功而跳过题目或给缺失判决补零。
 
 已完成的验证记录见运行目录 `validation/E2E_20260911.md`：
-nanoGPT 全 dev PPL 455.256；OPSD 全 dev Avg@12 53.33%；
+OPSD 全 dev Avg@12 53.33%；
 Jailbreak 训练/280 条生成/本地 IFEval 通过，外部裁判尚未验证；
 Swarm 小规模搜索 + 完整可见验证通过（8/15）。这些是链路证据，不是优化目标或官方排名。
 

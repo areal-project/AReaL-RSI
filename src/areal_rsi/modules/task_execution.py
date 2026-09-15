@@ -14,10 +14,38 @@ from pathlib import Path
 from typing import Any
 
 from areal_rsi.api.base import ContentRef, SolutionVersion, Task, TaskResult
-from areal_rsi.base.storage import FileContentStore, new_id, safe_relative
+from areal_rsi.api.modules import ConfiguredAgentRuntime
+from areal_rsi.base.storage import FileContentStore, FileTrajectoryStore, new_id, safe_relative
 from areal_rsi.modules.gateway import GatewayProxy
 from areal_rsi.modules.harness import LocalHarnessRuntime
 from areal_rsi.modules.runtime import DshAgentRuntime
+
+
+def create_task_runtime(
+    root: Path,
+    content: FileContentStore,
+    trajectories: FileTrajectoryStore,
+    *,
+    runtime_config: dict[str, Any] | None = None,
+    **connection: Any,
+) -> ConfiguredAgentRuntime:
+    """Select an execution adapter without selecting a research workflow.
+
+    None keeps the direct DSH task adapter. An explicit configuration uses the
+    ARealAgentRuntime package and its durable event/asset storage plugin.
+    """
+    if runtime_config is None:
+        return DshAgentRuntime(root, content, trajectories, **connection)
+    from areal_rsi.modules.runtime_package import PackageAgentRuntime, RuntimeSettings
+
+    return PackageAgentRuntime(
+        root,
+        content,
+        trajectories,
+        settings=RuntimeSettings(runtime_config),
+        role="task-agent",
+        **connection,
+    )
 
 
 @dataclass(frozen=True)
@@ -38,7 +66,7 @@ class FileTaskExecutor:
     file is imported or executed while harvesting outputs.
     """
 
-    def __init__(self, runtime: DshAgentRuntime, content: FileContentStore, root: Path):
+    def __init__(self, runtime: ConfiguredAgentRuntime, content: FileContentStore, root: Path):
         self.runtime, self.content, self.root = runtime, content, root
 
     async def run(
@@ -112,10 +140,14 @@ class TargetGateway:
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:
-                if self.path not in {"/chat/completions", "/v1/chat/completions"}:
+                route = self.path.removeprefix("/v1")
+                if route not in {"/chat/completions", "/responses", "/messages"}:
                     self.send_error(404)
                     return
-                if self.headers.get("Authorization") != f"Bearer {owner.token}":
+                if (
+                    self.headers.get("Authorization") != f"Bearer {owner.token}"
+                    and self.headers.get("x-api-key") != owner.token
+                ):
                     self.send_error(401)
                     return
                 try:
@@ -134,22 +166,34 @@ class TargetGateway:
                             self.send_error(429, "Task model request budget exhausted")
                             return
                         owner.calls += 1
-                    body["max_tokens"] = min(
-                        int(body.get("max_tokens", max_output_tokens)), max_output_tokens
+                    limit_field = "max_output_tokens" if route == "/responses" else "max_tokens"
+                    body[limit_field] = min(
+                        int(body.get(limit_field, max_output_tokens)), max_output_tokens
                     )
-                    body["n"] = 1
-                    if body["max_tokens"] < 1:
+                    if body[limit_field] < 1:
                         raise ValueError("Output budget must be positive")
-                    if "max_completion_tokens" in body:
-                        body["max_completion_tokens"] = min(
-                            int(body["max_completion_tokens"]), max_output_tokens
-                        )
+                    if route != "/responses":
+                        body.pop("max_output_tokens", None)
+                    if route == "/chat/completions":
+                        body["n"] = 1
+                        if "max_completion_tokens" in body:
+                            body["max_completion_tokens"] = min(
+                                int(body["max_completion_tokens"]), max_output_tokens
+                            )
+                    else:
+                        body.pop("n", None)
+                        body.pop("max_completion_tokens", None)
+                        if route == "/responses":
+                            body.pop("max_tokens", None)
                     request = urllib.request.Request(
-                        owner.delegate.url + "/chat/completions",
+                        owner.delegate.url + route,
                         data=json.dumps(body).encode(),
                         headers={
                             "Content-Type": "application/json",
                             "Authorization": "Bearer " + delegate_token,
+                            "anthropic-version": self.headers.get(
+                                "anthropic-version", "2023-06-01"
+                            ),
                         },
                     )
                     with urllib.request.urlopen(request, timeout=timeout_seconds) as response:

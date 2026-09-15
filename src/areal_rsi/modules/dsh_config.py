@@ -12,6 +12,7 @@ from typing import Any, cast
 import yaml  # type: ignore[import-untyped]
 
 from areal_rsi.config import AgentModelSettings
+from areal_rsi.modules.remote.registry import all_remote_environment_names
 
 PERSONA = files("areal_rsi").joinpath("resources/dsh/persona.md").read_text()
 
@@ -27,6 +28,7 @@ MCP_ENVIRONMENT = (
     "RSI_TARGET_BASE_URL",
     "RSI_TARGET_API_KEY",
     "RSI_AGENT_MODELS",
+    "RSI_RUNTIME_CONFIG",
     "ARENA_PROFILE",
     "ARENA_BASE_URL",
     "ARENA_OPENAPI_TOKEN",
@@ -112,6 +114,7 @@ def write_profile_patch(
         )
     environment_names = [
         *MCP_ENVIRONMENT,
+        *all_remote_environment_names(),
         *sorted(AgentModelSettings.from_environment().credential_env_names),
     ]
     mcp = _entry(tree, "rsi-mcp")["config"]

@@ -204,6 +204,7 @@ async def generate(
     timeout_seconds: float = 600,
     runtime_root: Path | None = None,
     expected_target_model: str | None = None,
+    runtime_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Operator entry: call ONLY RSI_TARGET credentials, exporting target-written files.
 
@@ -218,8 +219,12 @@ async def generate(
         encode,
     )
     from areal_rsi.config import ModelConfig
-    from areal_rsi.modules.runtime import DshAgentRuntime
-    from areal_rsi.modules.task_execution import FileTaskExecutor, TargetGateway, TaskExportError
+    from areal_rsi.modules.task_execution import (
+        FileTaskExecutor,
+        TargetGateway,
+        TaskExportError,
+        create_task_runtime,
+    )
 
     if destination.exists():
         raise FileExistsError("Each target evaluation requires a fresh private output directory")
@@ -250,7 +255,7 @@ async def generate(
             max_output_tokens=max_output_tokens,
             timeout_seconds=timeout_seconds,
         )
-        runtime = DshAgentRuntime(
+        runtime = create_task_runtime(
             destination / "sessions" / task_id,
             content,
             trajectories,
@@ -259,6 +264,7 @@ async def generate(
             timeout=timeout_seconds,
             max_tokens=max_output_tokens,
             dsh_root=runtime_root or destination / "dsh",
+            runtime_config=runtime_config,
         )
         task_directory = destination / "tasks" / task_id
         task_directory.mkdir(parents=True)

@@ -128,3 +128,27 @@ def test_develop_publishes_only_public_feedback_with_private_runtime_symlinks(
             execution.close()
 
     asyncio.run(scenario())
+
+
+def test_prepare_freezes_task_runtime_instead_of_following_later_environment_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from areal_rsi.modules.runtime_package import RuntimeSettings
+
+    async def scenario() -> None:
+        source = tmp_path / "runtime.json"
+        source.write_text('{"default":{"kind":"dsh"}}')
+        monkeypatch.setenv("RSI_RUNTIME_CONFIG", str(source))
+        monkeypatch.setenv("RSI_TARGET_MODEL", "fixture")
+        monkeypatch.setenv("RSI_TARGET_BASE_URL", "https://example.test")
+        await prepare(
+            "arithmetic",
+            tmp_path / "setup/research.json",
+            dataset=tmp_path,
+            remote_config=tmp_path / "unused",
+        )
+        source.write_text('{"default":{"kind":"codex-cli"}}')
+        operator = json.loads((tmp_path / "setup/operator.json").read_text())
+        assert RuntimeSettings(operator["task_runtime"]).select("task-agent")["kind"] == "dsh"
+
+    asyncio.run(scenario())

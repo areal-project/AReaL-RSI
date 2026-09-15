@@ -192,7 +192,7 @@ class LocalHarnessRuntime:
                     servers.append(key)
             spec = AgentSpec(
                 "task-agent",
-                "deepseek-harness@v1",
+                getattr(self.runtime, "runtime_id", "deepseek-harness@v1"),
                 solution.model,
                 (prompt,),
                 skills,

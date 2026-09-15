@@ -23,11 +23,11 @@ CLI ─┘              （CLI 直接装配同一个 ResearchApp）
 - `JobManager`：独立子进程、队列、作业身份和恢复。它不解释研究结论。
 - 验证器：绑定冻结候选和固定任务条件，只有合法验证结果能更新成绩。
 
-TUI 使用原生 DSH plugin 承担前台 Interaction，自然对话由 DSH 处理；MCP 直接调用新研究 HTTP API，不再创建另一个后台 Interaction 来转述对话。Web 仍提供自己的 Interaction 入口。Web 与 TUI 共用后台执行进程；前台 CLI 使用同一个引擎并持有相同执行锁，其他界面对该研究只读。没有固定 `propose → build → evaluate → select` 工作流、旧 MCP 控制器或 Runtime package 桥接。
+TUI 使用原生 DSH plugin 承担前台 Interaction，自然对话由 DSH 处理；MCP 直接调用新研究 HTTP API，不再创建另一个后台 Interaction 来转述对话。Web 仍提供自己的 Interaction 入口。Web 与 TUI 共用后台执行进程；前台 CLI 使用同一个引擎并持有相同执行锁，其他界面对该研究只读。没有固定 `propose → build → evaluate → select` 工作流或旧 MCP 控制器。Task Runtime package 与远端后端属于执行层，继续保留。
 
 ## 数学与 LCB
 
-`adapters/harness_cases.py` 将已有 Benchmark 和 Task Runtime 组装为 ResearchConfig 的 `develop` 与 `verify` 命令。它不调度研究员、不实现另一个研究循环。
+`adapters/harness_cases.py` 将已有 Benchmark 和 Task Runtime 组装为 ResearchConfig 的 `develop` 与 `verify` 命令。LCB 的底层组件经 RemoteProvider 装配，数学可选择 PackageAgentRuntime 并使用独立 journal 存储。它不调度研究员、不实现另一个研究循环。
 
 - 数学：固定目标连接、题池和初始 Harness；研究员只修改 `prompt.md`，Task Agent 在独立 macOS 沙箱解题，宿主评分器读取私有答案。
 - LCB：固定远端 Benchmark / Reward / Model；候选 prompt 通过 ArenaHarnessBuilder 发布为新 Harness 版本，ArenaHarnessRuntime 保存远端 job 回执并读取真实评分。

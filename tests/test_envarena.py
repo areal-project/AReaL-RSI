@@ -650,15 +650,12 @@ class RemoteTest(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaisesRegex(ValueError, "内容与请求不符"):
                     await self.client.ensure_version("benchmarks", "test", spec)
 
-
-
     async def test_verifier_infra_failure_is_not_aggregated_as_zero_reward(self) -> None:
         result = VerificationResult(
             "task", "trace", None, None, {}, "", status=VerificationStatus.INFRA_ERROR
         )
         with self.assertRaisesRegex(ValueError, "Verifier 未成功完成"):
             await ArenaEvaluation().evaluate(self.solution, BenchmarkSplit.TRAIN, [result])
-
 
     async def test_invalid_case_weights_are_rejected_without_changing_scoring(self) -> None:
         spec = self.client.versions["/benchmarks/base/versions/1.0.0"]["spec"]
@@ -726,7 +723,6 @@ class RemoteTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "评分语义"):
             await ArenaBenchmark(self.client, self.config).load()
 
-
     async def test_config_resolves_source_job_envelope_and_disjoint_splits(self) -> None:
         self.client.jobs["source"] = {
             "job_id": "source",
@@ -762,3 +758,39 @@ class RemoteTest(unittest.IsolatedAsyncioTestCase):
                 path.write_text(base + "artifact_globs: " + json.dumps(invalid))
                 with self.assertRaisesRegex(ValueError, "artifact_globs"):
                     await ArenaConfig.load(path, self.client)
+
+    async def test_provider_assembly_preserves_execution_and_all_harness_changes(self) -> None:
+        from areal_rsi.base.storage import FileMemory, encode
+        from areal_rsi.modules.remote import registry
+        from areal_rsi.modules.remote.base import RemoteContext
+        from areal_rsi.modules.remote.envarena.backend import EnvArenaProvider
+
+        context = RemoteContext(
+            self.root,
+            self.content,
+            FileMemory(self.root / "memory"),
+            self.traces,
+            self.versions,
+            lambda _: None,
+        )
+        config_path = self.root / "remote.yaml"
+        config_path.write_text(json.dumps(encode(self.config)))
+        with patch(
+            "areal_rsi.modules.remote.envarena.backend.ArenaClient", return_value=self.client
+        ):
+            backend = await EnvArenaProvider().create(context, config_path)
+        self.assertEqual(
+            backend.identity["allowed_changes"], ["system_prompt", "skills", "tools", "mcp"]
+        )
+        self.assertFalse(hasattr(backend, "research_agent_factory"))
+        assert isinstance(backend.harness_runtime, ArenaHarnessRuntime)
+        results = await backend.harness_runtime.run_many(
+            backend.baseline,
+            await backend.benchmark.list_tasks(BenchmarkSplit.TRAIN),
+            config={"execution_key": "provider-execution", "run_id": "research-fixture"},
+        )
+        self.assertEqual(set(results), {"train-a", "train-b"})
+        jobs = registry.read_remote_jobs(self.root, "research-fixture")
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].state, "collected")
+        self.assertFalse((self.root / "run-states").exists())

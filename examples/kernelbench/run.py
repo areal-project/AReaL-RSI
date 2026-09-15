@@ -225,6 +225,21 @@ async def publish_development(generation_root, generated, manifest, rows, evalua
     )
 
 
+def execution_protocol_id(gpu_protocol_id, config):
+    """Include an explicitly selected Task Runtime in the comparison identity."""
+    if config.get("task_runtime") is None:
+        return gpu_protocol_id
+    import hashlib
+
+    from areal_rsi.modules.runtime_package import RuntimeSettings
+
+    runtime = RuntimeSettings(config["task_runtime"])
+    runtime.select("task-agent")
+    return hashlib.sha256(json.dumps({
+        "gpu_protocol_id": gpu_protocol_id, "task_runtime": runtime.identity,
+    }, sort_keys=True).encode()).hexdigest()
+
+
 def describe_identity(operator_config, phase, target_model=None):
     """Probe fixed GPU conditions without a model request or candidate execution."""
     config = json.loads(operator_config.read_text())
@@ -285,7 +300,7 @@ def describe_identity(operator_config, phase, target_model=None):
         "phase": phase,
         "split": split,
         "manifest_id": manifest["manifest_id"],
-        "protocol_id": description["protocol_id"],
+        "protocol_id": execution_protocol_id(description["protocol_id"], config),
         "target_model": model,
         "environment": description["environment"],
     }
@@ -319,6 +334,7 @@ async def run(harness, output, operator_config, phase, target_model=None):
         timeout_seconds=budget.get("timeout_seconds", 600),
         runtime_root=Path(config["dsh_root"]) if config.get("dsh_root") else None,
         expected_target_model=target_model or config.get("target_model"),
+        runtime_config=config.get("task_runtime"),
     )
     gpu = config["gpu"]
     result = private / "results.json"
@@ -348,6 +364,7 @@ async def run(harness, output, operator_config, phase, target_model=None):
     aggregate = aggregate_results(manifest, rows)
     evaluation = {
         **asdict(aggregate),
+        "protocol_id": execution_protocol_id(aggregate.protocol_id, config),
         "metric": "fast_1",
         "score": aggregate.fast_1,
         "phase": phase,

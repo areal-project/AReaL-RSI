@@ -26,4 +26,4 @@ uv run --env-file .env --locked rsi research --resume <run_id>
 
 训练作业提供任务输出与反馈；search/final 仅向研究员提供聚合结果。final 是同一留出题池上的独立执行复测，不是新的测试集。远端回执位于研究对应执行输出的 `private/remote/executions/`，可据其中 job_id 到平台核查。
 
-旧 RemoteApp、固定演化循环、`rsi resume` 和 `examples/remote/run.py` 已移除。远端 Task 执行和可信评分能力由新研究模式调用。
+旧 RemoteApp、固定演化循环、`rsi resume` 和 `examples/remote/run.py` 已移除。通用 RemoteProvider / RemoteBackend 和 Arena 组件装配保留，由新研究模式调用远端 Task 执行和可信评分。

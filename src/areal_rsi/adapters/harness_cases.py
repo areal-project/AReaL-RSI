@@ -26,6 +26,7 @@ from areal_rsi.api.base import (
 from areal_rsi.api.research import ResearchLimits, TaskBrief, VerificationContract
 from areal_rsi.base.storage import (
     FileContentStore,
+    FileMemory,
     FileTrajectoryStore,
     FileVersionManager,
     decode,
@@ -75,15 +76,23 @@ async def prepare(
         raise FileExistsError("Use a fresh preparation directory")
     settings: dict[str, Any] = {"case": case, "dataset": str(dataset.resolve()), "limit": limit}
     if case == "lcb":
-        from areal_rsi.modules.remote.envarena.benchmark import ArenaBenchmark
-        from areal_rsi.modules.remote.envarena.client import ArenaClient, ArenaConnection
-        from areal_rsi.modules.remote.envarena.config import ArenaConfig
+        from areal_rsi.modules.remote.base import RemoteContext
+        from areal_rsi.modules.remote.registry import get_provider
 
-        client = ArenaClient(ArenaConnection.from_environment())
-        remote = await ArenaConfig.load(remote_config, client)
-        benchmark = ArenaBenchmark(client, remote)
-        await benchmark.load()
-        harness = await client.version("harnesses", remote.harness)
+        preflight = folder / "preflight"
+        content = FileContentStore(preflight / "content")
+        backend = await get_provider("envarena").create(
+            RemoteContext(
+                preflight,
+                content,
+                FileMemory(preflight / "memory"),
+                FileTrajectoryStore(preflight / "trajectories", content),
+                FileVersionManager(preflight / "versions"),
+                lambda _: None,
+            ),
+            remote_config,
+        )
+        harness = json.loads(await content.read_text(backend.baseline.harness.content))
         prompt = harness["spec"].get("system_prompt", {})
         if prompt.get("kind", "inline") != "inline":
             raise ValueError("LCB example requires an inline system prompt")
@@ -94,15 +103,23 @@ async def prepare(
         settings.update(
             remote_config=str(saved),
             remote_sha256=hashlib.sha256(saved.read_bytes()).hexdigest(),
-            benchmark=benchmark.name,
-            target_model=remote.model,
-            endpoint=client.connection.base_url,
+            benchmark=backend.benchmark.name,
+            target_model=backend.identity["model"],
+            endpoint=backend.identity["base_url"],
         )
     else:
         content = FileContentStore(folder / "preflight-content")
         benchmark, _ = math_components(case, settings["dataset"], limit, content)
         target = ModelConfig.from_environment("target")
         settings.update(benchmark=benchmark.name, target_model=target.public_identity())
+        from areal_rsi.modules.runtime_package import RuntimeSettings
+
+        task_runtime = None
+        if os.environ.get("RSI_RUNTIME_CONFIG"):
+            selected_runtime = RuntimeSettings.from_environment()
+            selected_runtime.select("task-agent")  # Validate before creating an executable plan.
+            task_runtime = selected_runtime.configuration
+        settings["task_runtime"] = task_runtime
         shutil.copytree(Path(__file__).parents[1] / "default_harness", seed)
     settings["seed_files"] = {
         p.relative_to(seed).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
@@ -229,33 +246,28 @@ async def evaluate(operator: Path, workspace: Path, output: Path, phase: str) ->
     runtime: Any
     gateway: Any = None
     if settings["case"] == "lcb":
-        from areal_rsi.modules.remote.envarena.benchmark import ArenaBenchmark
-        from areal_rsi.modules.remote.envarena.client import ArenaClient, ArenaConnection
-        from areal_rsi.modules.remote.envarena.config import ArenaConfig
-        from areal_rsi.modules.remote.envarena.harness import (
-            REMOTE_CHANGE_TYPE,
-            ArenaHarnessBuilder,
-            snapshot,
-        )
-        from areal_rsi.modules.remote.envarena.runtime import ArenaHarnessRuntime, ArenaVerifier
+        from areal_rsi.modules.remote.base import RemoteContext
+        from areal_rsi.modules.remote.envarena.harness import REMOTE_CHANGE_TYPE
+        from areal_rsi.modules.remote.registry import get_provider
 
         path = Path(settings["remote_config"])
         if hashlib.sha256(path.read_bytes()).hexdigest() != settings["remote_sha256"]:
             raise ValueError("Remote config changed")
-        client = ArenaClient(ArenaConnection.from_environment())
-        if client.connection.base_url != settings["endpoint"]:
+        backend = await get_provider("envarena").create(
+            RemoteContext(
+                output / "private",
+                content,
+                FileMemory(output / "private/memory"),
+                trajectories,
+                versions,
+                print,
+            ),
+            path,
+        )
+        if backend.identity["base_url"] != settings["endpoint"]:
             raise ValueError("Arena endpoint changed")
-        config = await ArenaConfig.load(path, client)
-        benchmark = ArenaBenchmark(client, config)
-        await benchmark.load()
-        model_value = await client.version("models", config.model)
-        model = await versions.create_model(
-            model_value["spec"]["model_name"], await content.put_json({"ref": encode(config.model)})
-        )
-        base = await versions.create_harness(
-            "base", await snapshot(client, content, config.harness)
-        )
-        harness = base
+        benchmark, verifier, runtime = backend.benchmark, backend.verifier, backend.harness_runtime
+        model, harness = backend.baseline.model, backend.baseline.harness
         if actual["prompt.md"] != original["prompt.md"]:
             patch = await content.put_bytes(
                 json.dumps({"system_prompt": actual["prompt.md"].decode()}).encode(),
@@ -263,19 +275,14 @@ async def evaluate(operator: Path, workspace: Path, output: Path, phase: str) ->
             )
             harness = await versions.create_harness(
                 "candidate",
-                await ArenaHarnessBuilder(client, content, config).build(
-                    base, HarnessChange(patch, "research candidate")
+                await backend.harness_builder.build(
+                    harness, HarnessChange(patch, "research candidate")
                 ),
             )
-        runtime = ArenaHarnessRuntime(
-            client, content, trajectories, benchmark, config, output / "private/remote", print
-        )
-        verifier = ArenaVerifier(content)
     else:
         from areal_rsi.config import ModelConfig
         from areal_rsi.modules.harness import LocalHarnessRuntime
-        from areal_rsi.modules.runtime import DshAgentRuntime
-        from areal_rsi.modules.task_execution import TargetGateway
+        from areal_rsi.modules.task_execution import TargetGateway, create_task_runtime
 
         benchmark, verifier = math_components(
             settings["case"], settings["dataset"], settings["limit"], content
@@ -295,7 +302,7 @@ async def evaluate(operator: Path, workspace: Path, output: Path, phase: str) ->
             max_output_tokens=8192,
             timeout_seconds=600,
         )
-        agent_runtime = DshAgentRuntime(
+        agent_runtime = create_task_runtime(
             output / "private/sessions",
             content,
             trajectories,
@@ -304,6 +311,7 @@ async def evaluate(operator: Path, workspace: Path, output: Path, phase: str) ->
             timeout=600,
             max_tokens=8192,
             dsh_root=operator.parent / "task-runtime",
+            runtime_config=settings.get("task_runtime"),
         )
         runtime = LocalHarnessRuntime(agent_runtime, content, output / "private/workspaces")
     if benchmark.name != settings["benchmark"]:
@@ -316,6 +324,7 @@ async def evaluate(operator: Path, workspace: Path, output: Path, phase: str) ->
     )
     write_json(solution_file, solution, immutable=True)
     rows = []
+    grades = []
     try:
         tasks = await benchmark.list_tasks(split)
         if hasattr(runtime, "run_many"):
@@ -335,6 +344,7 @@ async def evaluate(operator: Path, workspace: Path, output: Path, phase: str) ->
             )
             if grade.status.value != "succeeded" or grade.score is None:
                 raise RuntimeError("Task verification failed: " + grade.feedback)
+            grades.append(grade)
             row = {
                 "task_id": task.task_id,
                 "score": grade.score,
@@ -348,7 +358,11 @@ async def evaluate(operator: Path, workspace: Path, output: Path, phase: str) ->
     finally:
         if gateway is not None:
             await asyncio.to_thread(gateway.close)
-    score = sum(float(r["score"]) for r in rows) / len(rows)
+    if settings["case"] == "lcb":
+        report = await backend.evaluation.evaluate(solution, split, grades)
+        score = report.score
+    else:
+        score = sum(float(r["score"]) for r in rows) / len(rows)
     result = {
         "status": "completed",
         "simulated": False,

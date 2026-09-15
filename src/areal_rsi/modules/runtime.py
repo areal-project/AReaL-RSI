@@ -182,6 +182,8 @@ class DshSession:
 
 
 class DshAgentRuntime:
+    runtime_id = "deepseek-harness@v1"
+
     def __init__(
         self,
         root: Path,

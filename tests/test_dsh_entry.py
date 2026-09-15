@@ -195,6 +195,7 @@ def test_patch_forwards_only_runtime_credential_names(
     )["config"]
     assert "FRONTEND_KEY" in mcp["env"]
     assert "RSI_TARGET_API_KEY" in mcp["env"]
+    assert "RSI_RUNTIME_CONFIG" in mcp["env"]
     assert "RSI_MODE" not in json.loads(
         mcp["env"].split("Object.fromEntries(", 1)[1].split(".flatMap", 1)[0]
     )

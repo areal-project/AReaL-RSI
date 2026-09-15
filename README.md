@@ -102,7 +102,7 @@ uv run --env-file .env --locked python run.py --type demo
 
 ## 数据与扩展
 
-`RSI_DATA_ROOT` 默认 `.rsi/research-lab`。会话、任务、报告、作业、候选及验证记录在 `runs/<run_id>/`。不读取旧固定流程的 `run-states/`，不提供旧固定计划或旧 Runtime 配置迁移。旧数据不会被删除。
+`RSI_DATA_ROOT` 默认 `.rsi/research-lab`。会话、任务、报告、作业、候选及验证记录在 `runs/<run_id>/`。不读取旧固定流程的 `run-states/`，不提供旧固定计划迁移；可配置 Task Runtime 继续支持，见 [Runtime 接入](docs/runtime-package.md)。旧数据不会被删除。
 
 新任务通过 `ResearchConfig` 提供执行命令与可信验证器，见[架构](docs/architecture.md)、[接口](docs/interfaces/README.md)和[研究设计](docs/rsi-research-design.md)。远端评测仍保留固定版本、原始回执、取消与重连逻辑。
 

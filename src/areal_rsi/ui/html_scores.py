@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from areal_rsi.ui.chart_legend import legend
 from areal_rsi.ui.visualization_catalog import discover, matches, read_object
 from areal_rsi.ui.web import RunReader
 
@@ -77,10 +78,10 @@ def chart(
             running = max(values + ([running] if running is not None else []))
             best_points.append(f"{x(step)},{y(running)}")
         svg.append(f'<polyline class="best" points="{" ".join(best_points)}"/>')
-    legend = []
+    legend_items = []
     for index, line in enumerate(series):
         color = COLORS[index % len(COLORS)]
-        legend.append(f'<span><i style="background:{color}"></i>{esc(line["name"])}</span>')
+        legend_items.append((f"{line['name']}：实测分数（圆点为单次评测）", color, "both", ""))
         previous = None
         for point in sorted(line["points"], key=lambda point: point["x"]):
             if point["y"] is None:
@@ -98,12 +99,12 @@ def chart(
                 f"<title>{esc(title)}</title></circle>"
             )
             previous = (px, py)
-    svg.append('</svg><div class="legend">' + "".join(legend))
+    svg.append("</svg>")
     if baseline is not None:
-        svg.append(f'<span class="baseline-label">— 基线 {baseline:.2%}</span>')
+        legend_items.append((f"基线：优化前得分 {baseline:.2%}", "#8a9691", "line", "8 6"))
     if best:
-        svg.append('<span class="best-label">┄ 历史最高分（按轮次）</span>')
-    return "".join(svg) + "</div>"
+        legend_items.append(("历史最高分：截至该轮已观察到的最高分", "#c59835", "line", "4 5"))
+    return "".join(svg) + legend(legend_items)
 
 
 def table(rows: list[tuple[str, float | None, str]]) -> str:

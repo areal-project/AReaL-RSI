@@ -77,6 +77,8 @@ CLI 持续输出进度；Ctrl+C 保存状态供恢复。用同一数据目录打
 
 每次研究的数据集中在 `RSI_DATA_ROOT/runs/<run_id>/`，包含需求、会话、任务、报告、共享证据、冻结候选和验证记录。等待作业、报告或用户时不调用模型；临时 API 故障自动重试。
 
+研究配置中的 `context_window_tokens` 可显式指定代理支持的上下文窗口。省略或设为 `null` 时，`gpt-6-astra` 使用 256,000 token 的运行预算，其他模型保守使用 128,000；预留输出空间后接近预算时自动压缩。会话配置记录实际使用的窗口，已有研究中显式保存的值保持有效。
+
 demo 在服务重启后自动恢复尚在执行的研究或收尾；手动暂停的研究保持暂停。完成最终复测后不能继续修改这次候选，需要新建 run。外部凭据失效或集群故障会明确报错或等待处理。
 
 系统职责和数据模型见[设计说明](docs/rsi-research-design.md)。旧固定流程和可选运行后端见 [Runtime 指南](docs/runtime-quickstart.md)。开发检查：`make check`；前端检查：`npm ci --prefix tests/frontend && npm test --prefix tests/frontend`。

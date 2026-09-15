@@ -15,9 +15,9 @@ from dataclasses import replace
 from datetime import datetime
 from typing import Any
 
-from areal_rsi.api.base import RunState
+from areal_rsi.api.base import ContentRef, RunState
 from areal_rsi.api.research import CandidateSnapshot, VerifiedResult
-from areal_rsi.base.storage import encode, now, write_json
+from areal_rsi.base.storage import decode, encode, now, write_json
 from areal_rsi.coordination.config import ResearchConfig
 from areal_rsi.coordination.coordinator import Coordinator
 from areal_rsi.coordination.verification import read_trusted_result
@@ -97,6 +97,31 @@ async def _finish(c: Coordinator, config: ResearchConfig, manager: JobManager) -
     folder.mkdir(exist_ok=True)
     jobs_path = c.store.root / "coordination/jobs.json"
     jobs: dict[str, Any] = json.loads(jobs_path.read_text()) if jobs_path.exists() else {}
+    selection_path = folder / "candidate-selection.json"
+    if not selection_path.exists():
+        withdrawn = []
+        for item in c.store.withdrawals():
+            candidate = c.store.get("candidates", item["candidate_id"], CandidateSnapshot)
+            manifest = await c.store.content.read_json(candidate.content)
+            assert isinstance(manifest, dict) and isinstance(manifest["files"], dict)
+            withdrawn.append(
+                {
+                    **item,
+                    "files": {
+                        name: decode(ContentRef, value).digest
+                        for name, value in manifest["files"].items()
+                    },
+                }
+            )
+        write_json(
+            selection_path,
+            {
+                "schema_version": 1,
+                "run_id": c.store.run_id,
+                "withdrawn_candidates": withdrawn,
+            },
+            immutable=True,
+        )
 
     async def execute(
         command: ApprovedCommand, phase: str, candidate: CandidateSnapshot | None = None
@@ -139,6 +164,8 @@ async def _finish(c: Coordinator, config: ResearchConfig, manager: JobManager) -
             )
         output.mkdir(parents=True, exist_ok=True)
         env = dict(config.execution_env)
+        if candidate is None:
+            env["RSI_CANDIDATE_SELECTION"] = str(selection_path)
         if config.metadata.get("time_limit_scope") == "exploration":
             env["RSI_EXPLORATION_FINISHED_AT"] = str(
                 c.state["finalization"]["exploration_finished_at"]
@@ -172,6 +199,11 @@ async def _finish(c: Coordinator, config: ResearchConfig, manager: JobManager) -
         return record
 
     await execute(config.finalizer, "prepare")
+    # An adapter may choose a lower-scoring eligible artifact, but cannot ignore
+    # a withdrawal and publish the same complete artifact under a new identifier.
+    content = await c.store.content.snapshot(folder / "output/candidate")
+    if any(item["content_digest"] == content.digest for item in c.store.withdrawals()):
+        raise ValueError("Finalizer returned a withdrawn candidate; honor RSI_CANDIDATE_SELECTION")
     candidate_id = "candidate-closeout"
     path = c.store.root / "candidates" / f"{candidate_id}.json"
     candidate = (

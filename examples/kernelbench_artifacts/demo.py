@@ -197,6 +197,10 @@ def prepare(
             ),
             ("workspace", "output", "task", "candidate"),
             auto_verify_output="candidate" if task else None,
+            parameter_descriptions={
+                "task": "题目标识，可选值：" + "、".join(demo["tasks"]) + "；不是文件路径。",
+                "candidate": "自包含产物文件，相对自己工作区的路径，例如 model_new.py。",
+            },
         ),
         ApprovedCommand(
             "diagnose_task",
@@ -216,6 +220,11 @@ def prepare(
                 "{candidate}",
             ),
             ("workspace", "output", "task", "script", "candidate"),
+            parameter_descriptions={
+                "task": "题目标识，可选值：" + "、".join(demo["tasks"]) + "；不是文件路径。",
+                "script": "自包含诊断脚本，相对自己工作区的文件路径。",
+                "candidate": "供诊断导入的产物文件，相对自己工作区的路径；无需产物时填空字符串。",
+            },
         ),
         ApprovedCommand(
             "collect_bundle", (*common, "collect", *fixed, "--output", "{output}"), ("output",)
@@ -308,6 +317,10 @@ def prepare(
         "execution_instructions": "evaluate_task 参数为 task/candidate；"
         "diagnose_task 为 task/script/candidate"
         "（candidate 可为空字符串），路径相对工作区。"
+        "远端只接收指定文件：evaluate_task 的 candidate 被命名为 model_new.py；"
+        "diagnose_task 的 script 被命名为 _rsi_diagnostic.py，非空 candidate 为 model_new.py，"
+        "另提供 reference.py。不会上传同目录模块或整个工作区；"
+        "组合组件后须把所需实现放入该自包含文件，诊断导入候选时使用 model_new。"
         "使用 run_job(wait=true) 等待原作业，慢或断线不要重新提交。collect_bundle 参数为 {}；"
         + (
             "evaluate_task 会自动归档本次正确产物、调用只读验证器并更新工作台，"

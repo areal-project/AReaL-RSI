@@ -340,6 +340,21 @@ class ResearchEngine:
         self.coordinator.store.event(kind, agent_id=agent_id, **data)
         self.wake()
 
+    def _model_message(self, message: ResearchMessage) -> Json:
+        """Keep a delivery's origin beside its text, including the first message."""
+        value: Json = encode(message)
+        researcher = next(
+            (
+                actor
+                for actor in self.coordinator.store.run().research_agents
+                if actor.agent_id == message.sender
+            ),
+            None,
+        )
+        if researcher is not None:
+            value["sender_direction"] = researcher.direction
+        return value
+
     def _recovery_state(self, agent_id: str) -> Json:
         c = self.coordinator
         actor = c.actor(agent_id)
@@ -362,6 +377,7 @@ class ResearchEngine:
             if run.baseline_result_ref
             else None,
             "execution_setup": c.state.get("execution_setup", "ready"),
+            "withdrawn_candidates": c.store.withdrawals(),
             "plan": c.state["plan"],
             "agent_id": agent_id,
             "current_message": {
@@ -374,6 +390,7 @@ class ResearchEngine:
             "followup_message_ids": c.state.get("turn_followups", {}).get(agent_id, []),
             "waiting_for_user": c.user_questions() if agent_id in {"rsi", "interaction"} else [],
             "direction": actor.direction,
+            "collaborators": c.collaborators(agent_id),
             "current_node": encode(current),
             # A completion notification is a new delivery, not a replacement
             # assignment. Keep the task itself available after wakeups/compaction.
@@ -383,9 +400,7 @@ class ResearchEngine:
             }
             if assignment
             else None,
-            "budget": {
-                name: c.state[name] for name in ("model_calls", "total_tokens", "verify_calls")
-            },
+            "budget": c.budget(observed_at=self.clock()),
             "directions": [
                 {
                     "agent_id": researcher.agent_id,
@@ -413,16 +428,7 @@ class ResearchEngine:
                 agent_id, RESEARCH_PROMPT
             )
             toolset = self.tools_factory(agent_id)
-            prompt = (
-                role_prompt
-                + "\n\n"
-                + toolset.instructions
-                + "\n\n以下是本次模型回合开始时的状态快照。"
-                "事实变化后，以后续工具结果和更新的会话检查点为准。"
-                "不要用这份初始快照覆盖较新的计划、方向或预算记录。"
-                + "\n\n当前 run 的系统状态：\n"
-                + json.dumps(state, ensure_ascii=False)
-            )
+            prompt = role_prompt + "\n\n" + toolset.instructions
             prompt_id = hashlib.sha256(prompt.encode()).hexdigest()
             write_json(session / "prompts" / f"{prompt_id}.json", {"prompt": prompt})
             runtime = self.interaction_runtime if agent_id == "interaction" else self.runtime
@@ -437,7 +443,7 @@ class ResearchEngine:
                     "max_output_tokens": config.max_output_tokens,
                     "max_model_calls_per_turn": config.max_model_calls_per_turn,
                     "compact_after_chars": config.compact_after_chars,
-                    "context_window_tokens": config.context_window_tokens,
+                    "context_window_tokens": config.effective_context_window_tokens,
                     "compact_keep_recent_tokens": config.compact_keep_recent_tokens,
                     "timeout": config.timeout,
                     "retry_initial_seconds": config.retry_initial_seconds,
@@ -464,14 +470,24 @@ class ResearchEngine:
                     for identifier in c.state["inboxes"].get(agent_id, [])
                     if identifier != message.message_id
                 )
-                return [encode(update) for update in updates if update.sender in allowed]
+                return [
+                    self._model_message(update) for update in updates if update.sender in allowed
+                ]
 
+            # Peer reports and progress use the same envelope whether they wake
+            # an idle actor or arrive during its turn. Literal user input stays
+            # literal; archived turns resume their original payload unchanged.
+            delivered_text = (
+                message.text
+                if message.sender == "user"
+                else json.dumps(self._model_message(message), ensure_ascii=False)
+            )
             result = await runtime.turn(
                 session,
                 system_prompt=prompt,
                 user_message=None
                 if resumed and (session / "session.json").exists()
-                else message.text,
+                else delivered_text,
                 message_id=message.message_id,
                 tools=toolset.definitions,
                 advertised_tools=toolset.advertised,

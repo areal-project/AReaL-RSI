@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -293,6 +293,18 @@ class Coordinator:
                 continue
             if actor.state in {AgentState.STOPPED, AgentState.PAUSED, AgentState.FAILED}:
                 continue
+            if (
+                actor.agent_id not in {"rsi", "interaction"}
+                and actor.agent_id not in self.state["active"]
+                and any(
+                    node.iteration_id == actor.current_iteration_id and node.report_ref is not None
+                    for node in actor.iterations
+                )
+            ):
+                # Queued peer/job facts do not authorize a new research stage.
+                # Preserve them for the next assignment. An interrupted active
+                # turn may still resume to finish its already-published report.
+                continue
             if self.state["inboxes"].get(actor.agent_id) or actor.agent_id in self.state["active"]:
                 ready.append(actor.agent_id)
         return ready
@@ -372,6 +384,17 @@ class Coordinator:
         if agent_id == "rsi" and not resumed:
             self.state.pop("rsi_explicit_wait", None)
         identifier = active or self.state["inboxes"][agent_id][0]
+        if not active and agent_id not in {"rsi", "interaction"}:
+            current = next(
+                (node for node in actor.iterations
+                 if node.iteration_id == actor.current_iteration_id), None
+            )
+            if current is not None:
+                assignment = self.store.public_record(current.assignment_ref)
+                assigned_message = effect_id("message", assignment["assignment_id"])
+                if assigned_message in self.state["inboxes"][agent_id]:
+                    # Start from the new goal before injecting retained facts.
+                    identifier = assigned_message
         self.state["active"][agent_id] = identifier
         actor.state, actor.wait_reason = AgentState.RUNNING, None
         self.save_actor(actor)
@@ -434,8 +457,45 @@ class Coordinator:
 
     def turn_update_senders(self, agent_id: str) -> set[str]:
         if agent_id == "rsi":
-            return {"user", *(actor.agent_id for actor in self.store.run().research_agents)}
-        return {"user"} if agent_id == "interaction" else {"rsi"}
+            return {
+                "user",
+                "system",
+                *(actor.agent_id for actor in self.store.run().research_agents),
+            }
+        if agent_id == "interaction":
+            return {"user"}
+        return {
+            "rsi",
+            "system",
+            *(
+                actor.agent_id
+                for actor in self.store.run().research_agents
+                if actor.agent_id != agent_id
+            ),
+        }
+
+    def collaborators(self, agent_id: str) -> list[dict[str, Any]]:
+        """Expose contact identities, without another researcher's private work."""
+        if agent_id in {"rsi", "interaction"}:
+            return []
+        contacts = []
+        for actor in self.store.run().research_agents:
+            if actor.agent_id == agent_id:
+                continue
+            node = next(
+                (n for n in actor.iterations if n.iteration_id == actor.current_iteration_id), None
+            )
+            contacts.append(
+                {
+                    "agent_id": actor.agent_id,
+                    "direction": actor.direction,
+                    "accepts_updates": self.state["status"] == "running"
+                    and actor.state in {AgentState.RUNNING, AgentState.WAITING}
+                    and node is not None
+                    and node.report_ref is None,
+                }
+            )
+        return contacts
 
     def receive_during_turn(self, agent_id: str, message_id: str) -> None:
         """Acknowledge authorized updates after the runtime has saved them."""
@@ -676,7 +736,14 @@ class Coordinator:
             and self.store.get("messages", identifier, ResearchMessage).reply_to == original
         ]
 
-    def message_researcher(self, agent_id: str, instruction: str, *, key: str) -> str:
+    def message_researcher(
+        self,
+        agent_id: str,
+        instruction: str,
+        *,
+        key: str,
+        references: tuple[RecordRef, ...] = (),
+    ) -> str:
         if agent_id in {"rsi", "interaction"} or self.state["status"] != "running":
             raise ValueError("任务补充只能发给运行中的研究方向")
         if not instruction.strip():
@@ -703,11 +770,14 @@ class Coordinator:
         ):
             raise ValueError("当前没有未完成的任务；收到报告后请用 assign 下发下一项任务")
         assignment = self.store.public_record(node.assignment_ref)
+        for ref in references:
+            self.link_reference(agent_id, ref)
         return self.enqueue(
             "rsi",
             agent_id,
             instruction,
             key=key,
+            references=references,
             reply_to=effect_id("message", assignment["assignment_id"]),
         )
 
@@ -887,14 +957,20 @@ class Coordinator:
         self.save()
         self.store.event("run_stopped", reason=reason)
 
-    def summary(self) -> dict[str, Any]:
-        run = self.store.run()
+    def budget(self, *, observed_at: float | None = None) -> dict[str, Any]:
+        observed = (
+            datetime.fromtimestamp(observed_at, UTC)
+            if observed_at is not None
+            else datetime.fromisoformat(now())
+        )
         started = self.state.get("started_at")
+        finished = self.store.run().finished_at
+        limit = self.store.brief().limits.max_wall_seconds
         elapsed = (
             max(
                 0.0,
                 (
-                    datetime.fromisoformat(run.finished_at or now())
+                    (datetime.fromisoformat(finished) if finished else observed)
                     - datetime.fromisoformat(started)
                 ).total_seconds(),
             )
@@ -902,32 +978,39 @@ class Coordinator:
             else 0.0
         )
         return {
+            **{name: self.state[name] for name in ("model_calls", "total_tokens", "verify_calls")},
+            "reserved_tokens": sum(
+                record.get("reserved_tokens", 0)
+                for record in self.state.get("model_requests", {}).values()
+            ),
+            "observed_at": observed.isoformat(),
+            "elapsed_seconds": elapsed,
+            "remaining_wall_seconds": max(0.0, limit - elapsed) if limit is not None else None,
+            "deadline_at": (datetime.fromisoformat(started) + timedelta(seconds=limit)).isoformat()
+            if started and limit is not None
+            else None,
+            "api_attempts": sum(
+                record.get("api_attempts", 1)
+                for record in self.state.get("model_requests", {}).values()
+            ),
+        }
+
+    def summary(self) -> dict[str, Any]:
+        run = self.store.run()
+        return {
             "run_id": run.run_id,
             "status": self.state["status"],
             "brief": encode(self.store.brief()),
             "plan": self.state["plan"],
             "execution_blocker": self.execution_blocker(),
+            "withdrawn_candidates": self.store.withdrawals(),
             "agents": encode(self.actors()),
             "simulated": self.state["simulated"],
             "best": self.store.public_record(run.best_result_ref) if run.best_result_ref else None,
             "baseline": self.store.public_record(run.baseline_result_ref)
             if run.baseline_result_ref
             else None,
-            "budget": {
-                **{
-                    name: self.state[name]
-                    for name in ("model_calls", "total_tokens", "verify_calls")
-                },
-                "reserved_tokens": sum(
-                    record.get("reserved_tokens", 0)
-                    for record in self.state.get("model_requests", {}).values()
-                ),
-                "elapsed_seconds": elapsed,
-                "api_attempts": sum(
-                    record.get("api_attempts", 1)
-                    for record in self.state.get("model_requests", {}).values()
-                ),
-            },
+            "budget": self.budget(),
             "waiting_for_user": self.user_questions(),
             "pending_report_replies": self.pending_report_replies(),
             "budget_stop_reason": self.state.get("budget_stop_reason"),

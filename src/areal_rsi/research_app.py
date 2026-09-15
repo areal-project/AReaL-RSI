@@ -493,6 +493,14 @@ class ResearchApp:
 
         async def poll() -> bool:
             current = self.active[c.store.run_id].config
+            if (
+                current.finalizer
+                and c.state["status"] == "paused"
+                and c.state.get("budget_stop_reason") == "Run wall-time budget exhausted"
+            ):
+                # The engine pauses at a hard budget. A configured closeout must
+                # still run without a user having to turn that pause into a stop.
+                c.stop("探索时间已到，停止研究并自动验证和归档已有产物")
             limit = current.brief.limits.max_wall_seconds
             reserve = current.metadata.get("finalization_reserve_seconds", 0)
             started = c.state.get("started_at")

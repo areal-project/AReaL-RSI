@@ -57,7 +57,7 @@ class ResearchConfig:
     api_key_env: str = "RSI_API_KEY"
     credential_file: str | None = None
     max_output_tokens: int = 16384
-    context_window_tokens: int = 128_000
+    context_window_tokens: int | None = None
     compact_keep_recent_tokens: int = 8_000
     max_model_calls_per_turn: int | None = None
     retry_initial_seconds: float = 2

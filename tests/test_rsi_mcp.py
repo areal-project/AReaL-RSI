@@ -26,6 +26,7 @@ class FixtureController(ExperimentController):
     """只用于协议进程的离线替身，不加载 App，也不调用任何模型。"""
 
     def __init__(self, root: Path):
+        self.root = root
         self.fixture_root = root
         self.fixture_plans: set[str] = set()
         self.child: subprocess.Popen[bytes] | None = None
@@ -161,8 +162,14 @@ class RsiMcpTest(unittest.IsolatedAsyncioTestCase):
         async with self.client() as session:
             tools = {tool.name: tool for tool in (await session.list_tools()).tools}
             self.assertEqual(
-                set(tools), {"rsi_plan", "rsi_start", "rsi_status", "rsi_stop", "rsi_resume"}
+                set(tools),
+                {"rsi_plan", "rsi_start", "rsi_status", "rsi_stop", "rsi_resume", "rsi_visualize"},
             )
+            visualization = await session.call_tool("rsi_visualize", {})
+            self.assertFalse(visualization.is_error)
+            self.assertIsInstance(visualization.content[0], TextContent)
+            assert isinstance(visualization.content[0], TextContent)
+            self.assertIn("没有实验记录", visualization.content[0].text)
             for name in ("rsi_start", "rsi_resume"):
                 self.assertIn("confirmed", tools[name].input_schema["required"])
                 self.assertEqual(

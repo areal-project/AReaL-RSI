@@ -14,6 +14,7 @@ from pydantic import Field, StrictBool
 
 from areal_rsi.config import ModelConfigurationError
 from areal_rsi.ui.experiments import ExperimentController
+from areal_rsi.ui.terminal_scores import visualize_scores
 from areal_rsi.ui.workspace import ExperimentWorkspace
 
 Goal = Annotated[str, Field(strict=True, min_length=1, max_length=4000)]
@@ -139,6 +140,7 @@ def create_server(controller: ExperimentController | ExperimentWorkspace) -> MCP
             "先用 rsi_plan 生成固定配置的实验计划并展示给用户。"
             "只有用户确认该计划后才能以 confirmed=true 调用 rsi_start；"
             "恢复实验同样需要用户确认。rsi_status 返回聚合状态，实验在后台独立运行。"
+            "用户要求画图、可视化或刷新跑分时调用 rsi_visualize，原样展示返回的终端图表。"
         ),
         log_level="WARNING",
     )
@@ -193,6 +195,23 @@ def create_server(controller: ExperimentController | ExperimentWorkspace) -> MCP
     async def rsi_status(run_id: Identifier | None = None) -> str:
         """查看指定实验或最近实验的有界聚合状态，不提供完整轨迹或隐藏评测明细。"""
         return await _invoke(lambda: controller.status(run_id))
+
+    @server.tool(
+        structured_output=False,
+        annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
+    )
+    async def rsi_visualize(run_id: Identifier | None = None) -> str:
+        """在 TUI 对话中画出 Task Agent Benchmark 跑分、历史最高分和父版本增减。
+
+        直接展示返回的文本图表，不需要用户启动 Web 服务。优先传入对话中的当前 run_id；
+        无上下文时省略以查看最近实验。刷新时再次调用；不启动评测、不改变实验。
+        """
+        try:
+            return visualize_scores(controller.root, run_id)
+        except FileNotFoundError:
+            raise ToolError("找不到实验，请用 rsi_status 查看可用的 run_id。") from None
+        except Exception:
+            raise ToolError("无法读取跑分，请检查本地实验记录。") from None
 
     @server.tool(
         structured_output=False,

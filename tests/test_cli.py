@@ -1,35 +1,25 @@
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
-from pathlib import Path
 
 
-def test_missing_model_configuration_has_actionable_error(tmp_path: Path) -> None:
-    env = {key: value for key, value in os.environ.items() if not key.startswith("RSI_")}
-    env["RSI_DATA_ROOT"] = str(tmp_path / "run")
+def test_all_entry_points_use_research_commands() -> None:
     result = subprocess.run(
-        [sys.executable, "-m", "areal_rsi", "tui"],
-        env=env,
-        cwd=tmp_path,
-        text=True,
-        capture_output=True,
-        timeout=10,
+        [sys.executable, "-m", "areal_rsi", "--help"], text=True, capture_output=True, check=True
     )
-    assert result.returncode == 2
-    assert "RSI_TEACHER_MODEL" in result.stderr
-    assert "--env-file .env" in result.stderr
-    assert "Traceback" not in result.stderr
+    assert "{tui,workbench,research,prepare}" in result.stdout
+    for removed in ("local-app", "_experiment-worker", "--plan"):
+        assert removed not in result.stdout
 
 
-def test_tui_entry_is_not_bound_to_an_experiment() -> None:
+def test_tui_can_select_a_research_config_or_existing_run() -> None:
     result = subprocess.run(
         [sys.executable, "-m", "areal_rsi", "tui", "--help"],
         text=True,
         capture_output=True,
         check=True,
     )
-    assert "--mode" not in result.stdout
-    assert "--config" not in result.stdout
+    assert "--config" in result.stdout
     assert "--resume" in result.stdout
+    assert "--mode" not in result.stdout

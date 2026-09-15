@@ -49,8 +49,7 @@ def test_dataset_supports_both_splits_and_tracks_content_identity(tmp_path: Path
     (tmp_path / "model-001/TARGET.md").write_text("New target")
     assert adapter.ThreeModelBenchmark(tmp_path).name != dataset.name
     runner = importlib.import_module("examples.3d_bench.run_local")
-    assert runner.ThreeModelBenchmark is adapter.ThreeModelBenchmark
-    assert runner.ThreeModelVerifier is adapter.ThreeModelVerifier
+    assert callable(runner.FileTaskRuntime)
 
 
 @pytest.fixture

@@ -1,8 +1,0 @@
-{
-  "default": {
-    "kind": "claude-code",
-    "config": {
-      "permissionMode": "dontAsk"
-    }
-  }
-}

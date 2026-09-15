@@ -68,6 +68,7 @@ class ResearchEngine:
         *,
         max_concurrent_turns: int | None = None,
         tick_hook: TickHook | None = None,
+        on_wall_time_exhausted: Callable[[], None] | None = None,
         poll_interval: float = 0.1,
         clock: Callable[[], float] = time.time,
     ):
@@ -85,6 +86,7 @@ class ResearchEngine:
         if self.max_concurrent_turns < 1 or poll_interval <= 0:
             raise ValueError("Concurrency and polling interval must be positive")
         self.tick_hook, self.poll_interval, self.clock = tick_hook, poll_interval, clock
+        self.on_wall_time_exhausted = on_wall_time_exhausted
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._lock_file: IO[str] | None = None
         self._tick_lock = asyncio.Lock()
@@ -185,7 +187,10 @@ class ResearchEngine:
         self.coordinator.state["budget_stop_reason"] = reason
         self.coordinator.save()
         if self.coordinator.state["status"] == "running":
-            self.coordinator.pause()
+            if reason == "Run wall-time budget exhausted" and self.on_wall_time_exhausted:
+                self.on_wall_time_exhausted()
+            else:
+                self.coordinator.pause()
         self.coordinator.store.event("budget_exhausted", reason=reason)
         self.wake()
 
@@ -555,11 +560,11 @@ class ResearchEngine:
         """Poll jobs, apply controls and dispatch ready actors without awaiting their turns."""
         async with self._tick_lock:
             self._acquire()
+            if self.tick_hook is not None:
+                self._jobs_pending = bool(await self.tick_hook())
             reason = self._wall_reason()
             if reason is not None:
                 self._pause_for_budget(reason)
-            if self.tick_hook is not None:
-                self._jobs_pending = bool(await self.tick_hook())
             status = self.coordinator.state["status"]
             cancelled = []
             for agent_id, task in self._tasks.items():

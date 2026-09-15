@@ -1,0 +1,96 @@
+{
+  "gsm8k": {
+    "before": {
+      "run_id": "run_61b7adde2a374f37",
+      "status": "succeeded",
+      "validation_score": 1.0
+    },
+    "after": {
+      "run_id": "research_72d188f4981d4f3d",
+      "status": "succeeded",
+      "model_calls": 20,
+      "reports": 1,
+      "changed_candidates": [
+        "candidate_7295513fd659464ff73bbdb8"
+      ],
+      "final_candidate": "candidate_7295513fd659464ff73bbdb8",
+      "final_score": 1.0,
+      "tasks": {
+        "final": [
+          "gsm8k_train_1444",
+          "gsm8k_train_2869"
+        ],
+        "search": [
+          "gsm8k_train_1444",
+          "gsm8k_train_2869"
+        ],
+        "train": [
+          "gsm8k_train_1336",
+          "gsm8k_train_3992"
+        ]
+      },
+      "remote_jobs": [],
+      "verification_count": 3
+    },
+    "same_task_sets": true
+  },
+  "lcb": {
+    "before": {
+      "run_id": "run_274fc6acb1604f4c",
+      "status": "succeeded",
+      "validation_score": 1.0
+    },
+    "after": {
+      "run_id": "research_6ccc9b7e9681467d",
+      "status": "succeeded",
+      "model_calls": 25,
+      "reports": 1,
+      "changed_candidates": [
+        "candidate_04895fcd84f877b32f650840"
+      ],
+      "final_candidate": "candidate_04895fcd84f877b32f650840",
+      "final_score": 1.0,
+      "tasks": {
+        "train": [
+          "rsi-lcb-claude-code-lcb-2727"
+        ],
+        "search": [
+          "rsi-lcb-claude-code-lcb-2777"
+        ],
+        "final": [
+          "rsi-lcb-claude-code-lcb-2777"
+        ]
+      },
+      "remote_jobs": [
+        "rsi-lcb-remote-a606a3c87af2-2609150714",
+        "rsi-lcb-remote-77d15f287b2f-2609150712",
+        "rsi-lcb-remote-83391dbe4fa2-2609150718",
+        "rsi-lcb-remote-d22aa0b1dda4-2609150716"
+      ],
+      "verification_count": 3
+    },
+    "same_task_sets": true
+  },
+  "remote_confirmation": [
+    {
+      "job_id": "rsi-lcb-remote-a606a3c87af2-2609150714",
+      "score": 1,
+      "status": "DONE"
+    },
+    {
+      "job_id": "rsi-lcb-remote-77d15f287b2f-2609150712",
+      "score": 1,
+      "status": "DONE"
+    },
+    {
+      "job_id": "rsi-lcb-remote-83391dbe4fa2-2609150718",
+      "score": 1,
+      "status": "DONE"
+    },
+    {
+      "job_id": "rsi-lcb-remote-d22aa0b1dda4-2609150716",
+      "score": 1,
+      "status": "DONE"
+    }
+  ]
+}

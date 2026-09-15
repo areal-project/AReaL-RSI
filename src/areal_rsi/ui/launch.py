@@ -51,7 +51,7 @@ class WorkbenchClient:
             if "csrf_token" in value and "models" in value:
                 raise ValueError("此端口是旧版 RSI 工作台，请先用当前代码重启服务再运行 demo")
             raise ValueError("端口已被其他服务占用")
-        if value.get("api_version") != 1:
+        if value.get("api_version") != 2:
             raise ValueError("RSI 工作台 API 版本不兼容，请重启为当前版本")
         self.token = value["csrf_token"]
         return value

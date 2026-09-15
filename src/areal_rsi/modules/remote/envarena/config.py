@@ -8,8 +8,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from areal_rsi.experiment_config import read_config
+import yaml  # type: ignore[import-untyped]
+
 from areal_rsi.modules.remote.envarena.client import ArenaClient, reference
+
+
+def read_config(path: Path) -> dict[str, Any]:
+    value = yaml.safe_load(path.read_text())
+    if not isinstance(value, dict):
+        raise ValueError("Arena config must be a YAML object")
+    return value
+
 
 EDITABLE = frozenset({"system_prompt", "skills", "tools", "mcp"})
 DEFAULT_ARTIFACT_GLOBS = ("*.py", "*.js", "response.txt", "runner_result.json")

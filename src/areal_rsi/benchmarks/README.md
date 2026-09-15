@@ -2,7 +2,7 @@
 
 这个目录负责发现和装配 AReaL-RSI 支持的 Benchmark。Benchmark 定义评测内容、
 数据来源、Verifier 和 Evaluation；它不决定实验优化 Harness、Model 还是 Artifact，
-优化对象由 RSI Agent 生成的 `ExperimentPlan.target` 决定。
+优化范围由 `ResearchConfig.brief` 和冻结的执行配置决定。
 
 ## 目录结构
 
@@ -35,7 +35,7 @@ Manifest 中的 `id` 是稳定的 Benchmark 类型，例如 `gsm8k`。Bundle 的
 3. 在 `config/supported_benchmarks.yaml` 注册公开描述、数据 Provider 和参数。
 4. 为数据隔离、实例身份、正常及异常验证结果添加离线测试。
 
-不要在 `LocalApp` 中增加 Benchmark 名称分支。Manifest 只能引用程序注册的可信 Adapter，
+研究核心不应包含 Benchmark 名称分支。Manifest 只能引用程序注册的可信 Adapter，
 不能包含任意 Python 导入路径、Shell 命令、凭证或隐藏答案。TRAIN/VALIDATE 的公开 Task
 不得包含 expected；Verifier 所需的私有数据只能由宿主程序读取。
 

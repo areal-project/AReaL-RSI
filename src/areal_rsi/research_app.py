@@ -496,21 +496,22 @@ class ResearchApp:
             limit = current.brief.limits.max_wall_seconds
             reserve = current.metadata.get("finalization_reserve_seconds", 0)
             started = c.state.get("started_at")
-            if (
-                current.finalizer
-                and limit
-                and reserve
-                and current.metadata.get("time_limit_scope", "total") == "total"
-                and started
-                and c.state["status"] == "running"
-            ):
+            if current.finalizer and limit and started and c.state["status"] == "running":
                 elapsed = datetime.now().timestamp() - datetime.fromisoformat(started).timestamp()
-                if elapsed >= limit - reserve:
-                    c.stop("已到探索时间上限，预留剩余时间自动复测最佳版本")
+                exploration_only = current.metadata.get("time_limit_scope") == "exploration"
+                if elapsed >= (limit if exploration_only else limit - reserve):
+                    c.stop("已到探索时间上限，开始自动复测最佳版本")
             if c.state["status"] == "stopped":
                 execution.close(cancel=True)
                 return False
             return await execution.poll()
+
+        def wall_time_exhausted() -> None:
+            # Intake may import a finalizer after this engine was attached.
+            if self.active[c.store.run_id].config.finalizer:
+                c.stop("探索时间已用尽，开始最终复测")
+            else:
+                c.pause()
 
         engine = ResearchEngine(
             c,
@@ -522,6 +523,7 @@ class ResearchApp:
                 actions.definitions(agent_id),
             ),
             tick_hook=poll,
+            on_wall_time_exhausted=wall_time_exhausted,
         )
 
         async def serve() -> None:
@@ -722,7 +724,6 @@ class ResearchApp:
                 manager.close(preserve_running=False)
                 destination = self.root / ".deleting" / new_id("research")
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                c.store.paths.legacy_state.unlink(missing_ok=True)
                 c.store.root.rename(destination)
             await asyncio.to_thread(shutil.rmtree, destination)
         return {"run_id": c.store.run_id, "status": "deleted"}
@@ -761,7 +762,7 @@ class ResearchApp:
             config = self.default_config or ResearchConfig(TaskBrief("新的研究", ""))
             return {
                 "service": "areal-rsi",
-                "api_version": 1,
+                "api_version": 2,
                 "capabilities": ["configured-runs", "automatic-finalization"],
                 "data_root": str(self.root),
                 "default_model_settings": {

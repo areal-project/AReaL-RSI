@@ -218,3 +218,22 @@ class EngineTest(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_wall_budget_can_transition_to_finalization_instead_of_pausing(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        c = Coordinator.create(
+            tmp_path, TaskBrief("finish on timeout", "", ResearchLimits(max_wall_seconds=1))
+        )
+        c.start()
+        engine = ResearchEngine(
+            c,
+            ResponsesRuntime(ResponsesConfig(api_key="fixture", base_url="https://example.test")),
+            lambda _: ToolSet([], None),  # type: ignore[arg-type]
+            on_wall_time_exhausted=lambda: c.stop("finalize"),
+        )
+        engine._pause_for_budget("Run wall-time budget exhausted")
+        assert c.state["status"] == "stopped"
+        await engine.close()
+
+    asyncio.run(scenario())

@@ -1,5 +1,5 @@
-"""Public RSI interfaces."""
+"""Research records and task execution interfaces."""
 
-from areal_rsi.api import base, modules, workflow
+from areal_rsi.api import base, modules, research
 
-__all__ = ["base", "modules", "workflow"]
+__all__ = ["base", "modules", "research"]

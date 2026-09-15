@@ -8,7 +8,6 @@ from inspect import signature
 
 from areal_rsi.api import base as base_api
 from areal_rsi.api import modules as modules_api
-from areal_rsi.api import workflow as workflow_api
 from areal_rsi.api.base import (
     TRAJECTORY_BUNDLE_MEDIA_TYPE,
     AgentSpec,
@@ -44,10 +43,7 @@ from areal_rsi.api.base import (
 from areal_rsi.api.modules import (
     AgentRuntime,
     AgentSession,
-    ArtifactBuilder,
     Benchmark,
-    HarnessRuntime,
-    TrainingBackend,
     TrajectoryNormalizer,
     TrajectorySource,
     TrajectoryStore,
@@ -55,7 +51,6 @@ from areal_rsi.api.modules import (
     Verifier,
     VerifierFactory,
 )
-from areal_rsi.api.workflow import ResearchAgent, RsiAgent, WorkflowContext
 
 
 class InterfaceDesignTest(unittest.TestCase):
@@ -136,21 +131,6 @@ class InterfaceDesignTest(unittest.TestCase):
         self.assertNotIn("current_solution_id", agent_state_fields)
         self.assertNotIn("best_solution_id", agent_state_fields)
 
-    def test_research_agent_uses_direct_inputs_and_history_selection(self) -> None:
-        self.assertFalse(hasattr(base_api, "ResearchInput"))
-        self.assertFalse(hasattr(base_api, "SelectionInput"))
-        self.assertFalse(hasattr(base_api, "Selection"))
-        self.assertFalse(hasattr(base_api, "ResearchAction"))
-        self.assertIn("propose", ResearchAgent.__dict__)
-        self.assertIn("select", ResearchAgent.__dict__)
-        self.assertEqual(
-            list(signature(ResearchAgent.propose).parameters),
-            ["self", "goal", "target", "current", "report", "evidence"],
-        )
-        self.assertEqual(
-            list(signature(ResearchAgent.select).parameters),
-            ["self", "current_solution_id", "candidates"],
-        )
 
     def test_evaluation_report_contains_aggregates_only(self) -> None:
         field_names = {item.name for item in fields(EvaluationReport)}
@@ -168,16 +148,6 @@ class InterfaceDesignTest(unittest.TestCase):
         self.assertNotIn("attachments", field_names)
         self.assertIn("content", field_names)
 
-    def test_public_dataclasses_are_not_frozen(self) -> None:
-        version = self._harness()
-
-        self.assertNotIn("metadata", {item.name for item in fields(HarnessVersion)})
-        version.name = "changed"
-        self.assertEqual(version.name, "changed")
-        for module in (base_api, workflow_api):
-            for value in vars(module).values():
-                if isinstance(value, type) and "__dataclass_params__" in vars(value):
-                    self.assertFalse(vars(value)["__dataclass_params__"].frozen)
 
     def test_trajectory_bundle_has_a_standard_contract(self) -> None:
         self.assertEqual(
@@ -231,11 +201,6 @@ class InterfaceDesignTest(unittest.TestCase):
         self.assertIn("send", AgentSession.__dict__)
         self.assertIn("finish", AgentSession.__dict__)
 
-    def test_task_runtime_and_builders_are_abstract(self) -> None:
-        self.assertEqual({"run"} & HarnessRuntime.__dict__.keys(), {"run"})
-        self.assertIn("train", TrainingBackend.__dict__)
-        self.assertIn("build", ArtifactBuilder.__dict__)
-        self.assertIn("prune", RsiAgent.__dict__)
 
     def test_verifier_receives_one_structured_request(self) -> None:
         result = TaskResult(
@@ -262,18 +227,7 @@ class InterfaceDesignTest(unittest.TestCase):
         self.assertIn("create", VerifierFactory.__dict__)
         self.assertEqual(VerificationStatus.SUCCEEDED, "succeeded")
 
-    def test_rsi_chat_and_workflow_have_no_wrapper_results(self) -> None:
-        self.assertFalse(hasattr(base_api, "ConversationInput"))
-        self.assertFalse(hasattr(base_api, "ConversationOutput"))
-        self.assertFalse(hasattr(workflow_api, "WorkflowResult"))
-        self.assertEqual(list(signature(RsiAgent.chat).parameters), ["self", "message"])
 
-    def test_only_the_selected_evolution_backend_is_required(self) -> None:
-        context_fields = {item.name: item for item in fields(WorkflowContext)}
-
-        self.assertIsNone(context_fields["harness_builder"].default)
-        self.assertIsNone(context_fields["training_backend"].default)
-        self.assertIsNone(context_fields["artifact_builder"].default)
 
     @staticmethod
     def _plan(*, research_agent_count: int) -> ExperimentPlan:

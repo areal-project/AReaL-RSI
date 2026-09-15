@@ -140,3 +140,26 @@ def test_conversation_can_bind_real_cpu_execution_without_template_or_baseline(
             await app.close()
 
     asyncio.run(scenario())
+
+
+def test_time_limit_uses_finalizer_imported_after_engine_attachment(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        app = app_at(tmp_path)
+        draft = await app.create({})
+        c = app.coordinator(draft["run_id"])
+        active = await app.attach(c)
+        # A conversation starts before trusted execution configuration is imported.
+        assert active.config.finalizer is None
+        active.config.finalizer = ApprovedCommand(
+            "finish", ("/usr/bin/true", "{output}"), ("output",)
+        )
+        c.state["intake"]["status"] = "ready"
+        c.save()
+        c.start()
+        active.engine._pause_for_budget("Run wall-time budget exhausted")
+        assert c.state["status"] == "stopped"
+        # Do not launch the fixture's finalizer; this test checks the intake boundary.
+        active.config.finalizer = None
+        await app.close()
+
+    asyncio.run(scenario())

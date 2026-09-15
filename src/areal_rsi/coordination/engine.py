@@ -25,6 +25,7 @@ from areal_rsi.agents.rsi.prompt import PROMPT as RSI_PROMPT
 from areal_rsi.api.base import AgentState
 from areal_rsi.api.research import ResearchMessage
 from areal_rsi.base.storage import encode, now, write_json
+from areal_rsi.coordination.agent_config import research_prompt, run_method
 from areal_rsi.coordination.coordinator import Coordinator
 from areal_rsi.modules.responses import ResponsesError, ResponsesRuntime, ToolHandler
 
@@ -412,6 +413,9 @@ class ResearchEngine:
             role_prompt = {"rsi": RSI_PROMPT, "interaction": INTERACTION_PROMPT}.get(
                 agent_id, RESEARCH_PROMPT
             )
+            if agent_id != "interaction":
+                role = "rsi" if agent_id == "rsi" else "research"
+                role_prompt = research_prompt(role_prompt, run_method(c.store.root, role))
             toolset = self.tools_factory(agent_id)
             prompt = (
                 role_prompt

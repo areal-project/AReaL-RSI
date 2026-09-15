@@ -274,6 +274,15 @@ class ResearchIntake:
 
     def import_config(self, config: ResearchConfig, description: str) -> None:
         current = self.config()
+        for role in ("research", "rsi"):
+            incoming_agent = getattr(config.agents, role)
+            current_agent = getattr(current.agents, role)
+            if incoming_agent is None:
+                setattr(config.agents, role, current_agent)
+            elif self.c.state["status"] != "planned" and incoming_agent != current_agent:
+                raise ValueError(
+                    f"Agent {role} cannot change after research starts; create a new run"
+                )
         incoming = config.brief
         if current.brief.limits.gpu_ids and current.brief.limits.gpu_ids != incoming.limits.gpu_ids:
             raise ValueError("导入配置的 GPU 与已约定资源不同，请先与用户确认")
@@ -470,8 +479,8 @@ class ResearchIntake:
                 path = Path(args["path"]).expanduser()
                 if not path.is_absolute():
                     raise ValueError("执行配置必须使用绝对路径")
-                reject_credentials(json.loads(path.read_text()))
                 config = load_config(path)
+                reject_credentials(config.public())
                 self.import_config(config, "已接入执行配置：" + str(path))
                 return ToolResult(self.setup())
             if call.name == "prepare_adapter":

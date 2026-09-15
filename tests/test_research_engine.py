@@ -12,6 +12,10 @@ from typing import Any
 
 from areal_rsi.api.base import AgentState
 from areal_rsi.api.research import ResearchLimits, ResearchReport, TaskBrief
+from areal_rsi.base.storage import write_json
+from areal_rsi.coordination.actions import ResearchActions
+from areal_rsi.coordination.agent_config import AgentConfig, AgentOverrides
+from areal_rsi.coordination.config import ResearchConfig, load_config
 from areal_rsi.coordination.coordinator import Coordinator
 from areal_rsi.coordination.engine import ResearchEngine, ToolSet
 from areal_rsi.modules.responses import (
@@ -74,6 +78,135 @@ class RoutedTransport:
 
 
 class EngineTest(unittest.IsolatedAsyncioTestCase):
+    async def test_yaml_overrides_both_roles_and_reads_isolated_skills_after_recovery(self) -> None:
+        c = self.coordinator()
+        for role in ("rsi", "research"):
+            folder = self.root / role
+            (folder / "skills").mkdir(parents=True)
+            (folder / "prompt.md").write_text(f"CUSTOM_{role}_PROMPT")
+            (folder / "skills/SKILL.md").write_text(f"PRIVATE_{role}_SKILL")
+        source = self.root / "experiment.yaml"
+        source.write_text(
+            "brief:\n  objective: Inspect\n  instructions: Report\nagents:\n"
+            "  research:\n    prompt: research/prompt.md\n    skills: research/skills\n"
+            "  rsi:\n    prompt: rsi/prompt.md\n    skills: rsi/skills\n"
+        )
+        config = load_config(source)
+        write_json(c.store.root / "coordination/config.json", config.public())
+        researcher = c.spawn(
+            key="both",
+            direction="Check",
+            instruction="Inspect evidence",
+            completion_criteria="Report findings",
+        )["agent_id"]
+        actions = ResearchActions(c)
+
+        async def respond(agent_id: str, index: int, payload: Json) -> Json:
+            role = "rsi" if agent_id == "rsi" else "research"
+            other = "research" if role == "rsi" else "rsi"
+            self.assertIn(f"CUSTOM_{role}_PROMPT", payload["instructions"])
+            self.assertNotIn(f"CUSTOM_{other}_PROMPT", payload["instructions"])
+            self.assertNotIn("你负责 RSI 指派的研究任务", payload["instructions"])
+            if index == 0:
+                return packet(
+                    {
+                        **call("read_agent_skill", f"{role}_skill"),
+                        "arguments": '{"path":"SKILL.md"}',
+                    }
+                )
+            history = json.dumps(payload["input"], ensure_ascii=False)
+            self.assertIn(f"PRIVATE_{role}_SKILL", history)
+            self.assertNotIn(f"PRIVATE_{other}_SKILL", history)
+            if role == "rsi":
+                return packet(
+                    {
+                        **call("wait", f"rsi_wait_{index}"),
+                        "arguments": '{"reason":"Await findings"}',
+                    }
+                )
+            return packet(
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "phase": "final_answer",
+                    "content": [
+                        {"type": "output_text", "text": "Checked evidence; ready for followup."}
+                    ],
+                }
+            )
+
+        def tools(agent_id: str) -> ToolSet:
+            return ToolSet(actions.definitions(agent_id), actions.handler(agent_id))
+
+        transport = RoutedTransport(respond)
+        engine = ResearchEngine(c, ResponsesRuntime(self.config, transport), tools)
+        await engine.run_until_idle(timeout=3)
+        sessions = {a: c.actor(a).session_id for a in ("rsi", researcher)}
+        for role in ("rsi", "research"):
+            (self.root / role / "prompt.md").unlink()
+            (self.root / role / "skills/SKILL.md").write_text("CHANGED SOURCE")
+        c.assign(
+            key="again",
+            agent_id=researcher,
+            instruction="Check again",
+            completion_criteria="Report",
+        )
+        engine = ResearchEngine(c, ResponsesRuntime(self.config, transport), tools)
+        await engine.run_until_idle(timeout=3)
+        for agent_id, session_id in sessions.items():
+            self.assertEqual(c.actor(agent_id).session_id, session_id)
+            self.assertGreaterEqual(transport.counts[agent_id], 3)
+        for agent_id, role in (("rsi", "rsi"), (researcher, "research")):
+            result = await actions.handler(agent_id)(
+                ToolCall("read_agent_skill", {"path": "SKILL.md"}, "after_recovery")
+            )
+            self.assertEqual(result.output["text"], f"PRIVATE_{role}_SKILL")
+
+    async def test_custom_role_prompt_replaces_only_research_and_survives_followup(self) -> None:
+        c = self.coordinator()
+        source = self.root / "custom.md"
+        source.write_text("UNIQUE CUSTOM RESEARCH ROLE")
+        method = AgentConfig(prompt=str(source))
+        method.freeze()
+        config = ResearchConfig(c.store.brief(), agents=AgentOverrides(research=method))
+        write_json(c.store.root / "coordination/config.json", config.public())
+        researcher = c.spawn(
+            key="custom",
+            direction="Check",
+            instruction="Inspect evidence",
+            completion_criteria="Report findings",
+        )["agent_id"]
+
+        async def respond(agent_id: str, index: int, payload: Json) -> Json:
+            prompt = payload["instructions"]
+            if agent_id == researcher:
+                self.assertIn("UNIQUE CUSTOM RESEARCH ROLE", prompt)
+                self.assertNotIn("你负责 RSI 指派的研究任务", prompt)
+                return packet(call("report", f"report_{index}"))
+            self.assertNotIn("UNIQUE CUSTOM RESEARCH ROLE", prompt)
+            return packet(call("wait", f"wait_{index}"))
+
+        transport = RoutedTransport(respond)
+        engine = ResearchEngine(
+            c, ResponsesRuntime(self.config, transport), lambda a: self.tools(c, a)
+        )
+        await engine.run_until_idle(timeout=3)
+        session_id = c.actor(researcher).session_id
+        source.unlink()
+        c.assign(
+            key="followup",
+            agent_id=researcher,
+            instruction="Check more evidence",
+            completion_criteria="Report",
+        )
+        # Reattach an engine as on recovery; source no longer exists.
+        engine = ResearchEngine(
+            c, ResponsesRuntime(self.config, transport), lambda a: self.tools(c, a)
+        )
+        await engine.run_until_idle(timeout=3)
+        self.assertEqual(c.actor(researcher).session_id, session_id)
+        self.assertEqual(transport.counts[researcher], 2)
+
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

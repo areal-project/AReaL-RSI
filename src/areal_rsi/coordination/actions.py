@@ -105,6 +105,11 @@ COMMON = [
 ]
 RSI = [
     definition(
+        "read_agent_skill",
+        "读取本次实验为当前角色冻结的 skill 或引用文件，不读取其他角色或候选工作区。",
+        path=STRING,
+    ),
+    definition(
         "retry_researcher",
         "检查失败原因后恢复研究员的原任务与会话，不新建节点。",
         agent_id=STRING,
@@ -172,12 +177,17 @@ RSI = [
 ]
 RESEARCH = [
     definition(
+        "read_agent_skill",
+        "读取本次实验为当前角色冻结的 skill 或引用文件，不读取其他角色或候选工作区。",
+        path=STRING,
+    ),
+    definition(
         "submit_report",
         "上报阶段结论或需要 RSI 决策的问题，结束本轮并等待回复；研究方向可以尚未完成。"
         "也可以直接给出最终回复，系统会自动归档为报告。",
         message=STRING,
         references=REFERENCES,
-    )
+    ),
 ]
 INTERACTION = [
     definition(
@@ -216,9 +226,14 @@ class ResearchActions:
         self.extras[tool["name"]] = tool, factory, roles
 
     def definitions(self, agent_id: str, *, include_hidden: bool = False) -> list[dict[str, Any]]:
+        from areal_rsi.coordination.agent_config import run_method
+
         role = self.role(agent_id)
         common = COMMON if role != "interaction" else COMMON[:3]
         hidden = set()
+        method = run_method(self.c.store.root, role) if role in {"research", "rsi"} else None
+        if method is None or not method.skills:
+            hidden.add("read_agent_skill")
         if not include_hidden:
             if {"read", "write", "glob"} <= self.extras.keys():
                 hidden.update({"read_file", "write_file", "list_files"})
@@ -358,6 +373,20 @@ class ResearchActions:
         args: dict[str, Any],
     ) -> ToolResult:
         c = self.c
+        if name == "read_agent_skill":
+            from areal_rsi.coordination.agent_config import run_method
+
+            method = run_method(c.store.root, self.role(agent_id))
+            skill_path = safe_relative(args["path"]).as_posix()
+            if method is None or skill_path not in method.skills:
+                raise ValueError("No configured research skill at this path")
+            return ToolResult(
+                {
+                    "path": skill_path,
+                    "text": method.skills[skill_path],
+                    "sha256": method.sha256,
+                }
+            )
         if name == "get_state":
             summary = model_state(c, agent_id)
             if agent_id == "interaction":

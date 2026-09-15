@@ -1,0 +1,14 @@
+# Copy this directory for a new method. Supply your actual task and execution
+# configuration before running a benchmark. This example only requests research.
+brief:
+  objective: 检查研究材料并提出可验证的改进建议
+  instructions: 先由 RSI 明确需要检查的材料和问题，再派单给 Research Agent。
+agents:
+  rsi:
+    base: default
+    prompt: rsi/prompt.md
+    skills: rsi/skills
+  research:
+    base: default
+    prompt: research/prompt.md
+    skills: research/skills

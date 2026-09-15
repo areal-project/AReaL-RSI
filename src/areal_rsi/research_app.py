@@ -253,6 +253,7 @@ class ResearchApp:
             issues = validate_execution(config)
             if issues:
                 raise ValueError("；".join(issues))
+        config.agents.freeze()
         c = Coordinator.create(self.root, config.brief, simulated=simulated, run_id=run_id)
         c.state["creation_digest"] = creation_digest
         c.save()

@@ -8,8 +8,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import yaml  # type: ignore[import-untyped]
+
 from areal_rsi.api.research import TaskBrief
 from areal_rsi.base.storage import decode, encode
+from areal_rsi.coordination.agent_config import AgentOverrides
 from areal_rsi.execution import ApprovedCommand
 from areal_rsi.modules.responses import ResponsesConfig
 
@@ -68,6 +71,7 @@ class ResearchConfig:
     execution_env: dict[str, str] = field(default_factory=dict)
     simulation_scores: tuple[float, ...] = (0.3, 0.5, 0.7)
     metadata: dict[str, Any] = field(default_factory=dict)
+    agents: AgentOverrides = field(default_factory=AgentOverrides)
 
     def model_settings(self) -> dict[str, str]:
         return {
@@ -114,6 +118,14 @@ class ResearchConfig:
 def config_from_dict(value: dict[str, Any]) -> ResearchConfig:
     if "api_key" in value:
         raise ValueError("Use api_key_env; credentials must not be saved in research configuration")
+    agents = value.get("agents", {})
+    if not isinstance(agents, dict) or set(agents) - {"research", "rsi"}:
+        raise ValueError("agents currently supports research and rsi")
+    for role, method in agents.items():
+        if method is not None and (
+            not isinstance(method, dict) or set(method) - {"base", "prompt", "skills", "snapshot"}
+        ):
+            raise ValueError(f"agents.{role} accepts base, prompt and skills; prompt is replaced")
     config: ResearchConfig = decode(ResearchConfig, value)
     if config.metadata.get("time_limit_scope", "total") not in {"total", "exploration"}:
         raise ValueError("time_limit_scope must be total or exploration")
@@ -130,8 +142,29 @@ def config_from_dict(value: dict[str, Any]) -> ResearchConfig:
 
 
 def load_config(path: Path) -> ResearchConfig:
-    config = config_from_dict(json.loads(path.read_text()))
+    value = yaml.safe_load(path.read_text())
+    if not isinstance(value, dict):
+        raise ValueError("Research configuration must be a YAML or JSON object")
+    config = config_from_dict(value)
     if config.seed_dir is not None:
         seed = Path(config.seed_dir).expanduser()
         config.seed_dir = str((path.parent / seed).resolve() if not seed.is_absolute() else seed)
+    for role in ("research", "rsi"):
+        agent = getattr(config.agents, role)
+        if agent is None:
+            continue
+        for name in ("prompt", "skills"):
+            source = getattr(agent, name)
+            if source:
+                location = Path(source).expanduser()
+                setattr(
+                    agent,
+                    name,
+                    str(
+                        (path.parent / location).absolute()
+                        if not location.is_absolute()
+                        else location
+                    ),
+                )
+        agent.freeze(role)
     return config

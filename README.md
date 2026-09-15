@@ -62,6 +62,9 @@ uv run --env-file .env --locked rsi research --resume <run_id>
 
 CLI 持续输出进度；Ctrl+C 保存状态供恢复。用同一数据目录打开工作台即可查看。CLI 持有执行权期间，Web 只读；需要同时操作研究时，使用上面的 demo/API 入口，让工作台后台执行。
 
+要在实验目录中分别替换 RSI、Research Agent 的 prompt 或提供 skills，见
+[研究方法配置入口](experiments/README.md)。无需修改 `src`，每次运行保存所用方法的内容快照。
+
 工作台提供本机 HTTP API。先 `GET /api/bootstrap` 获取 `csrf_token`，写请求使用 `X-RSI-Token` 请求头和 JSON body：
 
 | 接口 | 用途 |

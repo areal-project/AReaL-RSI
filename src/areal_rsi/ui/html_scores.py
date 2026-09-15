@@ -81,7 +81,7 @@ def chart(
     legend_items = []
     for index, line in enumerate(series):
         color = COLORS[index % len(COLORS)]
-        legend_items.append((f"{line['name']}：实测分数（圆点为单次评测）", color, "both", ""))
+        legend_items.append((line["name"], color, "both", ""))
         previous = None
         for point in sorted(line["points"], key=lambda point: point["x"]):
             if point["y"] is None:
@@ -101,9 +101,9 @@ def chart(
             previous = (px, py)
     svg.append("</svg>")
     if baseline is not None:
-        legend_items.append((f"基线：优化前得分 {baseline:.2%}", "#8a9691", "line", "8 6"))
+        legend_items.append((f"优化前：{baseline:.2%}", "#8a9691", "line", "8 6"))
     if best:
-        legend_items.append(("历史最高分：截至该轮已观察到的最高分", "#c59835", "line", "4 5"))
+        legend_items.append(("截至当时的最高分", "#c59835", "line", "4 5"))
     return "".join(svg) + legend(legend_items)
 
 
@@ -136,7 +136,8 @@ def rsi_panel(entry: dict[str, Any]) -> str:
             for row in rows
             if row["agent_id"] == agent["agent_id"]
         ]
-        series.append({"name": agent["agent_id"], "points": points})
+        name = agent["agent_id"].replace("research-agent-", "研究线 ")
+        series.append({"name": name, "points": points})
     if not series and baseline is not None:
         series = [{"name": "基线", "points": [{"x": 0, "y": baseline, "label": "基线"}]}]
     active = "运行中 · 本地执行锁活跃" if run["worker_alive"] else f"记录状态：{run['state']}"
@@ -160,12 +161,15 @@ def rsi_panel(entry: dict[str, Any]) -> str:
         "pending": "待完成版本选择",
     }
     return (
-        f'<section class="panel"><div class="eyebrow">RSI · VALIDATE 分区</div>'
+        f'<section class="panel"><div class="eyebrow">RSI · 每轮测试成绩</div>'
         f"<h2>{esc(entry['root'].name)} <small>{esc(run['run_id'])}</small></h2>"
         f'<p>{esc(run["goal"])}</p><p class="meta">{esc(active)} · {esc(run["benchmark"])}</p>'
         f'<p class="meta">{esc(status)}</p>'
-        '<p class="note">每条实线是一条研究线的候选版本跑分，横轴为优化轮次。'
-        "连线表示观察顺序，不代表候选一定被采用；TRAIN 属于修改前版本，不与候选混画。</p>"
+        '<p class="note">每条实线代表一条独立尝试改进的研究线。横轴是优化轮次，'
+        "纵轴越高，成绩越好。灰线是本实验优化前的成绩，金线保留截至当时的最高分。</p>"
+        "<details><summary>这些分数怎么测出来？</summary><p>每次修改后，用实验设置的验证题目"
+        "测试新版本（VALIDATE）。修改前的测试（TRAIN）属于旧版本，所以没有混在这张图里。"
+        "连线按轮次排列，版本是否继续使用可在下方记录中查看。</p></details>"
         + chart(series, baseline)
         + table(
             [
@@ -223,14 +227,21 @@ def campaign_panel(entry: dict[str, Any]) -> str:
         f"<h2>Codex / Terminus-2 <small>{esc(root.name)}</small></h2>"
         f'<p class="meta">记录更新时间：{esc(progress.get("observed_at", "未记录"))} · '
         f"复验阶段：{esc(validation.get('phase', '未开始'))}</p>"
-        '<p class="note">本地记录快照，不实时查询 Arena。保留原始全量评分；'
-        "任务执行失败可能包含在原始分母中。未完成评测留空并断开连线。</p>"
-        "<h3>候选发现过程</h3>"
-        + chart([{"name": "发现阶段实测", "points": points}], baseline)
+        '<p class="note">每轮测试完整 89 题，分数越高越好。灰线是本组实验优化前的成绩，'
+        "金线保留截至当时的最高分。尚未测完的轮次留空。</p>"
+        "<details><summary>评分与记录说明</summary><p>图表读取本地记录，不实时查询 Arena。"
+        "保留原始评分；运行失败的题目可能仍包含在原始评分分母中。</p></details>"
+        "<h3>每轮优化后的成绩</h3>"
+        + chart([{"name": "每轮得分", "points": points}], baseline)
         + table(rows)
-        + '<h3>独立复验</h3><p class="meta">按复验次序展示，不与发现阶段连成同一条曲线。</p>'
+        + '<h3>选出的版本，再测一次</h3><p class="meta">同一版本的成绩也可能波动。'
+        "为了检查好成绩是不是偶然，将选中的版本再测一遍完整 89 题，这叫“复验”。"
+        "这里按复验次序展示分数；这一步不修改版本，所以单独画图。</p>"
         + chart(
-            [{"name": "独立复验实测", "points": attempts}], baseline, xlabel="复验次序", best=False
+            [{"name": "再次测试的得分", "points": attempts}],
+            baseline,
+            xlabel="再次测试的次序",
+            best=False,
         )
         + table(validation_rows)
         + f'<p class="source">来源：{esc(root)}</p></section>'

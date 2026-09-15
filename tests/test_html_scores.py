@@ -97,9 +97,9 @@ def test_failed_evaluation_breaks_score_line() -> None:
     assert output.split("</svg>", 1)[0].count("<circle ") == 3
     assert 'class="best"' in output
     assert output.count('aria-label="图例"') == 1
-    assert "candidate：实测分数（圆点为单次评测）" in output
-    assert "基线：优化前得分 50.00%" in output
-    assert "历史最高分：截至该轮已观察到的最高分" in output
+    assert "candidate" in output
+    assert "优化前：50.00%" in output
+    assert "截至当时的最高分" in output
     samples = output.split('class="chart-legend"', 1)[1]
     assert 'stroke="#8a9691"' in samples and 'stroke-dasharray="8 6"' in samples
     assert 'stroke="#c59835"' in samples and 'stroke-dasharray="4 5"' in samples
@@ -136,7 +136,11 @@ def test_campaign_full_history_and_independent_validation(tmp_path: Path) -> Non
     document = Path(result["report_path"]).read_text()
     assert document.count('role="img"') == 2
     assert "91.01%" in document and "85.39%" in document
-    assert document.index("91.01%") < document.index("<h3>独立复验</h3>") < document.index("85.39%")
+    assert (
+        document.index("91.01%")
+        < document.index("<h3>选出的版本，再测一次</h3>")
+        < document.index("85.39%")
+    )
     assert "轮次 35</td><td>—</td>" in document
     assert "候选轮次 1" in document
     assert result["warnings"] == []
@@ -146,5 +150,5 @@ def test_legend_cross_is_explicit_and_labels_are_escaped() -> None:
     output = legend([("执行无效 <TRAIN>", "#d72d46", "cross", "")])
     assert 'aria-label="图例"' in output
     assert 'stroke="#d72d46"' in output
-    assert 'M 19 5 L 29 15 M 19 15 L 29 5' in output
-    assert '执行无效 &lt;TRAIN&gt;' in output
+    assert "M 19 5 L 29 15 M 19 15 L 29 5" in output
+    assert "执行无效 &lt;TRAIN&gt;" in output

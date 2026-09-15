@@ -175,8 +175,11 @@ class RunReader:
             "best_solution_id": run.best_solution_id,
             "baseline_score": baseline_score,
             "baseline_progress": {
-                key: progress.get("baseline", {}).get(key)
-                for key in ("phase", "task", "task_count")
+                "phase": progress.get("baseline", {}).get("phase"),
+                "task_count": progress.get("baseline", {}).get("task_count"),
+                "task": progress.get("baseline", {}).get(
+                    "completed_tasks", progress.get("baseline", {}).get("task")
+                ),
             },
             "best_score": best_score,
             "score_history": score_history(folder, run),

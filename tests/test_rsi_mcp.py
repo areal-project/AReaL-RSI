@@ -16,6 +16,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.types import CallToolResult, TextContent
 
+from areal_rsi.base.storage import write_json
 from areal_rsi.config import ModelConfigurationError
 from areal_rsi.ui.experiments import ExperimentController
 from areal_rsi.ui.mcp import create_server
@@ -170,6 +171,29 @@ class RsiMcpTest(unittest.IsolatedAsyncioTestCase):
             self.assertIsInstance(visualization.content[0], TextContent)
             assert isinstance(visualization.content[0], TextContent)
             self.assertIn("没有实验记录", visualization.content[0].text)
+            write_json(
+                self.root / "history/codex-tb21/experiments.json",
+                {
+                    "baseline_job": "base",
+                    "benchmark_ref": {"key": "tb21-full"},
+                    "rounds": {},
+                },
+            )
+            visualization = await session.call_tool(
+                "rsi_visualize",
+                {
+                    "scope": "all",
+                    "query": "Terminal Bench",
+                    "limit": 4,
+                    "open_browser": False,
+                },
+            )
+            self.assertFalse(visualization.is_error)
+            assert isinstance(visualization.content[0], TextContent)
+            report = json.loads(visualization.content[0].text)
+            self.assertEqual(report["format"], "html")
+            self.assertFalse(report["browser_open_requested"])
+            self.assertIn("codex-tb21", Path(report["report_path"]).read_text())
             for name in ("rsi_start", "rsi_resume"):
                 self.assertIn("confirmed", tools[name].input_schema["required"])
                 self.assertEqual(

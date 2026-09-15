@@ -14,7 +14,7 @@ from pydantic import Field, StrictBool
 
 from areal_rsi.config import ModelConfigurationError
 from areal_rsi.ui.experiments import ExperimentController
-from areal_rsi.ui.terminal_scores import visualize_scores
+from areal_rsi.ui.html_scores import create_html_report
 from areal_rsi.ui.workspace import ExperimentWorkspace
 
 Goal = Annotated[str, Field(strict=True, min_length=1, max_length=4000)]
@@ -140,7 +140,8 @@ def create_server(controller: ExperimentController | ExperimentWorkspace) -> MCP
             "先用 rsi_plan 生成固定配置的实验计划并展示给用户。"
             "只有用户确认该计划后才能以 confirmed=true 调用 rsi_start；"
             "恢复实验同样需要用户确认。rsi_status 返回聚合状态，实验在后台独立运行。"
-            "用户要求画图、可视化或刷新跑分时调用 rsi_visualize，原样展示返回的终端图表。"
+            "用户要求画图、可视化或刷新跑分时调用 rsi_visualize 生成 HTML 报告，"
+            "只返回摘要和报告链接，不在聊天中画字符图。"
         ),
         log_level="WARNING",
     )
@@ -198,16 +199,38 @@ def create_server(controller: ExperimentController | ExperimentWorkspace) -> MCP
 
     @server.tool(
         structured_output=False,
-        annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
+        annotations=ToolAnnotations(
+            read_only_hint=False, destructive_hint=False, open_world_hint=False
+        ),
     )
-    async def rsi_visualize(run_id: Identifier | None = None) -> str:
-        """在 TUI 对话中画出 Task Agent Benchmark 跑分、历史最高分和父版本增减。
+    async def rsi_visualize(
+        run_id: Identifier | None = None,
+        query: Annotated[str, Field(strict=True, max_length=200)] = "",
+        scope: Literal["recent", "all", "running"] = "recent",
+        limit: Annotated[int, Field(strict=True, ge=1, le=6)] = 4,
+        offset: Annotated[int, Field(strict=True, ge=0)] = 0,
+        open_browser: StrictBool = True,
+    ) -> str:
+        """生成包含真实折线图的离线 HTML 报告，默认自动请求浏览器打开。
 
-        直接展示返回的文本图表，不需要用户启动 Web 服务。优先传入对话中的当前 run_id；
-        无上下文时省略以查看最近实验。刷新时再次调用；不启动评测、不改变实验。
+        只返回简短摘要和 report_url 链接，不在聊天框画字符图，也不要求启动 Web 服务。
+        open_browser=false 只生成文件，适合无桌面环境；打开失败仍返回文件路径。
+        相同筛选重新调用会更新同一报告文件。优先传入对话中的当前 run_id；
+        无上下文时省略以查看最近实验。历史和当前实验一起看用 scope=all；
+        仅看确认持有执行锁的 RSI 实验用 scope=running。query 可按目录、Benchmark、
+        目标文本筛选（Terminal Bench 可用 tb）；offset 翻页。自动发现历史工作区，
+        支持独立 TB2.1 campaign；不同评分口径分开展示。刷新时再次调用；不启动评测。
         """
         try:
-            return visualize_scores(controller.root, run_id)
+            return create_html_report(
+                controller.root,
+                run_id,
+                query=query,
+                scope=scope,
+                limit=limit,
+                offset=offset,
+                open_browser=open_browser,
+            )
         except FileNotFoundError:
             raise ToolError("找不到实验，请用 rsi_status 查看可用的 run_id。") from None
         except Exception:

@@ -14,6 +14,7 @@ from areal_rsi.api.base import ExperimentRun, SolutionVersion
 from areal_rsi.base.storage import decode, encode, now, safe_name
 from areal_rsi.experiment_config import experiment_roots
 from areal_rsi.modules.remote.registry import read_remote_jobs
+from areal_rsi.ui.scores import score_history
 
 
 class RunReader:
@@ -143,7 +144,7 @@ class RunReader:
                     "max_iterations": run.plan.max_iterations,
                     "phase": phase,
                     "iteration": state.get("iteration"),
-                    "task": state.get("task"),
+                    "task": state.get("completed_tasks", state.get("task")),
                     "task_count": state.get("task_count"),
                     "current_reason": state.get("reason"),
                     "error": agent.error,
@@ -178,6 +179,7 @@ class RunReader:
                 for key in ("phase", "task", "task_count")
             },
             "best_score": best_score,
+            "score_history": score_history(folder, run),
             "max_iterations": run.plan.max_iterations,
             "research_agent_count": run.plan.research_agent_count,
             "agents": agents,

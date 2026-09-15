@@ -46,5 +46,19 @@ for(const card of cards){
   assert.doesNotMatch(card,/<script>/);
 }
 assert.match(graph,/data-version-target="version-run_fixture-v3"/);
+context.run.score_history=[
+  {agent_id:'baseline',iteration:0,solution_id:'base',score:.5,best_score:.5,
+    baseline_delta:0,parent_delta:null,selection:'baseline'},
+  {agent_id:'research-agent-1',iteration:1,solution_id:'<script>v1</script>',
+    score:.3,best_score:.5,baseline_delta:-.2,parent_delta:-.2,selection:'pending'},
+];
+const panel=vm.runInContext('scorePanel(run)',context);
+assert.match(panel,/待完成版本选择/);
+assert.match(panel,/-20.0 pp/);
+assert.match(panel,/&lt;script&gt;v1&lt;\/script&gt;/);
+assert.doesNotMatch(panel,/<script>|NaN|undefined/);
+assert.match(panel,/历史最高 50.0%/);
+context.run.score_history=[];
+assert.match(vm.runInContext('scorePanel(run)',context),/尚无完整 VALIDATE 评测/);
 """
     subprocess.run([node, "-e", check, str(script)], check=True, capture_output=True, timeout=10)

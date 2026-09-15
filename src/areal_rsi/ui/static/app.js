@@ -70,6 +70,29 @@ function agentCard(agent,index,run){
     ${currentReason?`<p class="meta">当前修改依据：${esc(agent.current_reason)}</p>`:""}
     ${versionHistory(run,agent).steps.map(entry=>iterationCard(run,agent,entry)).join("")}</article>`;
 }
+const deltaLabel=value=>Number.isFinite(value)?`${value>=0?"+":""}${(value*100).toFixed(1)} pp`:"—";
+function scorePanel(run){
+  const rows=run.score_history||[];
+  if(!rows.length)return '<section class="panel"><h2>Task Agent · Benchmark 跑分</h2><p class="muted">尚无完整 VALIDATE 评测；完成后自动显示。</p></section>';
+  const w=900,h=240,left=65,right=20,top=20,bottom=40;
+  const low=Math.min(0,...rows.map(r=>r.score)),high=Math.max(1,...rows.map(r=>r.score));
+  const x=i=>left+(w-left-right)*i/Math.max(1,rows.length-1);
+  const y=s=>top+(h-top-bottom)*(high-s)/(high-low);
+  let svg=`<svg class="chart" viewBox="0 0 ${w} ${h}" role="img" aria-label="按评测完成顺序排列的 Task Agent 分数与历史最佳曲线">`;
+  for(const s of [low,(low+high)/2,high])svg+=`<line class="grid" x1="${left}" y1="${y(s)}" x2="${w-right}" y2="${y(s)}"/><text x="0" y="${y(s)+5}">${percent(s)}</text>`;
+  svg+=`<polyline fill="none" stroke="#ffc984" stroke-width="2" stroke-dasharray="6 4" points="${rows.map((r,i)=>`${x(i)},${y(r.best_score)}`).join(" ")}"/>`;
+  rows.forEach((r,i)=>{
+    const index=run.agents.findIndex(a=>a.agent_id===r.agent_id),color=index<0?"#ffffff":colors[index%colors.length];
+    svg+=`<circle cx="${x(i)}" cy="${y(r.score)}" r="5" fill="${color}"><title>${esc(r.agent_id)} · 第 ${r.iteration} 轮 · ${esc(r.solution_id)} · ${percent(r.score)} · ${esc(stamp(r.evaluated_at))}</title></circle>`;
+    if(i===0||i===rows.length-1||i%Math.ceil(rows.length/8)===0)svg+=`<text x="${x(i)}" y="${h-12}" text-anchor="middle">${i+1}</text>`;
+  });
+  svg+='</svg>';
+  const labels={baseline:"基线",selected:"继续采用",reverted:"选择其他版本",stopped:"研究线结束",pending:"待完成版本选择"};
+  const change=value=>`<span class="${value>0?"positive":value<0?"negative":"muted"}">${deltaLabel(value)}</span>`;
+  return `<section class="panel"><h2>Task Agent · Benchmark 跑分</h2><p class="meta">${esc(run.benchmark)} · VALIDATE 固定分区。横轴为评测完成序号；圆点为每个版本实测分数，金色虚线为历史最高分。评测失败不记为零分。</p>${svg}
+    <div class="legend"><span>历史最高 ${percent(rows.at(-1).best_score)}</span><span>已完成 ${rows.length} 次评测（含基线）</span></div>
+    <details data-key="score-history"><summary>逐版本跑分记录与提升幅度</summary><div class="score-table"><table><thead><tr><th>研究线 / 轮次</th><th>Task Agent 版本</th><th>VALIDATE</th><th>较基线</th><th>较父版本</th><th>后续选择</th><th>评测完成</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${esc(r.agent_id)} / ${r.iteration}</td><td><code>${esc(r.solution_id)}</code></td><td>${percent(r.score)}</td><td>${change(r.baseline_delta)}</td><td>${change(r.parent_delta)}</td><td>${esc(labels[r.selection]||r.selection)}</td><td>${esc(stamp(r.evaluated_at))}</td></tr>`).join("")}</tbody></table></div></details></section>`;
+}
 function render(run){
   const completed=run.agents.reduce((n,a)=>n+a.completed_iterations,0);
   document.title=`RSI · ${run.run_id}`;
@@ -84,6 +107,7 @@ function render(run){
     <div class="stat"><div class="label">已完成研究轮次</div><div class="value">${completed} <span class="meta">/ ${run.max_iterations*run.research_agent_count}</span></div><div class="meta">${run.research_agent_count} 条独立研究线</div></div>
     <div class="stat"><div class="label">开始时间</div><div class="value meta">${esc(stamp(run.started_at))}</div><div class="meta">${run.finished_at?`结束 ${esc(stamp(run.finished_at))}`:"尚未结束"}</div></div></section>
     <section class="panel"><h2>验证得分 · 版本演进关系</h2><p class="meta">箭头从实际输入版本指向本轮候选；点击节点查看版本及修改原因。</p>${chart(run)}<div class="legend">${run.agents.map((a,i)=>`<span class="line-${i}">${esc(a.agent_id)}</span>`).join("")}</div></section>
+    ${scorePanel(run)}
     <h2>独立研究线与迭代记录</h2><section class="agents">${run.agents.length?run.agents.map((a,i)=>agentCard(a,i,run)).join(""):'<p class="muted">研究线尚未初始化。</p>'}</section>
     <footer>最佳版本 <code>${esc(run.best_solution_id)}</code> · 本地只读视图，每 3 秒刷新；评测错误不会作为成功样本隐藏。</footer>`;
 }

@@ -179,6 +179,13 @@ uv run --env-file .env --locked rsi web --port 8765
 
 浏览器打开 [http://127.0.0.1:8765](http://127.0.0.1:8765)，查看独立研究线、执行阶段、TRAIN/VALIDATE 得分、版本关系及选版依据。页面自动刷新，只读并绑定本机；无需模型连接配置。
 
+“Task Agent · Benchmark 跑分”按评测完成顺序展示基线和每次优化后的候选分数，
+同时显示历史最高分。展开记录可查看版本 ID、相对基线及实际父版本的增减、
+后续选版结果和评测完成时间。分数来自已落盘的 VALIDATE 评测，选版尚未完成
+也会显示，恢复实验不会重复计数；失败或未完成的评测不计为零分。
+这里的 Benchmark 跑分是实验配置的 VALIDATE 分区，并非额外全量评测。
+TRAIN 属于修改前的输入版本，不能与本轮候选的 VALIDATE 直接解释为泛化差距。
+
 指定单个实验：`uv run --env-file .env --locked rsi web --port 8765 --run RUN_ID`。
 
 Web 和 TUI 需要读取同一工作区，页面顶部会显示实际目录。若两个终端的 `RSI_DATA_ROOT`

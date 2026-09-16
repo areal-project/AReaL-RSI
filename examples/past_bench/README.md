@@ -3,7 +3,7 @@
 通过官方 Hermes + PAST-Bench runner 执行完整任务族，接入当前 AReaL-RSI 研究工作台。
 候选只包含 `prompt.md`，作为官方 `model.system_prompt_prefix` 注入每个 episode；
 优化的是通用记忆、检索、复用和更新策略。模型、原生工具、持久化实现、反思流程和 grader 固定。
-这不是任意 Agent 代码优化接口，也不在旧版 TUI 的内置 Benchmark catalog 中注册。
+这不是任意 Agent 代码优化接口。TUI 通过新版研究入口启动，不依赖旧版 Benchmark catalog。
 
 固定上游提交：`f8223517ae7491e776b69793d9f11e9d074ab42e`。
 该版本的 `evolve` 明确拒绝 Hermes/nanobot/zeroclaw 持久化序列使用 `--runtime container`。
@@ -76,13 +76,15 @@ mock 服务端口冲突。不要同时在同一主机启动使用相同服务端
 ## 接入工作台
 
 ```bash
-uv run --locked python -m areal_rsi.adapters.past_bench configure \
+uv run --env-file .env --locked python -m areal_rsi.adapters.past_bench configure \
   --lock /absolute/path/operator.lock.json --harness examples/past_bench/seed \
   --output /absolute/path/research.json
 uv run --env-file .env --locked rsi workbench --config /absolute/path/research.json
 ```
 
-研究模型沿用 AReaL-RSI 的 `RSI_API_KEY`、`RSI_MODEL`、`RSI_BASE_URL` 等设置。
+configure 从 `RSI_TEACHER_MODEL`、`RSI_TEACHER_BASE_URL` 读取研究模型设置，凭证引用
+`RSI_TEACHER_API_KEY`，不会将密钥写入配置。运行时 `RSI_MODEL`、`RSI_BASE_URL` 仍可覆盖
+研究模型设置；Task Agent 和 judge 由 operator 锁定，不受研究模型选择影响。
 configure 不启动研究或调用模型。生成的配置限制候选只编辑 `prompt.md`，提供 `develop`
 诊断命令和可信 `verify` 命令，并固定 `diagnostic → development`、`search → search`、
 `final → final`。每个 family 必须完整分配到且仅分配到一个池。
@@ -90,6 +92,39 @@ configure 不启动研究或调用模型。生成的配置限制候选只编辑 
 示例只覆盖三个 memory family，是开发接入示例，不是官方的完整 26-family 成绩。
 可在 operator 配置中换成覆盖四类能力的更大划分；正式研究前应确定划分，不要在 final
 上反复挑选候选。完整运行的成本随 family 数量增加，首次建议只运行 development smoke。
+
+## 在 TUI 中一句话启动
+
+完成上述配置后，在 `.env` 中设置 `RSI_PAST_BENCH_CONFIG=/absolute/path/research.json`。
+本仓库本地默认读取 `.rsi/past-bench/research-current.json`，已有此文件时无需额外设置。
+确保 Docker 已启动、研究模型和 operator 引用的凭证已加载，然后运行：
+
+```bash
+./tui
+```
+
+在 TUI 中输入：**开始优化 Task Agent 在 PAST-Bench 上的表现。**
+
+Interaction 会调用 `rsi_research_start`，按已准备的配置直接启动，不再要求第二次确认。
+仅询问方法或要求计划不会启动。运行前检查协议、依赖、镜像、任务划分和凭证是否存在；
+这不等于提前验证网络或模型接口可用。更改适配器后必须重新 prepare/configure。
+
+默认优化方法为：测量 seed baseline；围绕记忆筛选、检索、规则作用域、更新或迁移提出假设；
+修改通用 `prompt.md`；development 诊断、search 比较；最后用 final 独立确认。
+同时观察持久化开启和关闭的绝对得分，不通过降低关闭组成绩制造提升。
+默认预算为 1 个 Research Agent、最多 8 个节点、100 次研究模型调用、4 次验证调用、
+1 个并行执行作业、4 小时。4 次验证需包含 baseline 和 final，不代表完整迭代 4 轮；
+development 诊断另外占用作业和时间预算。模型调用有实际费用。
+
+后台服务默认在 `127.0.0.1:8198`，可通过 `RSI_RESEARCH_PORT` 更换端口；研究数据位于
+`RSI_DATA_ROOT/past-bench-research/`（未设置时为 `.rsi/past-bench-research/`）。
+该入口自动启动独立工作台，退出 TUI 不会终止研究。返回链接可查看真实进度。
+可继续说“查看这次研究进度”“暂停这次研究”“继续这次研究”或“停止这次研究”。
+暂停不强杀已运行的评测，停止会取消作业。工具重试复用同一个 request_id，避免重复研究。
+更新代码或凭证后应重启专用工作台服务；已有研究保留自己的配置和候选快照。
+
+TUI 用 `rsi_research_status` / `rsi_research_control` 管理新版研究，不混用旧版
+`rsi_status` / `rsi_resume`。这是有边界的小规模优化入口，不表示所有 26 个任务族已经实测。
 
 ## 成绩和证据
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -137,7 +138,9 @@ def create_server(controller: ExperimentController | ExperimentWorkspace) -> MCP
     server = MCPServer(
         "areal-rsi",
         instructions=(
-            "先用 rsi_plan 生成固定配置的实验计划并展示给用户。"
+            "用户明确要求开始优化 PAST-Bench 时，直接用 rsi_research_start，"
+            "这是已配置的新版研究入口，无需再次确认；仅询问或讨论时不要启动。"
+            "其他旧版实验先用 rsi_plan 生成固定配置的实验计划并展示给用户。"
             "只有用户确认该计划后才能以 confirmed=true 调用 rsi_start；"
             "恢复实验同样需要用户确认。rsi_status 返回聚合状态，实验在后台独立运行。"
             "用户要求画图、可视化或刷新跑分时调用 rsi_visualize 生成 HTML 报告，"
@@ -145,6 +148,56 @@ def create_server(controller: ExperimentController | ExperimentWorkspace) -> MCP
         ),
         log_level="WARNING",
     )
+
+    from areal_rsi.ui.research_bridge import ResearchBridge
+
+    research = ResearchBridge(controller.root)
+
+    async def research_call(operation: Callable[[], dict[str, Any]]) -> str:
+        try:
+            return json.dumps(await asyncio.to_thread(operation), ensure_ascii=False)
+        except Exception:
+            # Upstream errors may include model credentials or private traces.
+            raise ToolError(
+                "研究操作未完成。检查 Docker、RSI_PAST_BENCH_CONFIG 指向的配置、协议锁和模型凭证；"
+                "配置步骤见 examples/past_bench/README.md。启动重试必须复用原 request_id。"
+            ) from None
+
+    @server.tool(
+        structured_output=False,
+        annotations=ToolAnnotations(
+            read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=True
+        ),
+    )
+    async def rsi_research_start(goal: Goal, request_id: Identifier) -> str:
+        """用户明确要求开始优化 Task Agent 在 PAST-Bench 上的表现时直接调用。
+
+        使用操作者预配置的小规模真实研究，优化 prompt.md，先 baseline 后候选搜索和 final。
+        不需要再问轮数或确认。仅询问、解释或要计划时不要调用。
+        每个新用户请求生成唯一 request_id（字母数字下划线）；同一请求重试必须复用它，
+        防止重复启动。返回 run_id 仅表示提交，使用 rsi_research_status 查看真实进度。
+        """
+        return await research_call(lambda: research.start(goal, request_id))
+
+    @server.tool(
+        structured_output=False,
+        annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
+    )
+    async def rsi_research_status(run_id: Identifier) -> str:
+        """查看新版 PAST-Bench 研究的真实 baseline、best、final 和作业状态。"""
+        return await research_call(lambda: research.control(run_id))
+
+    @server.tool(
+        structured_output=False,
+        annotations=ToolAnnotations(
+            read_only_hint=False, destructive_hint=False, open_world_hint=True
+        ),
+    )
+    async def rsi_research_control(
+        run_id: Identifier, action: Literal["pause", "resume", "stop"]
+    ) -> str:
+        """用户要求时暂停、继续或停止新版研究。pause 不强杀运行中的评测，stop 会取消作业。"""
+        return await research_call(lambda: research.control(run_id, action))
 
     @server.tool(
         structured_output=False,

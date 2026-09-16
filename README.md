@@ -86,6 +86,8 @@ demo 在服务重启后自动恢复尚在执行的研究或收尾；手动暂停
 
 PAST-Bench 跨会话策略优化见 [接入与运行指南](examples/past_bench/README.md)：使用官方
 Hermes、Docker 工具沙箱和完整任务族持久化对照，支持独立 development/search/final 划分。
+配置完成后运行 `./tui`，输入“开始优化 Task Agent 在 PAST-Bench 上的表现”，即可通过
+新版研究入口启动策略优化，并在同一对话中查询、暂停或继续。
 
 旧固定流程仍可通过 `./tui` 启动，脚本自动读取本地 `.env`。Terminal-Bench
 实验配置和用法见 [TB2.1 示例](examples/tb21/README.md)。

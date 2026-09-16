@@ -557,7 +557,14 @@ def research_config(lock_path: Path, seed: Path, *, target: float | None = None)
             "比较候选，最后在独立 final family 上确认。所有 family 均完整运行持久化开关对照。"
             "主要指标 evaluation_lift 是持久化开启与关闭的评测均分之差，按 family 宏平均。"
             "有冷启动的 family 另报 ablation_lift；缺失基线不填零。"
-            "passed 表示正向 lift，不代表所有任务通过。原始轨迹仅供操作者检查。",
+            "passed 表示正向 lift，不代表所有任务通过。原始轨迹仅供操作者检查。"
+            "优化方法：先记录 seed 的 search baseline；围绕经验筛选、检索时机、规则作用域、"
+            "过期纠正和迁移提出一个可验证假设，再修改 prompt.md。每次改动保持简洁，"
+            "用 develop 获取聚合反馈、用 search 的可信结果决定是否保留候选。"
+            "同时报告 evaluation_score 和 without_persistence_score，禁止通过刻意降低关闭"
+            "持久化时的表现制造 lift。聚合反馈不能定位具体失败时，应承认不确定性，"
+            "不要编造轨迹或读取操作者私有评分文件。保留至少一次验证额度给 final，"
+            "完成后交付最佳策略、相对 baseline 的变化和独立 final 结果；无提升也如实报告。",
             ResearchLimits(
                 max_agents=1,
                 max_nodes=8,
@@ -575,6 +582,9 @@ def research_config(lock_path: Path, seed: Path, *, target: float | None = None)
             ),
         ),
         seed_dir=str(seed),
+        model=os.environ.get("RSI_TEACHER_MODEL", "gpt-6-astra"),
+        base_url=os.environ.get("RSI_TEACHER_BASE_URL", "https://api.openai.com"),
+        api_key_env="RSI_TEACHER_API_KEY",
         commands=(
             ApprovedCommand(
                 "develop",

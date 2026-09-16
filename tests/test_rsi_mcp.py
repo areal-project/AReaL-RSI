@@ -164,7 +164,17 @@ class RsiMcpTest(unittest.IsolatedAsyncioTestCase):
             tools = {tool.name: tool for tool in (await session.list_tools()).tools}
             self.assertEqual(
                 set(tools),
-                {"rsi_plan", "rsi_start", "rsi_status", "rsi_stop", "rsi_resume", "rsi_visualize"},
+                {
+                    "rsi_plan",
+                    "rsi_start",
+                    "rsi_status",
+                    "rsi_stop",
+                    "rsi_resume",
+                    "rsi_visualize",
+                    "rsi_research_start",
+                    "rsi_research_status",
+                    "rsi_research_control",
+                },
             )
             visualization = await session.call_tool("rsi_visualize", {})
             self.assertFalse(visualization.is_error)

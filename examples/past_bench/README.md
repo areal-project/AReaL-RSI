@@ -1,9 +1,11 @@
-# PAST-Bench 跨会话策略优化
+# PAST-Bench Harness 优化
 
 通过官方 Hermes + PAST-Bench runner 执行完整任务族，接入当前 AReaL-RSI 研究工作台。
-候选只包含 `prompt.md`，作为官方 `model.system_prompt_prefix` 注入每个 episode；
-优化的是通用记忆、检索、复用和更新策略。模型、原生工具、持久化实现、反思流程和 grader 固定。
-这不是任意 Agent 代码优化接口。TUI 通过新版研究入口启动，不依赖旧版 Benchmark catalog。
+默认示例使用 `edit_scope: "hermes"`：候选包含 `prompt.md` 和完整的 `hermes/` 源码，
+允许修改执行循环、工具、记忆实现、上下文管理、内部提示词和 skills。
+`prompt.md` 仍作为官方 `model.system_prompt_prefix` 注入每个 episode。
+模型、任务、评分器、官方序列及状态快照/恢复规则固定。TUI 通过新版研究入口启动。
+兼容旧的 `edit_scope: "prompt"`（未填写时的默认值），仅允许修改 `prompt.md`。
 
 本目录的 `run.py` 包含所有 PAST-Bench 专属执行、评分、协议检查和研究配置生成逻辑。
 `src/areal_rsi/` 只提供通用的研究配置、作业调度、候选管理和可信结果校验；不导入本目录。
@@ -55,15 +57,47 @@ uv run --locked python examples/past_bench/run.py describe \
 ```
 
 prepare/describe 不调用模型。它们核对上游提交及 tracked 文件、Python 依赖、沙箱镜像、
-适配器代码、family 划分和官方生成的序列定义。lock 不包含密钥。输出路径必须是新文件。
+适配器及进程桥接代码、编辑范围、family 划分和官方生成的序列定义。lock 不包含密钥。输出路径必须是新文件。
 保存 Python 环境和镜像以复现同一 lock；上游依赖安装本身未提供精确版本锁。
+
+生成可编辑的完整 Harness（只复制固定上游的 tracked 文件，不复制本地缓存或凭证）：
+
+```bash
+uv run --locked python examples/past_bench/run.py seed \
+  --lock /absolute/path/operator.lock.json --output /absolute/path/hermes-seed
+```
+
+两个对比实验应从同一 seed 和协议开始。旧 prompt-only 成绩不能直接当作新协议的 baseline。
+
+## 保存和选择版本
+
+保留原始 upstream 和 seed；在独立工作目录中修改，每个版本保存到不同目录，不原地覆盖。
+版本目录包含 `version.json` 以及完整的 `harness/prompt.md`、`harness/hermes/` 文件。
+两个版本的同名模块是不同的文件，运行时只加载选中的完整版本，避免混用模块造成结果难以复现。
+
+```bash
+uv run --locked python examples/past_bench/versions.py save \
+  --source /absolute/path/hermes-seed --output /absolute/path/versions/v001
+# 修改独立工作目录后保存 v002；save 拒绝覆盖已有版本目录。
+uv run --locked python examples/past_bench/versions.py save \
+  --source /absolute/path/edited-workspace --output /absolute/path/versions/v002
+uv run --env-file .env --locked python examples/past_bench/versions.py configure \
+  --version /absolute/path/versions/v002/version.json \
+  --lock /absolute/path/operator.lock.json --output /absolute/path/research-v002.json
+```
+
+选择哪个 `version.json`，就生成加载哪个版本的配置；TUI 用 `RSI_RESEARCH_CONFIG` 选择配置。
+选择前会校验全部源码摘要，已保存版本被原地修改时拒绝加载。直接评测可先执行
+`versions.py verify --version .../version.json`，再将返回的 Harness 路径传给 `run.py evaluate`。
+研究工作台内部也会为每个候选保存独立的内容寻址快照，评测时展开副本，不修改 seed 或历史候选。
+版本文件不是文件系统权限锁；操作者应始终在工作副本中改代码，再保存为新版本。
 
 ## 跑一组真实任务
 
 ```bash
 uv run --env-file .env --locked python examples/past_bench/run.py evaluate \
   --lock /absolute/path/operator.lock.json \
-  --harness examples/past_bench/seed \
+  --harness /absolute/path/hermes-seed \
   --output /absolute/path/new-smoke-output --phase diagnostic
 ```
 
@@ -81,7 +115,7 @@ mock 服务端口冲突。不要同时在同一主机启动使用相同服务端
 
 ```bash
 uv run --env-file .env --locked python examples/past_bench/run.py configure \
-  --lock /absolute/path/operator.lock.json --harness examples/past_bench/seed \
+  --lock /absolute/path/operator.lock.json --harness /absolute/path/hermes-seed \
   --output /absolute/path/research.json
 uv run --env-file .env --locked rsi workbench --config /absolute/path/research.json
 ```
@@ -89,7 +123,7 @@ uv run --env-file .env --locked rsi workbench --config /absolute/path/research.j
 configure 从 `RSI_TEACHER_MODEL`、`RSI_TEACHER_BASE_URL` 读取研究模型设置，凭证引用
 `RSI_TEACHER_API_KEY`，不会将密钥写入配置。运行时 `RSI_MODEL`、`RSI_BASE_URL` 仍可覆盖
 研究模型设置；Task Agent 和 judge 由 operator 锁定，不受研究模型选择影响。
-configure 不启动研究或调用模型。生成的配置限制候选只编辑 `prompt.md`，提供 `develop`
+configure 不启动研究或调用模型。完整模式允许编辑 `prompt.md` 和 `hermes/**`，提供 `develop`
 诊断命令和可信 `verify` 命令，并固定 `diagnostic → development`、`search → search`、
 `final → final`。每个 family 必须完整分配到且仅分配到一个池。
 
@@ -115,7 +149,7 @@ Interaction 会调用 `rsi_research_start`，按已准备的配置直接启动�
 这不等于提前验证网络或模型接口可用。更改适配器后必须重新 prepare/configure。
 
 默认优化方法为：测量 seed baseline；围绕记忆筛选、检索、规则作用域、更新或迁移提出假设；
-修改通用 `prompt.md`；development 诊断、search 比较；最后用 final 独立确认。
+修改提示词或 Hermes 实现；development 诊断、search 比较；最后用 final 独立确认。
 同时观察持久化开启和关闭的绝对得分，不通过降低关闭组成绩制造提升。
 默认预算为 1 个 Research Agent、最多 8 个节点、100 次研究模型调用、4 次验证调用、
 1 个并行执行作业、4 小时。4 次验证需包含 baseline 和 final，不代表完整迭代 4 轮；
@@ -157,13 +191,32 @@ TUI 用 `rsi_research_status` / `rsi_research_control` 管理新版研究，不�
 
 上游 raw runtime trace 可能含模型凭据，所以原始轨迹和配置全部留在 operator-private
 目录，研究 Agent 只能看到显式发布的聚合结果。`local` Hermes 和评分器仍同属主机信任域；
-Docker 工具沙箱不等于面向恶意 Agent 代码的端到端隔离。当前接口不执行候选 Python 或 shell。
+Docker 工具沙箱不等于面向恶意 Agent 代码的端到端隔离。
+
+## 完整源码模式的运行边界
+
+`harness_runtime.py` 在官方 runner 与 Hermes 之间建立进程桥接。每个 episode 从候选源码
+生成临时副本，在新的 Python 进程里运行，再将响应交给官方 runner 评分。这样修改工具和
+执行循环会真正生效，也不会通过 Python 模块缓存或修改源码目录偷偷跨 episode 保留状态。
+正常学习状态必须写入官方提供的 `HERMES_HOME`，由 runner 按原协议保存、恢复或清空。
+关闭持久化的对照组使用同一份候选代码。加载记录绑定 session 和源码摘要，缺失或不匹配
+不产生有效成绩。所有候选文件都纳入 Harness 身份，包括非 Python 文件。
+
+允许修改整个 `hermes/`，但须保留官方适配器使用的 `AIAgent`、`SessionDB`、工具注册接口
+及 `HERMES_HOME` 状态契约。不能修改 benchmark runner、grader、任务、划分、桥接器、
+模型或评分规则，也不能读取隐藏题目/答案、操纵对照组。Python 依赖环境固定；修改依赖
+声明不会自动安装新包，需要新增依赖时应由操作者更新环境并为双方实验建立新协议。
+
+候选代码在主机同一用户下执行；独立进程和过滤常见凭据环境变量不阻止任意代码访问
+主机文件。该模式适用于受实验规则约束的 Harness 优化，不提供恶意代码的安全隔离保证。
+官方控制的是任务序列和反思任务；Hermes 如何执行、调用工具及组织记忆均可优化。
 
 ## 开发检查
 
 ```bash
-uv run --locked pytest tests/test_past_bench.py tests/test_research_verification.py
+uv run --locked pytest tests/test_past_bench.py tests/test_past_bench_harness.py tests/test_research_verification.py
 make check
 ```
 
-离线测试覆盖成对分数、反思与状态分支、残缺/篡改结果、family 划分、候选限制和可信成绩绑定。
+离线测试覆盖成对分数、反思与状态分支、残缺/篡改结果、family 划分、候选限制和可信成绩绑定，
+并通过实际子进程验证工具代码修改生效、记忆持久化、源码副本隔离和超时回收。

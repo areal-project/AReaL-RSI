@@ -1,7 +1,7 @@
 """Trusted, family-level PAST-Bench evaluator for the research workflow.
 
 The upstream runner owns history branches, persistence ablation and grading.
-Candidates supply policy text only; they cannot replace the runner or graders.
+Candidates supply policy text or a complete Hermes source tree, never the benchmark or graders.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import json
 import math
 import os
 import re
+import shutil
 import signal
 import socket
 import subprocess
@@ -101,8 +102,10 @@ def validate_options(options: dict[str, Any]) -> None:
         "judge_api_key_env",
         "families",
     }
-    if set(options) != required:
+    if set(options) - {"edit_scope"} != required:
         raise ValueError(f"Operator fields must be exactly {sorted(required)}")
+    if options.get("edit_scope", "prompt") not in {"prompt", "hermes"}:
+        raise ValueError("edit_scope must be prompt or hermes")
     for name in required - {"families"}:
         if not isinstance(options[name], str) or not options[name].strip():
             raise ValueError(f"{name} must be a nonempty string")
@@ -216,6 +219,10 @@ def protocol(options: dict[str, Any]) -> dict[str, Any]:
         "image_id": image,
         "environment_id": environment_identity(options["python"], repository),
         "adapter_id": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "runtime_bridge_id": hashlib.sha256(
+            Path(__file__).with_name("harness_runtime.py").read_bytes()
+        ).hexdigest(),
+        "edit_scope": options.get("edit_scope", "prompt"),
         "options": options,
         "metric": METRIC,
         "agent": "hermes",
@@ -266,26 +273,64 @@ def phase_identity(lock: dict[str, Any], phase: str) -> dict[str, Any]:
     }
 
 
-def candidate_policy(harness: Path) -> tuple[str, str]:
+def candidate_policy(harness: Path, scope: str = "prompt") -> tuple[str, str]:
     if harness.is_symlink() or not harness.is_dir():
         raise ValueError("Candidate must be a directory")
     files: dict[str, str] = {}
+    total_bytes = 0
     for path in sorted(harness.rglob("*")):
         if path.is_symlink():
             raise ValueError("Candidate symlinks are not allowed")
         if path.is_dir():
             continue
-        if path.relative_to(harness).as_posix() != "prompt.md" or not path.is_file():
-            raise ValueError("PAST-Bench policy candidates contain only prompt.md")
-        if path.stat().st_size > 64_000:
+        name = path.relative_to(harness).as_posix()
+        if not path.is_file() or not (
+            name == "prompt.md" or (scope == "hermes" and name.startswith("hermes/"))
+        ):
+            raise ValueError("Candidate permits prompt.md and, in hermes scope, hermes/ only")
+        if name == "prompt.md" and path.stat().st_size > 64_000:
             raise ValueError("Policy exceeds 64 KB")
-        files["prompt.md"] = hashlib.sha256(path.read_bytes()).hexdigest()
-    if set(files) != {"prompt.md"}:
+        total_bytes += path.stat().st_size
+        if total_bytes > 64_000_000 or len(files) >= 10_000:
+            raise ValueError("Harness exceeds 64 MB or 10000 files")
+        files[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    if "prompt.md" not in files:
         raise ValueError("Candidate requires prompt.md")
+    if scope == "hermes" and not {
+        "hermes/run_agent.py",
+        "hermes/hermes_state.py",
+        "hermes/tools/registry.py",
+    }.issubset(files):
+        raise ValueError(
+            "Hermes candidate requires AIAgent, SessionDB and tool registry interfaces"
+        )
     policy = (harness / "prompt.md").read_text()
     if re.fullmatch(r"\$\{[^}]+\}", policy.strip()):
         raise ValueError("Policy must not be an environment-variable reference")
     return policy, hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
+
+
+def seed_harness(lock_path: Path, output: Path) -> dict[str, Any]:
+    """Export tracked upstream source, excluding local secrets, caches and run artifacts."""
+    lock = load_lock(lock_path)
+    scope = lock["protocol"]["edit_scope"]
+    repository = Path(lock["protocol"]["options"]["repository"])
+    if output.exists():
+        raise ValueError("Seed output must not exist")
+    output.mkdir(parents=True)
+    shutil.copyfile(Path(__file__).with_name("seed") / "prompt.md", output / "prompt.md")
+    if scope == "hermes":
+        prefix = Path("agents/hermes-agent")
+        paths = capture(["git", "ls-files", "-z", "--", str(prefix)], cwd=repository).split("\0")
+        for name in filter(None, paths):
+            source = repository / name
+            if source.is_symlink() or not source.is_file():
+                raise ValueError("Seed contains a non-regular tracked file")
+            target = output / "hermes" / Path(name).relative_to(prefix)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+    _, harness_id = candidate_policy(output, scope)
+    return {"harness_id": harness_id, "edit_scope": scope}
 
 
 def preflight(lock_path: Path) -> dict[str, Any]:
@@ -400,6 +445,35 @@ def check_traces(root: Path, target_model: str) -> set[str]:
     return starts
 
 
+def check_harness_receipts(trace: Path, receipts: Path, source: Path) -> None:
+    """Require a candidate-loading receipt for every executed runtime session."""
+    files = {
+        path.relative_to(source).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(source.rglob("*"))
+        if path.is_file()
+    }
+    expected_digest = hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
+    sessions = set()
+    for path in trace.rglob("*.jsonl"):
+        for line in path.read_text().splitlines():
+            event = json.loads(line)
+            if event.get("type") == "runtime_request":
+                sessions.add(event["session_id"])
+    records = [json.loads(line) for line in receipts.read_text().splitlines()]
+    seen = [record["session_id"] for record in records]
+    if (
+        not sessions
+        or len(seen) != len(set(seen))
+        or set(seen) != sessions
+        or any(
+            record.get("source_digest") != expected_digest
+            or record.get("loaded_entry") != "hermes/run_agent.py"
+            for record in records
+        )
+    ):
+        raise ValueError("Candidate Hermes execution receipts are incomplete or inconsistent")
+
+
 def run_official(command: list[str], repository: Path, log_path: Path) -> None:
     # Give the official runner a chance to execute service/container finally blocks.
     # Its process group is scoped to this evaluation, never all past-bench containers.
@@ -422,7 +496,8 @@ def run_official(command: list[str], repository: Path, log_path: Path) -> None:
 
 def evaluate(lock_path: Path, harness: Path, output: Path, phase: str) -> dict[str, Any]:
     lock = load_lock(lock_path)
-    policy, harness_id = candidate_policy(harness)
+    scope = lock["protocol"].get("edit_scope", "prompt")
+    policy, harness_id = candidate_policy(harness, scope)
     options = lock["protocol"]["options"]
     for variable in (options["api_key_env"], options["judge_api_key_env"]):
         if not os.environ.get(variable):
@@ -501,10 +576,26 @@ def evaluate(lock_path: Path, harness: Path, output: Path, phase: str) -> dict[s
                 "--trace-dir",
                 str(trace),
             ]
+            if scope == "hermes":
+                command = [
+                    options["python"],
+                    "-B",
+                    str(Path(__file__).with_name("harness_runtime.py")),
+                    "--harness",
+                    str(harness / "hermes"),
+                    "--receipts",
+                    str(private / (manifest["family_id"] + "-harness.jsonl")),
+                    "--",
+                    *command[4:],
+                ]
             print(f"Running {manifest['family']} ({phase}, paired persistence)", flush=True)
             run_official(command, repository, private / (manifest["family_id"] + ".log"))
             comparison = read_json(trace / "sequence_comparison.json")
             trace_ids = check_traces(trace, options["target_model"])
+            if scope == "hermes":
+                check_harness_receipts(
+                    trace, private / (manifest["family_id"] + "-harness.jsonl"), harness / "hermes"
+                )
             scores = score_comparison(comparison, manifest)
             for variant in ("with_persistence", "without_persistence"):
                 if any(
@@ -518,7 +609,7 @@ def evaluate(lock_path: Path, harness: Path, output: Path, phase: str) -> dict[s
                 repository,
                 private / (manifest["family_id"] + "-report.log"),
             )
-        if candidate_policy(harness)[1] != harness_id:
+        if candidate_policy(harness, scope)[1] != harness_id:
             raise ValueError("Candidate changed during evaluation")
         if load_lock(lock_path) != lock:
             raise ValueError("Protocol changed during evaluation")
@@ -535,6 +626,7 @@ def evaluate(lock_path: Path, harness: Path, output: Path, phase: str) -> dict[s
         "metrics": metrics,
         "harness_id": harness_id,
         "family_count": len(family_scores),
+        "edit_scope": scope,
     }
     write_json(output / "evaluation.json", result)
     # Deliberately publish aggregate diagnostics only. Raw traces can contain keys
@@ -550,7 +642,8 @@ def research_config(lock_path: Path, seed: Path, *, target: float | None = None)
     from areal_rsi.execution import ApprovedCommand
 
     lock = load_lock(lock_path)
-    candidate_policy(seed)
+    scope = lock["protocol"].get("edit_scope", "prompt")
+    candidate_policy(seed, scope)
     command = (
         sys.executable,
         str(Path(__file__).resolve()),
@@ -565,14 +658,24 @@ def research_config(lock_path: Path, seed: Path, *, target: float | None = None)
     return ResearchConfig(
         brief=TaskBrief(
             "改进 PAST-Bench 跨会话经验复用策略",
-            "只修改 prompt.md 中的通用策略，不嵌入具体题目答案或预先学得的用户偏好。"
-            "官方 Hermes 负责记忆和工具执行。先测 seed baseline，再用 develop 诊断和 search "
+            (
+                "可修改 prompt.md 和 hermes/ 下的全部 Harness 源码，包括执行流程、工具、"
+                "记忆、检索、上下文管理与技能机制；允许新增、删除、重构模块。保留 AIAgent、"
+                "SessionDB、tools.registry 的桥接接口和 HERMES_HOME 的持久化契约。"
+                "仅 HERMES_HOME 由官方 runner 按任务序列保留/恢复，代码目录每个 episode 重建，"
+                "不得将学习状态藏在源码或其他位置跨越关闭持久化的对照。依赖环境固定，"
+                "修改依赖清单不会自动安装；不得修改模型连接、评测预算、官方任务或评分器。"
+                if scope == "hermes"
+                else "只修改 prompt.md 中的通用策略。"
+            )
+            + "不嵌入具体题目答案或预先学得的用户偏好。先测 seed baseline，"
+            "再用 develop 诊断和 search "
             "比较候选，最后在独立 final family 上确认。所有 family 均完整运行持久化开关对照。"
             "主要指标 evaluation_lift 是持久化开启与关闭的评测均分之差，按 family 宏平均。"
             "有冷启动的 family 另报 ablation_lift；缺失基线不填零。"
             "passed 表示正向 lift，不代表所有任务通过。原始轨迹仅供操作者检查。"
             "优化方法：先记录 seed 的 search baseline；围绕经验筛选、检索时机、规则作用域、"
-            "过期纠正和迁移提出一个可验证假设，再修改 prompt.md。每次改动保持简洁，"
+            "过期纠正和迁移提出一个可验证假设，再修改允许范围内的 Harness。每次改动保持简洁，"
             "用 develop 获取聚合反馈、用 search 的可信结果决定是否保留候选。"
             "同时报告 evaluation_score 和 without_persistence_score，禁止通过刻意降低关闭"
             "持久化时的表现制造 lift。聚合反馈不能定位具体失败时，应承认不确定性，"
@@ -585,7 +688,7 @@ def research_config(lock_path: Path, seed: Path, *, target: float | None = None)
                 max_verify_calls=4,
                 max_jobs=1,
                 max_wall_seconds=14400,
-                allowed_paths=("prompt.md",),
+                allowed_paths=("prompt.md", "hermes/*") if scope == "hermes" else ("prompt.md",),
             ),
             VerificationContract(
                 METRIC,
@@ -640,14 +743,15 @@ def main() -> None:
     prepare_parser = sub.add_parser("prepare")
     prepare_parser.add_argument("--config", type=Path, required=True)
     prepare_parser.add_argument("--output", type=Path, required=True)
-    for action in ("describe", "evaluate", "configure", "preflight"):
+    for action in ("describe", "evaluate", "configure", "preflight", "seed"):
         command = sub.add_parser(action)
         command.add_argument("--lock", type=Path, required=True)
-        if action not in {"configure", "preflight"}:
+        if action not in {"configure", "preflight", "seed"}:
             command.add_argument("--phase", choices=tuple(PHASES), default="diagnostic")
         if action not in {"describe", "preflight"}:
             command.add_argument("--output", type=Path, required=True)
-            command.add_argument("--harness", type=Path, required=True)
+            if action != "seed":
+                command.add_argument("--harness", type=Path, required=True)
         if action == "configure":
             command.add_argument("--target", type=float)
     args = parser.parse_args()
@@ -655,6 +759,8 @@ def main() -> None:
         if args.action == "prepare":
             result = prepare(args.config.resolve(), args.output.resolve())
             print(json.dumps({"protocol_id": result["protocol_id"]}))
+        elif args.action == "seed":
+            print(json.dumps(seed_harness(args.lock.resolve(), args.output.resolve())))
         elif args.action == "preflight":
             print(json.dumps(preflight(args.lock.resolve())))
         elif args.action == "describe":

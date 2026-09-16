@@ -3,10 +3,11 @@
   "python": "/absolute/path/to/PAST-Bench/.venv/bin/python",
   "revision": "f8223517ae7491e776b69793d9f11e9d074ab42e",
   "sandbox_image": "past-bench-agent:f8223517",
-  "target_model": "YOUR_FIXED_TARGET_MODEL",
+  "edit_scope": "hermes",
+  "target_model": "gpt-6-astra",
   "base_url": "https://api.openai.com/v1",
   "api_key_env": "RSI_TARGET_API_KEY",
-  "judge_model": "YOUR_FIXED_JUDGE_MODEL",
+  "judge_model": "gpt-6-astra",
   "judge_base_url": "https://api.openai.com/v1",
   "judge_api_key_env": "RSI_JUDGE_API_KEY",
   "families": {

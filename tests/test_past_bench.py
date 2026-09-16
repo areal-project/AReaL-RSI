@@ -169,7 +169,7 @@ def test_candidate_scope_identity_and_symlinks(tmp_path: Path) -> None:
         pb.candidate_policy(candidate)
     (candidate / "prompt.md").write_text("General policy")
     (candidate / "grader.py").write_text("raise RuntimeError('must never execute')")
-    with pytest.raises(ValueError, match=r"only prompt\.md"):
+    with pytest.raises(ValueError, match="Candidate permits"):
         pb.candidate_policy(candidate)
     (candidate / "grader.py").unlink()
     (candidate / "secret").symlink_to(tmp_path)
@@ -300,8 +300,9 @@ def test_runtime_errors_are_not_task_scores(tmp_path: Path) -> None:
         pb.check_traces(tmp_path, "fixed")
 
 
+@pytest.mark.parametrize("scope", ["prompt", "hermes"])
 def test_evaluator_delivers_bound_result_to_research_reader(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scope: str
 ) -> None:
     from areal_rsi.api.research import TaskBrief, VerificationContract
     from areal_rsi.base.storage import write_json
@@ -314,7 +315,7 @@ def test_evaluator_delivers_bound_result_to_research_reader(
     operator["target_model"] = "fixed"
     lock = {
         "protocol_id": "protocol",
-        "protocol": {"options": operator, "image_id": "sha256:image"},
+        "protocol": {"options": operator, "image_id": "sha256:image", "edit_scope": scope},
         "manifests": {split: [manifest] for split in pb.PHASES.values()},
     }
     monkeypatch.setattr(pb, "load_lock", lambda path: lock)
@@ -328,6 +329,9 @@ def test_evaluator_delivers_bound_result_to_research_reader(
             return
         assert "--compare-no-persistence" in command and "--sandbox" in command
         assert command[command.index("--runtime") + 1] == "local"
+        if scope == "hermes":
+            assert Path(command[2]).name == "harness_runtime.py"
+            assert command[command.index("--") + 1] == "evolve"
         config = pb.read_json(Path(command[command.index("--config") + 1]))
         assert config["model"]["system_prompt_prefix"] == "General policy"
         trace = Path(command[command.index("--trace-dir") + 1])
@@ -338,12 +342,35 @@ def test_evaluator_delivers_bound_result_to_research_reader(
                 row["trace_id"] = trace_id
                 events = [
                     {"type": "trace_start", "trace_id": trace_id, "model": "fixed"},
+                    {"type": "runtime_request", "session_id": trace_id},
                     {"type": "trace_end", "trace_id": trace_id},
                 ]
                 (trace / f"{trace_id}.jsonl").write_text(
                     "\n".join(json.dumps(event) for event in events)
                 )
         pb.write_json(trace / "sequence_comparison.json", comparison)
+        if scope == "hermes":
+            import hashlib
+
+            source = Path(command[command.index("--harness") + 1])
+            files = {
+                p.relative_to(source).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+                for p in source.rglob("*")
+                if p.is_file()
+            }
+            receipt = {
+                "source_digest": hashlib.sha256(
+                    json.dumps(files, sort_keys=True).encode()
+                ).hexdigest(),
+                "loaded_entry": "hermes/run_agent.py",
+            }
+            Path(command[command.index("--receipts") + 1]).write_text(
+                "\n".join(
+                    json.dumps({**receipt, "session_id": row["trace_id"]})
+                    for variant in ("with_persistence", "without_persistence")
+                    for row in comparison[variant]["episodes"]
+                )
+            )
 
     monkeypatch.setattr(pb, "run_official", official)
 
@@ -356,6 +383,11 @@ def test_evaluator_delivers_bound_result_to_research_reader(
         seed = tmp_path / "seed"
         seed.mkdir()
         (seed / "prompt.md").write_text("General policy")
+        if scope == "hermes":
+            for name in ("run_agent.py", "hermes_state.py", "tools/registry.py"):
+                path = seed / "hermes" / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("# source fixture")
         candidate = await store.snapshot(seed, agent_id="operator", description="seed")
         input_root = store.root / "execution-inputs" / "job-one"
         write_json(input_root / "snapshot.json", candidate.content)

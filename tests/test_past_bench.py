@@ -1,0 +1,361 @@
+from __future__ import annotations
+
+import asyncio
+import copy
+import json
+import math
+import socket
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from areal_rsi.adapters import past_bench as pb
+from areal_rsi.coordination.config import config_from_dict
+
+
+def fixture() -> tuple[dict[str, Any], dict[str, Any]]:
+    episodes: list[dict[str, Any]] = [
+        {"task_id": "cold", "bucket": "baseline", "stage": "cold", "history_mode": "continue"},
+        {"task_id": "learn", "bucket": "learn", "stage": "learn_a", "history_mode": "continue"},
+        {
+            "task_id": "learn_REFLECT",
+            "bucket": "reflection",
+            "stage": "reflection",
+            "episode_kind": "reflection",
+            "requires_fresh_session": True,
+        },
+        {
+            "task_id": "near",
+            "bucket": "evaluation",
+            "stage": "eval_near",
+            "history_mode": "from_anchor",
+            "history_load_anchor": "learned",
+        },
+        {"task_id": "control", "bucket": "control", "stage": "control", "history_mode": "fresh"},
+    ]
+    manifest = {
+        "family": "memory/fixture",
+        "family_id": "fixture",
+        "episodes": episodes,
+        "service_ports": [],
+    }
+    comparison = {}
+    for variant, evaluation in (("with_persistence", 0.9), ("without_persistence", 0.3)):
+        comparison[variant] = {
+            "variant": variant,
+            "episodes": [
+                {
+                    **entry,
+                    "family_id": "fixture",
+                    "infra_blocked": False,
+                    "passed": True,
+                    "task_score": evaluation if entry["bucket"] == "evaluation" else 0.2,
+                }
+                for entry in episodes
+            ],
+        }
+    return manifest, comparison
+
+
+def test_paired_scores_use_episodes_not_untrusted_summary() -> None:
+    manifest, comparison = fixture()
+    comparison["delta"] = {"evaluation_avg_task_score": 100}
+    result = pb.score_comparison(comparison, manifest)
+    assert result[pb.METRIC] == pytest.approx(0.6)
+    assert result["evaluation_score"] == 0.9
+    comparison["with_persistence"]["episodes"][3]["task_score"] = 0
+    assert pb.score_comparison(comparison, manifest)[pb.METRIC] == pytest.approx(-0.3)
+
+
+def test_families_without_cold_baselines_do_not_fabricate_a_baseline() -> None:
+    manifest, comparison = fixture()
+    manifest["episodes"].pop(0)
+    for variant in ("with_persistence", "without_persistence"):
+        comparison[variant]["episodes"].pop(0)
+    result = pb.score_comparison(comparison, manifest)
+    assert result["evaluation_lift"] == pytest.approx(0.6)
+    assert "baseline_score" not in result
+    assert "ablation_lift" not in result
+
+
+def test_macro_average_and_baseline_coverage() -> None:
+    result = pb.aggregate_scores(
+        [
+            {"evaluation_lift": 0.4, "baseline_score": 0.2, "ablation_lift": 0.3},
+            {"evaluation_lift": 0.2},
+        ]
+    )
+    assert result["evaluation_lift"] == pytest.approx(0.3)
+    assert result["baseline_score"] == 0.2
+    assert result["ablation_lift"] == 0.3
+    assert result["baseline_family_count"] == 1
+
+
+def test_occupied_mock_port_is_rejected_without_resetting_service() -> None:
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        port = listener.getsockname()[1]
+        with pytest.raises(ValueError, match="occupied"):
+            pb.require_free_ports([port])
+    pb.require_free_ports([port])
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing",
+        "duplicate",
+        "order",
+        "infra",
+        "nan",
+        "bool",
+        "range",
+        "history",
+        "variant",
+        "reflection",
+        "family",
+        "status",
+    ],
+)
+def test_invalid_comparisons_fail_closed(mutation: str) -> None:
+    manifest, comparison = fixture()
+    block = comparison["with_persistence"]
+    rows = block["episodes"]
+    if mutation == "missing":
+        rows.pop()
+    elif mutation == "duplicate":
+        rows.append(rows[0])
+    elif mutation == "order":
+        rows[0], rows[1] = rows[1], rows[0]
+    elif mutation == "infra":
+        rows[0]["infra_blocked"] = True
+    elif mutation in {"nan", "bool", "range"}:
+        rows[0]["task_score"] = {"nan": math.nan, "bool": True, "range": 2}[mutation]
+    elif mutation == "history":
+        rows[3]["history_load_anchor"] = "other-candidate"
+    elif mutation == "variant":
+        block["variant"] = "without_persistence"
+    elif mutation == "reflection":
+        rows[2]["task_id"] = "arbitrary-extra-task"
+    elif mutation == "family":
+        rows[0]["family_id"] = "other"
+    else:
+        del rows[0]["infra_blocked"]
+    with pytest.raises(ValueError):
+        pb.score_comparison(comparison, manifest)
+
+
+def test_candidate_scope_identity_and_symlinks(tmp_path: Path) -> None:
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    (candidate / "prompt.md").write_text("Learn general rules.")
+    text, identity = pb.candidate_policy(candidate)
+    assert text == "Learn general rules."
+    assert identity == pb.candidate_policy(candidate)[1]
+    (candidate / "prompt.md").write_text("Retrieve relevant rules.")
+    assert identity != pb.candidate_policy(candidate)[1]
+    (candidate / "prompt.md").write_text("${RSI_API_KEY}")
+    with pytest.raises(ValueError, match="environment-variable"):
+        pb.candidate_policy(candidate)
+    (candidate / "prompt.md").write_text("General policy")
+    (candidate / "grader.py").write_text("raise RuntimeError('must never execute')")
+    with pytest.raises(ValueError, match=r"only prompt\.md"):
+        pb.candidate_policy(candidate)
+    (candidate / "grader.py").unlink()
+    (candidate / "secret").symlink_to(tmp_path)
+    with pytest.raises(ValueError, match="symlinks"):
+        pb.candidate_policy(candidate)
+
+
+def options(tmp_path: Path) -> dict[str, Any]:
+    source = Path(__file__).parents[1] / "examples/past_bench/operator.example.json"
+    value: dict[str, Any] = json.loads(source.read_text())
+    value.update(repository=str(tmp_path), python=str(Path(__file__)))
+    return value
+
+
+@pytest.mark.parametrize("mutation", ["overlap", "empty", "traversal", "unknown", "key", "url"])
+def test_operator_validation(tmp_path: Path, mutation: str) -> None:
+    value = options(tmp_path)
+    pb.validate_options(value)
+    if mutation == "overlap":
+        value["families"]["final"] = value["families"]["search"]
+    elif mutation == "empty":
+        value["families"]["search"] = []
+    elif mutation == "traversal":
+        value["families"]["search"] = ["../../secret"]
+    elif mutation == "unknown":
+        value["command"] = "custom grader"
+    elif mutation == "key":
+        value["api_key_env"] = "sk-secret"
+    else:
+        value["base_url"] = "https://user:secret@example.org/v1"
+    with pytest.raises(ValueError):
+        pb.validate_options(value)
+
+
+def test_manifest_and_protocol_identity_change_with_effective_inputs() -> None:
+    manifest, _ = fixture()
+    lock: dict[str, Any] = {
+        "protocol_id": "p",
+        "protocol": {"options": {"target_model": "fixed"}},
+        "manifests": {"development": [manifest], "search": [manifest]},
+    }
+    original = pb.phase_identity(lock, "diagnostic")
+    assert original == pb.phase_identity(copy.deepcopy(lock), "diagnostic")
+    lock["manifests"]["development"][0]["episodes"].pop()
+    assert original["manifest_id"] != pb.phase_identity(lock, "diagnostic")["manifest_id"]
+    lock["protocol_id"] = "changed"
+    assert original["protocol_id"] != pb.phase_identity(lock, "diagnostic")["protocol_id"]
+
+
+def test_research_config_uses_frozen_harness_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, _ = fixture()
+    lock: dict[str, Any] = {
+        "protocol_id": "p",
+        "protocol": {"options": {"target_model": "fixed"}},
+        "manifests": {split: [{**manifest, "family_id": split}] for split in pb.PHASES.values()},
+    }
+    monkeypatch.setattr(pb, "load_lock", lambda path: lock)
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    (seed / "prompt.md").write_text("General policy")
+    config = pb.research_config(tmp_path / "lock.json", seed)
+    restored = config_from_dict(config.public())
+    assert restored.brief.limits.allowed_paths == ("prompt.md",)
+    assert restored.verifier is not None
+    assert restored.verifier.public_output_subdir is None
+    identity = restored.metadata["verification_identity"]
+    assert identity["adapter"] == "harness"
+    assert identity["phases"]["search"]["manifest_id"] != identity["phases"]["final"]["manifest_id"]
+    assert "expected" not in json.dumps(config.public())
+    assert "api_key" not in json.dumps(identity)
+
+
+def test_runtime_errors_are_not_task_scores(tmp_path: Path) -> None:
+    trace = tmp_path / "episode.jsonl"
+    trace.write_text(
+        json.dumps({"type": "trace_start", "model": "fixed", "trace_id": "t"})
+        + "\n"
+        + json.dumps({"type": "trace_end", "trace_id": "t"})
+        + "\n"
+    )
+    pb.check_traces(tmp_path, "fixed")
+    with pytest.raises(ValueError, match="different target"):
+        pb.check_traces(tmp_path, "other")
+    with trace.open("a") as stream:
+        stream.write(json.dumps({"type": "runtime_response", "status": "error"}) + "\n")
+    with pytest.raises(ValueError, match="Runtime error"):
+        pb.check_traces(tmp_path, "fixed")
+
+
+def test_evaluator_delivers_bound_result_to_research_reader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from areal_rsi.api.research import TaskBrief, VerificationContract
+    from areal_rsi.base.storage import write_json
+    from areal_rsi.coordination.coordinator import Coordinator
+    from areal_rsi.coordination.verification import read_trusted_result
+    from areal_rsi.execution import JobRecord, JobSpec
+
+    manifest, comparison = fixture()
+    operator = options(tmp_path)
+    operator["target_model"] = "fixed"
+    lock = {
+        "protocol_id": "protocol",
+        "protocol": {"options": operator, "image_id": "sha256:image"},
+        "manifests": {split: [manifest] for split in pb.PHASES.values()},
+    }
+    monkeypatch.setattr(pb, "load_lock", lambda path: lock)
+    monkeypatch.setenv(operator["api_key_env"], "target-secret-never-published")
+    monkeypatch.setenv(operator["judge_api_key_env"], "judge-secret-never-published")
+    calls: list[list[str]] = []
+
+    def official(command: list[str], repository: Path, log_path: Path) -> None:
+        calls.append(command)
+        if "v2-report" in command:
+            return
+        assert "--compare-no-persistence" in command and "--sandbox" in command
+        assert command[command.index("--runtime") + 1] == "local"
+        config = pb.read_json(Path(command[command.index("--config") + 1]))
+        assert config["model"]["system_prompt_prefix"] == "General policy"
+        trace = Path(command[command.index("--trace-dir") + 1])
+        trace.mkdir()
+        for variant in ("with_persistence", "without_persistence"):
+            for index, row in enumerate(comparison[variant]["episodes"]):
+                trace_id = f"{variant}-{index}"
+                row["trace_id"] = trace_id
+                events = [
+                    {"type": "trace_start", "trace_id": trace_id, "model": "fixed"},
+                    {"type": "trace_end", "trace_id": trace_id},
+                ]
+                (trace / f"{trace_id}.jsonl").write_text(
+                    "\n".join(json.dumps(event) for event in events)
+                )
+        pb.write_json(trace / "sequence_comparison.json", comparison)
+
+    monkeypatch.setattr(pb, "run_official", official)
+
+    async def run() -> None:
+        coordinator = Coordinator.create(
+            tmp_path / "research",
+            TaskBrief("Improve", "Fixed families", verification=VerificationContract(pb.METRIC)),
+        )
+        store = coordinator.store
+        seed = tmp_path / "seed"
+        seed.mkdir()
+        (seed / "prompt.md").write_text("General policy")
+        candidate = await store.snapshot(seed, agent_id="operator", description="seed")
+        input_root = store.root / "execution-inputs" / "job-one"
+        write_json(input_root / "snapshot.json", candidate.content)
+        workspace = input_root / "workspace"
+        await store.content.materialize(candidate.content, workspace)
+        output = store.root / "execution-outputs" / "job-one"
+        result = pb.evaluate(tmp_path / "lock.json", workspace, output, "search")
+        assert len(calls) == 2
+        assert result["score"] == pytest.approx(0.6)
+        assert not (output / "public").exists()
+        assert "secret-never-published" not in (output / "evaluation.json").read_text()
+        job = JobRecord(
+            "job-one",
+            JobSpec(
+                ("trusted-evaluator",),
+                cwd=str(workspace),
+                metadata={
+                    "candidate_id": candidate.candidate_id,
+                    "candidate_digest": candidate.content.digest,
+                    "contract_digest": store.contract_digest(),
+                    "phase": "search",
+                },
+            ),
+            "succeeded",
+            1,
+            2,
+        )
+        identity = {"adapter": "harness", "phases": {"search": pb.phase_identity(lock, "search")}}
+        verified = read_trusted_result(store, job, candidate, "search", identity=identity)
+        assert verified.status == "succeeded" and verified.score == result["score"]
+        for field in ("harness_id", "protocol_id", "manifest_id", "phase", "target_model"):
+            tampered = {**result, field: "tampered"}
+            write_json(output / "evaluation.json", tampered)
+            with pytest.raises(ValueError):
+                read_trusted_result(store, job, candidate, "search", identity=identity)
+        write_json(output / "evaluation.json", result)
+        negative = {
+            **result,
+            "score": -0.1,
+            "passed": False,
+            "metrics": {**result["metrics"], pb.METRIC: -0.1},
+        }
+        write_json(output / "evaluation.json", negative)
+        assert read_trusted_result(store, job, candidate, "search", identity=identity).score == -0.1
+        write_json(output / "evaluation.json", result)
+        (workspace / "prompt.md").write_text("Changed after the evaluation")
+        with pytest.raises(ValueError, match="differ from the frozen"):
+            read_trusted_result(store, job, candidate, "search", identity=identity)
+
+    asyncio.run(run())

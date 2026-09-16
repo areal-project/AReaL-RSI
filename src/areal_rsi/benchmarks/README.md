@@ -1,5 +1,11 @@
 # Benchmark 适配
 
+这里是旧固定流程的 BenchmarkBundle 接口。当前研究工作台也可通过可信
+`ApprovedCommand` 评测冻结候选，并由通用结果读取器校验 `evaluation.json`；
+这类外部接入不必加入内置 catalog。示例见
+[PAST-Bench](../../../examples/past_bench/README.md) 和
+[KernelBench](../../../examples/kernelbench/README.md)。
+
 这个目录负责发现和装配 AReaL-RSI 支持的 Benchmark。Benchmark 定义评测内容、
 数据来源、Verifier 和 Evaluation；它不决定实验优化 Harness、Model 还是 Artifact，
 优化对象由 RSI Agent 生成的 `ExperimentPlan.target` 决定。
@@ -39,4 +45,4 @@ Manifest 中的 `id` 是稳定的 Benchmark 类型，例如 `gsm8k`。Bundle 的
 不能包含任意 Python 导入路径、Shell 命令、凭证或隐藏答案。TRAIN/VALIDATE 的公开 Task
 不得包含 expected；Verifier 所需的私有数据只能由宿主程序读取。
 
-仓库内的 [`benchmark-adapter` Skill](../../../skills/benchmark-adapter/SKILL.md) 描述了完整适配流程。
+仓库内的 [`benchmark-adapter` Skill](../../../skills/benchmark-adapter/SKILL.md) 描述了入口选择和适配流程。

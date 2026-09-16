@@ -84,5 +84,8 @@ demo 在服务重启后自动恢复尚在执行的研究或收尾；手动暂停
 
 系统职责和数据模型见[设计说明](docs/rsi-research-design.md)。旧固定流程和可选运行后端见 [Runtime 指南](docs/runtime-quickstart.md)。开发检查：`make check`；前端检查：`npm ci --prefix tests/frontend && npm test --prefix tests/frontend`。
 
+PAST-Bench 跨会话策略优化见 [接入与运行指南](examples/past_bench/README.md)：使用官方
+Hermes、Docker 工具沙箱和完整任务族持久化对照，支持独立 development/search/final 划分。
+
 旧固定流程仍可通过 `./tui` 启动，脚本自动读取本地 `.env`。Terminal-Bench
 实验配置和用法见 [TB2.1 示例](examples/tb21/README.md)。

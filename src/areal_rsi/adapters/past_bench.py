@@ -1,0 +1,651 @@
+"""Trusted, family-level PAST-Bench evaluator for the research workflow.
+
+The upstream runner owns history branches, persistence ablation and grading.
+Candidates supply policy text only; they cannot replace the runner or graders.
+"""
+
+from __future__ import annotations
+
+import argparse
+import fcntl
+import hashlib
+import json
+import math
+import os
+import re
+import signal
+import socket
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from statistics import mean
+from types import FrameType
+from typing import Any
+from urllib.parse import urlsplit
+
+import yaml  # type: ignore[import-untyped]
+
+REVISION = "f8223517ae7491e776b69793d9f11e9d074ab42e"
+PHASES = {"diagnostic": "development", "search": "search", "final": "final"}
+METRIC = "evaluation_lift"
+
+
+def digest(value: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, ensure_ascii=False, allow_nan=False).encode()
+    ).hexdigest()
+
+
+def write_json(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("x") as stream:
+        json.dump(value, stream, sort_keys=True, indent=2, ensure_ascii=False, allow_nan=False)
+        stream.write("\n")
+
+
+def read_json(path: Path) -> dict[str, Any]:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("Expected a regular JSON file")
+    value = json.loads(path.read_text())
+    if not isinstance(value, dict):
+        raise ValueError("Expected a JSON object")
+    return value
+
+
+def capture(command: list[str], *, cwd: Path | None = None) -> str:
+    result = subprocess.run(command, cwd=cwd, capture_output=True, text=True, timeout=60)
+    if result.returncode:
+        # Dependencies may echo credentials in errors. Keep subprocess logs private.
+        raise ValueError(f"Preflight command failed: {Path(command[0]).name}")
+    return result.stdout.strip()
+
+
+def source_identity(repository: Path, revision: str) -> str:
+    if capture(["git", "rev-parse", "HEAD"], cwd=repository) != revision:
+        raise ValueError("PAST-Bench revision differs from the pinned revision")
+    if capture(["git", "status", "--porcelain", "--untracked-files=no"], cwd=repository):
+        raise ValueError("PAST-Bench tracked files must be unmodified")
+    return revision
+
+
+def environment_identity(python: str, repository: Path) -> str:
+    payload = capture(
+        [
+            python,
+            "-c",
+            "import importlib.metadata as m,json,sys,past_bench; "
+            "print(json.dumps({'python':sys.version,'packages':sorted("
+            "(d.metadata['Name'],d.version) for d in m.distributions()),"
+            "'source':past_bench.__file__}))",
+        ],
+        cwd=repository,
+    )
+    value = json.loads(payload)
+    if not Path(value["source"]).resolve().is_relative_to(repository / "src"):
+        raise ValueError("Python imports a different PAST-Bench checkout")
+    return digest(value)
+
+
+def validate_options(options: dict[str, Any]) -> None:
+    required = {
+        "repository",
+        "python",
+        "revision",
+        "sandbox_image",
+        "target_model",
+        "base_url",
+        "api_key_env",
+        "judge_model",
+        "judge_base_url",
+        "judge_api_key_env",
+        "families",
+    }
+    if set(options) != required:
+        raise ValueError(f"Operator fields must be exactly {sorted(required)}")
+    for name in required - {"families"}:
+        if not isinstance(options[name], str) or not options[name].strip():
+            raise ValueError(f"{name} must be a nonempty string")
+    if options["revision"] != REVISION:
+        raise ValueError("This adapter supports the documented pinned revision only")
+    for field in ("repository", "python"):
+        if not Path(options[field]).is_absolute() or not Path(options[field]).exists():
+            raise ValueError(f"{field} must be an existing absolute path")
+    for field in ("api_key_env", "judge_api_key_env"):
+        if not re.fullmatch(r"[A-Z_][A-Z0-9_]*", options[field]):
+            raise ValueError(f"{field} must name an environment variable")
+    for field in ("base_url", "judge_base_url"):
+        url = urlsplit(options[field])
+        if (
+            url.scheme not in {"https", "http"}
+            or not url.hostname
+            or url.username
+            or url.password
+            or url.query
+            or url.fragment
+        ):
+            raise ValueError(f"{field} must be a credential-free HTTP(S) endpoint")
+    pools = options["families"]
+    if not isinstance(pools, dict) or set(pools) != set(PHASES.values()):
+        raise ValueError("Define development, search and final family pools")
+    seen: set[str] = set()
+    for families in pools.values():
+        if not isinstance(families, list) or not families:
+            raise ValueError("Every family pool must be nonempty")
+        for family in families:
+            if not isinstance(family, str) or not re.fullmatch(
+                r"[A-Za-z0-9_]+/[A-Za-z0-9_]+", family
+            ):
+                raise ValueError("Family must be ability/family without path traversal")
+            if family in seen:
+                raise ValueError("Family pools must be disjoint and contain no duplicates")
+            seen.add(family)
+
+
+def family_manifest(options: dict[str, Any], family: str) -> dict[str, Any]:
+    repository = Path(options["repository"])
+    with tempfile.TemporaryDirectory(prefix="past-manifest-") as temporary:
+        path = Path(temporary) / "sequence.yaml"
+        capture(
+            [
+                options["python"],
+                "-c",
+                "import sys; from pathlib import Path; "
+                "from past_bench.self_evolve_v2.manifest import generate_manifest; "
+                "generate_manifest(sys.argv[1],Path(sys.argv[2]),repo_root=sys.argv[3])",
+                family,
+                str(path),
+                str(repository),
+            ],
+            cwd=repository,
+        )
+        sequence = yaml.safe_load(path.read_text())
+    episodes = []
+    service_ports: set[int] = set()
+    for entry in sequence["episodes"]:
+        task_dir = Path(entry["task"])
+        if not task_dir.is_absolute():
+            task_dir = path.parent / task_dir
+        task = yaml.safe_load((task_dir / "task.yaml").read_text())
+        service_ports.update(service["port"] for service in task.get("services", []))
+        episodes.append(
+            {
+                "task_id": task["task_id"],
+                "bucket": entry["bucket"],
+                "stage": entry["stage"],
+                "history_mode": entry["history_mode"],
+                "history_load_anchor": entry["history_load_anchor"],
+                "history_save_anchor": entry["history_save_anchor"],
+                "persistence_allowed": entry["persistence_allowed"],
+                "requires_fresh_session": entry["requires_fresh_session"],
+            }
+        )
+        if (
+            sequence["hermes"]["reflection_enabled"]
+            and entry["bucket"] == "learn"
+            and entry["reflection_required"]
+        ):
+            episodes.append(
+                {
+                    "task_id": task["task_id"] + "_REFLECT",
+                    "bucket": "reflection",
+                    "stage": "reflection",
+                    "episode_kind": "reflection",
+                    "requires_fresh_session": True,
+                    "persistence_allowed": entry["persistence_allowed"],
+                }
+            )
+    ids = [episode["task_id"] for episode in episodes]
+    if len(ids) != len(set(ids)) or "evaluation" not in {episode["bucket"] for episode in episodes}:
+        raise ValueError("Family must contain unique episodes and evaluation tasks")
+    return {
+        "family": family,
+        "family_id": sequence["episodes"][0]["family_id"],
+        "episodes": episodes,
+        "service_ports": sorted(service_ports),
+    }
+
+
+def protocol(options: dict[str, Any]) -> dict[str, Any]:
+    validate_options(options)
+    repository = Path(options["repository"])
+    revision = source_identity(repository, options["revision"])
+    image = capture(["docker", "image", "inspect", "--format", "{{.Id}}", options["sandbox_image"]])
+    return {
+        "revision": revision,
+        "image_id": image,
+        "environment_id": environment_identity(options["python"], repository),
+        "adapter_id": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "options": options,
+        "metric": METRIC,
+        "agent": "hermes",
+        "runtime": "local",
+        "sandbox": True,
+        "paired": True,
+        "temperature": 0.0,
+    }
+
+
+def prepare(config: Path, output: Path) -> dict[str, Any]:
+    options = read_json(config)
+    pinned = protocol(options)
+    manifests = {
+        split: [family_manifest(options, family) for family in families]
+        for split, families in options["families"].items()
+    }
+    result = {
+        "schema_version": 1,
+        "protocol": pinned,
+        "protocol_id": digest(pinned),
+        "manifests": manifests,
+    }
+    write_json(output, result)
+    return result
+
+
+def load_lock(path: Path) -> dict[str, Any]:
+    lock = read_json(path)
+    if lock.get("schema_version") != 1 or digest(lock["protocol"]) != lock["protocol_id"]:
+        raise ValueError("Invalid PAST-Bench lock")
+    if protocol(lock["protocol"]["options"]) != lock["protocol"]:
+        raise ValueError("Evaluation environment changed; prepare a new lock and research run")
+    options = lock["protocol"]["options"]
+    for split, families in options["families"].items():
+        if [family_manifest(options, family) for family in families] != lock["manifests"][split]:
+            raise ValueError("Family manifest changed")
+    return lock
+
+
+def phase_identity(lock: dict[str, Any], phase: str) -> dict[str, Any]:
+    split = PHASES[phase]
+    return {
+        "protocol_id": lock["protocol_id"],
+        "manifest_id": digest(lock["manifests"][split]),
+        "split": split,
+        "target_model": lock["protocol"]["options"]["target_model"],
+    }
+
+
+def candidate_policy(harness: Path) -> tuple[str, str]:
+    if harness.is_symlink() or not harness.is_dir():
+        raise ValueError("Candidate must be a directory")
+    files: dict[str, str] = {}
+    for path in sorted(harness.rglob("*")):
+        if path.is_symlink():
+            raise ValueError("Candidate symlinks are not allowed")
+        if path.is_dir():
+            continue
+        if path.relative_to(harness).as_posix() != "prompt.md" or not path.is_file():
+            raise ValueError("PAST-Bench policy candidates contain only prompt.md")
+        if path.stat().st_size > 64_000:
+            raise ValueError("Policy exceeds 64 KB")
+        files["prompt.md"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    if set(files) != {"prompt.md"}:
+        raise ValueError("Candidate requires prompt.md")
+    policy = (harness / "prompt.md").read_text()
+    if re.fullmatch(r"\$\{[^}]+\}", policy.strip()):
+        raise ValueError("Policy must not be an environment-variable reference")
+    return policy, hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
+
+
+def finite_score(value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError("Episode score must be finite")
+    if not 0 <= value <= 1:
+        raise ValueError("Episode score is outside [0, 1]")
+    return float(value)
+
+
+def score_comparison(comparison: dict[str, Any], manifest: dict[str, Any]) -> dict[str, float]:
+    """Recompute measured deltas from complete episodes, never trust summary totals."""
+    scores: dict[str, dict[str, float]] = {}
+    for variant in ("with_persistence", "without_persistence"):
+        block = comparison[variant]
+        if block.get("variant") != variant:
+            raise ValueError("Mismatched persistence variant")
+        rows = block["episodes"]
+        if not isinstance(rows, list) or len(rows) != len(manifest["episodes"]):
+            raise ValueError("Incomplete family evaluation")
+        buckets: dict[str, list[float]] = {}
+        for row, expected in zip(rows, manifest["episodes"], strict=True):
+            if row.get("family_id") != manifest["family_id"] or any(
+                row.get(key) != value for key, value in expected.items()
+            ):
+                raise ValueError("Episode identity, order or history differs from manifest")
+            reflection = expected.get("episode_kind") == "reflection"
+            if row.get("infra_blocked", False if reflection else None) is not False:
+                raise ValueError("Infrastructure failure or missing episode status")
+            if reflection:
+                continue
+            if not isinstance(row.get("passed"), bool):
+                raise ValueError("Episode has no boolean pass result")
+            buckets.setdefault(row["bucket"], []).append(finite_score(row["task_score"]))
+        scores[variant] = {bucket: mean(values) for bucket, values in buckets.items()}
+    on, off = scores["with_persistence"], scores["without_persistence"]
+    result = {
+        "evaluation_score": on["evaluation"],
+        "without_persistence_score": off["evaluation"],
+        METRIC: on["evaluation"] - off["evaluation"],
+    }
+    if "baseline" in on and "baseline" in off:
+        result.update(
+            baseline_score=on["baseline"],
+            outcome_delta=on["evaluation"] - on["baseline"],
+            ablation_lift=(on["evaluation"] - on["baseline"])
+            - (off["evaluation"] - off["baseline"]),
+        )
+    return result
+
+
+def aggregate_scores(families: list[dict[str, float]]) -> dict[str, float]:
+    if not families:
+        raise ValueError("No evaluated families")
+    # Missing baselines remain missing; only observed family metrics are averaged.
+    metrics = {
+        key: mean(row[key] for row in families if key in row)
+        for key in sorted(set().union(*(row.keys() for row in families)))
+    }
+    metrics["baseline_family_count"] = sum("baseline_score" in row for row in families)
+    return metrics
+
+
+def require_free_ports(ports: list[int]) -> None:
+    # Upstream reuses and resets healthy existing services, which could be another
+    # run's fixtures. Refuse that situation before invoking the runner.
+    for port in ports:
+        with socket.socket() as connection:
+            connection.settimeout(0.2)
+            if connection.connect_ex(("127.0.0.1", port)) == 0:
+                raise ValueError(f"Task service port {port} is occupied; stop or relocate that run")
+
+
+def check_traces(root: Path, target_model: str) -> set[str]:
+    traces = list(root.rglob("*.jsonl"))
+    starts: set[str] = set()
+    for path in traces:
+        trace_ids: set[str] = set()
+        ended: set[str] = set()
+        # Hermes session logs are not benchmark trace event streams.
+        for line in path.read_text().splitlines():
+            event = json.loads(line)
+            if event.get("type") == "trace_start":
+                trace_ids.add(event["trace_id"])
+                if event.get("model") != target_model:
+                    raise ValueError("Trace uses a different target model")
+            if event.get("type") == "runtime_response" and event.get("status") == "error":
+                raise ValueError("Runtime error in benchmark trace")
+            if event.get("type") == "trace_end" and event.get("failure_modes"):
+                raise ValueError("Incomplete or failed benchmark execution")
+            if event.get("type") == "trace_end":
+                ended.add(event["trace_id"])
+        if trace_ids != ended:
+            raise ValueError("Missing trace start/end event")
+        starts.update(trace_ids)
+    if not starts:
+        raise ValueError("Missing real benchmark traces")
+    return starts
+
+
+def run_official(command: list[str], repository: Path, log_path: Path) -> None:
+    # Give the official runner a chance to execute service/container finally blocks.
+    # Its process group is scoped to this evaluation, never all past-bench containers.
+    with log_path.open("x") as log:
+        process = subprocess.Popen(
+            command, cwd=repository, stdout=log, stderr=log, start_new_session=True
+        )
+        try:
+            if process.wait(timeout=14400):
+                raise ValueError("Official runner failed; inspect private operator log")
+        finally:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGINT)
+                try:
+                    process.wait(timeout=20)
+                except subprocess.TimeoutExpired:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait()
+
+
+def evaluate(lock_path: Path, harness: Path, output: Path, phase: str) -> dict[str, Any]:
+    lock = load_lock(lock_path)
+    policy, harness_id = candidate_policy(harness)
+    options = lock["protocol"]["options"]
+    for variable in (options["api_key_env"], options["judge_api_key_env"]):
+        if not os.environ.get(variable):
+            raise ValueError(f"Set {variable} before evaluation")
+    if output.is_symlink() or (output.exists() and any(output.iterdir())):
+        raise ValueError("Evaluation requires a new, empty output directory")
+    output.mkdir(parents=True, exist_ok=True)
+    private = output / "private"
+    private.mkdir(mode=0o700)
+    repository = Path(options["repository"])
+    # Upstream notes/mock services use fixed ports. Serialize runs on this checkout.
+    with (repository / ".areal-rsi-evaluation.lock").open("a") as guard:
+        fcntl.flock(guard, fcntl.LOCK_EX)
+        registry = {
+            "agents": {
+                "hermes": {
+                    "adapter": "hermes",
+                    "install_policy": "prebaked",
+                    "capabilities": ["tool_use", "multimodal", "sandbox_file_ops"],
+                    "default_model": {
+                        "model_id": options["target_model"],
+                        "api_key_env": options["api_key_env"],
+                        "base_url": options["base_url"],
+                    },
+                }
+            }
+        }
+        registry_path = private / "agents.json"
+        write_json(registry_path, registry)
+        config = {
+            "model": {
+                "model_id": options["target_model"],
+                "base_url": options["base_url"],
+                "api_key": "${" + options["api_key_env"] + "}",
+                "system_prompt_prefix": policy,
+            },
+            "judge": {
+                "enabled": True,
+                "model_id": options["judge_model"],
+                "base_url": options["judge_base_url"],
+                "api_key": "${" + options["judge_api_key_env"] + "}",
+            },
+            "runtime": {
+                "mode": "local",
+                "temperature": 0.0,
+                "registry_path": str(registry_path),
+                "cache_dir": str(private / "runtime-cache"),
+            },
+            "sandbox": {"image": lock["protocol"]["image_id"]},
+        }
+        config_path = private / "runtime.json"
+        write_json(config_path, config)
+        family_scores = []
+        for manifest in lock["manifests"][PHASES[phase]]:
+            require_free_ports(manifest["service_ports"])
+            trace = private / manifest["family_id"]
+            command = [
+                options["python"],
+                "-u",
+                "-m",
+                "past_bench.cli",
+                "evolve",
+                "--family",
+                manifest["family"],
+                "--agent",
+                "hermes",
+                "--runtime",
+                "local",
+                "--sandbox",
+                "--sandbox-tools",
+                "--compare-no-persistence",
+                "--registry",
+                str(registry_path),
+                "--config",
+                str(config_path),
+                "--trace-dir",
+                str(trace),
+            ]
+            print(f"Running {manifest['family']} ({phase}, paired persistence)", flush=True)
+            run_official(command, repository, private / (manifest["family_id"] + ".log"))
+            comparison = read_json(trace / "sequence_comparison.json")
+            trace_ids = check_traces(trace, options["target_model"])
+            scores = score_comparison(comparison, manifest)
+            for variant in ("with_persistence", "without_persistence"):
+                if any(
+                    row.get("trace_id") not in trace_ids for row in comparison[variant]["episodes"]
+                ):
+                    raise ValueError("Episode is missing its execution trace")
+            family_scores.append(scores)
+            write_json(trace / "rsi_metrics.json", scores)
+            run_official(
+                [options["python"], "-m", "past_bench.cli", "v2-report", str(trace)],
+                repository,
+                private / (manifest["family_id"] + "-report.log"),
+            )
+        if candidate_policy(harness)[1] != harness_id:
+            raise ValueError("Candidate changed during evaluation")
+        if load_lock(lock_path) != lock:
+            raise ValueError("Protocol changed during evaluation")
+    metrics = aggregate_scores(family_scores)
+    result = {
+        **phase_identity(lock, phase),
+        "adapter": "past-bench",
+        "status": "completed",
+        "simulated": False,
+        "phase": phase,
+        "metric": METRIC,
+        "score": metrics[METRIC],
+        "passed": metrics[METRIC] > 0,
+        "metrics": metrics,
+        "harness_id": harness_id,
+        "family_count": len(family_scores),
+    }
+    write_json(output / "evaluation.json", result)
+    # Deliberately publish aggregate diagnostics only. Raw traces can contain keys
+    # in upstream runtime_request events and must stay operator-private.
+    if phase == "diagnostic":
+        write_json(output / "public" / "feedback.json", result)
+    return result
+
+
+def research_config(lock_path: Path, seed: Path, *, target: float | None = None) -> Any:
+    from areal_rsi.api.research import ResearchLimits, TaskBrief, VerificationContract
+    from areal_rsi.coordination.config import ResearchConfig
+    from areal_rsi.execution import ApprovedCommand
+
+    lock = load_lock(lock_path)
+    candidate_policy(seed)
+    command = (
+        sys.executable,
+        "-m",
+        "areal_rsi.adapters.past_bench",
+        "evaluate",
+        "--lock",
+        str(lock_path),
+        "--harness",
+        "{workspace}",
+        "--output",
+        "{output}",
+    )
+    return ResearchConfig(
+        brief=TaskBrief(
+            "改进 PAST-Bench 跨会话经验复用策略",
+            "只修改 prompt.md 中的通用策略，不嵌入具体题目答案或预先学得的用户偏好。"
+            "官方 Hermes 负责记忆和工具执行。先测 seed baseline，再用 develop 诊断和 search "
+            "比较候选，最后在独立 final family 上确认。所有 family 均完整运行持久化开关对照。"
+            "主要指标 evaluation_lift 是持久化开启与关闭的评测均分之差，按 family 宏平均。"
+            "有冷启动的 family 另报 ablation_lift；缺失基线不填零。"
+            "passed 表示正向 lift，不代表所有任务通过。原始轨迹仅供操作者检查。",
+            ResearchLimits(
+                max_agents=1,
+                max_nodes=8,
+                max_model_calls=100,
+                max_verify_calls=4,
+                max_jobs=1,
+                max_wall_seconds=14400,
+                allowed_paths=("prompt.md",),
+            ),
+            VerificationContract(
+                METRIC,
+                target=target,
+                description="完整 family 成对提升；研究划分",
+                identity={"feedback": "aggregate_only", "require_final_confirmation": True},
+            ),
+        ),
+        seed_dir=str(seed),
+        commands=(
+            ApprovedCommand(
+                "develop",
+                (*command, "--phase", "diagnostic"),
+                ("workspace", "output"),
+                timeout_seconds=14400,
+                output_subdir="public",
+            ),
+        ),
+        verifier=ApprovedCommand(
+            "verify",
+            (*command, "--phase", "{phase}"),
+            ("workspace", "output", "phase"),
+            timeout_seconds=14400,
+        ),
+        metadata={
+            "template": "past-bench",
+            "simulation_only": False,
+            "evaluate_seed_as_baseline": True,
+            "verification_identity": {
+                "adapter": "harness",
+                "phases": {phase: phase_identity(lock, phase) for phase in PHASES},
+            },
+        },
+    )
+
+
+def main() -> None:
+    def interrupted(signum: int, frame: FrameType | None) -> None:
+        raise InterruptedError("Evaluation interrupted")
+
+    signal.signal(signal.SIGTERM, interrupted)
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="action", required=True)
+    prepare_parser = sub.add_parser("prepare")
+    prepare_parser.add_argument("--config", type=Path, required=True)
+    prepare_parser.add_argument("--output", type=Path, required=True)
+    for action in ("describe", "evaluate", "configure"):
+        command = sub.add_parser(action)
+        command.add_argument("--lock", type=Path, required=True)
+        if action != "configure":
+            command.add_argument("--phase", choices=tuple(PHASES), default="diagnostic")
+        if action != "describe":
+            command.add_argument("--output", type=Path, required=True)
+            command.add_argument("--harness", type=Path, required=True)
+        if action == "configure":
+            command.add_argument("--target", type=float)
+    args = parser.parse_args()
+    try:
+        if args.action == "prepare":
+            result = prepare(args.config.resolve(), args.output.resolve())
+            print(json.dumps({"protocol_id": result["protocol_id"]}))
+        elif args.action == "describe":
+            print(json.dumps(phase_identity(load_lock(args.lock.resolve()), args.phase)))
+        elif args.action == "configure":
+            from areal_rsi.coordination.config import config_from_dict
+
+            config = research_config(
+                args.lock.resolve(), args.harness.resolve(), target=args.target
+            )
+            config_from_dict(config.public())
+            write_json(args.output.resolve(), config.public())
+            print(f"Research configuration written: {args.output}")
+        else:
+            result = evaluate(
+                args.lock.resolve(), args.harness.absolute(), args.output.absolute(), args.phase
+            )
+            print(json.dumps(result))
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
+        parser.exit(2, f"PAST-Bench evaluation unavailable: {error}\n")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,15 @@
+# Same sandbox server and tools as upstream Dockerfile.agent; configurable mirrors.
+ARG REGISTRY=docker.io
+FROM ${REGISTRY}/python:3.11-slim
+ARG DEBIAN_MIRROR=http://deb.debian.org
+ARG PIP_INDEX_URL=https://pypi.org/simple
+WORKDIR /workspace
+RUN sed -i "s|http://deb.debian.org|${DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends libreoffice file unzip \
+    && rm -rf /var/lib/apt/lists/*
+COPY requirements-sandbox-server.txt /tmp/requirements.txt
+RUN pip install -r /tmp/requirements.txt --no-cache-dir && rm /tmp/requirements.txt
+COPY src/past_bench/sandbox/ /opt/sandbox/
+EXPOSE 8080
+ENTRYPOINT ["python", "/opt/sandbox/server.py", "--port", "8080"]

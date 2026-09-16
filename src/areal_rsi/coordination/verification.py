@@ -8,6 +8,10 @@ The operator supplies ``identity`` from config.metadata["verification_identity"]
         "final": {"protocol_id": "...", "manifest_id": "...",
                   "target_model": "fixed-target", "split": "final"}}}
 
+The generic ``harness`` adapter binds the frozen candidate's file hashes to
+``harness_id`` and requires protocol_id and manifest_id. It supports arbitrary
+finite metric ranges, including signed improvement scores.
+
 The generic ``content`` adapter requires protocol_id and manifest_id;
 its wrapper must echo candidate_id and candidate_digest (the CAS directory
 digest). Additional configured identity fields are compared exactly.
@@ -34,6 +38,7 @@ from areal_rsi.execution import JobRecord
 
 IDENTITY_FIELDS = {
     "kernelbench": {"protocol_id", "manifest_id", "target_model", "split"},
+    "harness": {"protocol_id", "manifest_id"},
     "content": {"protocol_id", "manifest_id"},
 }
 
@@ -111,7 +116,7 @@ def _frozen_files(
 def _candidate_identity(
     adapter: str, result: dict[str, Any], candidate: CandidateSnapshot, files: dict[str, str]
 ) -> None:
-    if adapter == "kernelbench":
+    if adapter in {"kernelbench", "harness"}:
         digest = hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
         if result.get("harness_id") != digest:
             raise ValueError("Verifier evaluated a different harness")

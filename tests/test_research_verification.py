@@ -90,7 +90,7 @@ def fixture(
     return store, job, candidate, identity, result, output
 
 
-@pytest.mark.parametrize("adapter", ["content", "kernelbench"])
+@pytest.mark.parametrize("adapter", ["content", "kernelbench", "harness"])
 @pytest.mark.parametrize("phase", ["search", "final"])
 def test_real_result_binds_frozen_candidate_contract_and_phase(
     tmp_path: Path, adapter: str, phase: str

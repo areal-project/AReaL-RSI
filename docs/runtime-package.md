@@ -1,5 +1,7 @@
 # 后台通过 Python package 接入 ARealAgentRuntime
 
+所有研究后端统一通过 ARealAgentRuntime 的公开 API 接入。连续研究工作台使用 `ResearchRuntime`（`modules/runtime_research.py`），将 `standard` 和 `codex` 注册为 `HarnessAdapterPort`，业务工具通过 `ToolProviderPort` 授权、执行并提交；细节见 [Agent 后端](agent-backends.md)。下文描述保留的固定工作流入口及其配置，不应将它的 `RSI_RUNTIME_CONFIG` 与工作台的 `backend` 混用。
+
 后台 RSI Agent、ResearchAgent、Task Agent 通过 `PackageAgentRuntime` 接入；前台仍使用 DSH 原生 TUI。
 RSI 管理实验循环、不可变候选、TRAIN/VALIDATE、评分和选版。Runtime 管理 Agent 执行、会话、工具和已提交事件。
 

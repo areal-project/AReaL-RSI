@@ -156,7 +156,7 @@ class ResearchStore:
                 result.append(self.decode_record(ResearchEvent, json.loads(path.read_text())))
         return result
 
-    def public_record(self, ref: RecordRef) -> Any:
+    def record_reference(self, ref: RecordRef) -> RecordRef:
         """Resolve only public run records, never private verifier data or sessions.
 
         Role-specific sharing/grants are checked by the coordinator on top of this
@@ -170,9 +170,34 @@ class ResearchStore:
             "evidence",
             "materials",
             "candidates",
+            "withdrawals",
             "verifications",
             "executions",
         }
+        if not uri.scheme and not uri.netloc and not uri.query and not uri.fragment:
+            # Resolve exact IDs only within this run. Do not guess misspellings,
+            # search other runs, or turn an ID into an authorization grant.
+            if "/" in ref.uri:
+                parts = ref.uri.split("/")
+                if len(parts) != 2 or parts[0] not in allowed:
+                    raise ValueError("Reference is outside this run's public research records")
+                identifier = safe_name(parts[1].removesuffix(".json"))
+                relative_record = self.root / parts[0] / f"{identifier}.json"
+                if not relative_record.is_file():
+                    raise ValueError("记录不存在；请用 list_records 核对引用")
+                return self.paths.reference(relative_record)
+            identifier = safe_name(ref.uri.removesuffix(".json"))
+            matches = [
+                self.root / category / f"{identifier}.json"
+                for category in allowed
+                # Withdrawals annotate candidates under the same storage key;
+                # they require a qualified reference, not a second entity ID.
+                if category != "withdrawals"
+                and (self.root / category / f"{identifier}.json").is_file()
+            ]
+            if len(matches) != 1:
+                raise ValueError("记录 ID 不存在或不唯一；请用 list_records 核对完整 URI")
+            return self.paths.reference(matches[0])
         path = safe_relative(unquote(uri.path.lstrip("/")))
         if (
             uri.scheme != "run"
@@ -182,14 +207,43 @@ class ResearchStore:
             or path.parts[0] not in allowed
         ):
             raise ValueError("Reference is outside this run's public research records")
-        return self.runs.read_json(ref)
+        if not path.name.endswith(".json"):
+            complete = path.with_name(path.name + ".json")
+            if (self.root / complete).is_file():
+                path = complete
+        return self.paths.reference(self.root / path)
+
+    def public_record(self, ref: RecordRef) -> Any:
+        return self.runs.read_json(self.record_reference(ref))
 
     def evidence(self, agent_id: str) -> list[EvidenceRecord]:
-        return [
-            item
-            for item in self.records("evidence", EvidenceRecord)
+        records = self.records("evidence", EvidenceRecord)
+        by_uri = {
+            self.paths.reference(self.root / "evidence" / f"{item.evidence_id}.json").uri: item
+            for item in records
+        }
+        pending = [
+            uri
+            for uri, item in by_uri.items()
             if agent_id == "rsi" or item.agent_id == agent_id or item.shared
         ]
+        pending.extend(
+            ref.uri
+            for actor in self.run().research_agents
+            if actor.agent_id == agent_id
+            for node in actor.iterations
+            for ref in node.references
+        )
+        visible = set()
+        while pending:
+            uri = pending.pop()
+            if uri in visible or uri not in by_uri:
+                continue
+            visible.add(uri)
+            # An explicitly handed-off evidence record includes its supporting
+            # evidence. Private paths and other runs remain outside this index.
+            pending.extend(ref.uri for ref in by_uri[uri].references)
+        return [item for uri, item in by_uri.items() if uri in visible]
 
     def publish_evidence(
         self, evidence_id: str, *, limitations: str, publication_id: str | None = None
@@ -310,6 +364,64 @@ class ResearchStore:
         self.event("verification_completed", result=encode(result))
         return ref
 
+    def withdrawals(self) -> list[dict[str, Any]]:
+        return [
+            json.loads(path.read_text())
+            for path in sorted((self.root / "withdrawals").glob("*.json"))
+        ]
+
+    def is_withdrawn(self, candidate_id: str) -> bool:
+        candidate = self.get("candidates", candidate_id, CandidateSnapshot)
+        return any(
+            item["content_digest"] == candidate.content.digest for item in self.withdrawals()
+        )
+
+    def withdraw_candidate(
+        self,
+        candidate_id: str,
+        reason: str,
+        references: tuple[RecordRef, ...],
+        *,
+        simulated_run: bool = False,
+        agent_id: str = "rsi",
+    ) -> RecordRef:
+        """Remove a known-defective artifact from selection; retain its measurements."""
+        candidate = self.get("candidates", candidate_id, CandidateSnapshot)
+        if not reason.strip():
+            raise ValueError("Candidate withdrawal needs a concrete reason")
+        path = self.root / "withdrawals" / f"{candidate_id}.json"
+        if not path.exists():
+            self.put(
+                "withdrawals",
+                candidate_id,
+                {
+                    "candidate_id": candidate_id,
+                    "content_digest": candidate.content.digest,
+                    "agent_id": agent_id,
+                    "reason": reason,
+                    "created_at": now(),
+                    "references": encode(references),
+                },
+            )
+            self.event(
+                "candidate_withdrawn", agent_id=agent_id, candidate_id=candidate_id, reason=reason
+            )
+        # Reconcile on replay too: a crash may follow the immutable withdrawal.
+        run = self.run()
+        if run.final_result_ref and self.is_withdrawn(
+            self.public_record(run.final_result_ref)["candidate_id"]
+        ):
+            run.final_result_ref = None
+        if run.best_result_ref and self.is_withdrawn(
+            self.public_record(run.best_result_ref)["candidate_id"]
+        ):
+            run.best_result_ref = None
+        self.save_run(run)
+        if self.brief().verification is not None:
+            for result in self.records("verifications", VerifiedResult):
+                self.consider_best(result.result_id, simulated_run=simulated_run)
+        return self.paths.reference(path)
+
     def consider_best(self, result_id: str, *, simulated_run: bool = False) -> bool:
         result = self.get("verifications", result_id, VerifiedResult)
         if (
@@ -318,6 +430,7 @@ class ResearchStore:
             or not result.passed
             or result.phase != "search"
             or result.simulated != simulated_run
+            or self.is_withdrawn(result.candidate_id)
         ):
             return False
         contract = self.brief().verification

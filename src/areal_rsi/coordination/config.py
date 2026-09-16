@@ -11,7 +11,7 @@ from typing import Any
 from areal_rsi.api.research import TaskBrief
 from areal_rsi.base.storage import decode, encode
 from areal_rsi.execution import ApprovedCommand
-from areal_rsi.modules.responses import ResponsesConfig
+from areal_rsi.modules.agent_runtime import RuntimeConfig
 
 MODEL_EFFORTS = {
     "gpt-5.6-luna": ("none", "low", "medium", "high", "xhigh", "max"),
@@ -19,15 +19,18 @@ MODEL_EFFORTS = {
     "gpt-5.6-terra": ("none", "low", "medium", "high", "xhigh", "max"),
     "gpt-6-astra": ("low", "medium", "high", "xhigh", "max"),
 }
-MODEL_FIELDS = ("base_url", "model", "reasoning_effort")
+MODEL_FIELDS = ("base_url", "model", "reasoning_effort", "backend")
 
 
 def validate_model_settings(value: dict[str, Any]) -> dict[str, str]:
+    value = {"backend": "standard", **value}
     if set(value) != set(MODEL_FIELDS) or any(
         not isinstance(value[key], str) or not value[key].strip() for key in MODEL_FIELDS
     ):
         raise ValueError("请填写 API 地址、模型和推理强度")
     settings = {key: value[key].strip() for key in MODEL_FIELDS}
+    if settings["backend"] not in {"standard", "codex"}:
+        raise ValueError("Agent 后端支持 standard 或 codex")
     if len(settings["model"]) > 200 or any(c.isspace() for c in settings["model"]):
         raise ValueError("模型名称不能包含空格，且不能超过 200 字")
     if settings["reasoning_effort"] not in MODEL_EFFORTS.get(
@@ -36,7 +39,9 @@ def validate_model_settings(value: dict[str, Any]) -> dict[str, str]:
         raise ValueError("该模型不支持所选推理强度")
     # Reuse the actual transport's URL validation; no request or credential is needed.
     try:
-        ResponsesConfig(api_key="validation-only", **settings)
+        RuntimeConfig(
+            api_key="validation-only", **{k: v for k, v in settings.items() if k != "backend"}
+        )
         if any(char.isspace() for char in settings["base_url"]):
             raise ValueError
     except ValueError as exc:
@@ -49,6 +54,8 @@ def validate_model_settings(value: dict[str, Any]) -> dict[str, str]:
 class ResearchConfig:
     brief: TaskBrief
     seed_dir: str | None = None
+    backend: str = "standard"
+    research_prompt_variant: str = "simple"
     model: str = "gpt-6-astra"
     reasoning_effort: str = "xhigh"
     base_url: str = "https://api.openai.com"
@@ -57,7 +64,7 @@ class ResearchConfig:
     api_key_env: str = "RSI_API_KEY"
     credential_file: str | None = None
     max_output_tokens: int = 16384
-    context_window_tokens: int = 128_000
+    context_window_tokens: int | None = None
     compact_keep_recent_tokens: int = 8_000
     max_model_calls_per_turn: int | None = None
     retry_initial_seconds: float = 2
@@ -68,6 +75,12 @@ class ResearchConfig:
     execution_env: dict[str, str] = field(default_factory=dict)
     simulation_scores: tuple[float, ...] = (0.3, 0.5, 0.7)
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.backend not in {"standard", "codex"}:
+            raise ValueError("Agent 后端支持 standard 或 codex")
+        if self.research_prompt_variant not in {"simple", "detailed"}:
+            raise ValueError("Research Prompt 支持 simple 或 detailed")
 
     def model_settings(self) -> dict[str, str]:
         return {
@@ -81,13 +94,14 @@ class ResearchConfig:
         for key, value in self.model_settings().items():
             setattr(self, key, value)
         self.model_settings_pinned = True
+        self.__post_init__()
 
-    def runtime(self) -> ResponsesConfig:
+    def runtime(self) -> RuntimeConfig:
         key = self.api_key()
         if not key:
             raise ValueError(f"Set {self.api_key_env} before starting model agents")
         settings = self.model_settings()
-        return ResponsesConfig(
+        return RuntimeConfig(
             api_key=key,
             base_url=settings["base_url"],
             model=settings["model"],

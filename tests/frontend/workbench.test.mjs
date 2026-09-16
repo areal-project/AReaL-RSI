@@ -16,9 +16,10 @@ function run(id, status = 'planned') {
     events: [], event_cursor: 120, waiting_for_user: [],
   };
 }
-async function setup(t, records, handler) {
+async function setup(t, records, handler, savedStorage = {}) {
   const window = new Window({url: 'http://localhost:8198/', settings: {disableJavaScriptFileLoading: true, disableCSSFileLoading: true}});
   t.after(() => window.happyDOM.close());
+  for (const [key, value] of Object.entries(savedStorage)) window.localStorage.setItem(key, value);
   window.setInterval = () => 0;
   const calls = [];
   window.fetch = async (path, options = {}) => {
@@ -42,6 +43,53 @@ async function setup(t, records, handler) {
   const submit = (id) => $(id).dispatchEvent(new window.Event('submit', {bubbles: true, cancelable: true}));
   return {window, $, calls, switchRun, input, submit};
 }
+
+test('research groups collapse, persist across navigation and reload, and share mobile selection', async (t) => {
+  const recent = {id: 'recent', name: '0915-153620', created_at: '2026-09-15T07:36:20Z'};
+  const older = {id: 'older', name: '0910-224132', created_at: '2026-09-10T14:41:32Z'};
+  const records = {a: {...run('a'), group: recent}, b: {...run('b'), group: recent}, c: {...run('c'), group: older}};
+  const ui = await setup(t, records);
+  const groups = () => [...ui.$('run-list').querySelectorAll('.run-group')];
+  assert.deepEqual(groups().map((group) => group.querySelector('.run-group-name').textContent), [recent.name, older.name]);
+  assert.deepEqual(groups().map((group) => group.querySelector('.run-group-count').textContent), ['2', '1']);
+  assert.ok(groups().every((group) => !group.open));
+  groups()[0].querySelector('summary').click(); await settle();
+  assert.equal(groups()[0].open, true);
+  ui.switchRun('b'); await settle();
+  assert.equal(ui.$('objective').textContent, '研究 b');
+  assert.deepEqual(groups().map((group) => group.open), [true, false]);
+  groups()[0].querySelector('summary').click(); await settle();
+  ui.$('mobile-run-picker').querySelector('summary').click();
+  const mobileOlder = ui.$('mobile-run-list').querySelectorAll('.run-group')[1];
+  mobileOlder.querySelector('summary').click(); await settle();
+  mobileOlder.querySelector('button').click(); await settle();
+  assert.equal(ui.$('objective').textContent, '研究 c');
+  assert.equal(ui.$('mobile-run-picker').open, false);
+  assert.deepEqual(groups().map((group) => group.open), [false, true]);
+  const saved = Object.fromEntries(['recent', 'older'].map((id) => {
+    const key = `rsi.workbench.group.group:${id}`;
+    return [key, ui.window.localStorage.getItem(key)];
+  }));
+  const reloaded = await setup(t, records, undefined, saved);
+  assert.deepEqual([...reloaded.$('run-list').querySelectorAll('.run-group')].map((group) => group.open), [false, true]);
+});
+
+test('new research stays accessible alongside saved groups and empty groups disappear', async (t) => {
+  const records = {a: {...run('a'), group: {id: 'batch', name: '0915-153620', created_at: '2026-09-15T07:36:20Z'}}};
+  const ui = await setup(t, records, (path, options) => {
+    if (path === '/api/runs' && options.method === 'POST') {
+      records.new = run('new');
+      return Promise.resolve(response(records.new));
+    }
+  });
+  ui.$('new-run').click(); ui.submit('create-form'); await settle();
+  const groups = [...ui.$('run-list').querySelectorAll('.run-group')];
+  assert.deepEqual(groups.map((group) => group.querySelector('.run-group-name').textContent), ['未分组', '0915-153620']);
+  assert.equal(ui.$('objective').textContent, '研究 new');
+  const empty = await setup(t, {});
+  assert.equal(empty.$('run-list').querySelectorAll('.run-group').length, 0);
+  assert.match(empty.$('run-list').textContent, /还没有研究记录/);
+});
 
 test('switching runs uses cached views and rejects a late response from the previous run', async (t) => {
   const records = {a: run('a'), b: run('b')};
@@ -143,8 +191,10 @@ test('creation configures the first conversation and modal dropdowns stay intera
   ui.input('create-base-url', 'https://custom.example/v1');
   ui.input('create-api-key', 'dummy-ui-key');
   ui.input('create-model', 'custom-model');
+  ui.$('create-backend-trigger').click();
+  ui.$('create-backend-options').querySelectorAll('[role="option"]')[1].click();
   ui.submit('create-form'); await settle();
-  assert.deepEqual(submitted.model_settings, {base_url: 'https://custom.example/v1', api_key: 'dummy-ui-key', model: 'custom-model', reasoning_effort: 'high'});
+  assert.deepEqual(submitted.model_settings, {base_url: 'https://custom.example/v1', api_key: 'dummy-ui-key', model: 'custom-model', reasoning_effort: 'high', backend: 'codex'});
   assert.equal(ui.$('create-dialog').open, false);
   assert.equal(ui.$('create-api-key').value, '');
   assert.equal(ui.$('objective').textContent, '研究 new');

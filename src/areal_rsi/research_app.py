@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from areal_rsi.agents.research.prompt import PROMPT_VARIANTS as RESEARCH_PROMPTS
 from areal_rsi.api.base import ExperimentRun
 from areal_rsi.api.research import (
     CandidateSnapshot,
@@ -25,7 +26,7 @@ from areal_rsi.api.research import (
 from areal_rsi.base.runs import FileRunStore
 from areal_rsi.base.storage import decode, encode, new_id, now, write_json
 from areal_rsi.coordination.actions import ResearchActions
-from areal_rsi.coordination.agent_tools import TOOL_PROMPT, AgentTools
+from areal_rsi.coordination.agent_tools import AgentTools
 from areal_rsi.coordination.config import (
     MODEL_EFFORTS,
     MODEL_FIELDS,
@@ -42,7 +43,8 @@ from areal_rsi.coordination.sources import register_sources
 from areal_rsi.coordination.store import ResearchStore
 from areal_rsi.coordination.verification import read_trusted_result
 from areal_rsi.execution import JobManager, JobRecord
-from areal_rsi.modules.responses import ResponsesRuntime
+from areal_rsi.modules.agent_runtime import AgentRuntime
+from areal_rsi.modules.runtime_research import ResearchRuntime
 
 
 @dataclass
@@ -63,13 +65,13 @@ class ResearchApp:
         *,
         repository: Path | None = None,
         config: ResearchConfig | None = None,
-        runtime_factory: Callable[[ResearchConfig], ResponsesRuntime] | None = None,
+        runtime_factory: Callable[[ResearchConfig], AgentRuntime] | None = None,
         allow_simulation: bool = False,
     ):
         self.root = root.resolve()
         self.repository = repository or Path(__file__).resolve().parents[2]
         self.default_config = config
-        self.runtime_factory = runtime_factory or (lambda cfg: ResponsesRuntime(cfg.runtime()))
+        self.runtime_factory = runtime_factory or self._runtime
         self.allow_simulation = allow_simulation
         self.active: dict[str, ActiveResearch] = {}
         self._run_locks: dict[str, asyncio.Lock] = {}
@@ -92,6 +94,23 @@ class ResearchApp:
             fcntl.flock(handle, fcntl.LOCK_UN)
         return False
 
+    @staticmethod
+    def _runtime(config: ResearchConfig) -> AgentRuntime:
+        return ResearchRuntime.create(
+            config.backend,
+            config.runtime(),
+            allow_web_access=config.metadata.get("allow_web_access", True),
+        )
+
+    @staticmethod
+    def _configure_agent_tools(active: ActiveResearch, config: ResearchConfig) -> None:
+        active.tools.configure(config.metadata.get("agent_tool_instructions"))
+        allow_web = config.metadata.get("allow_web_access", True)
+        register_sources(active.actions, enabled=config.backend == "standard" and allow_web)
+        for runtime in (active.engine.runtime, active.engine.interaction_runtime):
+            if isinstance(runtime, ResearchRuntime):
+                runtime.configure_web(allow_web)
+
     def coordinator(self, run_id: str) -> Coordinator:
         if run_id in self.active:
             return self.active[run_id].coordinator
@@ -112,7 +131,7 @@ class ResearchApp:
             if c.state.get("started_at") and recorded:
                 settings = json.loads(recorded[0].read_text())
                 for key in MODEL_FIELDS:
-                    setattr(config, key, settings[key])
+                    setattr(config, key, settings.get(key, "standard"))
                 config.model_settings_pinned = True
             else:
                 config.pin_model_settings()
@@ -127,7 +146,7 @@ class ResearchApp:
         }
 
     async def set_model_settings(self, c: Coordinator, values: dict[str, Any]) -> None:
-        settings, key = self.parse_model_settings(values)
+        settings, key = self.parse_model_settings({"backend": self.config(c).backend, **values})
         async with self.run_lock(c):
             c = self.coordinator(c.store.run_id)
             if not self.model_settings(c)["editable"]:
@@ -143,6 +162,31 @@ class ResearchApp:
             # An Interaction tool may have updated other config fields before
             # cancellation. Reload them instead of replacing the whole config.
             config = self.config(c)
+            if settings["backend"] != config.backend:
+                # Preserve the intake dialogue when switching runtimes before
+                # research starts; native session histories have different formats.
+                actor = c.actor("interaction")
+                actor.session_id = new_id("session")
+                c.save_actor(actor)
+                dialogue = sorted(
+                    (
+                        item
+                        for item in c.store.records("messages", ResearchMessage)
+                        if item.sender == "user" or item.recipient == "user"
+                    ),
+                    key=lambda item: item.created_at,
+                )
+                write_json(
+                    c.store.paths.agent("interaction")
+                    / "sessions"
+                    / actor.session_id
+                    / "backend-handoff.json",
+                    {
+                        "previous_dialogue": [
+                            {"sender": item.sender, "text": item.text} for item in dialogue
+                        ]
+                    },
+                )
             for field, value in settings.items():
                 setattr(config, field, value)
             config.model_settings_pinned = True
@@ -348,8 +392,7 @@ class ResearchApp:
         # Configuration may have changed over several Interaction turns. Bind its
         # final revision before RSI can submit any jobs.
         active.config = config
-        active.tools.tool_prompt = config.metadata.get("agent_tool_instructions", TOOL_PROMPT)
-        register_sources(active.actions, enabled=config.metadata.get("allow_web_access", True))
+        self._configure_agent_tools(active, config)
         active.execution.commands = {item.name: item for item in config.commands}
         active.execution.verifier = config.verifier
         active.execution.execution_env = config.execution_env
@@ -382,8 +425,7 @@ class ResearchApp:
             raise ValueError("；".join(issues))
         active = self.active[c.store.run_id]
         active.config = config
-        active.tools.tool_prompt = config.metadata.get("agent_tool_instructions", TOOL_PROMPT)
-        register_sources(active.actions, enabled=config.metadata.get("allow_web_access", True))
+        self._configure_agent_tools(active, config)
         active.execution.commands = {item.name: item for item in config.commands}
         active.execution.verifier = config.verifier
         active.execution.execution_env = config.execution_env
@@ -466,13 +508,17 @@ class ResearchApp:
             await runtime.reconfigure_session(session, config.model_settings_revision)
         actions = ResearchActions(c)
         await actions.initialize_workspace("rsi")
-        register_sources(actions, enabled=config.metadata.get("allow_web_access", True))
+        register_sources(
+            actions,
+            enabled=config.backend == "standard" and config.metadata.get("allow_web_access", True),
+        )
         agent_tools = AgentTools(
             actions,
             self.root,
             environment=lambda: self.config(c).execution_env,
             credential_names=(config.api_key_env,),
             instructions=config.metadata.get("agent_tool_instructions"),
+            backend=config.backend,
         )
         execution = ResearchExecution(
             actions,
@@ -493,6 +539,14 @@ class ResearchApp:
 
         async def poll() -> bool:
             current = self.active[c.store.run_id].config
+            if (
+                current.finalizer
+                and c.state["status"] == "paused"
+                and c.state.get("budget_stop_reason") == "Run wall-time budget exhausted"
+            ):
+                # The engine pauses at a hard budget. A configured closeout must
+                # still run without a user having to turn that pause into a stop.
+                c.stop("探索时间已到，停止研究并自动验证和归档已有产物")
             limit = current.brief.limits.max_wall_seconds
             reserve = current.metadata.get("finalization_reserve_seconds", 0)
             started = c.state.get("started_at")
@@ -520,7 +574,10 @@ class ResearchApp:
                 actions.handler(agent_id),
                 agent_tools.instructions(agent_id),
                 actions.definitions(agent_id),
+                actions.workspace(agent_id),
+                config.execution_env,
             ),
+            research_prompt=RESEARCH_PROMPTS[config.research_prompt_variant],
             tick_hook=poll,
         )
 
@@ -544,6 +601,8 @@ class ResearchApp:
             finally:
                 execution.close(cancel=c.state["status"] in {"stopped", "succeeded", "failed"})
                 await agent_tools.close()
+                await runtime.close()
+                await engine.interaction_runtime.close()
 
         task = asyncio.create_task(serve(), name="research:" + c.store.run_id)
         active = ActiveResearch(c, config, actions, execution, agent_tools, engine, task)
@@ -778,6 +837,14 @@ class ResearchApp:
             }
         if action == "list":
             runs = FileRunStore(self.root).list(ExperimentRun)
+            # Workbench organization is independent of frozen experiment records.
+            group_file = self.root / "workbench-groups.json"
+            groups = json.loads(group_file.read_text())["groups"] if group_file.exists() else []
+            run_groups = {
+                run_id: {key: group[key] for key in ("id", "name", "created_at")}
+                for group in groups
+                for run_id in group["run_ids"]
+            }
 
             def created_at(run: ExperimentRun) -> str:
                 c = self.coordinator(run.run_id)
@@ -801,6 +868,7 @@ class ResearchApp:
                             "status": self.coordinator(r.run_id).state["status"],
                             "simulated": self.coordinator(r.run_id).state["simulated"],
                             "created_at": created_at(r),
+                            "group": run_groups.get(r.run_id),
                         }
                         for r in runs
                         if r.plan.workflow == "research"

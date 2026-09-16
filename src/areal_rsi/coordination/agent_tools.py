@@ -9,14 +9,22 @@ from pathlib import Path
 from typing import Any
 
 from areal_rsi.coordination.actions import ResearchActions
+from areal_rsi.modules.agent_runtime import ToolCall, ToolHandler, ToolResult
 from areal_rsi.modules.dsh_tools import DshToolWorker, definitions, ensure_tools, tool_environment
-from areal_rsi.modules.responses import ToolCall, ToolHandler, ToolResult
 
-TOOL_PROMPT = """bash、read、write、edit、glob、grep 用于日常工作。
-bash 可使用已有 SSH、Git、Python。
+TOOL_PROMPT = """日常文件操作和命令执行使用 bash、read、write、edit、glob、grep。
 bash 每次是新 shell，默认在当前工作区；远端检查用非交互模式并设置超时。
-实验和长期作业使用作业工具，结果与产物可直接读取、收集或复测，无需手抄记录。
-沿用已授权的认证，不打印凭证。OUTCOME_UNKNOWN 先检查实际结果，避免重复执行。
+允许联网时，使用 search_web 搜索、fetch_url 阅读网页。
+研究员的创建、分工和消息传递统一使用 RSI 协作工具。
+实验和长期作业通过配置的 run_job、wait_for_job 执行，不用后台 shell 绕过作业管理。
+沿用已授权的环境，不打印凭证。作业结果未知时先检查实际状态，避免重复执行。
+"""
+
+CODEX_TOOL_PROMPT = """日常文件操作、命令执行和联网调研使用 Codex 原生工具。
+允许联网时，直接使用 Codex 原生网页工具搜索与阅读页面。
+研究员的创建、分工和消息传递统一使用 RSI 协作工具，不启动 Codex 原生 subagent 或独立 goal。
+实验和长期作业通过配置的 run_job、wait_for_job 执行，不用后台 shell 绕过作业管理。
+沿用已授权的环境，不打印凭证。
 """
 
 
@@ -45,24 +53,30 @@ class AgentTools:
         environment: Callable[[], Mapping[str, str]],
         credential_names: tuple[str, ...],
         instructions: str | None = None,
+        backend: str = "standard",
     ):
         self.actions, self.root = actions, root
         self.environment, self.credential_names = environment, credential_names
-        self.tool_prompt = TOOL_PROMPT if instructions is None else instructions
+        self.backend = backend
+        self.configure(instructions)
         self.workers: dict[str, DshToolWorker] = {}
         self.installation: Path | None = None
         self.install_lock = asyncio.Lock()
-        for tool in definitions():
+        for tool in definitions() if backend == "standard" else []:
             actions.register(tool, self.handler, roles={"interaction", "rsi", "research"})
+
+    def configure(self, instructions: str | None) -> None:
+        self.tool_prompt = (
+            (instructions + "\n" if instructions else "") + CODEX_TOOL_PROMPT
+            if self.backend == "codex"
+            else TOOL_PROMPT
+            if instructions is None
+            else instructions
+        )
 
     def instructions(self, agent_id: str) -> str:
         return (
             self.tool_prompt
-            + (
-                "\nRSI 使用工具只为调研、核查证据、协调与收尾；候选实现和实验循环交给研究员。"
-                if agent_id == "rsi"
-                else ""
-            )
             + "\n你的默认工作区："
             + str(self.actions.workspace(agent_id).resolve())
         )

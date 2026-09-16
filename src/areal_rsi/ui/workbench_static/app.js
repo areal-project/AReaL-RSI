@@ -11,6 +11,7 @@ const state = {
   refreshController: null,
   loading: false,
   runs: [],
+  groupExpansion: new Map(),
   events: new Map(),
   cursors: new Map(),
   selected: new Map(),
@@ -42,8 +43,15 @@ const state = {
   modelSavingRun: null,
 };
 const emptyChat = $("messages").firstElementChild.cloneNode(true);
-const runDropdown = new WorkbenchDropdown($("mobile-runs"), {
-  label: "选择研究", placeholder: "暂无研究", onChange: (value) => selectRun(value),
+const mobileRunPicker = $("mobile-run-picker");
+document.addEventListener("click", (event) => {
+  if (!mobileRunPicker.contains(event.target)) mobileRunPicker.open = false;
+});
+mobileRunPicker.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    mobileRunPicker.open = false;
+    mobileRunPicker.querySelector("summary").focus();
+  }
 });
 const recipientDropdown = new WorkbenchDropdown($("chat-recipient"), {
   label: "发送给",
@@ -67,6 +75,10 @@ const effortDropdown = new WorkbenchDropdown($("reasoning-effort"), {
   label: "推理强度",
   onChange: (value) => { modelDraft().reasoning_effort = value; renderModelSettings(); },
 });
+const backendOptions = [{value: "standard", text: "standard"}, {value: "codex", text: "codex"}];
+const backendDropdown = new WorkbenchDropdown($("agent-backend"), {
+  label: "Agent 后端", onChange: (value) => { modelDraft().backend = value; renderModelSettings(); },
+});
 const effortLabels = {
   none: "无推理 · none", low: "低 · low", medium: "中 · medium",
   high: "高 · high", xhigh: "很高 · xhigh", max: "最高 · max",
@@ -77,7 +89,7 @@ function modelDraft() {
     const saved = state.run?.model_settings || {};
     state.modelDrafts.set(state.runId, {
       base_url: saved.base_url || "", model: saved.model || "",
-      reasoning_effort: saved.reasoning_effort || "", api_key: "",
+      reasoning_effort: saved.reasoning_effort || "", backend: saved.backend || "standard", api_key: "",
     });
   }
   return state.modelDrafts.get(state.runId);
@@ -87,7 +99,7 @@ function modelSettingsChanged() {
   const saved = state.run?.model_settings;
   const draft = state.modelDrafts.get(state.runId);
   return !!saved?.editable && !!draft &&
-    (!!draft.api_key || ["base_url", "model", "reasoning_effort"].some((key) => draft[key] !== saved[key]));
+    (!!draft.api_key || ["base_url", "model", "reasoning_effort", "backend"].some((key) => draft[key] !== (saved[key] || (key === "backend" ? "standard" : ""))));
 }
 
 function renderModelSettings() {
@@ -101,7 +113,7 @@ function renderModelSettings() {
   if (!saved.editable) state.modelDrafts.delete(state.runId);
   const draft = saved.editable ? (state.modelDrafts.get(state.runId) || saved) : saved;
   const disabled = !saved.editable || !!state.modelSavingRun;
-  $("model-settings-summary").textContent = `${saved.model} · ${saved.reasoning_effort}${saved.editable ? "" : " · 已锁定"}`;
+  $("model-settings-summary").textContent = `${saved.backend || "standard"} · ${saved.model} · ${saved.reasoning_effort}${saved.editable ? "" : " · 已锁定"}`;
   if ($("model-base-url").value !== draft.base_url) $("model-base-url").value = draft.base_url;
   $("model-base-url").disabled = disabled;
   $("model-name").value = draft.model;
@@ -113,6 +125,7 @@ function renderModelSettings() {
   if (!models.some((model) => model.value === draft.model))
     models.push({ value: draft.model, text: draft.model, disabled: true });
   modelDropdown.update(models, draft.model, disabled);
+  backendDropdown.update(backendOptions, draft.backend || "standard", disabled);
   const efforts = [...(state.models.find((model) => model.id === draft.model)?.efforts || Object.keys(effortLabels))];
   if (!efforts.includes(draft.reasoning_effort)) efforts.push(draft.reasoning_effort);
   effortDropdown.update(efforts.map((value) => ({ value, text: effortLabels[value] || value })), draft.reasoning_effort, disabled);
@@ -370,11 +383,51 @@ async function loadRuns() {
   }
 }
 function renderRuns() {
-  const buttons = state.runs.map((run) => {
+  const groups = new Map();
+  for (const run of state.runs) {
+    const key = run.group?.id ? `group:${run.group.id}` : "ungrouped";
+    if (!groups.has(key)) groups.set(key, {
+      key, name: run.group?.name || "未分组", createdAt: run.group?.created_at || "", runs: [],
+    });
+    groups.get(key).runs.push(run);
+  }
+  const ordered = [...groups.values()].sort((a, b) =>
+    (b.createdAt || "\uffff").localeCompare(a.createdAt || "\uffff"));
+  for (const id of ["run-list", "mobile-run-list"]) {
+    replace(id, ...(ordered.length
+      ? ordered.map(renderRunGroup)
+      : [element("p", "muted", "还没有研究记录")]));
+  }
+  const current = state.runs.find((run) => run.run_id === state.runId);
+  $("mobile-run-name").textContent = current?.objective || "选择研究";
+}
+
+function renderRunGroup(group) {
+  const details = element("details", "run-group");
+  details.dataset.group = group.key;
+  const storageKey = `rsi.workbench.group.${group.key}`;
+  if (!state.groupExpansion.has(group.key))
+    state.groupExpansion.set(group.key, localStorage.getItem(storageKey) === "open");
+  details.open = state.groupExpansion.get(group.key);
+  const summary = element("summary");
+  summary.append(element("span", "run-group-name", group.name));
+  summary.append(element("span", "run-group-count", String(group.runs.length)));
+  details.classList.toggle("has-selected", group.runs.some((run) => run.run_id === state.runId));
+  details.addEventListener("toggle", () => {
+    if (!details.isConnected || state.groupExpansion.get(group.key) === details.open) return;
+    state.groupExpansion.set(group.key, details.open);
+    localStorage.setItem(storageKey, details.open ? "open" : "closed");
+    for (const peer of document.querySelectorAll(".run-group"))
+      if (peer.dataset.group === group.key) peer.open = details.open;
+  });
+  const items = element("div", "run-group-items");
+  for (const run of group.runs) {
     const button = element(
       "button",
       `run-item ${run.run_id === state.runId ? "selected" : ""}`,
     );
+    button.title = run.objective || "未命名研究";
+    if (run.run_id === state.runId) button.setAttribute("aria-current", "true");
     button.append(element("span", "run-indicator"));
     const body = element("span");
     body.append(element("span", "run-name", run.objective || "未命名研究"));
@@ -386,19 +439,14 @@ function renderRuns() {
       ),
     );
     button.append(body);
-    button.addEventListener("click", () => selectRun(run.run_id));
-    return button;
-  });
-  replace(
-    "run-list",
-    ...(buttons.length ? buttons : [element("p", "muted", "还没有研究记录")]),
-  );
-  runDropdown.update(
-    state.runs.map((run) => ({
-      value: run.run_id, text: run.objective || "未命名研究", description: label(run.status),
-    })),
-    state.runId,
-  );
+    button.addEventListener("click", () => {
+      mobileRunPicker.open = false;
+      selectRun(run.run_id);
+    });
+    items.append(button);
+  }
+  details.append(summary, items);
+  return details;
 }
 async function selectRun(runId) {
   if (state.deleting) return;
@@ -1442,6 +1490,9 @@ async function createConversation(message = "", modelSettings) {
 const createPreset = new WorkbenchDropdown($("create-model-preset"), {
   label: "常用模型", onChange: (value) => { $("create-model").value = value; updateCreateModels(); },
 });
+const createBackend = new WorkbenchDropdown($("create-backend"), {
+  label: "Agent 后端", onChange: (value) => { state.createBackend = value; },
+});
 const createEffort = new WorkbenchDropdown($("create-effort"), {
   label: "推理强度", onChange: (value) => { state.createEffort = value; },
 });
@@ -1462,6 +1513,8 @@ function openCreate(message = "") {
   $("create-message").value = message;
   $("create-error").hidden = true;
   state.createEffort = defaults.reasoning_effort || "xhigh";
+  state.createBackend = defaults.backend || "standard";
+  createBackend.update(backendOptions, state.createBackend);
   updateCreateModels();
   $("create-dialog").showModal();
 }
@@ -1472,7 +1525,7 @@ $("create-form").addEventListener("submit", (event) => {
   event.preventDefault();
   createConversation($("create-message").value.trim(), {
     base_url: $("create-base-url").value.trim(), api_key: $("create-api-key").value.trim(),
-    model: $("create-model").value.trim(), reasoning_effort: state.createEffort,
+    model: $("create-model").value.trim(), reasoning_effort: state.createEffort, backend: state.createBackend,
   });
 });
 $("new-run").addEventListener("click", () => openCreate());

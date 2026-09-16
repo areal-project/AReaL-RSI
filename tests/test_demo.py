@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import base64
+import hashlib
+import json
 import runpy
 import socket
 import sys
@@ -23,6 +27,9 @@ from areal_rsi.ui.workbench import WorkbenchServer
 
 
 class StopTransport:
+    def __init__(self, action: str = "stop_run"):
+        self.action = action
+
     async def request(self, config: Any, payload: Any, sink: Any) -> dict[str, Any]:
         return {
             "id": "stop",
@@ -30,7 +37,7 @@ class StopTransport:
             "output": [
                 {
                     "type": "function_call",
-                    "name": "stop_run",
+                    "name": self.action,
                     "call_id": "finished",
                     "arguments": '{"reason":"探索结束"}',
                 }
@@ -39,15 +46,66 @@ class StopTransport:
         }
 
 
-@pytest.mark.parametrize("retry_verifier", [False, True])
+@pytest.mark.parametrize("limit", [None, 1800])
+@pytest.mark.parametrize("scope", ["total", "exploration"])
+def test_single_task_preparation_preserves_unlimited_time_and_submissions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, limit: int | None, scope: str
+) -> None:
+    prepare = runpy.run_path("examples/kernelbench_artifacts/demo.py")["prepare"]
+    source = b"# Public reference fixture\n"
+
+    def remote(environment: Any, payload: Any) -> dict[str, Any]:
+        assert payload["demo"]["exploration_submissions"] is None
+        return {
+            "manifest": {
+                "tasks": {"L3P10": {"reference_sha256": hashlib.sha256(source).hexdigest()}},
+                "protocol_id": "fixed", "manifest_id": "tasks",
+            },
+            "references": {"L3P10": {"source": base64.b64encode(source).decode()}},
+        }
+
+    monkeypatch.setitem(prepare.__globals__, "control_request", remote)
+    environment = tmp_path / "environment.json"
+    environment.write_text("{}")
+    config = prepare(
+        tmp_path, environment, "unlimited", task="L3P10", max_agents=6,
+        max_wall_seconds=limit, time_limit_scope=scope,
+        exploration_submissions=None, check_credentials=False,
+    )
+    limits = config["brief"]["limits"]
+    assert limits["max_wall_seconds"] == limit
+    assert limits["max_jobs"] is None and limits["max_model_calls"] is None
+    assert limits["max_agents"] == 6
+    assert config["metadata"]["finalization_reserve_seconds"] == (
+        180 if limit is not None and scope == "total" else 0
+    )
+    assert ("本次不设时间上限" in config["brief"]["instructions"]) == (limit is None)
+    assert "None 秒" not in config["brief"]["instructions"]
+    assert "GPU 提交次数不限" in config["brief"]["instructions"]
+    frozen = json.loads((tmp_path / "runs/unlimited/setup/research.json").read_text())
+    assert frozen == config
+
+
+@pytest.mark.parametrize(
+    "retry_verifier,deadline,withdraw_final",
+    [
+        (False, False, False),
+        (True, False, False),
+        (False, True, False),
+        (True, True, False),
+        (False, False, True),
+    ],
+)
 def test_configured_http_run_finishes_without_a_monitor_and_reuses_service(
-    tmp_path: Path, retry_verifier: bool
+    tmp_path: Path, retry_verifier: bool, deadline: bool, withdraw_final: bool
 ) -> None:
     script = tmp_path / "cpu_runner.py"
     script.write_text("""import json,sys,os
 from pathlib import Path
 output=Path(sys.argv[2]);output.mkdir(parents=True,exist_ok=True)
 if sys.argv[1]=='finish':
+    selection=json.loads(Path(os.environ['RSI_CANDIDATE_SELECTION']).read_text())
+    (output/'selection-seen.json').write_text(json.dumps(selection))
     candidate=output/'candidate';candidate.mkdir(exist_ok=True)
     (candidate/'model.py').write_text('candidate')
     with (output/'calls').open('a') as f:f.write('once\\n')
@@ -86,10 +144,14 @@ else:
             }
         },
     )
+    if deadline:
+        config.brief.limits.max_wall_seconds = 0.2
+        config.metadata["time_limit_scope"] = "exploration"
     app = ResearchApp(
         tmp_path,
         runtime_factory=lambda _: ResponsesRuntime(
-            ResponsesConfig(base_url="https://example.test", api_key="test"), StopTransport()
+            ResponsesConfig(base_url="https://example.test", api_key="test"),
+            StopTransport("wait" if deadline else "stop_run"),
         ),
     )
     server = WorkbenchServer(app, port=0)
@@ -101,6 +163,15 @@ else:
         params = {"run_id": "demo", "config": config.public()}
         first = client.request("/api/runs", params)
         assert first["run_id"] == client.request("/api/runs", params)["run_id"]
+        if withdraw_final:
+            c = app.coordinator("demo")
+            workspace = tmp_path / "defective-product"
+            workspace.mkdir()
+            (workspace / "model.py").write_text("candidate")
+            candidate = asyncio.run(
+                c.store.snapshot(workspace, agent_id="operator", description="Known defect")
+            )
+            c.store.withdraw_candidate(candidate.candidate_id, "Known contract violation", ())
         client.request("/api/runs/demo/start", {})
         until = time.monotonic() + 15
         while time.monotonic() < until:
@@ -112,6 +183,20 @@ else:
             if (detail.get("finalization") or {}).get("status") in {"completed", "failed"}:
                 break
             time.sleep(0.1)
+        selection = json.loads(
+            (tmp_path / "runs/demo/finalization/output/selection-seen.json").read_text()
+        )
+        assert selection["run_id"] == "demo"
+        if withdraw_final:
+            assert detail["finalization"]["status"] == "failed", detail
+            assert "withdrawn candidate" in detail["finalization"]["error"]
+            assert detail["final"] is None
+            assert (
+                selection["withdrawn_candidates"][0]["files"]["model.py"]
+                == "sha256:" + hashlib.sha256(b"candidate").hexdigest()
+            )
+            return
+        assert not selection["withdrawn_candidates"]
         assert detail["finalization"]["status"] == "completed", detail
         assert detail["final"]["score"] == 0.5
         assert (
@@ -134,11 +219,16 @@ def test_launcher_rejects_an_unrelated_listener() -> None:
             ensure_workbench(listener.getsockname()[1])
 
 
+@pytest.mark.parametrize("withdraw_fastest", [False, True])
 def test_remote_final_confirmation_survives_lost_reply_without_new_submission(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, withdraw_fastest: bool
 ) -> None:
     script = Path(__file__).resolve().parents[1] / "examples/kernelbench_artifacts/control.py"
-    finish = runpy.run_path(str(script))["finish"]
+    remote_finish = runpy.run_path(str(script))["finish"]
+    demo = ModuleType("demo")
+    demo.control_request = lambda manifest, payload: remote_finish(payload["manifest"])  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "demo", demo)
+    finish = runpy.run_path(str(script.with_name("finish.py")))["finish"]
     workspace = tmp_path / "task/workspace"
     workspace.mkdir(parents=True)
     (workspace.parent / "gpuq-token").write_text("scoped")
@@ -194,10 +284,88 @@ def test_remote_final_confirmation_survives_lost_reply_without_new_submission(
         "exploration_budget_per_task": 10,
         "final_seed": 137,
     }
+    if withdraw_fastest:
+        defective = tmp_path / "defective"
+        defective.mkdir()
+        (defective / "model_new.py").write_text("faster but known defective")
+        jobs.append(
+            {
+                **jobs[0],
+                "id": "withdrawn",
+                "cwd": str(defective),
+                "evaluation": {**jobs[0]["evaluation"], "speedup": 5},
+            }
+        )
+        selection = tmp_path / "candidate-selection.json"
+        selection.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "run_id": "repeat",
+                    "withdrawn_candidates": [
+                        {
+                            "files": {
+                                "L1P1/model_new.py": "sha256:"
+                                + hashlib.sha256(
+                                    (defective / "model_new.py").read_bytes()
+                                ).hexdigest()
+                            }
+                        }
+                    ],
+                }
+            )
+        )
+        monkeypatch.setenv("RSI_CANDIDATE_SELECTION", str(selection))
+    else:
+        monkeypatch.delenv("RSI_CANDIDATE_SELECTION", raising=False)
+    output = tmp_path / "output"
     with pytest.raises(TimeoutError):
-        finish(manifest)
-    result = finish(manifest)
+        finish(manifest, output)
+    finish(manifest, output)
+    result = json.loads((output / "final-selection.json").read_text())
     assert result["status"] == "completed"
     assert len(submissions) == 1 and submissions[0]["seed"] == 137
     assert (tmp_path / "final/model_new.py").read_text() == "best passing code"
     assert (control / "exploration-closed").exists()
+
+
+@pytest.mark.parametrize("gpu_python", [None, "/runtime/python"])
+def test_diagnostic_uses_execution_interpreter_and_reuses_submitted_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, gpu_python: str | None
+) -> None:
+    script = Path(__file__).resolve().parents[1] / "examples/kernelbench_artifacts/remote.py"
+    handle = runpy.run_path(str(script))["handle"]
+    workspace = tmp_path / "task/workspace"
+    workspace.mkdir(parents=True)
+    control = tmp_path / "control"
+    control.mkdir()
+    manifest = {
+        "python": "/control-host/python",
+        "submission_budget_per_task": None,
+        "exploration_budget_per_task": None,
+        "remote_manifest": str(control / "manifest.json"),
+        "tasks": {"L1P1": {"task_id": "task", "workspace": str(workspace)}},
+    }
+    if gpu_python:
+        manifest["gpu_python"] = gpu_python
+    jobs: list[dict[str, Any]] = []
+
+    def request(manifest: Any, name: str, path: str, body: Any = None) -> Any:
+        if body is None:
+            return list(jobs)
+        job = {
+            **body, "id": "diagnostic", "task_id": "task", "budget": None,
+            "budget_used": 1, "state": "queued", "cwd": str(workspace),
+        }
+        jobs.append(job)
+        return job
+
+    monkeypatch.setitem(handle.__globals__, "task_request", request)
+    payload = {
+        "operation": "submit_diagnostic", "task": "L1P1", "key": "same-experiment",
+        "source": "", "script": base64.b64encode(b"print('probe')").decode(),
+    }
+    first = handle(manifest, payload)
+    second = handle(manifest, payload)
+    assert first["id"] == second["id"] and len(jobs) == 1
+    assert jobs[0]["argv"] == [gpu_python or "/opt/.venv/bin/python", "-u", "_rsi_diagnostic.py"]

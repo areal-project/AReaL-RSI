@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from collections.abc import Callable
 from pathlib import Path
@@ -14,7 +15,7 @@ from areal_rsi.api.research import CandidateSnapshot, EvidenceRecord, TaskBrief,
 from areal_rsi.base.storage import decode, encode, now, safe_name, safe_relative, write_json
 from areal_rsi.coordination.coordinator import Coordinator, effect_id
 from areal_rsi.coordination.views import model_state, record_preview
-from areal_rsi.modules.responses import ToolCall, ToolHandler, ToolResult
+from areal_rsi.modules.agent_runtime import ToolCall, ToolHandler, ToolResult
 
 STRING = {"type": "string"}
 RECORD_CATEGORIES = (
@@ -22,6 +23,7 @@ RECORD_CATEGORIES = (
     "reports",
     "assignments",
     "candidates",
+    "withdrawals",
     "verifications",
     "executions",
     "materials",
@@ -30,10 +32,13 @@ REFERENCES = {
     "type": "array",
     "items": {
         "type": "string",
-        "description": "工具返回的精确 run:// 记录 URI，不接受文件路径或网页地址。",
+        "description": "精确记录 ID、公开类别/记录ID 或 run:// URI，"
+        "不接受工作区文件路径或网页地址。",
     },
-    "description": "填写工具返回的 run:// 记录 URI。文件路径和网页地址写在正文中，"
-    "或先用 fetch_url/save_evidence 归档后引用。没有记录引用时使用 []。",
+    "description": "优先填写工具返回的记录 ID，无需重写 run ID；"
+    "也接受公开类别/记录ID、完整 run:// URI。"
+    "只解析本 run 的精确记录，不猜测拼写。文件路径和网页地址写在正文中，"
+    "或先用 save_evidence 归档发现后引用。没有记录引用时使用 []。",
 }
 
 
@@ -57,7 +62,11 @@ COMMON = [
         "get_state",
         "查看已保存的研究状态、预算与证据摘要；需要完整记录时，用返回的 URI 调用read_record。",
     ),
-    definition("read_record", "用 run:// URI 读取你有权限查看的研究记录。", uri=STRING),
+    definition(
+        "read_record",
+        "用工具返回的记录 ID 或 run:// URI 读取你有权限查看的本 run 研究记录。",
+        uri=STRING,
+    ),
     definition(
         "list_records",
         "按时间倒序查找历史记录，每页 10 条；旧作业材料缺少时间时按来源作业时间排序。"
@@ -73,6 +82,13 @@ COMMON = [
         "读取已保存产物中的文本文件，不切换工作区。path 为空时列出实际文件路径。",
         candidate_id=STRING,
         path=STRING,
+    ),
+    definition(
+        "import_candidate",
+        "将本 run 的不可变产物完整复制到工作区的新子目录，支持任意文件类型。"
+        "用于组合、比较和继续研究，无需通过模型重写文件；不覆盖已有修改。",
+        candidate_id=STRING,
+        destination=STRING,
     ),
     definition("list_files", "列出当前工作区中的文件。"),
     definition("read_file", "读取工作区中的 UTF-8 文本文件。", path=STRING),
@@ -94,13 +110,22 @@ COMMON = [
         "save_candidate",
         "将本 Agent 的默认工作区保存为不可变候选，记录父版本。"
         "bash 的 workdir 不会改变保存目录；请核对回执中的 workspace 和文件数量。"
-        "仅在需要保留产物时使用。",
+        "也可保存供同伴复用的中间产物；保存不代表验证通过。仅在需要保留产物时使用。",
         description=STRING,
     ),
     definition(
         "checkout_candidate",
         "从已保存的候选继续工作。若工作区还有未保存的修改，先保存快照；工具不会覆盖这些修改。",
         candidate_id=STRING,
+    ),
+    definition(
+        "withdraw_candidate",
+        "发现具体反例或违反任务契约后，将该产物及内容完全相同的快照从选优和交付中撤回。"
+        "研究员可直接撤回本 run 中的产物，系统自动通知 RSI。保留原产物、历史分数和证据；"
+        "修复后保存新产物再验证。仅有待查疑问或速度较慢时不撤回。",
+        candidate_id=STRING,
+        reason=STRING,
+        references=REFERENCES,
     ),
 ]
 RSI = [
@@ -115,6 +140,7 @@ RSI = [
         "已经提交报告时使用 assign 回复报告并下发下一项任务。",
         agent_id=STRING,
         instruction=STRING,
+        references=REFERENCES,
     ),
     definition(
         "update_plan",
@@ -172,12 +198,34 @@ RSI = [
 ]
 RESEARCH = [
     definition(
+        "share_update",
+        "将影响相关同伴的关键发现或可复用产物直接交给指定研究员，RSI 同步收到副本。"
+        "只共享事实和引用，不改变同伴目标、不结束自己的阶段；正式报告后的同伴不会被唤醒。"
+        "接收者从 get_state 的 collaborators 选择；不群发普通进度。"
+        "save_current=true 时一次完成保存当前工作区快照并交接，无需先保存再发送引用。"
+        "在 message 中说明入口、已测部分和仍未通过的验证；快照本身不是正确性证明。",
+        agent_ids={"type": "array", "items": STRING, "minItems": 1},
+        message=STRING,
+        references=REFERENCES,
+        save_current={
+            "type": "boolean",
+            "description": "同时保存并交接当前产物；已有快照引用时为 false。",
+        },
+    ),
+    definition(
+        "send_update",
+        "将影响其他方向或整体决策的关键发现及时通知 RSI，本阶段继续执行，不提交报告。"
+        "说明新证据、影响和你正在做的下一步；普通进度不用发送。",
+        message=STRING,
+        references=REFERENCES,
+    ),
+    definition(
         "submit_report",
         "上报阶段结论或需要 RSI 决策的问题，结束本轮并等待回复；研究方向可以尚未完成。"
         "也可以直接给出最终回复，系统会自动归档为报告。",
         message=STRING,
         references=REFERENCES,
-    )
+    ),
 ]
 INTERACTION = [
     definition(
@@ -326,11 +374,12 @@ class ResearchActions:
         return path
 
     def read_record(self, agent_id: str, uri: str) -> Any:
+        uri = self.c.store.record_reference(RecordRef(uri)).uri
         value = self.c.store.public_record(RecordRef(uri))
         if self.role(agent_id) in {"rsi", "interaction"}:
             return value
         category = urlsplit(uri).path.split("/")[1]
-        if category in {"briefs", "candidates", "verifications"}:
+        if category in {"briefs", "candidates", "verifications", "withdrawals"}:
             return value
         if value.get("agent_id") == agent_id or value.get("shared"):
             return value
@@ -346,9 +395,22 @@ class ResearchActions:
         raise ValueError("Evidence is not shared with this research direction")
 
     def refs(self, agent_id: str, values: list[str]) -> tuple[RecordRef, ...]:
+        refs = []
         for uri in values:
-            self.read_record(agent_id, uri)
-        return tuple(RecordRef(uri) for uri in values)
+            if not uri.strip():
+                continue
+            ref = self.c.store.record_reference(RecordRef(uri.strip()))
+            self.read_record(agent_id, ref.uri)
+            if ref not in refs:
+                refs.append(ref)
+        return tuple(refs)
+
+    def handoff_refs(
+        self, instruction: str, values: list[str], *, agent_id: str = "rsi"
+    ) -> tuple[RecordRef, ...]:
+        # Prose references have the same ownership checks as structured ones.
+        inline = re.findall(r"run://[\w-]+/[\w-]+/[\w.-]*[\w]", instruction)
+        return self.refs(agent_id, list(dict.fromkeys([*values, *inline])))
 
     async def _apply(
         self,
@@ -358,6 +420,38 @@ class ResearchActions:
         args: dict[str, Any],
     ) -> ToolResult:
         c = self.c
+        if name == "withdraw_candidate":
+            ref = c.store.withdraw_candidate(
+                args["candidate_id"],
+                args["reason"],
+                self.refs(agent_id, args["references"]),
+                simulated_run=c.state["simulated"],
+                agent_id=agent_id,
+            )
+            selected = c.state.get("selected_candidate_id")
+            if selected and c.store.is_withdrawn(selected):
+                c.state["selected_candidate_id"] = None
+                c.save()
+            withdrawal = c.store.public_record(ref)
+            if self.role(agent_id) == "research" and withdrawal["agent_id"] == agent_id:
+                # The withdrawal is durable before notification. Replaying this
+                # action repairs delivery without duplicating the message.
+                c.enqueue(
+                    agent_id,
+                    "rsi",
+                    "研究员已因具体反例撤回产物："
+                    + withdrawal["candidate_id"]
+                    + "\n原因："
+                    + withdrawal["reason"]
+                    + "\n撤回已生效；原产物、历史分数和证据仍保留。\n记录："
+                    + ref.uri,
+                    key="withdrawal:" + withdrawal["candidate_id"],
+                    references=(
+                        ref,
+                        *(RecordRef(item["uri"]) for item in withdrawal["references"]),
+                    ),
+                )
+            return ToolResult({"withdrawn": True, "uri": ref.uri, "best": c.summary()["best"]})
         if name == "get_state":
             summary = model_state(c, agent_id)
             if agent_id == "interaction":
@@ -429,6 +523,30 @@ class ResearchActions:
             if len(text) > 256000:
                 raise ValueError("Candidate file is too large for the model context")
             return ToolResult({"path": relative_name, "content": text})
+        if name == "import_candidate":
+            candidate = c.store.get("candidates", args["candidate_id"], CandidateSnapshot)
+            await c.store.check_candidate_scope(candidate, c.state["seed_candidate_id"])
+            target = self.workspace_path(agent_id, args["destination"])
+            if target.exists():
+                if (
+                    not target.is_dir()
+                    or await c.store.content.snapshot(target) != candidate.content
+                ):
+                    raise ValueError("Destination contains different files; choose a new directory")
+            else:
+                staging = c.store.paths.agent(agent_id) / (key + "-import")
+                if staging.exists():
+                    shutil.rmtree(staging)
+                await c.store.content.materialize(candidate.content, staging)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                staging.rename(target)
+            c.link_reference(
+                agent_id,
+                c.store.paths.reference(
+                    c.store.root / "candidates" / f"{candidate.candidate_id}.json"
+                ),
+            )
+            return ToolResult({"candidate_id": candidate.candidate_id, "directory": str(target)})
         if name == "list_files":
             root = self.workspace(agent_id)
             return ToolResult(
@@ -460,7 +578,11 @@ class ResearchActions:
             )
             return ToolResult({"saved": True})
         if name in {"spawn_researcher", "assign"}:
-            values = {**args, "references": self.refs(agent_id, args["references"]), "key": key}
+            values = {
+                **args,
+                "references": self.handoff_refs(args["instruction"], args["references"]),
+                "key": key,
+            }
             result = c.spawn(**values) if name == "spawn_researcher" else c.assign(**values)
             await self.initialize_workspace(result["agent_id"])
             return ToolResult(result)
@@ -471,6 +593,9 @@ class ResearchActions:
                         args["agent_id"],
                         args["instruction"],
                         key=key,
+                        references=self.handoff_refs(
+                            args["instruction"], args.get("references", [])
+                        ),
                     )
                 }
             )
@@ -486,6 +611,86 @@ class ResearchActions:
             }
             result = c.report(agent_id, key=key, fields=values)
             return ToolResult(result, stop=True, reason="rsi_reply")
+        if name in {"send_update", "share_update"}:
+            message = args["message"].strip()
+            actor = c.actor(agent_id)
+            node = next(
+                (n for n in actor.iterations if n.iteration_id == actor.current_iteration_id), None
+            )
+            if (
+                c.state["status"] != "running"
+                or not message
+                or node is None
+                or node.report_ref is not None
+            ):
+                raise ValueError("进展通知需要尚未结束的研究阶段和具体发现")
+            recipients = list(dict.fromkeys(args.get("agent_ids", [])))
+            contacts = {item["agent_id"]: item for item in c.collaborators(agent_id)}
+            if name == "share_update" and (
+                not recipients or any(recipient not in contacts for recipient in recipients)
+            ):
+                raise ValueError("接收者必须是本 run 的其他研究员，请查看 collaborators")
+            refs = self.handoff_refs(message, args["references"], agent_id=agent_id)
+            saved = None
+            if name == "share_update" and args.get("save_current", False):
+                # Snapshot identity belongs to this durable action. If delivery
+                # is interrupted, reuse these bytes even if local work changes.
+                saved = (
+                    await self._apply(
+                        agent_id, key + ":snapshot", "save_candidate", {"description": message}
+                    )
+                ).output
+                refs = (*refs, RecordRef(saved["uri"]))
+                if c.state["status"] != "running" or c.actor(agent_id).state in {
+                    AgentState.STOPPED,
+                    AgentState.FAILED,
+                }:
+                    raise ValueError("研究已停止；产物快照已保留，不再交接")
+                # Saving may yield while a recipient reports or stops.
+                contacts = {item["agent_id"]: item for item in c.collaborators(agent_id)}
+            text = (
+                "研究进展（本阶段仍在执行，不是阶段报告）：\n"
+                + message
+                + ("\n\n已保存当前产物供协作复用；保存不代表验证通过。" if saved else "")
+                + ("\n\n相关记录：\n" + "\n".join(ref.uri for ref in refs) if refs else "")
+            )
+            deliveries = []
+            for recipient in recipients:
+                if not contacts[recipient]["accepts_updates"]:
+                    deliveries.append({"agent_id": recipient, "status": "not_active"})
+                    continue
+                for ref in refs:
+                    c.link_reference(recipient, ref)
+                peer_message = c.enqueue(
+                    agent_id,
+                    recipient,
+                    "同伴共享事实与产物，不是新的阶段指令。\n" + text,
+                    key=key + ":peer:" + recipient,
+                    references=refs,
+                )
+                deliveries.append(
+                    {"agent_id": recipient, "status": "sent", "message_id": peer_message}
+                )
+            message_id = c.enqueue(
+                agent_id,
+                "rsi",
+                text
+                + (
+                    "\n\n指定共享同伴（已结束阶段不唤醒）：" + ", ".join(recipients)
+                    if recipients
+                    else ""
+                ),
+                key=key,
+                references=refs,
+            )
+            return ToolResult(
+                {
+                    "message_id": message_id,
+                    "stage_continues": True,
+                    "deliveries": deliveries,
+                    **({"saved_candidate": saved} if saved else {}),
+                }
+            )
         if name == "stop_researcher":
             c.stop_agent(args["agent_id"], args["reason"])
             return ToolResult({"stopped": args["agent_id"]})
@@ -607,6 +812,10 @@ class ResearchActions:
                 selected = c.store.public_record(selected_ref)["candidate_id"]
             if selected is not None:
                 c.store.get("candidates", selected, CandidateSnapshot)
+                if c.store.is_withdrawn(selected):
+                    raise ValueError(
+                        "Selected candidate was withdrawn; repair and verify a new artifact"
+                    )
             require_final = self.require_final_confirmation()
             if require_final or (contract is not None and contract.target is not None):
                 if contract is None or selected is None:

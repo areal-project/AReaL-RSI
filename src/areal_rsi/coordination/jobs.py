@@ -17,7 +17,8 @@ from areal_rsi.base.storage import decode, encode, now, safe_relative, write_jso
 from areal_rsi.coordination.actions import STRING, ResearchActions, definition
 from areal_rsi.coordination.coordinator import effect_id
 from areal_rsi.execution import ApprovedCommand, JobManager, JobRecord, JobSpec
-from areal_rsi.modules.responses import ToolCall, ToolHandler, ToolResult
+from areal_rsi.execution.progress import read_progress
+from areal_rsi.modules.agent_runtime import ToolCall, ToolHandler, ToolResult
 
 VerificationReader = Callable[[JobRecord, CandidateSnapshot, str], VerifiedResult]
 INLINE_INSTRUCTIONS_CHARS = 8000
@@ -69,10 +70,14 @@ class ResearchExecution:
             definition(
                 "run_job",
                 "按已配置命令运行固定输入。candidate_id 为空时使用当前工作区。"
-                "wait=true 时短作业直接返回，长作业停止推理、完成后带回公开反馈。",
+                "wait=true 时短作业直接返回，长作业停止推理、完成后带回公开反馈。"
+                "返回的记录引用在作业运行中即可交接；实时状态用 job_status 查询。",
                 command_name=STRING,
                 candidate_id=STRING,
-                parameters_json=STRING,
+                parameters_json={
+                    "type": "string",
+                    "description": "JSON 对象字符串；参数名及含义见 get_commands，所有值为字符串。",
+                },
                 wait=WAIT,
             ),
             definition(
@@ -84,13 +89,15 @@ class ResearchExecution:
             ),
             definition(
                 "get_commands",
-                "查看可用执行命令、参数、输出位置及环境用法。"
+                "查看可用执行命令、参数名称及含义、输出位置及环境用法。"
+                "按执行说明确认实际携带的输入与依赖，不假定远端能访问整个本地工作区。"
                 "若 instructions_truncated 为 true，"
                 "执行前用 read_record 读取 instructions_ref 的完整说明。",
             ),
             definition(
                 "job_status",
-                "查看作业的命令、原始任务参数、公开状态与已发布结果。"
+                "查看作业的命令、原始任务参数、公开状态、进度与已发布结果。"
+                "普通作业失败且无公开反馈时，附上有界日志末尾帮助排错。"
                 "任务归属以 parameters 和实际反馈为准，不凭 Job ID 猜测。",
                 job_id=STRING,
             ),
@@ -164,6 +171,12 @@ class ResearchExecution:
                                 "parameters": [
                                     p for p in cmd.parameters if p not in {"workspace", "output"}
                                 ],
+                                "parameter_descriptions": {
+                                    p: cmd.parameter_descriptions[p]
+                                    for p in cmd.parameters
+                                    if p not in {"workspace", "output"}
+                                    and p in cmd.parameter_descriptions
+                                },
                                 "output_subdir": cmd.output_subdir,
                                 "feedback_file": cmd.feedback_file,
                                 "auto_verify_output": cmd.auto_verify_output,
@@ -287,7 +300,9 @@ class ResearchExecution:
                     }
                     ref = self.c.store.put("materials", effect_id("output", call.call_id), value)
                     self.c.link_reference(agent_id, ref)
-                    return ToolResult({**value, "uri": ref.uri})
+                    return ToolResult(
+                        {**value, "uri": ref.uri, "record_id": effect_id("output", call.call_id)}
+                    )
                 collected: dict[str, Any] = {}
                 if args.get("as_candidate", False):
                     candidate_id = effect_id("candidate", agent_id + ":" + call.call_id)
@@ -365,6 +380,8 @@ class ResearchExecution:
             record = self.find_job(key)
             if record is None:
                 record = self.manager.submit(decode(JobSpec, self.jobs[key]["spec"]), job_id=key)
+            if not self.jobs[key]["verification"]:
+                self.publish_execution(record)
             return ToolResult(self.public(record))
         args = call.arguments
         verification = call.name == "verify_candidate"
@@ -386,6 +403,13 @@ class ResearchExecution:
         candidate_id = args.get("candidate_id") or None
         if verification and candidate_id is None:
             raise ValueError("Verification requires an immutable candidate")
+        if (
+            verification
+            and phase == "final"
+            and candidate_id is not None
+            and self.c.store.is_withdrawn(candidate_id)
+        ):
+            raise ValueError("Withdrawn candidates cannot be selected for final confirmation")
         if (
             verification
             and phase == "final"
@@ -513,11 +537,44 @@ class ResearchExecution:
             self.c.save()
         self.manager.scheduling_enabled = self.c.state["status"] == "running"
         record = self.manager.submit(spec, job_id=key)
+        if not verification:
+            self.publish_execution(record)
         self.c.store.event("job_submitted", agent_id=agent_id, job=self.public(record))
         return ToolResult(self.public(record))
 
+    def publish_execution(self, record: JobRecord) -> dict[str, Any]:
+        """Publish a shareable receipt now, then finalize the same reference once.
+
+        Live status comes from job_status. The submission receipt is explicitly
+        nonterminal; immutable job events preserve its history when finalized.
+        Verifier results keep their separate trusted publication boundary.
+        """
+        info = self.jobs[record.job_id]
+        assert not info["verification"]
+        path = self.c.store.root / "executions" / f"{record.job_id}.json"
+        value = json.loads(path.read_text()) if path.exists() else None
+        # Legacy execution records were only published after completion.
+        if value is None or (not value.get("terminal", True) and record.terminal):
+            value = {
+                "agent_id": info["agent_id"],
+                "iteration_id": info["iteration_id"],
+                "job_id": record.job_id,
+                "created_at": info["created_at"],
+                "observed_at": now(),
+                "simulated": self.simulated,
+                "exit_code": record.exit_code,
+                "state": record.state,
+                "terminal": record.terminal,
+                "output_available": record.state == "succeeded",
+            }
+            self.c.store.put("executions", record.job_id, value, immutable=False)
+        ref = self.c.store.paths.reference(path)
+        self.c.link_reference(info["agent_id"], ref, iteration_id=info["iteration_id"])
+        return {**value, "uri": ref.uri}
+
     def public(self, record: JobRecord) -> dict[str, Any]:
         info = self.jobs[record.job_id]
+        path = self.c.store.root / "executions" / f"{record.job_id}.json"
         return {
             "job_id": record.job_id,
             "agent_id": info["agent_id"],
@@ -545,14 +602,39 @@ class ResearchExecution:
             "public_files_available": record.state == "succeeded"
             and (not info["verification"] or info.get("public_output_subdir") is not None),
             "result": info.get("result"),
+            **(
+                {"uri": self.c.store.paths.reference(path).uri, "record_id": record.job_id}
+                if not info["verification"] and path.is_file()
+                else {}
+            ),
         }
 
     def for_agent(self, record: JobRecord, agent_id: str) -> dict[str, Any]:
         result = self.public(record)
         info = self.jobs[record.job_id]
         # Run-wide status access does not grant access to another branch's files.
+        if not info["verification"] and agent_id in {"rsi", info["agent_id"]}:
+            progress = read_progress(Path(info["output"]))
+            if progress is not None:
+                result["progress"] = progress
+            if record.state in {"failed", "timed_out", "lost"} and not info.get("feedback"):
+                # Supply already-readable failure evidence with the status instead
+                # of requiring another model/tool round trip to discover it.
+                with suppress(OSError):
+                    with open(record.log_path, "rb") as stream:
+                        stream.seek(0, 2)
+                        offset = max(0, stream.tell() - 16000)
+                        stream.seek(offset)
+                        raw = stream.read(16000)
+                    if raw:
+                        result["failure_log"] = {
+                            "text": raw.decode(errors="replace"), "truncated": offset > 0,
+                        }
         if info.get("feedback") and (info["verification"] or agent_id in {"rsi", info["agent_id"]}):
-            result["feedback"] = info["feedback"]
+            result["feedback"] = {
+                **info["feedback"],
+                "record_id": effect_id("feedback", record.job_id),
+            }
         return result
 
     def publish_feedback(self, record: JobRecord) -> None:
@@ -796,22 +878,19 @@ class ResearchExecution:
                     and result.score is not None
                 ):
                     run.baseline_result_ref = ref
-                if result.phase == "final" and result.status == "succeeded" and result.passed:
+                if (
+                    result.phase == "final"
+                    and result.status == "succeeded"
+                    and result.passed
+                    and not self.c.store.is_withdrawn(candidate.candidate_id)
+                ):
                     run.final_result_ref = ref
                 self.c.store.save_run(run)
                 self.c.store.consider_best(result.result_id, simulated_run=self.simulated)
                 info["result"] = {**encode(result), "uri": ref.uri}
             else:
                 # Job exit state is evidence. Training stdout is never a score.
-                info["result"] = {
-                    "agent_id": info["agent_id"],
-                    "iteration_id": info["iteration_id"],
-                    "job_id": record.job_id,
-                    "simulated": self.simulated,
-                    "exit_code": record.exit_code,
-                    "state": record.state,
-                    "output_available": record.state == "succeeded",
-                }
+                info["result"] = self.publish_execution(record)
                 if self.simulated and record.state == "succeeded":
                     # A visible fixture, never a fabricated checkpoint or real score.
                     output = (
@@ -828,10 +907,6 @@ class ResearchExecution:
                             "description": "Execution fixture: no training or GPU work performed",
                         },
                     )
-                result_path = self.c.store.root / "executions" / f"{record.job_id}.json"
-                if not result_path.exists():
-                    self.c.store.put("executions", record.job_id, info["result"])
-                info["result"]["uri"] = self.c.store.paths.reference(result_path).uri
             self.c.link_reference(
                 info["agent_id"],
                 RecordRef(info["result"]["uri"]),

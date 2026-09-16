@@ -62,7 +62,8 @@ def control_request(environment: dict[str, Any], payload: dict[str, Any]) -> dic
         ) or ("HTTP Error 5" in error or "HTTP Error 429" in error):
             raise RuntimeError(error)
         raise ValueError(error)
-    return response["value"]
+    value: dict[str, Any] = response["value"]
+    return value
 
 
 def prepare(
@@ -73,7 +74,7 @@ def prepare(
     check: bool = False,
     task: str | None = None,
     max_agents: int = 3,
-    max_wall_seconds: int = 3600,
+    max_wall_seconds: int | None = 3600,
     check_credentials: bool = True,
     web_research: bool | None = None,
     exploration_submissions: int | None = 10,
@@ -112,7 +113,7 @@ def prepare(
     setup = root / "runs" / run_id / "setup"
     config_path = setup / "research.json"
     if not check and config_path.exists():
-        existing = json.loads(config_path.read_text())
+        existing: dict[str, Any] = json.loads(config_path.read_text())
         previous_demo = json.loads((setup / "demo.json").read_text())
         if existing["metadata"].get("time_limit_scope", "total") != time_limit_scope:
             raise ValueError("此研究已有不同的时间口径；请新建研究")
@@ -161,8 +162,7 @@ def prepare(
     write_json(setup / "demo.json", demo, immutable=True)
     rules = (HERE / "RULES.md").read_text()
     budget_policy = (
-        "GPU 提交次数不限，包括正式评测、验证、诊断、失败和参数比较；"
-        "可按需调试和调参，无需逐次请求许可。所有作业保留记录。"
+        "GPU 提交次数不限，可以按需要评测、调试和比较参数，无需逐次确认。所有作业都会保留记录。"
         if exploration_submissions is None
         else f"每题最多 {exploration_submissions} 次探索 GPU 提交，包含诊断和失败；"
         "各研究员共享额度，最终另由程序独立复测一次。"
@@ -197,6 +197,10 @@ def prepare(
             ),
             ("workspace", "output", "task", "candidate"),
             auto_verify_output="candidate" if task else None,
+            parameter_descriptions={
+                "task": "题目标识，可选值：" + "、".join(demo["tasks"]) + "；不是文件路径。",
+                "candidate": "自包含产物文件，相对自己工作区的路径，例如 model_new.py。",
+            },
         ),
         ApprovedCommand(
             "diagnose_task",
@@ -216,38 +220,46 @@ def prepare(
                 "{candidate}",
             ),
             ("workspace", "output", "task", "script", "candidate"),
+            parameter_descriptions={
+                "task": "题目标识，可选值：" + "、".join(demo["tasks"]) + "；不是文件路径。",
+                "script": "自包含诊断脚本，相对自己工作区的文件路径。",
+                "candidate": "供诊断导入的产物文件，相对自己工作区的路径；无需产物时填空字符串。",
+            },
         ),
         ApprovedCommand(
             "collect_bundle", (*common, "collect", *fixed, "--output", "{output}"), ("output",)
         ),
     )
+    time_policy = "本次不设时间上限。"
+    if task and max_wall_seconds is not None:
+        duration = (
+            f"{max_wall_seconds // 60} 分钟"
+            if max_wall_seconds % 60 == 0
+            else f"{max_wall_seconds} 秒"
+        )
+        time_policy = (
+            f"探索时间最多 {duration}，最终独立复测另计。"
+            if time_limit_scope == "exploration"
+            else f"研究总时间最多 {duration}，包含最终独立复测。"
+        )
     config.brief = TaskBrief(
         title if name else title + " · " + config.model,
-        "研究并优化 "
+        "请优化 "
         + "、".join(demo["tasks"])
-        + " 的完整 ModelNew。先保证正确性，再提高整题加速比。"
-        "阅读自己工作区 RULES.md 和 tasks/<题号>/reference.py；不读取其他 run 或历史解法。"
-        f"同时最多 {demo['max_agents']} 名研究员（含等待），停止后名额可复用，累计创建数不限；"
-        "RSI 自主决定方向、分工和阶段汇报点；"
-        "实现和实验交给研究员。"
+        + " 的完整 ModelNew，在保持原始语义和正确性的前提下，尽可能提高整题加速比。"
+        + ("没有固定的达标分数。" if task else "")
+        + "\n\n题目在工作区的 tasks/<题号>/reference.py，具体要求见 RULES.md。"
+        "从本题公开材料开始研究，不读取其他研究或 baseline 的候选源码。"
+        + ("先理解任务并主动联网调研，" if allow_web else "先理解任务并研究已有材料，")
+        + "再制定团队研究计划，组织研究员并行实施；"
+        "过程中遇到需要进一步了解的问题，继续有针对性地查阅允许范围内的资料。"
+        + "\n\n"
+        + time_policy
         + budget_policy
-        + "研究结束由程序冻结候选并进行独立复测，最终反馈不再用于修改。"
-        "达到目标或判断无法继续改善时，用 stop_run 结束探索，后台自动收尾。"
-        "不用重复请求已给定的环境、资源和目标。"
-        + (
-            f"探索最长 {max_wall_seconds} 秒，最终复测另计；这是上限，不是必须用满。"
-            if task and time_limit_scope == "exploration"
-            else f"整项研究最长 {max_wall_seconds} 秒，包含最终复测；这是上限，不是必须用满。"
-            if task
-            else ""
-        )
-        + (
-            "目标是正确前提下尽可能高的加速比，没有固定达标阈值。"
-            "只做有依据的改进，不凑满时间或提交次数；提前结束也会自动复测。"
-            "并行方向和阶段沟通由 RSI 决定。"
-            if task
-            else "不另设总时间或模型调用上限。"
-        ),
+        + f"同时最多 {demo['max_agents']} 名研究员，等待中的研究员也占名额；"
+        "停止后可以创建新的研究员，累计人数不限。由 RSI 决定研究方向和分工。"
+        "\n\n按研究进展决定何时结束，不必用满预算。结束时用 stop_run 说明结果与原因，"
+        "系统会选取仍有效的最佳正式正确产物，冻结后独立复测。最终反馈不能再用于修改候选。",
         ResearchLimits(
             max_agents=demo["max_agents"],
             max_nodes=None,
@@ -296,28 +308,34 @@ def prepare(
         "auto_resume": True,
         "time_limit_scope": time_limit_scope,
         "finalization_reserve_seconds": (
-            min(180, max_wall_seconds / 10) if task and time_limit_scope == "total" else 0
+            min(180, max_wall_seconds / 10)
+            if task and time_limit_scope == "total" and max_wall_seconds is not None
+            else 0
         ),
         "allow_web_access": allow_web,
         "agent_tool_instructions": (
-            "遵守 RULES.md。只使用自己的本地工作区，GPU 仅经登记作业工具调用；"
-            "禁止直接 SSH、读取评分器或其他研究。"
+            "请先阅读工作区的 RULES.md 和公开题目。只在自己的工作区操作，"
+            "通过研究工具共享本次研究的资料和产物。GPU 实验使用已配置的作业工具，"
+            "不要直接 SSH，也不要读取评分器或其他研究。\n"
             + web_policy
-            + ("联网调研使用 search_web 和 fetch_url，便于归档来源。" if allow_web else "")
         ),
-        "execution_instructions": "evaluate_task 参数为 task/candidate；"
-        "diagnose_task 为 task/script/candidate"
-        "（candidate 可为空字符串），路径相对工作区。"
-        "使用 run_job(wait=true) 等待原作业，慢或断线不要重新提交。collect_bundle 参数为 {}；"
+        "execution_instructions": "用 evaluate_task 评测产物，传入 task 和 candidate；"
+        "用 diagnose_task 运行诊断，传入 task、script 和 candidate，"
+        "不需要候选时将 candidate 留为空字符串。文件路径均相对于自己的工作区。\n\n"
+        "远端只接收指定的文件，不会上传整个目录，因此候选和诊断脚本需要自包含。"
+        "候选在远端名为 model_new.py，诊断脚本名为 _rsi_diagnostic.py，"
+        "并提供题目的 reference.py；诊断中用 import model_new 导入候选。\n\n"
+        "用 run_job(wait=true) 等待结果；作业慢或连接中断时，先查看原作业，避免重复提交。"
+        "collect_bundle 不需要参数，传入 {} 即可。"
         + (
-            "evaluate_task 会自动归档本次正确产物、调用只读验证器并更新工作台，"
-            "不会追加 GPU 提交；无需手动 collect_bundle、保存候选或刷新分数。"
+            "evaluate_task 会自动保存正确产物和正式成绩并更新工作台，不会额外提交 GPU 作业；"
+            "无需再手动 collect_bundle、保存候选或刷新成绩。"
             if task
             else "用 collect_job_output(destination='',as_candidate=true) 保存汇总候选，"
             "再 verify_candidate(phase='search',wait=true) 更新工作台。"
         )
-        + "RSI 结束探索后，后台冻结历史最快正确源码，以 seed 137 复测；"
-        "无需研究员消耗探索额度重复最终确认。",
+        + "\n\n探索结束后，系统会冻结仍有效的历史最佳正式正确源码，以 seed 137 独立复测。"
+        "最终确认由系统完成，不需要研究员重复提交。",
         "verification_identity": {
             "adapter": "content",
             "phases": {

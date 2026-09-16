@@ -2,11 +2,61 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from areal_rsi.base.storage import now
 from areal_rsi.coordination.actions import STRING, ResearchActions, definition
-from areal_rsi.coordination.coordinator import effect_id
+from areal_rsi.coordination.coordinator import Coordinator, effect_id
 from areal_rsi.coordination.web_tools import ResearchWebClient
-from areal_rsi.modules.responses import ToolCall, ToolHandler, ToolResult
+from areal_rsi.modules.agent_runtime import ToolCall, ToolHandler, ToolResult
+
+
+def archive_codex_source(
+    coordinator: Coordinator, agent_id: str, session: Path, request_id: str
+) -> None:
+    """Index the native tool's actual response without replacing or rewriting it."""
+    key = effect_id("source", agent_id + ":" + request_id)
+    path = coordinator.store.root / "materials" / f"{key}.json"
+    if path.exists():
+        coordinator.link_reference(agent_id, coordinator.store.paths.reference(path))
+        return
+    web = session / "web"
+    request = json.loads((web / "requests" / f"{request_id}.json").read_text())
+    response = json.loads((web / "responses" / f"{request_id}.json").read_text())
+    limitations = []
+    try:
+        body = json.loads((web / "responses" / f"{request_id}.body").read_bytes())
+    except (ValueError, UnicodeError):
+        body = {}
+        limitations.append("Native web service returned a non-JSON response.")
+    if not isinstance(body, dict):
+        body = {}
+        limitations.append("Native web service returned an unexpected response shape.")
+    if response["status_code"] != 200:
+        limitations.append(f"Native web service returned HTTP {response['status_code']}.")
+    # The request's conversation input and encrypted continuation state stay in
+    # the private session archive. Only retrieved source content is shared.
+    ref = coordinator.store.put(
+        "materials",
+        key,
+        {
+            "agent_id": agent_id,
+            "created_at": now(),
+            "source": "codex_web_search",
+            "request_id": request_id,
+            "commands": request.get("commands", {}),
+            "status_code": response["status_code"],
+            "text": body.get("output", ""),
+            "results": body.get("results", []),
+            "limitations": limitations,
+            "untrusted_source_content": True,
+        },
+    )
+    coordinator.link_reference(agent_id, ref)
+    coordinator.store.event(
+        "source_read", agent_id=agent_id, source="codex_web_search", uri=ref.uri
+    )
 
 
 def register_sources(

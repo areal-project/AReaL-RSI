@@ -19,7 +19,7 @@
         ><span>RSI<span class="brand-caption">研究工作台</span></span></a
       >
       <button class="primary new-run" id="new-run">＋ 新建研究</button>
-      <div class="sidebar-label">研究记录</div>
+      <div class="sidebar-label">研究分组</div>
       <nav id="run-list" aria-label="研究记录">
         <p class="muted">正在读取…</p>
       </nav>
@@ -33,7 +33,12 @@
       <header class="topbar">
         <div class="mobile-brand">
           RSI
-          <div id="mobile-runs"></div>
+          <div id="mobile-runs">
+            <details id="mobile-run-picker">
+              <summary aria-label="选择研究"><span id="mobile-run-name">选择研究</span><span aria-hidden="true">⌄</span></summary>
+              <nav id="mobile-run-list" aria-label="研究分组"></nav>
+            </details>
+          </div>
           <button id="mobile-new" class="quiet">＋ 新建</button>
         </div>
         <div class="breadcrumb">
@@ -86,6 +91,7 @@
           <summary><span>模型设置</span><span id="model-settings-summary" class="muted"></span></summary>
           <form id="model-settings-form">
             <div class="model-settings-fields">
+              <div><label for="agent-backend-trigger">Agent 后端</label><div id="agent-backend"></div></div>
               <label class="model-url-field" for="model-base-url">API 地址
                 <input id="model-base-url" type="url" required spellcheck="false"
                   autocomplete="off" placeholder="https://api.example.com/v1" />
@@ -287,7 +293,8 @@
         <div class="card-heading"><h2 id="create-title">新建研究</h2><button type="button" id="create-cancel" class="quiet" aria-label="关闭新建研究">✕</button></div>
         <p class="muted">先选择模型，再与 Interaction 聊聊研究目标。</p>
         <div class="model-settings-fields">
-          <label for="create-base-url">API 地址<input id="create-base-url" type="url" required autocomplete="off" spellcheck="false" /></label>
+          <div><label for="create-backend-trigger">Agent 后端</label><div id="create-backend"></div></div>
+        <label for="create-base-url">API 地址<input id="create-base-url" type="url" required autocomplete="off" spellcheck="false" /></label>
           <label for="create-api-key">API Key<input id="create-api-key" type="text" autocomplete="off" spellcheck="false" /></label>
           <div><label for="create-model">模型名称</label><input id="create-model" required autocomplete="off" spellcheck="false" /><div id="create-model-preset"></div></div>
           <div><label for="create-effort-trigger">推理强度</label><div id="create-effort"></div></div>

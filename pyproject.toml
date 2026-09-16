@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "areal-rsi"
 version = "0.1.0"
-description = "File-backed RSI infrastructure built around DeepSeek Harness."
+description = "Durable multi-agent research with standard and Codex backends."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
@@ -16,6 +16,7 @@ dependencies = [
   "areal-agent-runtime[api,dsh]==0.4.0.dev1",
   "pyyaml>=6,<7",
   "httpx[socks]>=0.28,<1",
+  "openai-codex==0.154.0",
 ]
 
 [project.scripts]

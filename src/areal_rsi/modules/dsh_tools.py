@@ -17,7 +17,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from areal_rsi.modules.responses import ToolCall
+from areal_rsi.modules.agent_runtime import ToolCall
 
 RESOURCES = Path(__file__).resolve().parents[1] / "resources" / "dsh_tools"
 SENSITIVE = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|AUTH|COOKIE", re.I)

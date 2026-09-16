@@ -5,10 +5,10 @@
   "sandbox_image": "past-bench-agent:f8223517",
   "edit_scope": "hermes",
   "target_model": "gpt-6-astra",
-  "base_url": "https://api.openai.com/v1",
+  "base_url": "https://4ipic.com/v1",
   "api_key_env": "RSI_TARGET_API_KEY",
   "judge_model": "gpt-6-astra",
-  "judge_base_url": "https://api.openai.com/v1",
+  "judge_base_url": "https://4ipic.com/v1",
   "judge_api_key_env": "RSI_JUDGE_API_KEY",
   "families": {
     "development": ["memory_ability/SM01_preference_adoption"],

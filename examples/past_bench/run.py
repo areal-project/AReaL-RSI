@@ -704,7 +704,7 @@ def research_config(lock_path: Path, seed: Path, *, target: float | None = None)
             timeout_seconds=120,
         ),
         model=os.environ.get("RSI_TEACHER_MODEL", "gpt-6-astra"),
-        base_url=os.environ.get("RSI_TEACHER_BASE_URL", "https://api.openai.com"),
+        base_url=os.environ.get("RSI_TEACHER_BASE_URL") or lock["protocol"]["options"]["base_url"],
         api_key_env="RSI_TEACHER_API_KEY",
         commands=(
             ApprovedCommand(

@@ -225,7 +225,7 @@ def test_research_config_uses_frozen_harness_identity(
     manifest, _ = fixture()
     lock: dict[str, Any] = {
         "protocol_id": "p",
-        "protocol": {"options": {"target_model": "fixed"}},
+        "protocol": {"options": {"target_model": "fixed", "base_url": "https://example.test/v1"}},
         "manifests": {split: [{**manifest, "family_id": split}] for split in pb.PHASES.values()},
     }
     monkeypatch.setattr(pb, "load_lock", lambda path: lock)

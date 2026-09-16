@@ -92,6 +92,27 @@ uv run --env-file .env --locked python examples/past_bench/versions.py configure
 研究工作台内部也会为每个候选保存独立的内容寻址快照，评测时展开副本，不修改 seed 或历史候选。
 版本文件不是文件系统权限锁；操作者应始终在工作副本中改代码，再保存为新版本。
 
+## 30 轮框架对比
+
+默认配置的 4 次验证预算不适用于 30 轮实验。用独立配置保留旧实验，并在开始前固定
+两组共同的[实验协议](comparison.md)：
+
+```bash
+uv run --env-file .env --locked python examples/past_bench/comparison.py \
+  --lock /absolute/path/operator.lock.json \
+  --version /absolute/path/versions/v001/version.json \
+  --output /absolute/path/research-30rounds.json
+```
+
+这只生成配置，不启动优化。设置 `RSI_RESEARCH_CONFIG` 指向新文件，再启动 TUI。
+生成器固定研究模型 gpt-6-astra / xhigh，禁止运行时模型环境变量覆盖；开始前也校验 seed
+版本摘要。评测协议、Task Agent、judge、初始源码保持不变。
+
+每组预算为 seed search 一次、30 个不同候选的有效 search 评测、最终候选 final 一次，
+另留 6 次失败尝试；不提供额外 develop 命令。框架硬限制总验证次数与资源上限，
+“30 个不同有效候选”和禁止提前完成仍由实验指令约束，必须依据逐轮账本审计，不能只看
+作业数或研究状态。此协议匹配评测次数，不声称两个平台的 token 计量或费用完全相同。
+
 ## 跑一组真实任务
 
 ```bash
@@ -123,6 +144,9 @@ uv run --env-file .env --locked rsi workbench --config /absolute/path/research.j
 configure 从 `RSI_TEACHER_MODEL`、`RSI_TEACHER_BASE_URL` 读取研究模型设置，凭证引用
 `RSI_TEACHER_API_KEY`，不会将密钥写入配置。运行时 `RSI_MODEL`、`RSI_BASE_URL` 仍可覆盖
 研究模型设置；Task Agent 和 judge 由 operator 锁定，不受研究模型选择影响。
+本机使用 `.env` 中的 `https://4ipic.com/v1`，不需要官网密钥；未提供研究模型地址时使用
+operator 的 `base_url`，不回退官网。Task Agent/judge 的地址在 prepare 前填写到 operator，
+之后不会被 `.env` 静默覆盖。Codex 应用自己的模型提供商配置独立于本仓库 `.env`。
 configure 不启动研究或调用模型。完整模式允许编辑 `prompt.md` 和 `hermes/**`，提供 `develop`
 诊断命令和可信 `verify` 命令，并固定 `diagnostic → development`、`search → search`、
 `final → final`。每个 family 必须完整分配到且仅分配到一个池。

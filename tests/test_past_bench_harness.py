@@ -47,12 +47,19 @@ def test_full_source_identity_and_scope(tmp_path: Path, monkeypatch: pytest.Monk
     (root / "hermes/escape").unlink()
     lock = {
         "protocol_id": "fixed",
-        "protocol": {"edit_scope": "hermes", "options": {"target_model": "fixed"}},
+        "protocol": {
+            "edit_scope": "hermes",
+            "options": {"target_model": "fixed", "base_url": "https://example.test/v1"},
+        },
         "manifests": {split: [] for split in pb.PHASES.values()},
     }
     monkeypatch.setattr(pb, "load_lock", lambda _: lock)
     config = pb.research_config(tmp_path / "lock", root)
     assert config.brief.limits.allowed_paths == ("prompt.md", "hermes/*")
+    monkeypatch.delenv("RSI_TEACHER_BASE_URL", raising=False)
+    assert pb.research_config(tmp_path / "lock", root).base_url == "https://example.test/v1"
+    monkeypatch.setenv("RSI_TEACHER_BASE_URL", "https://4ipic.com/v1")
+    assert pb.research_config(tmp_path / "lock", root).base_url == "https://4ipic.com/v1"
 
 
 @pytest.fixture
@@ -192,3 +199,34 @@ def test_saved_versions_are_separate_and_never_overwritten(
         versions.verify_version(second / "version.json")
     with pytest.raises(ValueError, match="outside its source"):
         versions.save_version(workspace, workspace / "nested", "hermes")
+
+
+def test_comparison_budget_model_and_version_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[1] / "examples/past_bench"))
+    from areal_rsi.api.research import TaskBrief
+    from areal_rsi.coordination.config import ResearchConfig, config_from_dict
+
+    versions, comparison = module("versions"), module("comparison")
+    workspace, saved = candidate(tmp_path / "workspace"), tmp_path / "saved"
+    versions.save_version(workspace, saved, "hermes")
+    lock = {"protocol": {"edit_scope": "hermes", "options": {"target_model": "gpt-6-astra"}}}
+    monkeypatch.setattr(comparison, "load_lock", lambda _: lock)
+    monkeypatch.setattr(
+        comparison,
+        "research_config",
+        lambda lock, source: ResearchConfig(brief=TaskBrief("fixture", ""), seed_dir=str(source)),
+    )
+    monkeypatch.setenv("RSI_MODEL", "different-model")
+    config = config_from_dict(
+        comparison.comparison_config(tmp_path / "lock", saved / "version.json")
+    )
+    assert config.model_settings()["model"] == "gpt-6-astra"
+    assert config.brief.limits.max_verify_calls == 32 + 6
+    assert config.brief.limits.max_nodes is not None and config.brief.limits.max_nodes >= 30
+    assert config.commands == ()
+    assert config.preflight is not None and "--preflight" in config.preflight.command
+    (saved / "harness/prompt.md").write_text("modified saved version")
+    with pytest.raises(ValueError, match="Saved Harness version changed"):
+        comparison.comparison_config(tmp_path / "lock", saved / "version.json")

@@ -3,11 +3,11 @@
 Interaction Agent、RSI Agent 和 ResearchAgent 组可分别配置模型，默认继承 teacher。
 所有 ResearchAgent 共用 research-agent 配置。
 Task Agent 直接执行 target，不存在另一份 Task Agent 模型配置。
-用户明确说“开始优化 Task Agent 在 PAST-Bench 上的表现”（或 Past Bench、past-bench 的同义请求）时，
+用户明确要求启动操作者预配置的研究时，
 直接调用 rsi_research_start，goal 保留用户目标，为本次请求生成唯一 request_id；工具重试复用同一 ID。
 这是已配置的新版本地研究，不走旧版 rsi_plan/rsi_start，不再问配置路径、轮数或二次确认。
 用户仅询问方法、查看配置或要求计划时不要启动。默认范围由操作者配置决定，不声称全套评测。
-优化对象是 Task Agent 的通用 prompt.md 策略；模型权重、官方 Hermes 和评分器保持固定。
+优化对象、可编辑范围、模型、预算和评测协议均来自操作者的研究配置，不从目标文本推断或覆盖。
 返回后简述 run_id、状态和 report_url；已提交不等于已测得提升。
 后续查询用 rsi_research_status，暂停/继续/停止用 rsi_research_control；不要混用旧实验工具。
 该研究可在退出 TUI 后继续运行；工作台报告链接展示 baseline、best、final 和作业进度。

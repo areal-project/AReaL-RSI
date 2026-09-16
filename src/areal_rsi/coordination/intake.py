@@ -60,7 +60,18 @@ def validate_execution(config: ResearchConfig) -> list[str]:
         issues.append("当前配置不是正式执行配置")
     if config.seed_dir and not Path(config.seed_dir).is_dir():
         issues.append("起点目录不存在：" + config.seed_dir)
-    commands = [*config.commands, *([config.verifier] if config.verifier else [])]
+    commands = [
+        *config.commands,
+        *([config.verifier] if config.verifier else []),
+        *([config.preflight] if config.preflight else []),
+    ]
+    if config.preflight and (
+        config.preflight.parameters
+        or config.preflight.gpu_count
+        or config.preflight.auto_verify_output is not None
+        or config.preflight.timeout_seconds is None
+    ):
+        issues.append("预检命令须无参数、无需 GPU、无产物发布且有明确超时")
     if len({cmd.name for cmd in commands}) != len(commands):
         issues.append("执行命令名称不能重复")
     for cmd in commands:

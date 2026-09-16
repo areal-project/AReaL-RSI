@@ -5,6 +5,10 @@
 优化的是通用记忆、检索、复用和更新策略。模型、原生工具、持久化实现、反思流程和 grader 固定。
 这不是任意 Agent 代码优化接口。TUI 通过新版研究入口启动，不依赖旧版 Benchmark catalog。
 
+本目录的 `run.py` 包含所有 PAST-Bench 专属执行、评分、协议检查和研究配置生成逻辑。
+`src/areal_rsi/` 只提供通用的研究配置、作业调度、候选管理和可信结果校验；不导入本目录。
+配置生成器输出固定的脚本绝对路径，因此可以从任意作业工作目录运行。
+
 固定上游提交：`f8223517ae7491e776b69793d9f11e9d074ab42e`。
 该版本的 `evolve` 明确拒绝 Hermes/nanobot/zeroclaw 持久化序列使用 `--runtime container`。
 本适配采用 **Hermes 本地 runtime + Docker 工具沙箱**，notes 等模拟服务由官方 runner
@@ -44,9 +48,9 @@ docker build -t past-bench-agent:f8223517 \
 目标模型与 judge 可以不同；使用其他 judge 时不能直接与论文表格比较。
 
 ```bash
-uv run --locked python -m areal_rsi.adapters.past_bench prepare \
+uv run --locked python examples/past_bench/run.py prepare \
   --config /absolute/path/operator.json --output /absolute/path/operator.lock.json
-uv run --locked python -m areal_rsi.adapters.past_bench describe \
+uv run --locked python examples/past_bench/run.py describe \
   --lock /absolute/path/operator.lock.json --phase diagnostic
 ```
 
@@ -57,7 +61,7 @@ prepare/describe 不调用模型。它们核对上游提交及 tracked 文件、
 ## 跑一组真实任务
 
 ```bash
-uv run --env-file .env --locked python -m areal_rsi.adapters.past_bench evaluate \
+uv run --env-file .env --locked python examples/past_bench/run.py evaluate \
   --lock /absolute/path/operator.lock.json \
   --harness examples/past_bench/seed \
   --output /absolute/path/new-smoke-output --phase diagnostic
@@ -76,7 +80,7 @@ mock 服务端口冲突。不要同时在同一主机启动使用相同服务端
 ## 接入工作台
 
 ```bash
-uv run --env-file .env --locked python -m areal_rsi.adapters.past_bench configure \
+uv run --env-file .env --locked python examples/past_bench/run.py configure \
   --lock /absolute/path/operator.lock.json --harness examples/past_bench/seed \
   --output /absolute/path/research.json
 uv run --env-file .env --locked rsi workbench --config /absolute/path/research.json
@@ -95,8 +99,9 @@ configure 不启动研究或调用模型。生成的配置限制候选只编辑 
 
 ## 在 TUI 中一句话启动
 
-完成上述配置后，在 `.env` 中设置 `RSI_PAST_BENCH_CONFIG=/absolute/path/research.json`。
-本仓库本地默认读取 `.rsi/past-bench/research-current.json`，已有此文件时无需额外设置。
+完成上述配置后，在 `.env` 中设置 `RSI_RESEARCH_CONFIG=/absolute/path/research.json`。
+通用 TUI 默认读取 `.rsi/research.json`，也可以将生成的配置保存到此位置。
+原 `RSI_PAST_BENCH_CONFIG` 不再使用；旧配置须通过新入口重新 prepare/configure。
 确保 Docker 已启动、研究模型和 operator 引用的凭证已加载，然后运行：
 
 ```bash
@@ -117,7 +122,7 @@ Interaction 会调用 `rsi_research_start`，按已准备的配置直接启动�
 development 诊断另外占用作业和时间预算。模型调用有实际费用。
 
 后台服务默认在 `127.0.0.1:8198`，可通过 `RSI_RESEARCH_PORT` 更换端口；研究数据位于
-`RSI_DATA_ROOT/past-bench-research/`（未设置时为 `.rsi/past-bench-research/`）。
+`RSI_DATA_ROOT/research/`（未设置时为 `.rsi/research/`）。历史目录保留，不自动迁移已有研究。
 该入口自动启动独立工作台，退出 TUI 不会终止研究。返回链接可查看真实进度。
 可继续说“查看这次研究进度”“暂停这次研究”“继续这次研究”或“停止这次研究”。
 暂停不强杀已运行的评测，停止会取消作业。工具重试复用同一个 request_id，避免重复研究。

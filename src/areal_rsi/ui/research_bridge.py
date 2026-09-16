@@ -6,6 +6,7 @@ import fcntl
 import hashlib
 import json
 import os
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -17,42 +18,38 @@ from areal_rsi.ui.launch import REPOSITORY, ensure_workbench
 
 def prepared_config() -> ResearchConfig:
     """Preflight fixed operator inputs before starting any model or evaluation."""
-    from areal_rsi.adapters.past_bench import PHASES, load_lock, phase_identity
-
     path = (
-        Path(
-            os.environ.get(
-                "RSI_PAST_BENCH_CONFIG", str(REPOSITORY / ".rsi/past-bench/research-current.json")
-            )
-        )
+        Path(os.environ.get("RSI_RESEARCH_CONFIG", str(REPOSITORY / ".rsi/research.json")))
         .expanduser()
         .resolve()
     )
     if not path.is_file():
-        raise ValueError(
-            "尚未配置 PAST-Bench，请按 examples/past_bench/README.md 完成 prepare/configure"
-        )
+        raise ValueError("尚未配置研究，请设置 RSI_RESEARCH_CONFIG 或提供 .rsi/research.json")
     config = load_config(path)
     issues = validate_execution(config)
     if issues:
-        raise ValueError("PAST-Bench 研究配置未通过执行检查")
-    if config.metadata.get("template") != "past-bench" or config.verifier is None:
-        raise ValueError("请选择 PAST-Bench 的研究配置")
-    command = config.verifier.command
-    if "--lock" not in command:
-        raise ValueError("PAST-Bench 配置缺少协议锁")
-    lock = load_lock(Path(command[command.index("--lock") + 1]))
-    expected = {
-        "adapter": "harness",
-        "phases": {phase: phase_identity(lock, phase) for phase in PHASES},
-    }
-    if config.metadata.get("verification_identity") != expected:
-        raise ValueError("PAST-Bench 配置与协议锁不一致，请重新 configure")
+        raise ValueError("研究配置未通过执行检查")
+    if config.preflight:
+        try:
+            checked = subprocess.run(
+                config.preflight.command,
+                cwd=path.parent,
+                env={**os.environ, **config.execution_env},
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=config.preflight.timeout_seconds,
+            )
+            identity = json.loads(checked.stdout)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            # A plugin's stderr can include private data; never echo it to the TUI.
+            raise ValueError("操作者配置的预检失败，请检查依赖、协议和凭证") from None
+        if not isinstance(identity, dict) or identity.get("verification_identity") != (
+            config.metadata.get("verification_identity")
+        ):
+            raise ValueError("预检返回的验证身份与研究配置不一致")
     if not config.api_key():
         raise ValueError("研究模型凭证未配置，请检查研究配置的 api_key_env")
-    for key in ("api_key_env", "judge_api_key_env"):
-        if not os.environ.get(lock["protocol"]["options"][key]):
-            raise ValueError("Task Agent 或评分模型凭证未配置，请检查 operator 中的环境变量")
     config.pin_model_settings()
     return config
 
@@ -106,7 +103,7 @@ def summary(detail: dict[str, Any], url: str) -> dict[str, Any]:
 
 class ResearchBridge:
     def __init__(self, root: Path):
-        self.root = root.resolve() / "past-bench-research"
+        self.root = root.resolve() / "research"
         self.port = int(os.environ.get("RSI_RESEARCH_PORT", "8198"))
 
     def start(self, goal: str, request_id: str) -> dict[str, Any]:
@@ -115,7 +112,7 @@ class ResearchBridge:
             raise ValueError("请提供研究目标")
         # The same user request is retryable after a disconnected tool response.
         # Store its exact keyless payload so a retry cannot create another run.
-        run_id = "research_past_" + hashlib.sha256(request_id.encode()).hexdigest()[:24]
+        run_id = "research_tui_" + hashlib.sha256(request_id.encode()).hexdigest()[:24]
         directory = self.root / "tui-requests"
         directory.mkdir(parents=True, exist_ok=True)
         with (directory / (run_id + ".lock")).open("a") as guard:

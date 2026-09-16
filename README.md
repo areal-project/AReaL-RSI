@@ -89,5 +89,11 @@ Hermes、Docker 工具沙箱和完整任务族持久化对照，支持独立 dev
 配置完成后运行 `./tui`，输入“开始优化 Task Agent 在 PAST-Bench 上的表现”，即可通过
 新版研究入口启动策略优化，并在同一对话中查询、暂停或继续。
 
+TUI 的研究入口与 benchmark 无关：从 `RSI_RESEARCH_CONFIG` 指定的文件（默认
+`.rsi/research.json`）加载 `ResearchConfig`。配置可提供操作者拥有的 `preflight`
+命令：无参数、无需 GPU、有明确超时，成功时输出 JSON，其中 `verification_identity`
+须等于配置的 `metadata.verification_identity`。具体依赖、凭证与数据检查由各 benchmark
+目录中的脚本实现；基础设施不导入这些实现。预检不会作为候选可调用的执行工具暴露。
+
 旧固定流程仍可通过 `./tui` 启动，脚本自动读取本地 `.env`。Terminal-Bench
 实验配置和用法见 [TB2.1 示例](examples/tb21/README.md)。

@@ -66,6 +66,8 @@ class ResearchConfig:
     retry_initial_seconds: float = 2
     retry_max_seconds: float = 60
     commands: tuple[ApprovedCommand, ...] = ()
+    # Operator-owned preparation check; never exposed as an agent execution tool.
+    preflight: ApprovedCommand | None = None
     verifier: ApprovedCommand | None = None
     finalizer: ApprovedCommand | None = None
     execution_env: dict[str, str] = field(default_factory=dict)

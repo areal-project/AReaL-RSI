@@ -10,9 +10,9 @@ test:
 	$(UV) run --locked pytest tests
 
 lint:
-	$(UV) run --locked ruff check src tests
+	$(UV) run --locked ruff check src tests examples/past_bench/run.py
 
 typecheck:
-	$(UV) run --locked mypy src tests
+	$(UV) run --locked mypy src tests examples/past_bench/run.py
 
 check: test lint typecheck

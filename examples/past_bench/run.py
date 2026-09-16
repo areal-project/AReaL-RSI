@@ -288,6 +288,20 @@ def candidate_policy(harness: Path) -> tuple[str, str]:
     return policy, hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
 
 
+def preflight(lock_path: Path) -> dict[str, Any]:
+    """Benchmark-owned checks exposed through the generic research preflight contract."""
+    lock = load_lock(lock_path)
+    for name in ("api_key_env", "judge_api_key_env"):
+        if not os.environ.get(lock["protocol"]["options"][name]):
+            raise ValueError("Task Agent or judge credential is missing")
+    return {
+        "verification_identity": {
+            "adapter": "harness",
+            "phases": {phase: phase_identity(lock, phase) for phase in PHASES},
+        }
+    }
+
+
 def finite_score(value: Any) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
         raise ValueError("Episode score must be finite")
@@ -539,8 +553,7 @@ def research_config(lock_path: Path, seed: Path, *, target: float | None = None)
     candidate_policy(seed)
     command = (
         sys.executable,
-        "-m",
-        "areal_rsi.adapters.past_bench",
+        str(Path(__file__).resolve()),
         "evaluate",
         "--lock",
         str(lock_path),
@@ -582,6 +595,11 @@ def research_config(lock_path: Path, seed: Path, *, target: float | None = None)
             ),
         ),
         seed_dir=str(seed),
+        preflight=ApprovedCommand(
+            "preflight",
+            (sys.executable, str(Path(__file__).resolve()), "preflight", "--lock", str(lock_path)),
+            timeout_seconds=120,
+        ),
         model=os.environ.get("RSI_TEACHER_MODEL", "gpt-6-astra"),
         base_url=os.environ.get("RSI_TEACHER_BASE_URL", "https://api.openai.com"),
         api_key_env="RSI_TEACHER_API_KEY",
@@ -622,12 +640,12 @@ def main() -> None:
     prepare_parser = sub.add_parser("prepare")
     prepare_parser.add_argument("--config", type=Path, required=True)
     prepare_parser.add_argument("--output", type=Path, required=True)
-    for action in ("describe", "evaluate", "configure"):
+    for action in ("describe", "evaluate", "configure", "preflight"):
         command = sub.add_parser(action)
         command.add_argument("--lock", type=Path, required=True)
-        if action != "configure":
+        if action not in {"configure", "preflight"}:
             command.add_argument("--phase", choices=tuple(PHASES), default="diagnostic")
-        if action != "describe":
+        if action not in {"describe", "preflight"}:
             command.add_argument("--output", type=Path, required=True)
             command.add_argument("--harness", type=Path, required=True)
         if action == "configure":
@@ -637,6 +655,8 @@ def main() -> None:
         if args.action == "prepare":
             result = prepare(args.config.resolve(), args.output.resolve())
             print(json.dumps({"protocol_id": result["protocol_id"]}))
+        elif args.action == "preflight":
+            print(json.dumps(preflight(args.lock.resolve())))
         elif args.action == "describe":
             print(json.dumps(phase_identity(load_lock(args.lock.resolve()), args.phase)))
         elif args.action == "configure":

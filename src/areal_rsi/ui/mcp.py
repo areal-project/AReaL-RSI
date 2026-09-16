@@ -138,7 +138,7 @@ def create_server(controller: ExperimentController | ExperimentWorkspace) -> MCP
     server = MCPServer(
         "areal-rsi",
         instructions=(
-            "用户明确要求开始优化 PAST-Bench 时，直接用 rsi_research_start，"
+            "用户明确要求启动操作者已配置的研究时，直接用 rsi_research_start，"
             "这是已配置的新版研究入口，无需再次确认；仅询问或讨论时不要启动。"
             "其他旧版实验先用 rsi_plan 生成固定配置的实验计划并展示给用户。"
             "只有用户确认该计划后才能以 confirmed=true 调用 rsi_start；"
@@ -159,8 +159,8 @@ def create_server(controller: ExperimentController | ExperimentWorkspace) -> MCP
         except Exception:
             # Upstream errors may include model credentials or private traces.
             raise ToolError(
-                "研究操作未完成。检查 Docker、RSI_PAST_BENCH_CONFIG 指向的配置、协议锁和模型凭证；"
-                "配置步骤见 examples/past_bench/README.md。启动重试必须复用原 request_id。"
+                "研究操作未完成。检查 RSI_RESEARCH_CONFIG 指向的配置、预检命令和模型凭证；"
+                "启动重试必须复用原 request_id。"
             ) from None
 
     @server.tool(
@@ -170,9 +170,10 @@ def create_server(controller: ExperimentController | ExperimentWorkspace) -> MCP
         ),
     )
     async def rsi_research_start(goal: Goal, request_id: Identifier) -> str:
-        """用户明确要求开始优化 Task Agent 在 PAST-Bench 上的表现时直接调用。
+        """用户明确要求启动操作者已配置的研究时直接调用。
 
-        使用操作者预配置的小规模真实研究，优化 prompt.md，先 baseline 后候选搜索和 final。
+        使用 RSI_RESEARCH_CONFIG 或 .rsi/research.json 的真实研究配置。
+        优化对象、可编辑范围、评测方式和预算均由配置决定，不能由目标文本覆盖。
         不需要再问轮数或确认。仅询问、解释或要计划时不要调用。
         每个新用户请求生成唯一 request_id（字母数字下划线）；同一请求重试必须复用它，
         防止重复启动。返回 run_id 仅表示提交，使用 rsi_research_status 查看真实进度。
@@ -184,7 +185,7 @@ def create_server(controller: ExperimentController | ExperimentWorkspace) -> MCP
         annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
     )
     async def rsi_research_status(run_id: Identifier) -> str:
-        """查看新版 PAST-Bench 研究的真实 baseline、best、final 和作业状态。"""
+        """查看已配置研究的真实 baseline、best、final 和作业状态。"""
         return await research_call(lambda: research.control(run_id))
 
     @server.tool(

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 import threading
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +13,7 @@ from mcp.types import CallToolResult, TextContent
 
 from areal_rsi.api.research import TaskBrief
 from areal_rsi.coordination.config import ResearchConfig
+from areal_rsi.execution import ApprovedCommand
 from areal_rsi.modules.responses import ResponsesConfig, ResponsesRuntime
 from areal_rsi.research_app import ResearchApp
 from areal_rsi.ui import research_bridge as bridge
@@ -41,7 +44,7 @@ def test_real_http_start_retry_pause_resume_stop(
     seed = tmp_path / "seed"
     seed.mkdir()
     (seed / "prompt.md").write_text("A generic policy")
-    config = ResearchConfig(TaskBrief("PAST-Bench", "Improve the policy"), seed_dir=str(seed))
+    config = ResearchConfig(TaskBrief("Generic research", "Improve the policy"), seed_dir=str(seed))
     monkeypatch.setattr(bridge, "prepared_config", lambda: config)
     controller = bridge.ResearchBridge(tmp_path)
     app = ResearchApp(
@@ -92,7 +95,7 @@ def test_real_http_start_retry_pause_resume_stop(
 def test_preflight_failure_never_starts_service_or_saves_request(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("RSI_PAST_BENCH_CONFIG", str(tmp_path / "missing.json"))
+    monkeypatch.setenv("RSI_RESEARCH_CONFIG", str(tmp_path / "missing.json"))
     controller = bridge.ResearchBridge(tmp_path)
 
     def unexpected(*args: Any) -> Any:
@@ -119,48 +122,78 @@ def test_status_does_not_publish_private_records() -> None:
     assert result["best"]["score"] == 0.6
 
 
-def test_persona_and_environment_route_prepared_past_bench() -> None:
+def test_persona_and_environment_route_configured_research() -> None:
     from areal_rsi.modules.dsh_config import MCP_ENVIRONMENT, PERSONA
 
     assert "rsi_research_start" in PERSONA
     assert "rsi_research_status" in PERSONA
-    assert "RSI_PAST_BENCH_CONFIG" in MCP_ENVIRONMENT
+    assert "RSI_RESEARCH_CONFIG" in MCP_ENVIRONMENT
     assert "RSI_RESEARCH_PORT" in MCP_ENVIRONMENT
 
 
-@pytest.mark.parametrize("failure", [None, "identity", "credentials"])
-def test_preflight_checks_protocol_and_target_credentials(
+@pytest.mark.parametrize("failure", [None, "identity", "command", "malformed", "credentials"])
+def test_preflight_runs_operator_command_and_checks_identity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str | None
 ) -> None:
-    from areal_rsi.adapters import past_bench as pb
-
-    seed = tmp_path / "seed"
-    seed.mkdir()
-    (seed / "prompt.md").write_text("Generic policy")
-    lock = {
-        "protocol_id": "fixed",
-        "protocol": {
-            "options": {
-                "target_model": "target",
-                "api_key_env": "FIXTURE_TARGET_KEY",
-                "judge_api_key_env": "FIXTURE_TARGET_KEY",
-            }
-        },
-        "manifests": {split: [] for split in pb.PHASES.values()},
-    }
-    monkeypatch.setattr(pb, "load_lock", lambda _: lock)
-    config = pb.research_config(tmp_path / "lock.json", seed)
-    monkeypatch.setenv("RSI_TEACHER_API_KEY", "fixture")
-    monkeypatch.setenv("FIXTURE_TARGET_KEY", "fixture")
+    identity = {"protocol_id": "fixture"}
+    script = tmp_path / "check.py"
+    script.write_text(
+        "import json,os,sys\n"
+        "assert os.environ['FIXTURE_SETTING'] == 'visible'\n"
+        "print(json.dumps({'verification_identity': {'protocol_id': 'fixture'}}))\n"
+    )
+    config = ResearchConfig(
+        TaskBrief("Generic research", ""),
+        preflight=ApprovedCommand("preflight", (sys.executable, str(script)), timeout_seconds=5),
+        metadata={"verification_identity": identity},
+        execution_env={"FIXTURE_SETTING": "visible"},
+    )
+    monkeypatch.setenv("RSI_API_KEY", "fixture")
     if failure == "identity":
-        config.metadata["verification_identity"]["phases"]["search"]["protocol_id"] = "other"
+        config.metadata["verification_identity"] = {"protocol_id": "other"}
+    if failure == "command":
+        script.write_text("raise RuntimeError('SECRET')")
+    if failure == "malformed":
+        script.write_text("print('SECRET')")
     if failure == "credentials":
-        monkeypatch.delenv("FIXTURE_TARGET_KEY")
+        monkeypatch.delenv("RSI_API_KEY")
     path = tmp_path / "config.json"
     path.write_text(json.dumps(config.public()))
-    monkeypatch.setenv("RSI_PAST_BENCH_CONFIG", str(path))
+    monkeypatch.setenv("RSI_RESEARCH_CONFIG", str(path))
     if failure:
-        with pytest.raises(ValueError, match=r"不一致|凭证"):
+        with pytest.raises(ValueError, match=r"不一致|凭证|预检失败") as error:
             bridge.prepared_config()
+        assert "SECRET" not in str(error.value)
     else:
-        assert bridge.prepared_config().metadata["template"] == "past-bench"
+        assert bridge.prepared_config().metadata["verification_identity"] == identity
+
+
+def test_infra_does_not_import_benchmark_implementation() -> None:
+    root = Path(__file__).parents[1]
+    assert not (root / "src/areal_rsi/adapters/past_bench.py").exists()
+    for file in (
+        "ui/research_bridge.py",
+        "ui/mcp.py",
+        "modules/dsh_config.py",
+        "resources/dsh/persona.md",
+    ):
+        source = (root / "src/areal_rsi" / file).read_text().lower()
+        assert "past_bench" not in source
+        assert "past-bench" not in source
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"parameters": ("workspace",)},
+        {"gpu_count": 1},
+        {"auto_verify_output": "candidate"},
+        {"timeout_seconds": None},
+    ],
+)
+def test_preflight_is_bounded_and_cannot_accept_agent_parameters(change: dict[str, Any]) -> None:
+    from areal_rsi.coordination.intake import validate_execution
+
+    command = ApprovedCommand("preflight", (sys.executable, "-V"), timeout_seconds=5)
+    config = ResearchConfig(TaskBrief("Check", ""), preflight=replace(command, **change))
+    assert any("预检命令" in issue for issue in validate_execution(config))

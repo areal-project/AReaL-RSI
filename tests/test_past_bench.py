@@ -2,16 +2,24 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import importlib.util
 import json
 import math
 import socket
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from areal_rsi.adapters import past_bench as pb
 from areal_rsi.coordination.config import config_from_dict
+
+ADAPTER = Path(__file__).parents[1] / "examples/past_bench/run.py"
+spec = importlib.util.spec_from_file_location("past_bench_adapter", ADAPTER)
+assert spec is not None and spec.loader is not None
+pb = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(pb)
 
 
 def fixture() -> tuple[dict[str, Any], dict[str, Any]]:
@@ -228,12 +236,51 @@ def test_research_config_uses_frozen_harness_identity(
     restored = config_from_dict(config.public())
     assert restored.brief.limits.allowed_paths == ("prompt.md",)
     assert restored.verifier is not None
+    assert restored.verifier.command[:2] == (sys.executable, str(ADAPTER))
+    assert restored.preflight is not None
+    assert restored.preflight.command[:3] == (sys.executable, str(ADAPTER), "preflight")
     assert restored.verifier.public_output_subdir is None
     identity = restored.metadata["verification_identity"]
     assert identity["adapter"] == "harness"
     assert identity["phases"]["search"]["manifest_id"] != identity["phases"]["final"]["manifest_id"]
     assert "expected" not in json.dumps(config.public())
     assert "api_key" not in json.dumps(identity)
+
+
+def test_external_cli_is_independent_of_working_directory(tmp_path: Path) -> None:
+    result = subprocess.run(
+        [sys.executable, str(ADAPTER), "--help"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "preflight" in result.stdout and "evaluate" in result.stdout
+
+
+def test_benchmark_preflight_checks_target_and_judge_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lock = {
+        "protocol_id": "fixed",
+        "protocol": {
+            "options": {
+                "target_model": "target",
+                "api_key_env": "FIXTURE_TARGET",
+                "judge_api_key_env": "FIXTURE_JUDGE",
+            }
+        },
+        "manifests": {split: [] for split in pb.PHASES.values()},
+    }
+    monkeypatch.setattr(pb, "load_lock", lambda _: lock)
+    monkeypatch.setenv("FIXTURE_TARGET", "secret-target")
+    monkeypatch.delenv("FIXTURE_JUDGE", raising=False)
+    with pytest.raises(ValueError, match="credential"):
+        pb.preflight(tmp_path / "lock.json")
+    monkeypatch.setenv("FIXTURE_JUDGE", "secret-judge")
+    result = pb.preflight(tmp_path / "lock.json")
+    assert result["verification_identity"]["phases"]["search"] == pb.phase_identity(lock, "search")
+    assert "secret" not in json.dumps(result)
 
 
 def test_runtime_errors_are_not_task_scores(tmp_path: Path) -> None:

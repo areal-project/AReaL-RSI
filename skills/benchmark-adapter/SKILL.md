@@ -9,13 +9,42 @@ Integrate the requested Benchmark without coupling it to an RSI optimization tar
 defines what is evaluated; `ExperimentPlan.target` independently determines whether an experiment
 changes a Harness, Model, or Artifact.
 
+## Repository Architecture Boundary
+
+In this repository, `src/areal_rsi/` is benchmark-independent infrastructure. Put new
+benchmark-specific runners, graders, task/split handling, protocol checks, configuration
+generators, prompts and launch instructions in `examples/<benchmark>/` (or the dedicated
+benchmark directory selected by the user). For example, PAST-Bench lives in
+`examples/past_bench/run.py`. An existing benchmark-specific module under `src/` is legacy
+placement, not a precedent for new integrations; do not migrate unrelated legacy code unless requested.
+
+Dependencies must point from the benchmark integration to infra, never the reverse. Infra
+may define reusable configuration fields, scheduling, candidate snapshots, approved commands
+and trusted result identities. It must not import a benchmark implementation or hard-code its
+name, default path, model, split, score formula or runtime in TUI/MCP routing, persona text,
+configuration loading, coordination or execution. A module named "bridge" or "adapter" is
+not generic if it still contains those assumptions.
+
+Connect through operator-owned `ResearchConfig` and `ApprovedCommand` values. If a benchmark
+requires startup checks, supply a bounded `preflight` command from its own directory; the
+generic bridge checks its returned `verification_identity` against the configured identity.
+Keep benchmark-specific credential and dependency checks in that command. Store one-sentence
+launch examples in benchmark documentation, not benchmark branches in the infra persona.
+
+Before delivery, search changed infra files for the benchmark name, imports and paths; inspect
+each match for coupling. Test the generic entry with a benchmark-independent fixture, and the
+integration through its actual external script. Update entry paths, documentation, and local
+prepared configurations together. Moving code changes protocol identity when source hashes are
+pinned: regenerate new locks/configurations without rewriting historical experiment evidence.
+
 ## Choose the Integration Surface
 
 The current research workflow uses operator-owned `ApprovedCommand` evaluators, not
 necessarily the legacy BenchmarkBundle catalog. Before choosing an interface, read
 `src/areal_rsi/coordination/config.py`, `src/areal_rsi/execution/models.py`,
 `src/areal_rsi/coordination/verification.py` and the closest maintained example.
-`examples/kernelbench/` and `examples/past_bench/` demonstrate trusted harness evaluation.
+`examples/past_bench/` demonstrates a self-contained trusted harness integration. KernelBench
+also demonstrates evaluation contracts, but its legacy module placement is not the desired boundary.
 
 For research integration, produce `evaluation.json` from the trusted evaluator and pin
 comparison identities in `metadata.verification_identity`. Prefer an existing identity adapter:

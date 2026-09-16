@@ -2,7 +2,7 @@
 
 工作目录：`/Users/jjsong/code/AReaL-RSI`。先选择 Codex 模型 `gpt-6-astra`、推理强度 `xhigh`。
 AReaL-RSI 的配置已固定相同研究模型；Task Agent/judge 由共同 lock 固定。
-本机模型接口为 `https://4ipic.com/v1`，凭证来自 `.env`，无需 OpenAI 官网密钥。
+本机模型接口为 `https://x.aixtoken.top/v1`，凭证来自 `.env`，无需 OpenAI 官网密钥。
 Codex 自身不自动采用仓库 `.env`；先确认其 provider 使用你指定的代理和对应凭证。
 两个实验可以同时启动，官方评测经同一 checkout 的锁串行执行。
 这份配置只覆盖三个 memory family，不是完整 PAST-Bench。
@@ -16,7 +16,7 @@ Codex 自身不自动采用仓库 `.env`；先确认其 provider 使用你指定
 
 固定输入：
 - seed：/Users/jjsong/code/AReaL-RSI/.rsi/past-bench/harness-versions/v001/version.json
-- lock：/Users/jjsong/code/AReaL-RSI/.rsi/past-bench/operator-full-harness-reviewed.lock.json
+- lock：/Users/jjsong/code/AReaL-RSI/.rsi/past-bench/operator-aixtoken.lock.json
 - 本组产物目录：/Users/jjsong/code/AReaL-RSI/.rsi/past-bench/comparison/codex-goal
 
 只使用 Codex Goal 的研究循环，不启动或调用 AReaL-RSI 优化器，不派生其他研究代理。先校验 seed 版本及协议，复制到本组工作目录；允许修改 prompt.md 和 hermes/ 内全部 Harness 内容，不能修改原始 seed、upstream、适配器、任务、模型或评分规则。
@@ -33,10 +33,10 @@ Codex 自身不自动采用仓库 `.env`；先确认其 provider 使用你指定
 ## 窗口二：AReaL-RSI TUI
 
 本机 `.env` 的 `RSI_RESEARCH_CONFIG` 已选择
-`.rsi/past-bench/research-hermes-30rounds-v002.json`。重新启动 `./tui` 后粘贴：
+`.rsi/past-bench/research-hermes-30rounds-v003.json`。重新启动 `./tui` 后粘贴：
 
 ```text
-现在启动 AReaL-RSI 组实验：使用已准备的 research-hermes-30rounds-v002.json 配置，优化完整 Hermes Harness 在 PAST-Bench 上的表现，完成 30 个不同候选的有效 search 评测，再对冻结的最佳版本做一次 final 确认。请实际调用研究启动工具，不要只给计划，也不要用交互助手代替 Research Agent 手工优化。
+现在启动 AReaL-RSI 组实验：使用已准备的 research-hermes-30rounds-v003.json 配置，优化完整 Hermes Harness 在 PAST-Bench 上的表现，完成 30 个不同候选的有效 search 评测，再对冻结的最佳版本做一次 final 确认。请实际调用研究启动工具，不要只给计划，也不要用交互助手代替 Research Agent 手工优化。
 
 启动前确认配置为 gpt-6-astra / xhigh，seed 为 harness-versions/v001，预算为 38 次总验证、64 个节点和 48 小时；如果仍是 4 次验证的旧配置，请明确报告配置未生效，不启动错误实验。遵守配置内完整的 comparison.md 共同协议。
 

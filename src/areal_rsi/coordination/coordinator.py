@@ -612,6 +612,10 @@ class Coordinator:
         completion_criteria: str = "",
         references: tuple[RecordRef, ...] = (),
     ) -> dict[str, str]:
+        from areal_rsi.coordination.benchmark import baseline_pending
+
+        if baseline_pending(self.state) or self.state.get("full_final_candidate_id"):
+            raise ValueError("Research requires completed full baseline and an unfrozen final")
         if self.state["status"] != "running":
             raise ValueError("Run is not running")
         agent_id = effect_id("research", key)
@@ -1020,6 +1024,10 @@ class Coordinator:
             "baseline": self.store.public_record(run.baseline_result_ref)
             if run.baseline_result_ref
             else None,
+            "full_benchmark_evaluation": bool(self.state.get("full_benchmark_evaluation")),
+            "baseline_error": self.state.get("baseline_error"),
+            "baseline_origin": self.state.get("baseline_origin"),
+            "full_final_candidate_id": self.state.get("full_final_candidate_id"),
             "budget": self.budget(),
             "waiting_for_user": self.user_questions(),
             "pending_report_replies": self.pending_report_replies(),

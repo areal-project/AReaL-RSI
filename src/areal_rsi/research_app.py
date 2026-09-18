@@ -433,7 +433,9 @@ class ResearchApp:
                 Path(config.seed_dir), agent_id="operator", description="研究起点"
             )
             c.state["seed_candidate_id"] = candidate.candidate_id
-            if config.metadata.get("evaluate_seed_as_baseline"):
+            if config.metadata.get("evaluate_seed_as_baseline") or config.metadata.get(
+                "full_benchmark_evaluation"
+            ):
                 c.state["baseline_candidate_id"] = candidate.candidate_id
             c.save()
 
@@ -493,6 +495,10 @@ class ResearchApp:
             c.state["intake"]["confirmation_message_id"] = confirmation_message_id
             c.save()
         c.start()
+        if config.metadata.get("full_benchmark_evaluation"):
+            c.state["full_benchmark_evaluation"] = True
+            c.state["require_final_confirmation"] = True
+            c.save()
         active.engine.wake()
 
     async def freeze_execution(self, c: Coordinator) -> None:
@@ -658,7 +664,9 @@ class ResearchApp:
                 execution.close(cancel=True)
                 return False
             pending = await execution.poll()
-            if current.mode == "passk":
+            if c.state["status"] == "running" and c.state.get("full_benchmark_evaluation"):
+                pending = await execution.ensure_full_baseline() or pending
+            if current.mode == "passk" and not c.state.get("full_benchmark_evaluation"):
                 stop_on_target(c)
             return pending
 
@@ -811,7 +819,8 @@ class ResearchApp:
                     info.get("verification")
                     and info.get("candidate_id")
                     and info["candidate_id"] == c.state.get("baseline_candidate_id")
-                    and info.get("phase") == "search"
+                    and info.get("phase")
+                    == ("baseline" if c.state.get("full_benchmark_evaluation") else "search")
                 )
                 phase = info.get("phase")
                 title = (

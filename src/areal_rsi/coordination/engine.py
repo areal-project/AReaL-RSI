@@ -403,6 +403,8 @@ class ResearchEngine:
             if run.baseline_result_ref
             else None,
             "execution_setup": c.state.get("execution_setup", "ready"),
+            "full_benchmark_evaluation": bool(c.state.get("full_benchmark_evaluation")),
+            "full_final_candidate_id": c.state.get("full_final_candidate_id"),
             "withdrawn_candidates": c.store.withdrawals(),
             "plan": c.state["plan"],
             "agent_id": agent_id,
@@ -583,6 +585,15 @@ class ResearchEngine:
             self.wake()
 
     def _actor_allowed(self, agent_id: str) -> bool:
+        from areal_rsi.coordination.benchmark import baseline_pending
+
+        if baseline_pending(self.coordinator.state):
+            return False
+        if self.coordinator.state.get("full_final_candidate_id") and agent_id not in {
+            "rsi",
+            "interaction",
+        }:
+            return False
         status = self.coordinator.state["status"]
         return status == "running" or (status == "planned" and agent_id == "interaction")
 

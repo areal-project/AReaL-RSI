@@ -266,7 +266,9 @@ class ResearchExecution:
                     stream.seek(max(0, stream.tell() - 16000))
                     return ToolResult({"text": stream.read().decode(errors="replace")})
             if call.name in {"collect_job_output", "read_job_output_file"}:
-                if record.state != "succeeded":
+                if record.state != "succeeded" and not (
+                    call.name == "read_job_output_file" and record.terminal
+                ):
                     raise ValueError("Job outputs are available after successful completion")
                 subdir = (
                     info.get("public_output_subdir")
@@ -297,24 +299,28 @@ class ResearchExecution:
                     offset = args["offset"]
                     if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
                         raise ValueError("Offset must be a nonnegative integer")
-                    if path.stat().st_size > 8_000_000:
-                        raise ValueError("Output is too large; publish a bounded summary")
-                    raw = path.read_text()
+                    # Offsets remain character-based; never load a whole trajectory into memory.
+                    with path.open() as stream:
+                        remaining = offset
+                        while remaining:
+                            chunk = stream.read(min(remaining, 65536))
+                            if not chunk:
+                                break
+                            remaining -= len(chunk)
+                        raw = stream.read(16001)
                     value = {
                         "agent_id": agent_id,
                         "job_id": job_id,
                         "path": args["path"],
                         "offset": offset,
-                        "content": raw[offset : offset + 16000],
-                        "next_offset": offset + 16000 if offset + 16000 < len(raw) else None,
+                        "content": raw[:16000],
+                        "next_offset": offset + 16000 if len(raw) > 16000 else None,
                         "simulated": self.simulated,
                     }
                     output_id = effect_id("output", agent_id + ":" + call.call_id)
                     ref = self.c.store.put("materials", output_id, value)
                     self.c.link_reference(agent_id, ref)
-                    return ToolResult(
-                        {**value, "uri": ref.uri, "record_id": output_id}
-                    )
+                    return ToolResult({**value, "uri": ref.uri, "record_id": output_id})
                 collected: dict[str, Any] = {}
                 if args.get("as_candidate", False):
                     candidate_id = effect_id("candidate", agent_id + ":" + call.call_id)
@@ -358,7 +364,9 @@ class ResearchExecution:
         wait_seconds = (
             self.continuous_wait_seconds
             if continuous
-            else self.inline_wait_seconds if inline else 0
+            else self.inline_wait_seconds
+            if inline
+            else 0
         )
         deadline = asyncio.get_running_loop().time() + wait_seconds
         while True:
@@ -411,7 +419,7 @@ class ResearchExecution:
         args = call.arguments
         verification = call.name == "verify_candidate"
         phase = args.get("phase", "diagnostic")
-        if phase not in {"search", "final", "diagnostic"}:
+        if phase not in {"search", "final", "diagnostic", "baseline"}:
             raise ValueError("Invalid verification phase")
         if verification:
             command = self.verifier
@@ -428,6 +436,32 @@ class ResearchExecution:
         candidate_id = args.get("candidate_id") or None
         if verification and candidate_id is None:
             raise ValueError("Verification requires an immutable candidate")
+        if self.c.state.get("full_benchmark_evaluation"):
+            from areal_rsi.coordination.benchmark import baseline_pending
+
+            if phase == "baseline":
+                if not verification or candidate_id != self.c.state.get("baseline_candidate_id"):
+                    raise ValueError("Full baseline must evaluate the immutable seed")
+                if self.c.state.get("full_baseline_ready"):
+                    raise ValueError("Full baseline is already complete")
+            elif baseline_pending(self.c.state):
+                raise ValueError("Complete the full benchmark baseline before optimization")
+            frozen = self.c.state.get("full_final_candidate_id")
+            if frozen and (not verification or phase != "final" or candidate_id != frozen):
+                raise ValueError(
+                    "Final candidate is frozen; no more optimization or candidate changes"
+                )
+            if verification and phase in {"search", "diagnostic"}:
+                limit = self.c.store.brief().limits.max_verify_calls
+                if (
+                    limit is not None
+                    and sum(bool(i["verification"]) for i in self.jobs.values()) >= limit - 1
+                ):
+                    raise ValueError("Last verification slot is reserved for full final evaluation")
+            if phase == "final" and agent_id != "rsi":
+                raise ValueError("RSI must select and freeze the final candidate")
+            if phase == "final" and any(not self.manager.get(k).terminal for k in self.jobs):
+                raise ValueError("Wait for running jobs before freezing the final candidate")
         if (
             verification
             and phase == "final"
@@ -452,6 +486,12 @@ class ResearchExecution:
                     "use a new run with a fresh final pool for independent confirmation"
                 )
         input_root = self.c.store.root / "execution-inputs" / key
+        if verification and phase == "final" and self.c.state.get("full_benchmark_evaluation"):
+            self.c.state["full_final_candidate_id"] = candidate_id
+            self.c.save()
+            for actor in self.c.store.run().research_agents:
+                if actor.state != AgentState.STOPPED:
+                    self.c.stop_agent(actor.agent_id, "Final candidate frozen for full evaluation")
         workspace = input_root / "workspace"
         output = self.c.store.root / "execution-outputs" / key
         output.mkdir(parents=True, exist_ok=True)
@@ -624,7 +664,7 @@ class ResearchExecution:
             "error": record.error,
             "simulated": record.spec.backend == "mock",
             "verification": info["verification"],
-            "public_files_available": record.state == "succeeded"
+            "public_files_available": record.terminal
             and (not info["verification"] or info.get("public_output_subdir") is not None),
             "result": info.get("result"),
             **(
@@ -653,7 +693,8 @@ class ResearchExecution:
                         raw = stream.read(16000)
                     if raw:
                         result["failure_log"] = {
-                            "text": raw.decode(errors="replace"), "truncated": offset > 0,
+                            "text": raw.decode(errors="replace"),
+                            "truncated": offset > 0,
                         }
         if info.get("feedback") and (info["verification"] or agent_id in {"rsi", info["agent_id"]}):
             result["feedback"] = {
@@ -817,6 +858,102 @@ class ResearchExecution:
         async with self._poll_lock:
             return await self._poll()
 
+    async def ensure_full_baseline(self) -> bool:
+        """Submit once per attempt; failures pause, resume explicitly permits a new attempt."""
+        from areal_rsi.coordination.benchmark import baseline_pending
+
+        if not baseline_pending(self.c.state):
+            return False
+        config_path = self.c.store.root / "coordination/config.json"
+        metadata = (
+            json.loads(config_path.read_text()).get("metadata", {}) if config_path.exists() else {}
+        )
+        if "full_baseline_source" in metadata:
+            from areal_rsi.coordination.benchmark import imported_baseline, read_baseline_source
+
+            archive = self.c.store.root / "coordination/imported-baseline.json"
+            try:
+                if archive.exists():
+                    raw = json.loads(archive.read_text())
+                else:
+                    raw = await asyncio.to_thread(
+                        read_baseline_source, metadata["full_baseline_source"]
+                    )
+                candidate = self.c.store.get(
+                    "candidates", self.c.state["baseline_candidate_id"], CandidateSnapshot
+                )
+                manifest = json.loads(
+                    (
+                        self.c.store.content.root / candidate.content.digest.removeprefix("sha256:")
+                    ).read_text()
+                )
+                files = {
+                    name: ref["digest"].removeprefix("sha256:")
+                    for name, ref in manifest["files"].items()
+                }
+                contract = self.c.store.brief().verification
+                if contract is None:
+                    raise ValueError("Full baseline requires a verification contract")
+                result = imported_baseline(
+                    raw,
+                    candidate=candidate,
+                    files=files,
+                    metadata=metadata,
+                    contract_digest=self.c.store.contract_digest(),
+                    metric=contract.metric,
+                )
+                write_json(archive, raw, immutable=True)
+                result.references = (self.c.store.paths.reference(archive),)
+                previous_path = self.c.store.root / "verifications" / f"{result.result_id}.json"
+                if previous_path.exists():
+                    result.created_at = self.c.store.get(
+                        "verifications", result.result_id, VerifiedResult
+                    ).created_at
+                self.c.store.record_verification(result)
+                run = self.c.store.run()
+                run.baseline_result_ref = self.c.store.paths.reference(
+                    self.c.store.root / "verifications" / f"{result.result_id}.json"
+                )
+                self.c.store.save_run(run)
+                self.c.state["full_baseline_ready"] = True
+                self.c.state["baseline_origin"] = "imported"
+                self.c.state.pop("baseline_error", None)
+                self.c.save()
+            except (ValueError, OSError, KeyError, TypeError) as exc:
+                self.c.state["baseline_error"] = "Cannot import full baseline: " + str(exc)
+                self.c.save()
+                self.c.pause()
+            return False
+        attempts = [item for item in self.jobs.values() if item.get("phase") == "baseline"]
+        if attempts and not attempts[-1].get("processed"):
+            return True
+        if attempts and self.c.state.get("baseline_failure_seen") != len(attempts):
+            self.c.state["baseline_failure_seen"] = len(attempts)
+            self.c.state["baseline_error"] = (
+                attempts[-1].get("result", {}).get("error", "Incomplete baseline")
+            )
+            self.c.save()
+            self.c.pause()
+            return False
+        try:
+            await self.submit(
+                "rsi",
+                ToolCall(
+                    name="verify_candidate",
+                    arguments={
+                        "candidate_id": self.c.state["baseline_candidate_id"],
+                        "phase": "baseline",
+                    },
+                    call_id=f"full-baseline-{len(attempts)}",
+                ),
+            )
+        except ValueError as exc:
+            self.c.state["baseline_error"] = str(exc)
+            self.c.save()
+            self.c.pause()
+            return False
+        return True
+
     async def _poll(self) -> bool:
         # A crash after the intent is stored but before manager.submit is safe:
         # the job has a stable identity and immutable input snapshot.
@@ -897,19 +1034,40 @@ class ResearchExecution:
                 if (
                     baseline is not None
                     and candidate.content == baseline.content
-                    and result.phase == "search"
+                    and result.phase
+                    == ("baseline" if self.c.state.get("full_benchmark_evaluation") else "search")
                     and result.status == "succeeded"
-                    and result.passed
                     and result.score is not None
                 ):
                     run.baseline_result_ref = ref
+                    if self.c.state.get("full_benchmark_evaluation"):
+                        self.c.state["full_baseline_ready"] = True
+                        self.c.state["baseline_origin"] = "evaluated"
+                        self.c.state.pop("baseline_error", None)
+                        self.c.save()
                 if (
                     result.phase == "final"
                     and result.status == "succeeded"
-                    and result.passed
+                    and (result.passed or self.c.state.get("full_benchmark_evaluation"))
                     and not self.c.store.is_withdrawn(candidate.candidate_id)
                 ):
                     run.final_result_ref = ref
+                    if self.c.state.get("full_benchmark_evaluation") and run.baseline_result_ref:
+                        baseline_result = self.c.store.public_record(run.baseline_result_ref)
+                        write_json(
+                            self.c.store.root / "coordination/full-comparison.json",
+                            {
+                                "baseline": baseline_result,
+                                "final": encode(result),
+                                "score_delta": result.score - baseline_result["score"],
+                                "metric_deltas": {
+                                    name: value - baseline_result["metrics"][name]
+                                    for name, value in result.metrics.items()
+                                    if name in baseline_result["metrics"]
+                                },
+                                "scope": "same-benchmark improvement, not held-out generalization",
+                            },
+                        )
                 self.c.store.save_run(run)
                 self.c.store.consider_best(result.result_id, simulated_run=self.simulated)
                 info["result"] = {**encode(result), "uri": ref.uri}

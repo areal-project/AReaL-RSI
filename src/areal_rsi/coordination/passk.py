@@ -99,10 +99,15 @@ class PassKActions(ResearchActions):
         if self.c.state["status"] == "planned" and agent_id == "interaction":
             return super().definitions(agent_id, include_hidden=include_hidden)
         if agent_id == "rsi":
+            final_tools = (
+                {"verify_candidate", "wait_for_job", "job_status", "finish"}
+                if self.c.state.get("full_benchmark_evaluation")
+                else set()
+            )
             return SUPERVISOR_TOOLS + [
                 tool
                 for tool in super().definitions(agent_id, include_hidden=include_hidden)
-                if tool["name"] == "read_agent_skill"
+                if tool["name"] == "read_agent_skill" or tool["name"] in final_tools
             ]
         if agent_id == "interaction":
             return []

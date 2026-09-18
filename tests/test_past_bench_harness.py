@@ -51,7 +51,10 @@ def test_full_source_identity_and_scope(tmp_path: Path, monkeypatch: pytest.Monk
             "edit_scope": "hermes",
             "options": {"target_model": "fixed", "base_url": "https://example.test/v1"},
         },
-        "manifests": {split: [] for split in pb.PHASES.values()},
+        "manifests": {
+            split: [{"family": "memory/fixture", "episodes": [{"task_id": "a"}]}]
+            for split in pb.PHASES.values()
+        },
     }
     monkeypatch.setattr(pb, "load_lock", lambda _: lock)
     config = pb.research_config(tmp_path / "lock", root)

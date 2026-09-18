@@ -22,6 +22,37 @@ pb = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(pb)
 
 
+@pytest.mark.parametrize("failed", [False, True])
+def test_original_artifacts_are_indexed_even_after_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed: bool
+) -> None:
+    output = tmp_path / "output"
+
+    def fake_evaluate(*args: Any) -> dict[str, Any]:
+        private = output / "private" / "family"
+        private.mkdir(parents=True)
+        (private / "trace.jsonl").write_text('{"tool_output":"original content"}\n')
+        (private / "report.json").write_text('{"score":0}')
+        if failed:
+            raise ValueError("runner failed")
+        return {"status": "completed"}
+
+    monkeypatch.setattr(pb, "_evaluate", fake_evaluate)
+    if failed:
+        with pytest.raises(ValueError, match="runner failed"):
+            pb.evaluate(tmp_path / "lock", tmp_path / "harness", output, "search")
+    else:
+        pb.evaluate(tmp_path / "lock", tmp_path / "harness", output, "search")
+    index = json.loads((output / "artifacts.json").read_text())
+    assert {item["path"] for item in index["files"]} == {
+        "private/family/trace.jsonl",
+        "private/family/report.json",
+    }
+    assert (output / "private/family/trace.jsonl").read_text() == (
+        '{"tool_output":"original content"}\n'
+    )
+
+
 def fixture() -> tuple[dict[str, Any], dict[str, Any]]:
     episodes: list[dict[str, Any]] = [
         {"task_id": "cold", "bucket": "baseline", "stage": "cold", "history_mode": "continue"},
@@ -74,6 +105,36 @@ def test_paired_scores_use_episodes_not_untrusted_summary() -> None:
     assert result["evaluation_score"] == 0.9
     comparison["with_persistence"]["episodes"][3]["task_score"] = 0
     assert pb.score_comparison(comparison, manifest)[pb.METRIC] == pytest.approx(-0.3)
+
+
+def test_full_manifest_is_discovered_independently_of_search_subset(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for family in ("memory/a", "reuse/b", "update/c"):
+        path = tmp_path / "self-evolve-tasks-v2" / family / "family.yaml"
+        path.parent.mkdir(parents=True)
+        path.write_text("{}")
+    monkeypatch.setattr(
+        pb,
+        "family_manifest",
+        lambda options, family: {
+            "family": family,
+            "episodes": [{"task_id": "learn"}, {"task_id": "test"}],
+        },
+    )
+    manifests = pb.full_manifest(
+        {"repository": str(tmp_path), "families": {"search": ["memory/a"]}}
+    )
+    assert len(manifests) == 3
+    assert len(pb.task_ids(manifests)) == 12  # Both persistence variants, all episodes.
+    lock = {
+        "protocol_id": "p",
+        "protocol": {"options": {"target_model": "m"}},
+        "manifests": {"full": manifests, "search": manifests[:1]},
+    }
+    assert pb.phase_identity(lock, "baseline") == pb.phase_identity(lock, "final")
+    assert len(pb.phase_identity(lock, "search")["task_ids"]) == 4
 
 
 def test_families_without_cold_baselines_do_not_fabricate_a_baseline() -> None:
@@ -239,7 +300,14 @@ def test_research_config_uses_frozen_harness_identity(
     assert restored.verifier.command[:2] == (sys.executable, str(ADAPTER))
     assert restored.preflight is not None
     assert restored.preflight.command[:3] == (sys.executable, str(ADAPTER), "preflight")
-    assert restored.verifier.public_output_subdir is None
+    assert restored.verifier.public_output_subdir == "."
+    assert restored.commands[0].output_subdir == "."
+    assert "不能只凭源码或总分" in restored.brief.instructions
+    assert restored.metadata["full_benchmark_evaluation"] is True
+    assert (
+        restored.metadata["verification_identity"]["phases"]["baseline"]
+        == restored.metadata["verification_identity"]["phases"]["final"]
+    )
     identity = restored.metadata["verification_identity"]
     assert identity["adapter"] == "harness"
     assert identity["phases"]["search"]["manifest_id"] != identity["phases"]["final"]["manifest_id"]

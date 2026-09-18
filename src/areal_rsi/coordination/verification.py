@@ -150,7 +150,7 @@ def read_trusted_result(
     are read. The caller can record a reader exception as an infrastructure error;
     it must never turn such an error into a comparable numeric score.
     """
-    if phase not in {"search", "final", "diagnostic"}:
+    if phase not in {"search", "final", "diagnostic", "baseline"}:
         raise ValueError("Unknown verification phase")
     if job.spec.backend == "mock":
         raise ValueError("Simulated execution cannot produce real verification")
@@ -175,7 +175,7 @@ def read_trusted_result(
         "candidate_id": candidate.candidate_id,
         "contract_digest": frozen["contract_digest"],
         "created_at": now(),
-        "phase": cast(Literal["search", "final", "diagnostic"], phase),
+        "phase": cast(Literal["search", "final", "diagnostic", "baseline"], phase),
         "simulated": False,
     }
     if job.state != "succeeded":

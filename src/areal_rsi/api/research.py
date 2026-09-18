@@ -187,7 +187,7 @@ class VerifiedResult:
     score: float | None = None
     passed: bool | None = None
     metrics: dict[str, float] = field(default_factory=dict)
-    phase: Literal["search", "final", "diagnostic"] = "search"
+    phase: Literal["search", "final", "diagnostic", "baseline"] = "search"
     simulated: bool = False
     references: tuple[RecordRef, ...] = ()
     error: str | None = None
@@ -195,7 +195,7 @@ class VerifiedResult:
     def __post_init__(self) -> None:
         if self.status not in {"succeeded", "failed", "infra_error", "cancelled"}:
             raise ValueError("Unknown verification status")
-        if self.phase not in {"search", "final", "diagnostic"}:
+        if self.phase not in {"search", "final", "diagnostic", "baseline"}:
             raise ValueError("Unknown verification phase")
         if self.status == "succeeded":
             if self.score is None or self.passed is None or self.error is not None:

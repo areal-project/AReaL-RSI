@@ -149,11 +149,18 @@ operator 的 `base_url`，不回退官网。Task Agent/judge 的地址在 prepar
 之后不会被 `.env` 静默覆盖。Codex 应用自己的模型提供商配置独立于本仓库 `.env`。
 configure 不启动研究或调用模型。完整模式允许编辑 `prompt.md` 和 `hermes/**`，提供 `develop`
 诊断命令和可信 `verify` 命令，并固定 `diagnostic → development`、`search → search`、
-`final → final`。每个 family 必须完整分配到且仅分配到一个池。
+`baseline → full`、`final → full`。development/search 保留配置的研究子集。
 
-示例只覆盖三个 memory family，是开发接入示例，不是官方的完整 26-family 成绩。
-可在 operator 配置中换成覆盖四类能力的更大划分；正式研究前应确定划分，不要在 final
-上反复挑选候选。完整运行的成本随 family 数量增加，首次建议只运行 development smoke。
+示例的研究子集只覆盖三个 memory family，但初始 baseline 和最终验证会自动发现锁定的
+上游 `self-evolve-tasks-v2` 下所有 family，运行全部回合及持久化开关对照。
+启动正式研究会产生全量评测成本；检查接入时可单独运行 development smoke。
+旧 lock 不会自动迁移，更新后需要重新 prepare/configure。
+
+若已有同一协议、模型和初始 Harness 的全量 `evaluation.json`，configure 时增加
+`--baseline-source /absolute/path/evaluation.json`（也支持 HTTP(S) URL）。框架校验并归档
+结果后直接开始研究，不重复跑 baseline。也可在配置的 `metadata.full_baseline_source`
+内直接填写结果对象。缺少任务或身份不匹配会暂停，不会自动回退重跑。
+详见[全量评测规则](../../docs/full-benchmark-evaluation.md)。
 
 ## 在 TUI 中一句话启动
 
@@ -173,7 +180,8 @@ Interaction 会调用 `rsi_research_start`，按已准备的配置直接启动�
 这不等于提前验证网络或模型接口可用。更改适配器后必须重新 prepare/configure。
 
 默认优化方法为：测量 seed baseline；围绕记忆筛选、检索、规则作用域、更新或迁移提出假设；
-修改提示词或 Hermes 实现；development 诊断、search 比较；最后用 final 独立确认。
+修改提示词或 Hermes 实现；development 诊断、search 比较；最后冻结候选并全量复测。
+baseline 已向研究者公开，因此最终对比衡量的是已见 Benchmark 上的提升，不代表未见任务泛化。
 同时观察持久化开启和关闭的绝对得分，不通过降低关闭组成绩制造提升。
 默认预算为 1 个 Research Agent、最多 8 个节点、100 次研究模型调用、4 次验证调用、
 1 个并行执行作业、4 小时。4 次验证需包含 baseline 和 final，不代表完整迭代 4 轮；
@@ -187,7 +195,7 @@ development 诊断另外占用作业和时间预算。模型调用有实际费�
 更新代码或凭证后应重启专用工作台服务；已有研究保留自己的配置和候选快照。
 
 TUI 用 `rsi_research_status` / `rsi_research_control` 管理新版研究，不混用旧版
-`rsi_status` / `rsi_resume`。这是有边界的小规模优化入口，不表示所有 26 个任务族已经实测。
+`rsi_status` / `rsi_resume`。只有实际完成全量评测后才能报告全量成绩。
 
 ## 成绩和证据
 
@@ -205,7 +213,8 @@ TUI 用 `rsi_research_status` / `rsi_research_control` 管理新版研究，不�
 `passed` 表示该成对提升大于零，不表示每个 episode 都成功。
 
 - `evaluation.json`：可信成绩；绑定候选文件摘要、protocol、family manifest、phase 和模型。
-- `public/feedback.json`：仅 diagnostic 发布的聚合结果。
+- `feedback.json`：所有阶段的聚合结果、逐回合成绩、trace_id 与任务组产物目录。
+- `artifacts.json`：完整文件索引，包含原始路径和大小；失败评测也会生成。
 - `private/<family>/sequence_comparison.json`：官方逐任务对照结果。
 - `private/<family>/v2_*_report.json`：官方多层指标，保留 `basis` 等实测/代理/默认值标记。
 - `private/<family>.log`：官方运行日志。
@@ -213,8 +222,11 @@ TUI 用 `rsi_research_status` / `rsi_research_control` 管理新版研究，不�
 不采信 stdout 分数或候选自己提交的结果。缺失/重复/错序任务、错误历史分支、无完整轨迹、
 运行时错误、基础设施失败和非有限分数都不产生有效成绩。失败产物保留，重试必须用新目录。
 
-上游 raw runtime trace 可能含模型凭据，所以原始轨迹和配置全部留在 operator-private
-目录，研究 Agent 只能看到显式发布的聚合结果。`local` Hermes 和评分器仍同属主机信任域；
+Research Agent 可通过 read_job_output_file 读取整个评测输出目录，包括历史命名为
+`private/` 的目录；所有文件保持原样，不脱敏、不裁剪或重写。先读索引，再按任务和 trace_id
+分段读取轨迹、评分报告、配置和运行日志。修改前应引用实际轨迹说明失败原因与改动假设。
+这些内容会进入研究模型上下文，因此该配置将完整产物授权给所配置的研究模型。
+`local` Hermes 和评分器仍同属主机信任域；
 Docker 工具沙箱不等于面向恶意 Agent 代码的端到端隔离。
 
 ## 完整源码模式的运行边界

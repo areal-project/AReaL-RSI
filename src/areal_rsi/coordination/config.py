@@ -13,6 +13,7 @@ import yaml  # type: ignore[import-untyped]
 from areal_rsi.api.research import TaskBrief
 from areal_rsi.base.storage import decode, encode
 from areal_rsi.coordination.agent_config import AgentOverrides
+from areal_rsi.coordination.benchmark import validate_full_benchmark
 from areal_rsi.coordination.collaboration import selected_modules
 from areal_rsi.execution import ApprovedCommand
 from areal_rsi.modules.responses import ResponsesConfig
@@ -86,6 +87,26 @@ class ResearchConfig:
     agents: AgentOverrides = field(default_factory=AgentOverrides)
 
     def __post_init__(self) -> None:
+        if "full_baseline_source" in self.metadata and not self.metadata.get(
+            "full_benchmark_evaluation"
+        ):
+            raise ValueError("full_baseline_source requires full_benchmark_evaluation")
+        validate_full_benchmark(self.metadata)
+        if self.metadata.get("full_benchmark_evaluation"):
+            if self.finalizer is not None:
+                raise ValueError(
+                    "Full benchmark policy requires RSI final verification, not finalizer"
+                )
+            if self.seed_dir is None or self.verifier is None or self.brief.verification is None:
+                raise ValueError(
+                    "Full benchmark evaluation requires seed_dir, verifier and contract"
+                )
+            if (
+                self.brief.limits.max_verify_calls is not None
+                and self.brief.limits.max_verify_calls
+                < (1 if "full_baseline_source" in self.metadata else 2)
+            ):
+                raise ValueError("Reserve verification budget for full baseline and final")
         self.collaboration_modules = selected_modules(self.mode, self.collaboration_modules)
         if self.backend not in {"standard", "codex"}:
             raise ValueError("Agent 后端支持 standard 或 codex")
@@ -195,6 +216,10 @@ def load_config(path: Path) -> ResearchConfig:
     if not isinstance(value, dict):
         raise ValueError("Research configuration must be a YAML or JSON object")
     config = config_from_dict(value)
+    source = config.metadata.get("full_baseline_source")
+    if isinstance(source, str) and not source.startswith(("http://", "https://")):
+        source_path = Path(source).expanduser()
+        config.metadata["full_baseline_source"] = str((path.parent / source_path).resolve())
     if config.seed_dir is not None:
         seed = Path(config.seed_dir).expanduser()
         config.seed_dir = str((path.parent / seed).resolve() if not seed.is_absolute() else seed)

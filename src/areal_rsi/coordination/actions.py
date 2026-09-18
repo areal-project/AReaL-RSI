@@ -834,11 +834,17 @@ class ResearchActions:
             return ToolResult({"candidate_id": candidate.candidate_id, "checked_out": True})
         if name == "finish":
             run = c.store.run()
+            if c.state.get("full_benchmark_evaluation") and not c.state.get("full_baseline_ready"):
+                raise ValueError("Complete full baseline before finishing")
             contract = c.store.brief().verification
             selected = args.get("candidate_id") or None
             selected_ref = run.final_result_ref or run.best_result_ref
             if selected is None and selected_ref is not None:
                 selected = c.store.public_record(selected_ref)["candidate_id"]
+            if c.state.get("full_benchmark_evaluation") and (
+                selected is None or selected != c.state.get("full_final_candidate_id")
+            ):
+                raise ValueError("Finish requires the frozen full-final candidate")
             if selected is not None:
                 c.store.get("candidates", selected, CandidateSnapshot)
                 if c.store.is_withdrawn(selected):
@@ -864,7 +870,9 @@ class ResearchActions:
                 if (
                     verified is None
                     or verified.status != "succeeded"
-                    or verified.passed is not True
+                    or (
+                        verified.passed is not True and not c.state.get("full_benchmark_evaluation")
+                    )
                 ):
                     raise ValueError(f"Selected candidate needs a successful {phase} verification")
                 assert verified.score is not None

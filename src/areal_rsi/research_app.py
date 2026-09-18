@@ -458,7 +458,11 @@ class ResearchApp:
             and not validate_execution(config)
         )
         if config.mode == "passk" and pending_setup and not prepared_setup:
-            raise ValueError("passk requires the execution setup to be complete before starting")
+            issues = validate_execution(config)
+            raise ValueError(
+                "passk requires the execution setup to be complete before starting: "
+                + ("；".join(issues) if issues else "尚未登记实际执行命令")
+            )
         if "intake" in c.state and not pending_setup:
             issues = validate_execution(config)
             if issues:

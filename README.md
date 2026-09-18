@@ -4,7 +4,10 @@
 
 ## 准备
 
-需要 Python 3.11+、uv 和 macOS `sandbox-exec`。standard 后端还需要 Node.js 22.19+ 和 pnpm。研究模型接口须支持 Responses API 和工具调用。
+需要 Python 3.11+ 和 uv。默认隔离模式需要 macOS `sandbox-exec`；可信 Linux
+服务器可在 `.env` 中显式设置 `RSI_RUNTIME_ISOLATION=linux-unrestricted`，
+Agent 将以服务用户权限运行，不提供文件或进程隔离，详见[后端说明](docs/agent-backends.md)。
+standard 后端还需要 Node.js 22.19+ 和 pnpm。研究模型接口须支持 Responses API 和工具调用。
 
 ```bash
 uv sync --locked

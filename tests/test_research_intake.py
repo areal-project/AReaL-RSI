@@ -137,7 +137,7 @@ def test_conversation_can_bind_real_cpu_execution_without_template_or_baseline(
         tools = active.actions.handler("interaction")
         brief = TaskBrief("研究文本处理", "比较规则与结果，保留具体观察")
         brief.limits.max_agents = 3
-        await tools(ToolCall("update_brief", {"brief_json": json.dumps(encode(brief))}, "brief"))
+        await tools(ToolCall("update_brief", encode(brief), "brief"))
         command = ApprovedCommand(
             "inspect",
             (
@@ -214,6 +214,102 @@ def test_conversation_can_bind_real_cpu_execution_without_template_or_baseline(
             await app.call("stop", {"run_id": c.store.run_id})
             await app.call("delete", {"run_id": c.store.run_id})
             assert not c.store.root.exists()
+        finally:
+            await app.close()
+
+    asyncio.run(scenario())
+
+
+def test_invalid_passk_brief_does_not_corrupt_draft(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        app = app_at(tmp_path)
+        try:
+            draft = await app.create(
+                {"conversation": True, "collaboration": {"mode": "passk", "modules": []}}
+            )
+            c = app.coordinator(draft["run_id"])
+            active = await app.attach(c)
+            path = c.store.root / "coordination/config.json"
+            original_config = path.read_bytes()
+            original_run = c.store.run()
+            brief = c.store.brief()
+            brief.limits.max_total_tokens = 50_000_000
+            result = await active.actions.handler("interaction")(
+                ToolCall("update_brief", encode(brief), "invalid")
+            )
+            assert "Additional properties" in str(result.output)
+            assert path.read_bytes() == original_config
+            assert c.store.run() == original_run
+            detail = await app.detail(c.store.run_id)
+            assert detail["collaboration"]["mode"] == "passk"
+            from areal_rsi.coordination.brief_tool import PASSK_HIDDEN_LIMITS
+
+            arguments = encode(brief)
+            for key in PASSK_HIDDEN_LIMITS:
+                arguments["limits"].pop(key)
+            arguments["limits"]["max_agents"] = 8
+            arguments["limits"]["max_jobs"] = 8
+            result = await active.actions.handler("interaction")(
+                ToolCall("update_brief", arguments, "valid")
+            )
+            assert "error" not in result.output
+            saved = app.config(c)
+            assert saved.brief.limits.max_agents == 8
+            for key in PASSK_HIDDEN_LIMITS:
+                assert getattr(saved.brief.limits, key) is None
+        finally:
+            await app.close()
+
+    asyncio.run(scenario())
+
+
+def test_passk_handoff_accepts_script_scores_without_trusted_verifier(tmp_path: Path) -> None:
+    from areal_rsi.api.research import VerificationContract
+    from areal_rsi.base.storage import write_json
+    from areal_rsi.coordination.intake import validate_execution
+
+    async def scenario() -> None:
+        app = app_at(tmp_path)
+        try:
+            draft = await app.create(
+                {"conversation": True, "collaboration": {"mode": "passk", "modules": []}}
+            )
+            c = app.coordinator(draft["run_id"])
+            config = app.config(c)
+            config.brief.objective = "Improve external benchmark"
+            config.brief.instructions = (
+                "Use the existing submit/status scripts and report their score"
+            )
+            config.brief.verification = VerificationContract("ppl", "minimize")
+            config.commands = (ApprovedCommand("submit", (sys.executable, "-c", "pass")),)
+            assert validate_execution(config) == []
+            config.brief.verification.target = 10
+            assert validate_execution(config)  # Trusted automatic target needs a verifier.
+            config.brief.verification.target = None
+            run = c.store.run()
+            run.brief_ref = c.store.put("briefs", "configured", config.brief)
+            c.store.save_run(run)
+            write_json(c.store.root / "coordination/config.json", config.public())
+            active = await app.attach(c)
+            c.enqueue("user", "interaction", "Start the benchmark", key="start")
+            message, _ = c.begin_turn("interaction")
+            result = await active.actions.handler("interaction")(
+                ToolCall(
+                    "handoff_research",
+                    {
+                        "confirmation_message_id": message.message_id,
+                        "summary": "Start with existing experiment commands",
+                        "execution_required": True,
+                    },
+                    "handoff",
+                )
+            )
+            assert result.output == {"started": True}
+            assert c.state["status"] == "running"
+            assert c.state["execution_setup"] == "ready"
+            assert c.state["started_at"]
+            assert active.execution.verifier is None
+            assert (c.store.root / "coordination/started-config.json").exists()
         finally:
             await app.close()
 

@@ -1,13 +1,13 @@
 """Single-worker Runtime state with an append-only, fsynced JSONL journal.
 
-Each RSI session owns a fresh worker and journal. In-process queries use Runtime's
-memory store; committed events and snapshots are exported from the journal after
-the worker stops. Reopening a worker or migrating old storage is not supported.
+In-process queries use Runtime's memory store. A restarted worker replays the
+validated durable journal through the same public StateStore operations.
 """
 
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import json
 import os
 from collections.abc import AsyncIterator
@@ -35,17 +35,22 @@ JOURNAL_VERSION = "rsi-runtime-journal-v1"
 class JournalStateStore(InMemoryStateStore):
     """Publish to readers only after the corresponding record reaches disk.
 
-Runtime validates state transitions in super(). The small synchronous append
-between that validation and returning deliberately has no await: another task
-cannot observe the memory update before fsync. Any write failure poisons this
-worker's writer; the parent exports only the surviving durable journal prefix.
-Leases are process-local because a journal has exactly one worker owner.
-"""
+    Runtime validates state transitions in super(). The small synchronous append
+    between that validation and returning deliberately has no await: another task
+    cannot observe the memory update before fsync. Any write failure poisons this
+    worker's writer; the parent exports only the surviving durable journal prefix.
+    Leases are process-local because a journal has exactly one worker owner.
+    """
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, *, resume: bool = False):
         super().__init__()
         root.mkdir(parents=True, exist_ok=True)
-        self.stream = (root / "journal.jsonl").open("xb", buffering=0)
+        self.stream = (root / "journal.jsonl").open("a+b" if resume else "xb", buffering=0)
+        try:
+            fcntl.flock(self.stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BaseException:
+            self.stream.close()
+            raise
         self.write_lock = asyncio.Lock()
         self.failed = False
         directory = os.open(root, os.O_RDONLY)
@@ -53,6 +58,38 @@ Leases are process-local because a journal has exactly one worker owner.
             os.fsync(directory)
         finally:
             os.close(directory)
+
+    async def restore(self) -> None:
+        self.stream.seek(0)
+        while True:
+            offset = self.stream.tell()
+            line = self.stream.readline()
+            if not line:
+                break
+            if not line.endswith(b"\n"):
+                self.stream.truncate(offset)
+                os.fsync(self.stream.fileno())
+                break
+            record = json.loads(line)
+            if record["version"] != JOURNAL_VERSION:
+                raise ValueError("Unsupported Runtime journal version")
+            operation = record["operation"]
+            if operation == "create":
+                await super().create_run(RunSnapshot.model_validate(record["snapshot"]))
+            elif operation == "commit":
+                await super().commit_event(
+                    RunEvent.model_validate(record["event"]),
+                    RunSnapshot.model_validate(record["snapshot"]),
+                    outbox_sinks=(),
+                )
+            elif operation == "environment":
+                await super().save_environment_snapshot(
+                    record["session_id"],
+                    AgentEnvironmentSnapshot.model_validate(record["snapshot"]),
+                )
+            else:
+                raise ValueError("Unknown Runtime journal operation")
+        self.stream.seek(0, os.SEEK_END)
 
     def _check_writer(self) -> None:
         if self.failed or self.stream.closed:
@@ -90,11 +127,14 @@ Leases are process-local because a journal has exactly one worker owner.
     def _append(self, operation: str, **data: Any) -> None:
         start = self.stream.tell()
         try:
-            payload = json.dumps(
-                {"version": JOURNAL_VERSION, "operation": operation, **data},
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ).encode() + b"\n"
+            payload = (
+                json.dumps(
+                    {"version": JOURNAL_VERSION, "operation": operation, **data},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).encode()
+                + b"\n"
+            )
             remaining = memoryview(payload)
             while remaining:
                 written = self.stream.write(remaining)
@@ -201,7 +241,8 @@ class JournalStoragePlugin:
         root = config.get("root")
         if not isinstance(root, str) or not root:
             raise ValueError("Runtime storage requires a root directory")
-        self.state = JournalStateStore(Path(root) / "state")
+        self.state = JournalStateStore(Path(root) / "state", resume=True)
+        await self.state.restore()
         context.provide(PortKey.STATE_STORE, self.state)
         context.provide(PortKey.ASSET_STORE, FileSystemAssetStore(Path(root) / "assets"))
 

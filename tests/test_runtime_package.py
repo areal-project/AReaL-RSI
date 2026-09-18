@@ -78,6 +78,49 @@ class PackageRuntimeTest(unittest.IsolatedAsyncioTestCase):
             }
         )
 
+    @unittest.skipUnless(sys.platform == "darwin", "macOS sandbox-exec integration")
+    async def test_native_zsh_heredoc_uses_private_temporary_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            content = FileContentStore(root / "content")
+            runtime = PackageAgentRuntime(
+                root / "sessions",
+                content,
+                FileTrajectoryStore(root / "traces", content),
+                settings=RuntimeSettings({"default": {"kind": "fake"}}),
+                role="research-agent",
+                base_url="http://localhost:1",
+                api_key="fixture",
+            )
+            model = ModelVersion("model-test", "test", await content.put_text("model"), now())
+            with patch(
+                "asyncio.create_subprocess_exec", new=AsyncMock(return_value=Mock())
+            ) as spawn:
+                session = await runtime.open(
+                    AgentSpec("researcher", "areal-agent-runtime@v1", model)
+                )
+            environment = spawn.call_args.kwargs["env"]
+            prefix = ["/usr/bin/sandbox-exec", "-f", str(session.directory / "sandbox.sb")]
+            result = subprocess.run(
+                [*prefix, "/bin/zsh", "-lc", "cat > probe.txt <<'END'\nheredoc works\nEND"],
+                env=environment,
+                cwd=session.directory / "workspace",
+                capture_output=True,
+                timeout=10,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertEqual(
+                (session.directory / "workspace/probe.txt").read_text(), "heredoc works\n"
+            )
+            denied = subprocess.run(
+                [*prefix, "/bin/zsh", "-lc", 'echo private > "$1"', "zsh", str(root / "peer")],
+                env=environment,
+                capture_output=True,
+                timeout=10,
+            )
+            self.assertNotEqual(denied.returncode, 0)
+            self.assertFalse((root / "peer").exists())
+
     async def test_sandbox_denies_sibling_experiment_data(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp).resolve()

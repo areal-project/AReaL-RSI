@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from areal_rsi.agents.research.prompt import PROMPT_VARIANTS as RESEARCH_PROMPTS
 from areal_rsi.api.base import ExperimentRun
 from areal_rsi.api.research import (
     CandidateSnapshot,
@@ -25,7 +26,7 @@ from areal_rsi.api.research import (
 from areal_rsi.base.runs import FileRunStore
 from areal_rsi.base.storage import decode, encode, new_id, now, write_json
 from areal_rsi.coordination.actions import ResearchActions
-from areal_rsi.coordination.agent_tools import TOOL_PROMPT, AgentTools
+from areal_rsi.coordination.agent_tools import AgentTools
 from areal_rsi.coordination.config import (
     MODEL_EFFORTS,
     MODEL_FIELDS,
@@ -42,7 +43,8 @@ from areal_rsi.coordination.sources import register_sources
 from areal_rsi.coordination.store import ResearchStore
 from areal_rsi.coordination.verification import read_trusted_result
 from areal_rsi.execution import JobManager, JobRecord
-from areal_rsi.modules.responses import ResponsesRuntime
+from areal_rsi.modules.agent_runtime import AgentRuntime
+from areal_rsi.modules.research_runtime import ResearchRuntime
 
 
 @dataclass
@@ -63,13 +65,13 @@ class ResearchApp:
         *,
         repository: Path | None = None,
         config: ResearchConfig | None = None,
-        runtime_factory: Callable[[ResearchConfig], ResponsesRuntime] | None = None,
+        runtime_factory: Callable[[ResearchConfig], AgentRuntime] | None = None,
         allow_simulation: bool = False,
     ):
         self.root = root.resolve()
         self.repository = repository or Path(__file__).resolve().parents[2]
         self.default_config = config
-        self.runtime_factory = runtime_factory or (lambda cfg: ResponsesRuntime(cfg.runtime()))
+        self.runtime_factory = runtime_factory or self._runtime
         self.allow_simulation = allow_simulation
         self.active: dict[str, ActiveResearch] = {}
         self._run_locks: dict[str, asyncio.Lock] = {}
@@ -92,6 +94,21 @@ class ResearchApp:
             fcntl.flock(handle, fcntl.LOCK_UN)
         return False
 
+    @staticmethod
+    def _runtime(config: ResearchConfig) -> AgentRuntime:
+        if not config.api_key():
+            raise ValueError(f"Set {config.api_key_env} before starting model agents")
+        return ResearchRuntime(config)
+
+    @staticmethod
+    def _configure_agent_tools(active: ActiveResearch, config: ResearchConfig) -> None:
+        active.tools.configure(config.metadata.get("agent_tool_instructions"))
+        allow_web = config.metadata.get("allow_web_access", True)
+        register_sources(active.actions, enabled=config.backend == "standard" and allow_web)
+        for runtime in (active.engine.runtime, active.engine.interaction_runtime):
+            if isinstance(runtime, ResearchRuntime):
+                runtime.allow_web_access = allow_web
+
     def coordinator(self, run_id: str) -> Coordinator:
         if run_id in self.active:
             return self.active[run_id].coordinator
@@ -112,7 +129,7 @@ class ResearchApp:
             if c.state.get("started_at") and recorded:
                 settings = json.loads(recorded[0].read_text())
                 for key in MODEL_FIELDS:
-                    setattr(config, key, settings[key])
+                    setattr(config, key, settings.get(key, "standard"))
                 config.model_settings_pinned = True
             else:
                 config.pin_model_settings()
@@ -127,7 +144,7 @@ class ResearchApp:
         }
 
     async def set_model_settings(self, c: Coordinator, values: dict[str, Any]) -> None:
-        settings, key = self.parse_model_settings(values)
+        settings, key = self.parse_model_settings({"backend": self.config(c).backend, **values})
         async with self.run_lock(c):
             c = self.coordinator(c.store.run_id)
             if not self.model_settings(c)["editable"]:
@@ -143,6 +160,31 @@ class ResearchApp:
             # An Interaction tool may have updated other config fields before
             # cancellation. Reload them instead of replacing the whole config.
             config = self.config(c)
+            if any(settings[field] != getattr(config, field) for field in MODEL_FIELDS):
+                # Preserve the intake dialogue when switching runtimes before
+                # research starts; native session histories have different formats.
+                actor = c.actor("interaction")
+                actor.session_id = new_id("session")
+                c.save_actor(actor)
+                dialogue = sorted(
+                    (
+                        item
+                        for item in c.store.records("messages", ResearchMessage)
+                        if item.sender == "user" or item.recipient == "user"
+                    ),
+                    key=lambda item: item.created_at,
+                )
+                write_json(
+                    c.store.paths.agent("interaction")
+                    / "sessions"
+                    / actor.session_id
+                    / "backend-handoff.json",
+                    {
+                        "previous_dialogue": [
+                            {"sender": item.sender, "text": item.text} for item in dialogue
+                        ]
+                    },
+                )
             for field, value in settings.items():
                 setattr(config, field, value)
             config.model_settings_pinned = True
@@ -255,6 +297,7 @@ class ResearchApp:
                 raise ValueError("；".join(issues))
         c = Coordinator.create(self.root, config.brief, simulated=simulated, run_id=run_id)
         c.state["creation_digest"] = creation_digest
+        c.state["mode"] = config.mode
         c.save()
         if key:
             self.save_credentials(c, config, key)
@@ -331,6 +374,7 @@ class ResearchApp:
             raise ValueError("请先与 Interaction 确认研究目标和执行条件")
         config = self.config(c)
         config.brief = c.store.brief()
+        config.__post_init__()
         write_json(c.store.root / "coordination" / "config.json", config.public())
         pending_setup = c.state.get("execution_setup") == "pending"
         # A complete operator configuration imported during intake needs no
@@ -340,6 +384,8 @@ class ResearchApp:
             and bool(config.commands or config.verifier)
             and not validate_execution(config)
         )
+        if config.mode == "passk" and pending_setup and not prepared_setup:
+            raise ValueError("passk requires the execution setup to be complete before starting")
         if "intake" in c.state and not pending_setup:
             issues = validate_execution(config)
             if issues:
@@ -348,8 +394,7 @@ class ResearchApp:
         # Configuration may have changed over several Interaction turns. Bind its
         # final revision before RSI can submit any jobs.
         active.config = config
-        active.tools.tool_prompt = config.metadata.get("agent_tool_instructions", TOOL_PROMPT)
-        register_sources(active.actions, enabled=config.metadata.get("allow_web_access", True))
+        self._configure_agent_tools(active, config)
         active.execution.commands = {item.name: item for item in config.commands}
         active.execution.verifier = config.verifier
         active.execution.execution_env = config.execution_env
@@ -382,8 +427,7 @@ class ResearchApp:
             raise ValueError("；".join(issues))
         active = self.active[c.store.run_id]
         active.config = config
-        active.tools.tool_prompt = config.metadata.get("agent_tool_instructions", TOOL_PROMPT)
-        register_sources(active.actions, enabled=config.metadata.get("allow_web_access", True))
+        self._configure_agent_tools(active, config)
         active.execution.commands = {item.name: item for item in config.commands}
         active.execution.verifier = config.verifier
         active.execution.execution_env = config.execution_env
@@ -464,15 +508,26 @@ class ResearchApp:
                 / (actor.session_id or "interaction")
             )
             await runtime.reconfigure_session(session, config.model_settings_revision)
-        actions = ResearchActions(c)
+        from areal_rsi.agents.rsi.prompt import PROMPT as RSI_PROMPT
+        from areal_rsi.coordination.passk import PROMPT as PASSK_PROMPT
+        from areal_rsi.coordination.passk import RSI_PROMPT as PASSK_RSI_PROMPT
+        from areal_rsi.coordination.passk import PassKActions, PassKEngine, stop_on_target
+
+        c.state["mode"] = config.mode
+        c.save()
+        actions = PassKActions(c) if config.mode == "passk" else ResearchActions(c)
         await actions.initialize_workspace("rsi")
-        register_sources(actions, enabled=config.metadata.get("allow_web_access", True))
+        register_sources(
+            actions,
+            enabled=config.backend == "standard" and config.metadata.get("allow_web_access", True),
+        )
         agent_tools = AgentTools(
             actions,
             self.root,
             environment=lambda: self.config(c).execution_env,
             credential_names=(config.api_key_env,),
             instructions=config.metadata.get("agent_tool_instructions"),
+            backend=config.backend,
         )
         execution = ResearchExecution(
             actions,
@@ -494,7 +549,7 @@ class ResearchApp:
         async def poll() -> bool:
             current = self.active[c.store.run_id].config
             if (
-                current.finalizer
+                (current.finalizer or current.mode == "passk")
                 and c.state["status"] == "paused"
                 and c.state.get("budget_stop_reason") == "Run wall-time budget exhausted"
             ):
@@ -506,6 +561,7 @@ class ResearchApp:
             started = c.state.get("started_at")
             if (
                 current.finalizer
+                and current.mode != "passk"
                 and limit
                 and reserve
                 and current.metadata.get("time_limit_scope", "total") == "total"
@@ -518,9 +574,12 @@ class ResearchApp:
             if c.state["status"] == "stopped":
                 execution.close(cancel=True)
                 return False
-            return await execution.poll()
+            pending = await execution.poll()
+            if current.mode == "passk":
+                stop_on_target(c)
+            return pending
 
-        engine = ResearchEngine(
+        engine = (PassKEngine if config.mode == "passk" else ResearchEngine)(
             c,
             runtime,
             lambda agent_id: ToolSet(
@@ -528,7 +587,13 @@ class ResearchApp:
                 actions.handler(agent_id),
                 agent_tools.instructions(agent_id),
                 actions.definitions(agent_id),
+                actions.workspace(agent_id),
+                config.execution_env,
             ),
+            research_prompt=PASSK_PROMPT
+            if config.mode == "passk"
+            else RESEARCH_PROMPTS[config.research_prompt_variant],
+            rsi_prompt=PASSK_RSI_PROMPT if config.mode == "passk" else RSI_PROMPT,
             tick_hook=poll,
         )
 
@@ -552,6 +617,8 @@ class ResearchApp:
             finally:
                 execution.close(cancel=c.state["status"] in {"stopped", "succeeded", "failed"})
                 await agent_tools.close()
+                await runtime.close()
+                await engine.interaction_runtime.close()
 
         task = asyncio.create_task(serve(), name="research:" + c.store.run_id)
         active = ActiveResearch(c, config, actions, execution, agent_tools, engine, task)
@@ -838,6 +905,11 @@ class ResearchApp:
                 "with Ctrl+C, then resume it here; viewing and export remain available."
             )
         if action == "chat":
+            if self.config(c).mode == "passk" and c.state.get("started_at"):
+                raise ValueError(
+                    "passk researchers cannot receive intervention after launch; "
+                    "create a new run to change the task"
+                )
             async with self.run_lock(c):
                 c = self.coordinator(c.store.run_id)
                 message_id = c.user_message(
@@ -862,6 +934,14 @@ class ResearchApp:
         elif action == "resume":
             async with self.run_lock(c):
                 c = self.coordinator(c.store.run_id)
+                if (
+                    self.config(c).mode == "passk"
+                    and c.state["status"] == "stopped"
+                    and not c.state.get("finalization")
+                ):
+                    raise ValueError(
+                        "This passk experiment has ended; create a new run for another budget"
+                    )
                 c.state.pop("user_stopped", None)
                 c.save()
                 if self.config(c).finalizer and c.state.get("finalization"):

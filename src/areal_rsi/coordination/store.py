@@ -374,6 +374,7 @@ class ResearchStore:
         candidate = self.get("candidates", candidate_id, CandidateSnapshot)
         return any(
             item["content_digest"] == candidate.content.digest for item in self.withdrawals()
+            if not item.get("scope_agent_id") or item["scope_agent_id"] == candidate.source_agent_id
         )
 
     def withdraw_candidate(
@@ -384,6 +385,7 @@ class ResearchStore:
         *,
         simulated_run: bool = False,
         agent_id: str = "rsi",
+        scope_agent_id: str | None = None,
     ) -> RecordRef:
         """Remove a known-defective artifact from selection; retain its measurements."""
         candidate = self.get("candidates", candidate_id, CandidateSnapshot)
@@ -401,6 +403,7 @@ class ResearchStore:
                     "reason": reason,
                     "created_at": now(),
                     "references": encode(references),
+                    **({"scope_agent_id": scope_agent_id} if scope_agent_id else {}),
                 },
             )
             self.event(

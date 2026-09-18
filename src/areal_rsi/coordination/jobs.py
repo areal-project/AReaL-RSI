@@ -298,10 +298,11 @@ class ResearchExecution:
                         "next_offset": offset + 16000 if offset + 16000 < len(raw) else None,
                         "simulated": self.simulated,
                     }
-                    ref = self.c.store.put("materials", effect_id("output", call.call_id), value)
+                    output_id = effect_id("output", agent_id + ":" + call.call_id)
+                    ref = self.c.store.put("materials", output_id, value)
                     self.c.link_reference(agent_id, ref)
                     return ToolResult(
-                        {**value, "uri": ref.uri, "record_id": effect_id("output", call.call_id)}
+                        {**value, "uri": ref.uri, "record_id": output_id}
                     )
                 collected: dict[str, Any] = {}
                 if args.get("as_candidate", False):

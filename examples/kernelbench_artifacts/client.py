@@ -107,9 +107,17 @@ def submit_and_wait(
                 )
             else:
                 job = remote(manifest, operation, task=task, key=output.name, **sources)
+            if manifest.get("mode") == "passk":
+                job = {
+                    k: v
+                    for k, v in job.items()
+                    if "budget_used" not in k and k != "task_budget_remaining"
+                }
             write_json(record_path, job)
             budget_message = (
-                f"本题已提交 {job.get('task_budget_used', job['budget_used'])} 次，次数不限"
+                "GPU 提交次数不限"
+                if manifest.get("mode") == "passk"
+                else f"本题已提交 {job.get('task_budget_used', job['budget_used'])} 次，次数不限"
                 if budget is None
                 else f"本题已用 {job['task_budget_used']}/{budget} 次 GPU 提交，"
                 f"剩余 {job['task_budget_remaining']} 次"
@@ -161,6 +169,23 @@ def submit_and_wait(
                 raise
             write_json(output / "progress.json", {"stage": "连接重试", "message": str(exc)[:400]})
         time.sleep(5)
+
+
+def attempt_status(status: dict[str, Any], run_root: Path, agent_id: str) -> dict[str, Any]:
+    """An identical peer artifact must not supply this attempt's verification result."""
+    jobs = json.loads((run_root / "coordination/jobs.json").read_text())
+    own = set()
+    for job_id, info in jobs.items():
+        receipt = run_root / "execution-outputs" / job_id / "remote-job.json"
+        if info["agent_id"] == agent_id and receipt.exists():
+            own.add(json.loads(receipt.read_text())["id"])
+    return {
+        task: {
+            "jobs": [job for job in value["jobs"] if job["id"] in own],
+            "used": sum(job["id"] in own for job in value["jobs"]),
+        }
+        for task, value in status.items()
+    }
 
 
 def score_bundle(
@@ -314,12 +339,14 @@ def main() -> None:
             )
         )
     else:
-        score, metrics, evidence = score_bundle(manifest, args.workspace, status, args.phase)
         snapshot = json.loads((args.workspace.parent / "snapshot.json").read_text())
         run_root = args.workspace.parents[2]
         execution = json.loads((run_root / "jobs" / args.output.name / "job.json").read_text())
         metadata = execution["spec"]["metadata"]
         assert snapshot["digest"] == metadata["candidate_digest"]
+        if manifest.get("mode") == "passk" and args.phase == "search":
+            status = attempt_status(status, run_root, metadata["agent_id"])
+        score, metrics, evidence = score_bundle(manifest, args.workspace, status, args.phase)
         result = {
             "status": "completed",
             "simulated": False,

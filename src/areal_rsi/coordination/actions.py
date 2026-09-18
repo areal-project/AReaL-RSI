@@ -38,7 +38,7 @@ REFERENCES = {
     "description": "优先填写工具返回的记录 ID，无需重写 run ID；"
     "也接受公开类别/记录ID、完整 run:// URI。"
     "只解析本 run 的精确记录，不猜测拼写。文件路径和网页地址写在正文中，"
-    "或先用 fetch_url/save_evidence 归档后引用。没有记录引用时使用 []。",
+    "或先用 save_evidence 归档发现后引用。没有记录引用时使用 []。",
 }
 
 

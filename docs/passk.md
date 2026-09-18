@@ -1,0 +1,80 @@
+# Isolated pass@k
+
+设置 `ResearchConfig.mode = "passk"`，`brief.limits.max_agents` 即固定的 k。
+省略 mode 时保持原有 `collaborative` 模式。后端仍可选 `standard` 或 `codex`，都使用
+AReaL Agent Runtime。这个模式只实现独立尝试，不包含信息共享或 evidence 审核。
+
+## 行为
+
+RSI Agent 调用 start_researchers，按同一份完整任务和初始文件启动固定的 k 个 researcher。
+每个 researcher 自行完成调研、实现、实验和改进。RSI 是实际模型 agent，但只监督持续探索：
+可以查看进展、接收报告，并通过 continue_researcher 提醒停下来的研究员在原会话继续。
+这个工具不接受建议或引用，只发送固定的继续提醒。RSI 不能调整方向、淘汰尝试或共享产物。
+
+submit_report 记录进展并通知 RSI，不结束当前研究回合。研究员自然结束回合时，系统归档其
+总结并通知 RSI；由 RSI 提醒继续，不创建新研究节点。RSI 等待期间不消耗模型调用，遗漏
+启动或继续事项时系统最多每 30 秒提醒一次。执行故障按退避间隔恢复原任务和会话，不创建
+额外样本；模型原生重试仍由 Runtime 负责。
+
+每个尝试只能访问自己的工作区、候选、作业和验证记录，以及共同起点和固定执行说明。
+不开放同伴交流、evidence 写入或跨尝试读取。向 RSI 的报告不转发给其他研究员。
+恢复状态只包含自己的最好结果。
+撤回候选只影响自己，即使另一尝试的文件内容恰好相同，也不会连带剪枝。
+工作台仍可供操作员查看全部尝试，研究开始后不接受聊天干预。
+
+整组在以下任一条件下停止：
+
+- 任一候选在当前契约的 search 正式验证中通过正确性检查，并达到目标指标。
+- 从研究启动算起达到 `max_wall_seconds`。启动开销、暂停和进程停机时间都计入；恢复不续杯。
+- 操作员明确停止。
+
+模拟结果只属于模拟实验。诊断成绩、错误契约、失败验证和模型自报成绩不会触发达标。
+使用历史最佳有效候选交付，不能用最后一次较差结果覆盖。配置了 finalizer 时，停止探索后
+仍按原流程独立复测和归档；达标事件记录的是 search 结果，最终交付是否确认仍以复测为准。
+只有时间限制时，可把 verification.target 设为 null；不限时时必须配置可信 verifier 和目标。
+
+## 配置与启动
+
+从已有题目的完整操作员配置复制一份，保留模型连接、seed、命令、verifier、finalizer 和
+验证契约，只修改以下字段（JSON 片段，不是完整执行配置）：
+
+```json
+{
+  "mode": "passk",
+  "backend": "codex",
+  "brief": {
+    "limits": {
+      "max_agents": 4,
+      "max_nodes": null,
+      "max_model_calls": null,
+      "max_total_tokens": null,
+      "max_verify_calls": null,
+      "max_wall_seconds": 3600,
+      "max_jobs": 4
+    }
+  }
+}
+```
+
+模型、token 和验证次数必须显式不设整组共享上限，防止一个尝试耗尽其他尝试的预算。
+`max_jobs` 是执行并发容量，不是累计提交数，应匹配实际 GPU/运行器资源。
+所有执行条件必须在启动前准备好；本模式不会等待 leader 配置环境。
+
+```bash
+RSI_DATA_ROOT=.rsi/passk uv run --env-file .env --locked rsi research --config /path/to/passk.json
+```
+
+程序中断后使用同一数据目录和 `rsi research --resume RUN_ID`；截止时间不变。
+已结束的实验需要新建，不把恢复操作计作原来的 pass@k。
+配置文件可通过工作台现有的操作员配置入口加载，无需新的执行服务。
+
+## 比较实验
+
+先以 k=1 检查持久探索、正式验证和恢复行为，再与 k>1 比较。两边固定题目、初始代码、
+模型、推理强度、工具、目标和计时口径。记录各尝试的最好正式分数、首次达标耗时、
+总 token、验证次数及实际 GPU 容量。共享 GPU 队列会改变每个尝试实际获得的实验时间；
+不能只比较同一个墙钟时长而忽略总资源。
+
+这里增加了 RSI 监督调用，比较时应单独记录其开销。它与 Codex 原生 goal pass@1 的提示和停止机制
+并非完全相同。工程测试验证独立性和执行行为；是否优于 goal pass@1 要通过实际重复实验
+检验，单次 pass@k 不保证必然胜出。

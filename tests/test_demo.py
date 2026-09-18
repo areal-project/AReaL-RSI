@@ -46,6 +46,80 @@ class StopTransport:
         }
 
 
+@pytest.mark.parametrize("limit", [None, 1800])
+@pytest.mark.parametrize("scope", ["total", "exploration"])
+@pytest.mark.parametrize("mode", ["collaborative", "passk"])
+def test_single_task_preparation_preserves_unlimited_time_and_submissions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, limit: int | None, scope: str, mode: str
+) -> None:
+    prepare = runpy.run_path("examples/kernelbench_artifacts/demo.py")["prepare"]
+    source = b"# Public reference fixture\n"
+
+    def remote(environment: Any, payload: Any) -> dict[str, Any]:
+        assert payload["demo"]["exploration_submissions"] is None
+        return {
+            "manifest": {
+                "tasks": {"L3P10": {"reference_sha256": hashlib.sha256(source).hexdigest()}},
+                "protocol_id": "fixed",
+                "manifest_id": "tasks",
+            },
+            "references": {"L3P10": {"source": base64.b64encode(source).decode()}},
+        }
+
+    monkeypatch.setitem(prepare.__globals__, "control_request", remote)
+    environment = tmp_path / "environment.json"
+    environment.write_text("{}")
+    if mode == "passk" and limit is None:
+        with pytest.raises(ValueError, match="wall limit"):
+            prepare(
+                tmp_path,
+                environment,
+                "unlimited",
+                task="L3P10",
+                mode=mode,
+                max_wall_seconds=None,
+                exploration_submissions=None,
+                check_credentials=False,
+            )
+        return
+    config = prepare(
+        tmp_path,
+        environment,
+        "unlimited",
+        task="L3P10",
+        max_agents=6,
+        max_wall_seconds=limit,
+        time_limit_scope=scope,
+        exploration_submissions=None,
+        check_credentials=False,
+        mode=mode,
+    )
+    limits = config["brief"]["limits"]
+    assert limits["max_wall_seconds"] == limit
+    assert limits["max_jobs"] == (6 if mode == "passk" else None)
+    assert limits["max_model_calls"] is None
+    assert limits["max_agents"] == 6
+    assert config["metadata"]["finalization_reserve_seconds"] == (
+        180 if limit is not None and scope == "total" and mode != "passk" else 0
+    )
+    assert ("本次不设时间上限" in config["brief"]["instructions"]) == (limit is None)
+    assert "None 秒" not in config["brief"]["instructions"]
+    assert "GPU 提交次数不限" in config["brief"]["instructions"]
+    frozen = json.loads((tmp_path / "runs/unlimited/setup/research.json").read_text())
+    assert frozen == config
+    if mode == "passk":
+        assert config["mode"] == "passk"
+        assert "collect_bundle" not in {c["name"] for c in config["commands"]}
+        rules = Path(config["seed_dir"]).joinpath("RULES.md").read_text()
+        prompt = (
+            config["brief"]["instructions"]
+            + rules
+            + json.dumps(config["metadata"], ensure_ascii=False)
+        )
+        assert "阶段目标仍由 RSI 决定" not in prompt and "团队研究计划" not in prompt
+        assert "独立完成整题" in rules and "不等待技术指导" in rules
+
+
 @pytest.mark.parametrize(
     "retry_verifier,deadline,withdraw_final",
     [
@@ -314,16 +388,24 @@ def test_diagnostic_uses_execution_interpreter_and_reuses_submitted_job(
         if body is None:
             return list(jobs)
         job = {
-            **body, "id": "diagnostic", "task_id": "task", "budget": None,
-            "budget_used": 1, "state": "queued", "cwd": str(workspace),
+            **body,
+            "id": "diagnostic",
+            "task_id": "task",
+            "budget": None,
+            "budget_used": 1,
+            "state": "queued",
+            "cwd": str(workspace),
         }
         jobs.append(job)
         return job
 
     monkeypatch.setitem(handle.__globals__, "task_request", request)
     payload = {
-        "operation": "submit_diagnostic", "task": "L1P1", "key": "same-experiment",
-        "source": "", "script": base64.b64encode(b"print('probe')").decode(),
+        "operation": "submit_diagnostic",
+        "task": "L1P1",
+        "key": "same-experiment",
+        "source": "",
+        "script": base64.b64encode(b"print('probe')").decode(),
     }
     first = handle(manifest, payload)
     second = handle(manifest, payload)

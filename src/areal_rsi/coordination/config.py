@@ -19,15 +19,18 @@ MODEL_EFFORTS = {
     "gpt-5.6-terra": ("none", "low", "medium", "high", "xhigh", "max"),
     "gpt-6-astra": ("low", "medium", "high", "xhigh", "max"),
 }
-MODEL_FIELDS = ("base_url", "model", "reasoning_effort")
+MODEL_FIELDS = ("base_url", "model", "reasoning_effort", "backend")
 
 
 def validate_model_settings(value: dict[str, Any]) -> dict[str, str]:
+    value = {"backend": "standard", **value}
     if set(value) != set(MODEL_FIELDS) or any(
         not isinstance(value[key], str) or not value[key].strip() for key in MODEL_FIELDS
     ):
         raise ValueError("请填写 API 地址、模型和推理强度")
     settings = {key: value[key].strip() for key in MODEL_FIELDS}
+    if settings["backend"] not in {"standard", "codex"}:
+        raise ValueError("Agent 后端支持 standard 或 codex")
     if len(settings["model"]) > 200 or any(c.isspace() for c in settings["model"]):
         raise ValueError("模型名称不能包含空格，且不能超过 200 字")
     if settings["reasoning_effort"] not in MODEL_EFFORTS.get(
@@ -36,7 +39,9 @@ def validate_model_settings(value: dict[str, Any]) -> dict[str, str]:
         raise ValueError("该模型不支持所选推理强度")
     # Reuse the actual transport's URL validation; no request or credential is needed.
     try:
-        ResponsesConfig(api_key="validation-only", **settings)
+        ResponsesConfig(
+            api_key="validation-only", **{k: v for k, v in settings.items() if k != "backend"}
+        )
         if any(char.isspace() for char in settings["base_url"]):
             raise ValueError
     except ValueError as exc:
@@ -48,7 +53,10 @@ def validate_model_settings(value: dict[str, Any]) -> dict[str, str]:
 @dataclass(slots=True)
 class ResearchConfig:
     brief: TaskBrief
+    mode: str = "collaborative"
     seed_dir: str | None = None
+    backend: str = "standard"
+    research_prompt_variant: str = "simple"
     model: str = "gpt-6-astra"
     reasoning_effort: str = "xhigh"
     base_url: str = "https://api.openai.com"
@@ -69,6 +77,37 @@ class ResearchConfig:
     simulation_scores: tuple[float, ...] = (0.3, 0.5, 0.7)
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        if self.mode not in {"collaborative", "passk"}:
+            raise ValueError("Research mode must be collaborative or passk")
+        if self.backend not in {"standard", "codex"}:
+            raise ValueError("Agent 后端支持 standard 或 codex")
+        if self.research_prompt_variant not in {"simple", "detailed"}:
+            raise ValueError("Research Prompt 支持 simple 或 detailed")
+        if self.mode == "passk":
+            limits = self.brief.limits
+            if self.max_model_calls_per_turn is not None:
+                raise ValueError("passk requires max_model_calls_per_turn to be null")
+            if any(
+                getattr(limits, name) is not None
+                for name in (
+                    "max_model_calls",
+                    "max_total_tokens",
+                    "max_verify_calls",
+                )
+            ):
+                raise ValueError(
+                    "passk requires unlimited model/token/verification counts (null); "
+                    "use a wall-time limit"
+                )
+            if limits.max_nodes is not None and limits.max_nodes < limits.max_agents:
+                raise ValueError("passk max_nodes must accommodate all k researchers")
+            contract = self.brief.verification
+            if limits.max_wall_seconds is None and not (
+                contract and contract.target is not None and self.verifier
+            ):
+                raise ValueError("passk needs a wall-time limit or a trusted verification target")
+
     def model_settings(self) -> dict[str, str]:
         return {
             key: str(getattr(self, key))
@@ -81,6 +120,7 @@ class ResearchConfig:
         for key, value in self.model_settings().items():
             setattr(self, key, value)
         self.model_settings_pinned = True
+        self.__post_init__()
 
     def runtime(self) -> ResponsesConfig:
         key = self.api_key()

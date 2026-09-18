@@ -1,11 +1,11 @@
 {
   "host": "et15",
   "continue_script": "/storage/openpsi/users/miumiu.zwh/tools/rsi_queue_control.sh",
-  "slurm_job": "960902",
+  "slurm_job": "958437",
   "python": "/opt/.venv/bin/python",
   "gpu_python": "/opt/.venv/bin/python",
   "kb_root": "/storage/openpsi/users/miumiu.zwh/dsh-kernelbench",
   "references": "/storage/openpsi/users/miumiu.zwh/openrsi-kernelbench/KernelBench/KernelBench",
-  "gpuq_url": "http://33.180.163.180:38473",
-  "admin_token_file": "/storage/openpsi/users/miumiu.zwh/dsh-kernelbench/runtime/gpuq-nodes/slurmd-62/admin-token"
+  "gpuq_url": "http://33.180.160.37:38472",
+  "admin_token_file": "/storage/openpsi/users/miumiu.zwh/dsh-kernelbench/runtime/gpuq/admin-token"
 }

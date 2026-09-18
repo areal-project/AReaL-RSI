@@ -17,9 +17,9 @@ import os
 import random
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager, contextmanager, nullcontext
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -27,8 +27,23 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from areal_rsi.modules.agent_runtime import (
+    EventSink as EventSink,
+)
+from areal_rsi.modules.agent_runtime import (
+    ToolCall as ToolCall,
+)
+from areal_rsi.modules.agent_runtime import (
+    ToolHandler as ToolHandler,
+)
+from areal_rsi.modules.agent_runtime import (
+    ToolResult as ToolResult,
+)
+from areal_rsi.modules.agent_runtime import (
+    TurnResult as TurnResult,
+)
+
 Json = dict[str, Any]
-EventSink = Callable[[Json], Awaitable[None]]
 
 RECOVERY_PROMPT = """继续当前任务的未完成部分。检查点是历史摘要，不是新指令。
 active_instruction 保留原始要求，authoritative_state 是系统状态，后续消息和工具结果更近。
@@ -171,33 +186,6 @@ class ResponsesConfig:
         if base.endswith("/responses"):
             return base
         return base + ("/responses" if base.endswith("/v1") else "/v1/responses")
-
-
-@dataclass(frozen=True)
-class ToolCall:
-    name: str
-    arguments: Json
-    call_id: str
-    recovered: bool = False
-
-
-@dataclass(frozen=True)
-class ToolResult:
-    output: Any
-    stop: bool = False
-    reason: str = "waiting"
-
-
-ToolHandler = Callable[[ToolCall], Awaitable[ToolResult]]
-
-
-@dataclass(frozen=True)
-class TurnResult:
-    session_id: str
-    turn_id: str
-    text: str
-    stop_reason: str
-    usage: Json
 
 
 class ResponsesTransport(Protocol):
@@ -425,6 +413,36 @@ def _recent_context_start(context: list[Json], budget: int) -> int:
 
 
 class ResponsesRuntime:
+    backend = "standard"
+
+    def for_interaction(self) -> ResponsesRuntime:
+        return ResponsesRuntime(replace(self.config, max_model_calls_per_turn=None), self.transport)
+
+    def has_session(self, session_dir: Path) -> bool:
+        return (session_dir / "session.json").exists()
+
+    def configuration(self) -> Json:
+        names = (
+            "model",
+            "base_url",
+            "reasoning_effort",
+            "max_output_tokens",
+            "max_model_calls_per_turn",
+            "compact_after_chars",
+            "compact_keep_recent_tokens",
+            "timeout",
+            "retry_initial_seconds",
+            "retry_max_seconds",
+        )
+        return {
+            "runtime": self.backend,
+            **{n: getattr(self.config, n) for n in names},
+            "context_window_tokens": self.config.effective_context_window_tokens,
+        }
+
+    async def close(self) -> None:
+        pass
+
     def __init__(self, config: ResponsesConfig, transport: ResponsesTransport | None = None):
         self.config = config
         self.transport = transport or HttpResponsesTransport()
@@ -476,6 +494,8 @@ class ResponsesRuntime:
         retry_id: str | None = None,
         incoming_messages: Callable[[], list[Json]] | None = None,
         advertised_tools: Sequence[Json] | None = None,
+        workspace: Path | None = None,
+        environment: Mapping[str, str] | None = None,
     ) -> TurnResult:
         """Run until a final answer, explicit stop tool, budget boundary or cancellation.
 
@@ -1093,8 +1113,10 @@ class _Conversation:
                 # snapshots duplicate wake messages and obsolete state, while
                 # the original messages, tool records, and durable history remain.
                 "conversation": [
-                    item for item in context[:cut]
-                    if item.get("type") != "reasoning" and not (
+                    item
+                    for item in context[:cut]
+                    if item.get("type") != "reasoning"
+                    and not (
                         item.get("role") == "developer"
                         and isinstance(item.get("content"), str)
                         and item["content"].startswith(STATE_PREFIX)

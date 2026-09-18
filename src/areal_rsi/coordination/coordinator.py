@@ -295,6 +295,7 @@ class Coordinator:
                 continue
             if (
                 actor.agent_id not in {"rsi", "interaction"}
+                and self.state.get("mode") != "passk"
                 and actor.agent_id not in self.state["active"]
                 and any(
                     node.iteration_id == actor.current_iteration_id and node.report_ref is not None
@@ -386,8 +387,12 @@ class Coordinator:
         identifier = active or self.state["inboxes"][agent_id][0]
         if not active and agent_id not in {"rsi", "interaction"}:
             current = next(
-                (node for node in actor.iterations
-                 if node.iteration_id == actor.current_iteration_id), None
+                (
+                    node
+                    for node in actor.iterations
+                    if node.iteration_id == actor.current_iteration_id
+                ),
+                None,
             )
             if current is not None:
                 assignment = self.store.public_record(current.assignment_ref)
@@ -429,7 +434,7 @@ class Coordinator:
                 "你可以发送补充消息继续，或点击重试。",
                 key="failure:" + effect_id(agent_id, error + str(self.state.get("model_calls"))),
             )
-            if agent_id not in {"rsi", "interaction"}:
+            if agent_id not in {"rsi", "interaction"} and self.state.get("mode") != "passk":
                 self.enqueue(
                     "runtime",
                     "rsi",
@@ -999,6 +1004,8 @@ class Coordinator:
         run = self.store.run()
         return {
             "run_id": run.run_id,
+            "mode": self.state.get("mode", "collaborative"),
+            "runtime_turns": self.state.get("runtime_turns", 0),
             "status": self.state["status"],
             "brief": encode(self.store.brief()),
             "plan": self.state["plan"],

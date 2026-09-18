@@ -127,7 +127,9 @@ dependencies = [
     { name = "areal-agent-runtime", extra = ["api", "dsh"] },
     { name = "deepseek-harness-sdk" },
     { name = "httpx", extra = ["socks"] },
+    { name = "jsonschema" },
     { name = "mcp" },
+    { name = "openai-codex-cli-bin" },
     { name = "pyyaml" },
 ]
 
@@ -147,6 +149,7 @@ dev = [
     { name = "mypy" },
     { name = "pytest" },
     { name = "ruff" },
+    { name = "types-jsonschema" },
 ]
 
 [package.metadata]
@@ -157,7 +160,9 @@ requires-dist = [
     { name = "areal-agent-runtime", extras = ["codex"], marker = "extra == 'codex'", path = "vendor/areal_agent_runtime-0.4.0.dev1-py3-none-any.whl" },
     { name = "deepseek-harness-sdk", specifier = "==0.1.2rc1" },
     { name = "httpx", extras = ["socks"], specifier = ">=0.28,<1" },
+    { name = "jsonschema", specifier = ">=4,<5" },
     { name = "mcp", specifier = ">=2.1,<3" },
+    { name = "openai-codex-cli-bin", specifier = "==0.154.0" },
     { name = "pyyaml", specifier = ">=6,<7" },
 ]
 provides-extras = ["codex", "claude", "anthropic"]
@@ -167,6 +172,7 @@ dev = [
     { name = "mypy", specifier = ">=1.15" },
     { name = "pytest", specifier = ">=8" },
     { name = "ruff", specifier = ">=0.11" },
+    { name = "types-jsonschema", specifier = ">=4,<5" },
 ]
 
 [[package]]
@@ -978,6 +984,21 @@ wheels = [
 ]
 
 [[package]]
+name = "openai-codex-cli-bin"
+version = "0.154.0"
+source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
+wheels = [
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/d9/c5/4bd3ca28d82d54a5aae89d7106a81062f66bc113e24aa684a03855603586/openai_codex_cli_bin-0.154.0-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:ce74d702b77f0e18df24cc47f5f5c14d88ce84a5df59ea07c0169bc92d0a98e2", size = 122467910, upload-time = "2026-09-10T19:40:22.967Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/96/56/ee6e0ae89813d68ca12c19ab4cb4ddce30281b6d3f4dc46370f03b493f58/openai_codex_cli_bin-0.154.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:4f32974a4379e58f5d2677c4d5097aeaeef7e249c04ca8d66b569503999ba53b", size = 112690061, upload-time = "2026-09-10T19:40:29.003Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/ac/48/11169686bed9637bd2b05675e0c62309d46b45a85065c515deca3aa47e3a/openai_codex_cli_bin-0.154.0-py3-none-manylinux_2_17_aarch64.whl", hash = "sha256:18c1235f7a3ece9c20ed7b02cba5501e0aec0b4027fed4c3805a703d7d745493", size = 118446658, upload-time = "2026-09-10T19:40:35.269Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/0a/31/6558f90be93a8aa090a84e3cb683ac9f2fd1ff7c56cfd1878adcf74a3b49/openai_codex_cli_bin-0.154.0-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:1c1812526b7b1cc497de30392ce018125b017e96010824b4ca598514f44ce5be", size = 127394645, upload-time = "2026-09-10T19:40:42.838Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/ca/a3/d823ea1d0c3f627047768ae8d9ae961d7e525197bcd78973121818e95dac/openai_codex_cli_bin-0.154.0-py3-none-musllinux_1_1_aarch64.whl", hash = "sha256:e850d84a2945f90ceb7fd609468d08fd654a00323f351db6bb2b204b7813ca0c", size = 118446656, upload-time = "2026-09-10T19:40:52.023Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/18/a8/744f5d2f5e96626a194482e1310346ded6a574ead2c7c287e36518d06095/openai_codex_cli_bin-0.154.0-py3-none-musllinux_1_1_x86_64.whl", hash = "sha256:88f330201b527ee0d740d14aaea336f71e2513ba087bc9429373dc01fcd09f0d", size = 127394643, upload-time = "2026-09-10T19:40:59.099Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/a4/e9/6759b73fa101e64bf86363982d810745952057316efe376118678a68a88d/openai_codex_cli_bin-0.154.0-py3-none-win_amd64.whl", hash = "sha256:11ba8fbef6f3bafaed39b745a2b0b5648bf00c8d168e241b314d86000d577fcb", size = 137545885, upload-time = "2026-09-10T19:41:06.777Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/de/e9/695a272bfdf151ddd17c837ca5b167dfb2d87996dda4aba537be779817ca/openai_codex_cli_bin-0.154.0-py3-none-win_arm64.whl", hash = "sha256:f043e8fe1323246583ee35bf3c4c021cc9bfd21d2715f12fb8a743c8ebf57667", size = 127145338, upload-time = "2026-09-10T19:41:14.947Z" },
+]
+
+[[package]]
 name = "opentelemetry-api"
 version = "1.44.0"
 source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
@@ -1489,6 +1510,18 @@ source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
 sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/53/a3/1585216310e344e8102c22482f6060c7a6ea0322b63e026372e6dcefcfd6/truststore-0.10.4.tar.gz", hash = "sha256:9d91bd436463ad5e4ee4aba766628dd6cd7010cf3e2461756b3303710eebc301", size = 26169, upload-time = "2025-08-12T18:49:02.73Z" }
 wheels = [
     { url = "https://pypi.tuna.tsinghua.edu.cn/packages/19/97/56608b2249fe206a67cd573bc93cd9896e1efb9e98bce9c163bcdc704b88/truststore-0.10.4-py3-none-any.whl", hash = "sha256:adaeaecf1cbb5f4de3b1959b42d41f6fab57b2b1666adb59e89cb0b53361d981", size = 18660, upload-time = "2025-08-12T18:49:01.46Z" },
+]
+
+[[package]]
+name = "types-jsonschema"
+version = "4.26.0.20260518"
+source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
+dependencies = [
+    { name = "referencing" },
+]
+sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/dd/46/73b6a5d61a61015c4248030a8cb07e5bdddb4041430fae9e585a68692578/types_jsonschema-4.26.0.20260518.tar.gz", hash = "sha256:e1dd53dc97a64f5eccdd6fa9839666e09bb500a8ebba2db6fdaf1789faea81a6", size = 16638, upload-time = "2026-05-18T06:06:44.106Z" }
+wheels = [
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/07/d5/134f8a147dcecda10db7f60cfc6af0578a25a5c53c87b3907a64385e0184/types_jsonschema-4.26.0.20260518-py3-none-any.whl", hash = "sha256:30b30a518c7fe335df85c919fcbcc631b69c03d4a4b5b632fa916bea03065307", size = 16072, upload-time = "2026-05-18T06:06:43.264Z" },
 ]
 
 [[package]]

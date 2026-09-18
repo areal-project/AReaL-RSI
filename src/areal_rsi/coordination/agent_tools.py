@@ -1,39 +1,23 @@
-"""Common DSH capabilities; role-specific coordination remains in ResearchActions."""
+"""Tool guidance only; native capabilities are supplied by AReaL Agent Runtime."""
 
 from __future__ import annotations
 
-import asyncio
-import copy
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any
 
 from areal_rsi.coordination.actions import ResearchActions
-from areal_rsi.modules.dsh_tools import DshToolWorker, definitions, ensure_tools, tool_environment
-from areal_rsi.modules.responses import ToolCall, ToolHandler, ToolResult
 
-TOOL_PROMPT = """bash、read、write、edit、glob、grep 用于日常工作。
-bash 可使用已有 SSH、Git、Python。
-bash 每次是新 shell，默认在当前工作区；远端检查用非交互模式并设置超时。
-实验和长期作业使用作业工具，结果与产物可直接读取、收集或复测，无需手抄记录。
-沿用已授权的认证，不打印凭证。OUTCOME_UNKNOWN 先检查实际结果，避免重复执行。
+TOOL_PROMPT = """日常文件操作和命令执行使用 Runtime 提供的 workspace 工具。
+允许联网时，使用 search_web 搜索、fetch_url 阅读网页。
+实验和长期作业通过 run_job、wait_for_job 执行。沿用已配置的环境，不打印凭证。
 """
 
-
-def model_output(name: str, output: dict[str, Any]) -> dict[str, Any]:
-    """Keep one shell output copy in context; the complete DSH receipt stays archived."""
-    value = output.get("value")
-    if (
-        name == "bash"
-        and isinstance(value, dict)
-        and all(isinstance(value.get(stream), dict) for stream in ("stdout", "stderr"))
-    ):
-        # DSH renders the same stdout/stderr in content. Structured output also
-        # preserves exit status, truncation and spill paths, without duplicating text.
-        result = copy.deepcopy(output)
-        result.pop("content", None)
-        return result
-    return output
+CODEX_TOOL_PROMPT = """日常文件操作、命令执行和联网调研使用 Codex 原生工具。
+允许联网时，使用 Codex 原生网页工具搜索与阅读页面。
+不要启动 Codex 原生 subagent 或独立 goal。
+RSI 任务工具的调用方法见下方 Runtime 说明；实验和长期作业通过 run_job、wait_for_job 执行。
+沿用已配置的环境，不打印凭证。
+"""
 
 
 class AgentTools:
@@ -45,54 +29,29 @@ class AgentTools:
         environment: Callable[[], Mapping[str, str]],
         credential_names: tuple[str, ...],
         instructions: str | None = None,
+        backend: str = "standard",
     ):
-        self.actions, self.root = actions, root
-        self.environment, self.credential_names = environment, credential_names
-        self.tool_prompt = TOOL_PROMPT if instructions is None else instructions
-        self.workers: dict[str, DshToolWorker] = {}
-        self.installation: Path | None = None
-        self.install_lock = asyncio.Lock()
-        for tool in definitions():
-            actions.register(tool, self.handler, roles={"interaction", "rsi", "research"})
+        self.actions, self.backend = actions, backend
+        self.configure(instructions)
+
+    def configure(self, instructions: str | None) -> None:
+        self.tool_prompt = (instructions + "\n" if instructions else "") + (
+            CODEX_TOOL_PROMPT if self.backend == "codex" else TOOL_PROMPT
+        )
 
     def instructions(self, agent_id: str) -> str:
+        if agent_id == "rsi" and self.actions.c.state.get("mode") == "passk":
+            return (
+                "先用 start_researchers 启动团队；用 get_state 查看进展，"
+                "用 continue_researcher 提醒已停下来的研究员继续。\n"
+                "没有需要处理的事项时用 wait 等待新报告。只使用这些监督工具。"
+                "RSI 工具的调用方法见下方 Runtime 说明。"
+            )
         return (
             self.tool_prompt
-            + (
-                "\nRSI 使用工具只为调研、核查证据、协调与收尾；候选实现和实验循环交给研究员。"
-                if agent_id == "rsi"
-                else ""
-            )
             + "\n你的默认工作区："
             + str(self.actions.workspace(agent_id).resolve())
         )
 
-    async def _installation(self) -> Path:
-        async with self.install_lock:
-            if self.installation is None:
-                self.installation = await asyncio.to_thread(ensure_tools, self.root)
-            return self.installation
-
-    def handler(self, agent_id: str) -> ToolHandler:
-        async def handle(call: ToolCall) -> ToolResult:
-            try:
-                installation = await self._installation()
-                if agent_id not in self.workers:
-                    self.workers[agent_id] = DshToolWorker(
-                        installation,
-                        self.actions.workspace(agent_id),
-                        self.actions.c.store.paths.agent(agent_id) / "tools",
-                    )
-                output = await self.workers[agent_id].execute(
-                    call,
-                    tool_environment(self.environment(), credential_names=self.credential_names),
-                )
-                return ToolResult(model_output(call.name, output))
-            except (RuntimeError, OSError) as exc:
-                return ToolResult({"error": str(exc), "isError": True})
-
-        return handle
-
     async def close(self) -> None:
-        await asyncio.gather(*(worker.close() for worker in self.workers.values()))
-        self.workers.clear()
+        pass

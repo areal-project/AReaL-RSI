@@ -6,6 +6,7 @@ import asyncio
 import copy
 import json
 import os
+import shlex
 import signal
 import sys
 from pathlib import Path
@@ -41,6 +42,46 @@ def compile_config(request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
         vendor.setdefault("profile", "sdk-minimal")
         vendor.setdefault("dshHome", str(directory / "dsh-home"))
         vendor.setdefault("runtimeCwd", str(workspace))
+        if request.get("research_tools") is not None:
+            # Configure the installed DSH provider, rather than implementing a
+            # separate Responses loop. Hand-declared model names need explicit
+            # reasoning capabilities (e.g. Astra/Luna on the existing gateway).
+            requested = vendor.get("reasoningEffort", "high")
+            effort = {"none": "off", "max": "xhigh"}.get(requested, requested)
+            route = "rsi-responses"
+            patch = directory / "research-model.patch.json"
+            patch.write_text(
+                json.dumps(
+                    [
+                        {
+                            "id": "llm-pi-ai",
+                            "config": {
+                                "providers": {
+                                    route: {
+                                        "api": "openai-responses",
+                                        "apiKeyEnv": "RSI_RUNTIME_KEY",
+                                        "baseURL": base,
+                                        "models": [
+                                            {
+                                                "id": model,
+                                                "contextWindow": request.get(
+                                                    "context_window_tokens", 256000
+                                                ),
+                                                "maxTokens": request["max_tokens"],
+                                                "reasoningEfforts": {
+                                                    effort: None if effort == "off" else requested
+                                                },
+                                            }
+                                        ],
+                                    }
+                                }
+                            },
+                        }
+                    ]
+                )
+            )
+            vendor.update(provider=route, reasoningEffort=effort)
+            vendor["patches"] = [*vendor.get("patches", []), str(patch)]
     elif kind == "anthropic":
         vendor.update(model=model, baseUrl=base, apiKey=key, maxTokens=request["max_tokens"])
     elif kind in {"claude-code", "claude-agent-sdk"}:
@@ -56,6 +97,18 @@ def compile_config(request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
         vendor.setdefault("stateDirectory", str(directory / "codex-state"))
         vendor.setdefault("approvalPolicy", "never")
         vendor.setdefault("sandbox", "danger-full-access")
+        if request.get("codex_config") is not None:
+            # Native configuration belongs to the isolated Codex home. The
+            # package owns App Server, provider wiring, threads and compaction.
+            home = Path(vendor["codexHome"])
+            home.mkdir(parents=True, exist_ok=True)
+            (home / "config.toml").write_text(
+                "\n".join(
+                    f"{name} = {json.dumps(value)}"
+                    for name, value in request["codex_config"].items()
+                )
+                + "\n"
+            )
     elif kind == "hermes":
         home = directory / "hermes-home"
         home.mkdir(exist_ok=True)
@@ -88,6 +141,34 @@ def compile_config(request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
         )
         tools.append("skill")
     prompts = list(request["prompts"])
+    if bridge := request.get("research_tools"):
+        if native:
+            manifest = directory / "research-tools.json"
+            manifest.write_text(json.dumps(bridge))
+            manifest.chmod(0o600)
+            tool_command = shlex.join(
+                [
+                    sys.executable,
+                    "-I",
+                    str(Path(__file__).with_name("runtime_tools.py")),
+                    str(manifest),
+                ]
+            )
+            prompts.append(
+                "RSI 任务工具通过以下命令调用，使用你的原生命令工具执行。\n"
+                f"查看工具及参数：{tool_command} list\n"
+                f"调用：{tool_command} call TOOL 'JSON_ARGUMENTS' CALL_ID\n"
+                "每次新操作使用新的 CALL_ID；重试同一操作时沿用原 ID。\n"
+                "常用工具：" + ", ".join(tool["name"] for tool in bridge["tools"])
+            )
+        else:
+            plugins.append(
+                {
+                    "entrypoint": "areal_rsi.modules.runtime_tools:create_plugin",
+                    "config": bridge,
+                }
+            )
+            tools.extend(tool["name"] for tool in bridge["tools"])
     if request["mcp"] and native:
         # Native-only adapters cannot accept Application ToolSpecs. The installed
         # RSI CLI gives their shell tools access to the same bounded MCP servers.
@@ -181,11 +262,23 @@ async def serve(request: dict[str, Any], output: Any) -> None:
     composition = await build_composition(BootstrapConfig.model_validate(config))
     app = composition.application
     active: str | None = None
-    session_id: str | None = None
-    run_ids: list[str] = []
+    binding = Path(request["directory"]) / "session-binding.json"
+    saved = json.loads(binding.read_text()) if binding.exists() else {}
+    session_id: str | None = saved.get("session_id")
+    bindings = Path(request["directory"]) / "run-bindings.json"
+    run_ids: list[str] = json.loads(bindings.read_text()) if bindings.exists() else []
     try:
         reader = asyncio.StreamReader(limit=16 * 1024 * 1024)
-        protocol = asyncio.StreamReaderProtocol(reader)
+        owner = asyncio.current_task()
+
+        class ParentPipeProtocol(asyncio.StreamReaderProtocol):
+            def connection_lost(self, exc: Exception | None) -> None:
+                super().connection_lost(exc)
+                # Losing the coordinator must cancel native execution too.
+                if active is not None and owner is not None:
+                    owner.cancel()
+
+        protocol = ParentPipeProtocol(reader)
         await asyncio.get_running_loop().connect_read_pipe(lambda: protocol, sys.stdin)
         while line := await reader.readline():
             message = json.loads(line)["message"]
@@ -195,6 +288,9 @@ async def serve(request: dict[str, Any], output: Any) -> None:
                 command.update(sessionId=session_id, resumeSession=True)
             ref = await app.start_run(StartRunCommand.model_validate(command))
             active, session_id = ref.run_id, ref.session_id
+            temporary_binding = binding.with_suffix(".tmp")
+            temporary_binding.write_text(json.dumps({"session_id": session_id}))
+            temporary_binding.replace(binding)
             run_ids.append(active)
             bindings = Path(request["directory"]) / "run-bindings.json"
             temporary = bindings.with_suffix(".tmp")
@@ -221,7 +317,7 @@ async def serve(request: dict[str, Any], output: Any) -> None:
             active = None
             error = (
                 None
-                if snapshot.status == "completed" and text
+                if snapshot.status == "completed" and (text or request.get("allow_empty_final"))
                 else str(snapshot.error or f"Run {snapshot.status}: no final assistant text")
             )
             emit({"type": "result", "text": "\n".join(text), "error": error})

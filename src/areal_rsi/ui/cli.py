@@ -104,6 +104,9 @@ def _idle_reason(detail: dict[str, Any]) -> str | None:
         and detail.get("status") == "running"
     ):
         return "worker_stopped"
+    if detail.get("mode") == "passk" and detail.get("status") == "running":
+        # Backoff or a gap between native turns is not a research stopping rule.
+        return None
     if detail.get("pending_agents") or detail.get("busy"):
         return None
     agents = detail.get("agents", [])

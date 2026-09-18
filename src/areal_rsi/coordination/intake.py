@@ -299,6 +299,7 @@ class ResearchIntake:
                 for key, value in current.brief.verification.identity.items():
                     if incoming.verification.identity.get(key) != value:
                         raise ValueError("接入不能改变已约定的验证条件：" + key)
+        config.backend = current.backend
         config.model, config.reasoning_effort = current.model, current.reasoning_effort
         config.base_url, config.api_key_env = current.base_url, current.api_key_env
         config.credential_file = current.credential_file

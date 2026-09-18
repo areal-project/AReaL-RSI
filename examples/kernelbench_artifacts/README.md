@@ -8,6 +8,8 @@ RSI 自主组织同时最多 5 名 Research Agent，直接优化八题的 kernel
 
 先按[仓库启动指南](../../README.md#准备)安装依赖并填写 `.env`，确保 `ssh et15` 可用。[et15.json](et15.json) 提供当前集群入口；如果 Slurm 作业、队列地址或账号路径变化，复制一份修改并传入 `--environment /path/to/et15.json`。
 
+`continue_script` 和 `python` 配置远端控制入口；GPU 诊断使用独立的 `gpu_python`（默认 `/opt/.venv/bin/python`），该路径须在 GPU 容器内存在。当前 et15 控制入口经登录节点访问原 GPUQ，状态查询无需创建 Slurm step。
+
 在仓库根目录执行：
 
 ```bash
@@ -26,7 +28,7 @@ uv run --env-file .env --locked python run.py --type demo
 uv run --env-file .env --locked python run.py --type demo --resume <run_id>
 ```
 
-研究结束后自动选取每题最快的正式正确源码，以 seed 137 复测；最终反馈不再用于优化。记录位于 `<数据目录>/runs/<run_id>/`，最终源码在 `finalization/output/candidate/<题号>/model_new.py`，分题成绩见工作台最终验证及 `verifications/`。准备配置位于 `setup/research.json`。
+研究结束后自动选取每题未因具体反例撤回的最快正式正确源码，以 seed 137 复测；最终反馈不再用于优化。收尾适配器按通用选优清单中的源码摘要排除已撤回版本，保留其历史成绩。记录位于 `<数据目录>/runs/<run_id>/`，最终源码在 `finalization/output/candidate/<题号>/model_new.py`，分题成绩见工作台最终验证及 `verifications/`。准备配置位于 `setup/research.json`。
 
 ## 通过 Interaction 做单题研究
 

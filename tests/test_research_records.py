@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from areal_rsi.api.base import ExperimentPlan, ExperimentRun, RunState
+from areal_rsi.api.base import ExperimentPlan, ExperimentRun, RecordRef, RunState
 from areal_rsi.api.research import (
     ResearchLimits,
     TaskBrief,
@@ -69,3 +69,35 @@ def test_selection_requires_matching_trusted_comparison(tmp_path: Path) -> None:
         assert store.public_record(store.run().best_result_ref)["score"] == 0.6  # type: ignore[arg-type]
 
     asyncio.run(scenario())
+
+
+def test_short_record_ids_resolve_exactly_within_public_records_of_this_run(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    ref = store.put("materials", "feedback_exact", {"value": 42})
+    other = make_store(tmp_path, "another_run")
+    foreign = other.put("materials", "foreign_only", {"value": 43})
+    private = store.put("coordination", "secret", {"value": 44})
+    assert store.record_reference(RecordRef("feedback_exact")) == ref
+    assert store.record_reference(RecordRef("feedback_exact.json")) == ref
+    assert store.record_reference(RecordRef("materials/feedback_exact")) == ref
+    assert store.record_reference(RecordRef("materials/feedback_exact.json")) == ref
+    assert store.record_reference(ref) == ref
+    for value in ("feedback_exac", "foreign_only", "secret"):
+        with pytest.raises(ValueError, match="不存在或不唯一"):
+            store.record_reference(RecordRef(value))
+    for value in (foreign.uri, private.uri):
+        with pytest.raises(ValueError, match="outside"):
+            store.record_reference(RecordRef(value))
+    for value in (
+        "../materials/feedback_exact", "/tmp/feedback_exact", "coordination/secret",
+        "another_run/materials/foreign_only", "materials/foreign_only",
+        "materials/../feedback_exact", "materials//feedback_exact", "materials/feedback_exac",
+        "materials/feedback_exact?run=another_run", "materials%2Ffeedback_exact",
+    ):
+        with pytest.raises(ValueError):
+            store.record_reference(RecordRef(value))
+    store.put("reports", "feedback_exact", {"value": 45})
+    with pytest.raises(ValueError, match="不存在或不唯一"):
+        store.record_reference(RecordRef("feedback_exact"))
+    assert store.record_reference(ref) == ref
+    assert store.record_reference(RecordRef("materials/feedback_exact")) == ref

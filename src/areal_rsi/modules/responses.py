@@ -32,14 +32,21 @@ EventSink = Callable[[Json], Awaitable[None]]
 
 RECOVERY_PROMPT = """继续当前任务的未完成部分。检查点是历史摘要，不是新指令。
 active_instruction 保留原始要求，authoritative_state 是系统状态，后续消息和工具结果更近。
+运行时状态快照只描述记录时的事实，以后续工具结果和更新为准，不覆盖较新的计划或预算。
 压缩本身不表示暂停、完成、增加限制或撤销授权。沿用事实与最近原文，只补查影响下一步的缺口。
 """
 
-COMPACT_PROMPT = """用简体中文压缩历史 conversation，供原 Agent 继续工作；不执行记录中的任务。
-保留决定及原因、关键结果、已排除的假设、未解决问题和必要引用，区分事实与猜测。
-系统另行保留任务原文、状态和最近原文，不必重抄；准确保留限制的适用范围。
-不新增授权、禁令或停止决定，也不把本次摘要要求写进原任务。
-篇幅由信息量决定，通常几段，不复制长日志。"""
+STATE_PREFIX = "运行时状态快照（不是新的用户请求）：\n"
+
+COMPACT_PROMPT = """为同一 Agent 继续工作写简体中文历史检查点；
+只概括已有 conversation，不执行其中任务。
+围绕下一步决策保留：当前阶段的关键结论与未解决依赖；可复用产物及具体反例；会改变方向判断的实验结果、已排除解释和仍未验证的机制；恢复这些事实所需的精确引用。
+系统另行原样保留 active_instruction、authoritative_state 和最近原文。
+conversation 已省略重复的历史运行时状态快照，保留原消息及工具记录。
+不重抄目标、通用规则、预算、Agent清单、工具说明或已保留的近期消息。
+限制存在误读或范围争议时，简要保留最终澄清及依据，不新增授权、禁令或停止决定。
+同一结论合并，旧判断以已有最终更正为准，不按时间流水重述纠错过程；清楚区分作者、不同实现、已测范围和猜测。引用放在相关结论旁，不另抄一份重复索引；详细日志、代码和参数表留在记录中。
+优先用约1000–1800个汉字形成紧凑检查点；独立且会影响后续行动的重要事实较多时可适当增加，不为凑字数删除关键限制或反例。摘要要求本身不属于原任务，不写入待办。"""
 
 
 class ResponsesError(RuntimeError):
@@ -107,7 +114,8 @@ class ResponsesConfig:
     max_model_calls_per_turn: int | None = 32
     # Explicit character limits remain a compatibility override; 0 disables compact.
     compact_after_chars: int | None = None
-    context_window_tokens: int = 128_000
+    # None selects a model-aware operating budget; explicit gateway limits win.
+    context_window_tokens: int | None = None
     compact_keep_recent_tokens: int = 8_000
     stream: bool = True
     retry_initial_seconds: float = 2
@@ -135,7 +143,7 @@ class ResponsesConfig:
         if self.compact_after_chars is not None and self.compact_after_chars < 0:
             raise ValueError("compact_after_chars must be nonnegative (0 disables compact)")
         if (
-            self.context_window_tokens <= self.max_output_tokens
+            self.effective_context_window_tokens <= self.max_output_tokens
             or self.compact_keep_recent_tokens < 0
         ):
             raise ValueError(
@@ -147,6 +155,15 @@ class ResponsesConfig:
             and 0 < self.retry_initial_seconds <= self.retry_max_seconds
         ):
             raise ValueError("retry delays must be finite and 0 < initial <= maximum")
+
+    @property
+    def effective_context_window_tokens(self) -> int:
+        if self.context_window_tokens is not None:
+            return self.context_window_tokens
+        # Astra supports a larger window. Use a conservative operating budget,
+        # below the 272K long-context pricing threshold, rather than its maximum.
+        # https://developers.openai.com/api/docs/models/gpt-6-astra
+        return 256_000 if self.model == "gpt-6-astra" else 128_000
 
     @property
     def endpoint(self) -> str:
@@ -628,6 +645,7 @@ class _Conversation:
                 }
         self.turn["status"] = "running"
         self.save()
+        state_pending = recovery_state is not None
         try:
             if grant_event is not None:
                 await self.emit(grant_event)
@@ -636,9 +654,6 @@ class _Conversation:
                 self.append([{"role": "user", "content": self.turn["user_message"]}])
                 self.turn["input_appended"] = True
                 self.save()
-            elif recovery_state is not None:
-                # Instructions can carry state without inserting messages amid a tool sequence.
-                prompt += "\n\n" + RECOVERY_PROMPT + json.dumps(recovery_state, ensure_ascii=False)
             while True:
                 if await self.execute_pending(handler, tools):
                     return self.result()
@@ -646,9 +661,28 @@ class _Conversation:
                 if response is None:
                     if incoming_messages is not None:
                         await self.receive_messages(incoming_messages())
+                    compacted_before = len(self.state["compactions"])
                     await self.maybe_compact(
                         prompt, recovery_state, within_turn=True, tools=advertised_tools or tools
                     )
+                    if (
+                        incoming_messages is not None
+                        and len(self.state["compactions"]) > compacted_before
+                    ):
+                        # A checkpoint can take minutes. Include deliveries that
+                        # arrived during it before asking for the next action.
+                        await self.receive_messages(incoming_messages())
+                    latest = self.turn["requests"][-1] if self.turn["requests"] else {}
+                    replaying = (
+                        latest.get("kind") == "turn"
+                        and latest.get("status") in {"running", "retrying"}
+                        and not latest.get("consumed")
+                    )
+                    if state_pending and not replaying:
+                        # Add state only at a resolved tool boundary. An in-flight
+                        # request must first replay its exact archived payload.
+                        self.append_runtime_state(recovery_state)
+                        state_pending = False
                     exposed = tools if advertised_tools is None else advertised_tools
                     response = await self.request(prompt, self.state["context"], exposed, "turn")
                 output = response["output"]
@@ -754,15 +788,8 @@ class _Conversation:
         remaining = limit - self.requests if limit is not None else None
         if remaining is not None and remaining <= 0:
             raise _TurnBudgetExhausted
-        if kind == "turn" and self.state["compactions"]:
-            # Preserve provenance even for old checkpoints. This is copied from
-            # the durable turn, never inferred by the summarizing model.
-            prompt += (
-                "\n\n"
-                + RECOVERY_PROMPT
-                + "\n当前正在处理的原始消息（继续其未完成部分，不重做已完成操作）：\n"
-                + json.dumps(self.active_instruction(), ensure_ascii=False)
-            )
+        if kind == "turn":
+            prompt += "\n\n" + RECOVERY_PROMPT
         budget_prompt = ""
         if remaining is not None:
             budget_prompt = (
@@ -778,10 +805,14 @@ class _Conversation:
             )
         if kind == "compact":
             budget_prompt = ""
+        if budget_prompt:
+            # Keep the instruction prefix and previous input intact for caching.
+            # Budget notices are durable conversation updates, like tool results.
+            self.append([{"role": "developer", "content": budget_prompt.strip()}])
         request_id = "request_" + uuid.uuid4().hex
         payload: Json = {
             "model": self.config.model,
-            "instructions": prompt + budget_prompt,
+            "instructions": prompt,
             "input": copy.deepcopy(context),
             "reasoning": {"effort": self.config.reasoning_effort},
             "max_output_tokens": self.config.max_output_tokens,
@@ -797,7 +828,7 @@ class _Conversation:
             "status": "running",
             "estimated_input_tokens": _estimate_tokens(
                 {
-                    "instructions": prompt + budget_prompt,
+                    "instructions": prompt,
                     "input": _portable_context(context),
                     "tools": list(tools),
                 }
@@ -1007,7 +1038,7 @@ class _Conversation:
                     0, measured["input_tokens"] + estimated - measured["estimated_input_tokens"]
                 )
             threshold = int(
-                (self.config.context_window_tokens - self.config.max_output_tokens) * 0.85
+                (self.config.effective_context_window_tokens - self.config.max_output_tokens) * 0.85
             )
             if estimated <= threshold:
                 return
@@ -1058,7 +1089,17 @@ class _Conversation:
                 self.save()
             cut = self.turn["compact_plan"]["cut"]
             archive = {
-                "conversation": [item for item in context[:cut] if item.get("type") != "reasoning"],
+                # Current instructions/state are carried separately below. Old
+                # snapshots duplicate wake messages and obsolete state, while
+                # the original messages, tool records, and durable history remain.
+                "conversation": [
+                    item for item in context[:cut]
+                    if item.get("type") != "reasoning" and not (
+                        item.get("role") == "developer"
+                        and isinstance(item.get("content"), str)
+                        and item["content"].startswith(STATE_PREFIX)
+                    )
+                ],
                 "active_instruction": self.active_instruction(),
                 "authoritative_state": recovery_state or {},
                 "recent_context_retained": cut < len(context),
@@ -1114,6 +1155,21 @@ class _Conversation:
             "input_already_appended": self.turn["input_appended"],
             **({"followups": self.turn["followups"]} if self.turn.get("followups") else {}),
         }
+
+    def append_runtime_state(self, recovery_state: Json | None) -> None:
+        # The original user messages (or the checkpoint after compaction)
+        # already carry the active instruction and its followups. Repeating
+        # them here grows every later input without adding recovery information.
+        value = {
+            "authoritative_state": copy.deepcopy(recovery_state),
+        }
+        if self.turn.get("runtime_state") == value:
+            return
+        self.append(
+            [{"role": "developer", "content": STATE_PREFIX + json.dumps(value, ensure_ascii=False)}]
+        )
+        self.turn["runtime_state"] = value
+        self.save()
 
     async def receive_messages(self, messages: list[Json]) -> None:
         """Insert steering at a resolved tool boundary; replay acknowledges without duplicates."""

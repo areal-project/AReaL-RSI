@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 from areal_rsi.api.base import RecordRef
 from areal_rsi.api.research import CandidateSnapshot, EvidenceRecord
@@ -33,6 +34,7 @@ def evidence_preview(item: EvidenceRecord, uri: str) -> dict[str, Any]:
 def model_state(c: Coordinator, agent_id: str) -> dict[str, Any]:
     """Return current work, without copying past iterations into the context."""
     result = c.summary()
+    result["collaborators"] = c.collaborators(agent_id)
     agents = result["agents"]
     if agent_id != "rsi":
         result.pop("pending_report_replies", None)
@@ -103,6 +105,7 @@ def record_preview(
                 "instruction",
                 "interpretation",
                 "summary",
+                "reason",
                 "query",
                 "url",
             )
@@ -116,8 +119,12 @@ def record_preview(
         if job.get("parameters"):
             context += " " + json.dumps(job["parameters"], ensure_ascii=False)[:120]
         text = f"{value['job_id']} · {value['path']} · {context}"
+    record_path = urlsplit(ref.uri).path.lstrip("/").removesuffix(".json")
     return {
         "uri": ref.uri,
+        "record_id": record_path
+        if record_path.startswith("withdrawals/")
+        else record_path.rsplit("/", 1)[-1],
         "created_at": value.get("created_at"),
         "summary": text[:240],
         # Older output excerpts have no archival timestamp. Keep that unknown

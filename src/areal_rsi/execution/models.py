@@ -103,6 +103,8 @@ class ApprovedCommand:
     # Optional operator-owned artifact directory relative to output. Successful
     # jobs publish a snapshot and run the trusted search verifier automatically.
     auto_verify_output: str | None = None
+    # Optional agent-facing help for data arguments; does not change binding or validation.
+    parameter_descriptions: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.final_candidate_policy not in {"single", "multiple"}:

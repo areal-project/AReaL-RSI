@@ -1,0 +1,242 @@
+"""Collaboration recipes bind real behavior, survive restart, and freeze at start."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import threading
+from dataclasses import replace
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from areal_rsi.api.research import TaskBrief
+from areal_rsi.base.storage import write_json
+from areal_rsi.coordination.collaboration import (
+    MODULES,
+    CollaborationModule,
+    CollaborationPlan,
+    build_plan,
+    manifest,
+    selected_modules,
+)
+from areal_rsi.coordination.config import ResearchConfig, config_from_dict
+from areal_rsi.coordination.intake import ResearchIntake
+from areal_rsi.coordination.passk import PassKActions, PassKEngine
+from areal_rsi.modules.responses import ResponsesConfig, ResponsesRuntime
+from areal_rsi.research_app import ResearchApp
+from areal_rsi.ui.launch import WorkbenchClient
+from areal_rsi.ui.workbench import WorkbenchServer
+
+
+class IdleTransport:
+    async def request(self, config: Any, payload: Any, sink: Any) -> dict[str, Any]:
+        await asyncio.Event().wait()
+        raise AssertionError("cancelled before a model response")
+
+
+def app_at(root: Path) -> ResearchApp:
+    return ResearchApp(
+        root,
+        runtime_factory=lambda _: ResponsesRuntime(
+            ResponsesConfig(api_key="test", base_url="https://example.test"), IdleTransport()
+        ),
+    )
+
+
+def test_legacy_config_and_unimplemented_modules() -> None:
+    config = ResearchConfig(TaskBrief("task", "complete task"))
+    legacy = config.public()
+    legacy.pop("collaboration_modules")
+    assert config_from_dict(legacy).mode == "collaborative"
+    ResearchApp.select_collaboration(config, {"mode": "passk", "modules": []})
+    restored = config_from_dict(config.public())
+    plan = build_plan(restored.mode, restored.collaboration_modules)
+    assert plan.actions is PassKActions and plan.engine is PassKEngine
+    assert plan.supervisor_only
+    assert restored.brief.limits.max_wall_seconds == 14400
+    assert restored.brief.limits.max_model_calls is None
+    assert restored.brief.limits.max_total_tokens is None
+    assert restored.brief.limits.max_verify_calls is None
+    with pytest.raises(ValueError, match="尚未实现"):
+        config_from_dict({**config.public(), "collaboration_modules": ["evidence_pool"]})
+    with pytest.raises(ValueError, match="名称列表"):
+        selected_modules("passk", "invalid")  # type: ignore[arg-type]
+
+
+def test_module_dependencies_and_stable_fingerprint(monkeypatch: pytest.MonkeyPatch) -> None:
+    def apply(plan: CollaborationPlan) -> CollaborationPlan:
+        return replace(plan, rsi_prompt=plan.rsi_prompt + "\nInstalled module.")
+
+    a = CollaborationModule("a", "A", "test", "1", apply)
+    b = CollaborationModule("b", "B", "test", "1", apply, requires=("a",))
+    monkeypatch.setitem(MODULES, "a", a)
+    monkeypatch.setitem(MODULES, "b", b)
+    assert manifest("passk", ("b", "a")) == manifest("passk", ("a", "b"))
+    assert manifest("passk", ("a",))["fingerprint"] != manifest("passk")["fingerprint"]
+    with pytest.raises(ValueError, match="需要"):
+        selected_modules("passk", ("b",))
+    with pytest.raises(ValueError, match="重复"):
+        selected_modules("passk", ("a", "a"))
+    with pytest.raises(ValueError, match="不支持"):
+        selected_modules("collaborative", ("a",))
+    monkeypatch.setitem(MODULES, "a", replace(a, conflicts=("b",)))
+    with pytest.raises(ValueError, match="冲突"):
+        selected_modules("passk", ("a", "b"))
+    monkeypatch.setitem(MODULES, "a", replace(a, requires=("b",)))
+    with pytest.raises(ValueError, match="循环"):
+        selected_modules("passk", ("a", "b"))
+
+
+def test_selection_rebuilds_runtime_and_freezes_versions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class ModuleActions(PassKActions):
+        pass
+
+    class ModuleEngine(PassKEngine):
+        pass
+
+    def apply(plan: CollaborationPlan) -> CollaborationPlan:
+        return replace(
+            plan,
+            actions=ModuleActions,
+            engine=ModuleEngine,
+            rsi_prompt="Module RSI prompt",
+            research_prompt="Module Research prompt",
+            supervisor_only=False,
+        )
+
+    module = CollaborationModule("test_module", "Test", "test only", "1", apply)
+    monkeypatch.setitem(MODULES, module.id, module)
+
+    async def scenario() -> None:
+        app = app_at(tmp_path)
+        try:
+            detail = await app.create({"conversation": True})
+            c = app.coordinator(detail["run_id"])
+            original = await app.attach(c)
+            await app.set_collaboration(c, {"mode": "passk", "modules": [module.id]})
+            active = app.active[c.store.run_id]
+            assert active is not original
+            assert isinstance(active.actions, ModuleActions)
+            assert isinstance(active.engine, ModuleEngine)
+            assert active.engine.rsi_prompt == "Module RSI prompt"
+            assert active.engine.research_prompt == "Module Research prompt"
+            assert not active.tools.supervisor_only
+            assert c.store.brief().limits.max_model_calls is None
+            # Starting directly here avoids invoking a real Interaction agent.
+            c.state["intake"]["status"] = "ready"
+            c.save()
+            await app.start(c)
+            path = c.store.root / "coordination/collaboration.json"
+            frozen = path.read_bytes()
+            detail = await app.detail(c.store.run_id)
+            assert not detail["collaboration"]["editable"]
+            assert detail["collaboration"]["manifest"]["modules"] == [
+                {"id": module.id, "version": "1"}
+            ]
+            for state in ("running", "paused", "stopped"):
+                c.state["status"] = state
+                c.save()
+                with pytest.raises(ValueError, match="已锁定"):
+                    await app.set_collaboration(c, {"mode": "collaborative", "modules": []})
+            assert path.read_bytes() == frozen
+            await app.close()
+            restored = app_at(tmp_path)
+            try:
+                recovered = await restored.attach(restored.coordinator(c.store.run_id))
+                assert isinstance(recovered.engine, ModuleEngine)
+                await restored.close()
+                monkeypatch.setitem(MODULES, module.id, replace(module, version="2"))
+                with pytest.raises(ValueError, match="冻结"):
+                    await restored.attach(restored.coordinator(c.store.run_id))
+                assert path.read_bytes() == frozen
+            finally:
+                await restored.close()
+        finally:
+            await app.close()
+
+    asyncio.run(scenario())
+
+
+def test_environment_import_preserves_selected_collaboration(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        app = app_at(tmp_path)
+        try:
+            detail = await app.create(
+                {
+                    "conversation": True,
+                    "collaboration": {"mode": "passk", "modules": []},
+                }
+            )
+            c = app.coordinator(detail["run_id"])
+            active = await app.attach(c)
+            intake = ResearchIntake(
+                active.actions, repository=app.repository, start=lambda message: app.start(c)
+            )
+            incoming = ResearchConfig(TaskBrief("environment", "adapter instructions"))
+            intake.import_config(incoming, "loaded adapter")
+            assert app.config(c).mode == "passk"
+            assert app.config(c).collaboration_modules == ()
+        finally:
+            await app.close()
+
+    asyncio.run(scenario())
+
+
+def test_http_selection_and_historical_read_only_projection(tmp_path: Path) -> None:
+    app = app_at(tmp_path)
+    server = WorkbenchServer(app, port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        client = WorkbenchClient(server.server_port)
+        bootstrap = client.request("/api/bootstrap")
+        client.token = bootstrap["csrf_token"]
+        assert [m["id"] for m in bootstrap["collaboration_catalog"]["modes"]] == [
+            "passk",
+            "collaborative",
+        ]
+        assert bootstrap["collaboration_catalog"]["modules"] == []
+        detail = client.request(
+            "/api/runs",
+            {
+                "message": "",
+                "collaboration": {"mode": "passk", "modules": []},
+            },
+        )
+        run_id = detail["run_id"]
+        detail = client.request(f"/api/runs/{run_id}")
+        assert detail["collaboration"]["mode"] == "passk"
+        assert detail["collaboration"]["editable"]
+        assert detail["brief"]["limits"]["max_verify_calls"] is None
+        client.request(
+            f"/api/runs/{run_id}/collaboration",
+            {
+                "mode": "collaborative",
+                "modules": [],
+            },
+        )
+        updated = client.request(f"/api/runs/{run_id}")
+        assert updated["collaboration"]["mode"] == "collaborative"
+        # A pre-feature stopped run has no manifest. Reading it never rewrites
+        # frozen config to pretend its implementation version was recorded.
+        c = app.coordinator(run_id)
+        c.state.update(status="stopped", started_at="2026-09-16T10:00:00Z")
+        c.save()
+        path = c.store.root / "coordination/config.json"
+        config = json.loads(path.read_text())
+        config.pop("collaboration_modules")
+        write_json(path, config)
+        before = path.read_bytes()
+        archived = client.request(f"/api/runs/{run_id}")
+        assert not archived["collaboration"]["editable"]
+        assert archived["collaboration"]["manifest"] is None
+        assert path.read_bytes() == before
+        assert not (c.store.root / "coordination/collaboration.json").exists()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)

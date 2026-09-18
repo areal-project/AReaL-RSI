@@ -1,5 +1,8 @@
 # 后台通过 Python package 接入 ARealAgentRuntime
 
+本文以原有 TUI / harness 自迭代流程为例。研究工作台复用同一个 Runtime 接入层，
+其配置、RSI 工具桥和会话恢复方式见 [Agent 后端说明](agent-backends.md)。
+
 后台 RSI Agent、ResearchAgent、Task Agent 通过 `PackageAgentRuntime` 接入；前台仍使用 DSH 原生 TUI。
 RSI 管理实验循环、不可变候选、TRAIN/VALIDATE、评分和选版。Runtime 管理 Agent 执行、会话、工具和已提交事件。
 
@@ -45,8 +48,8 @@ DSH npm bundle 仍使用原来的 `0.3.0` 制品，其来源提交单独记录�
 RSI 使用 `runtime_storage` Plugin，将事件与对应状态作为一条 JSONL 记录追加到
 `data/state/journal.jsonl`，每条记录完成 fsync 后才交给消费者，不重写历史事件。
 Runtime 的内存 StateStore 负责当前进程内的状态校验和查询，日志负责持久化和轨迹导出。
-同时设置 `eventSinks: []`，关闭默认轨迹投影器及其 SQLite 索引；运行过程不使用 SQLite。
-每个日志只由一个新 worker 写入，不重开已有日志，不探测、兼容或迁移旧轨迹存储。
+同时设置 `eventSinks: []`，关闭默认轨迹投影器及其 SQLite 索引；这一状态存储层不使用 SQLite，原生 harness 可有自己的内部存储。
+每个日志通过进程锁限制为单个 worker 写入。研究会话重启时经公开 StateStore 接口重放日志，恢复环境和原生会话；不迁移其他格式的旧轨迹存储。
 异常退出后导出保留完整日志前缀，仅忽略末尾未写完的一行；完整行损坏则报错。
 存储格式计入实验的 Runtime 配置摘要，应创建新实验，不要续跑使用其他存储配置的旧实验。
 
@@ -127,7 +130,7 @@ portable ToolSpec 的精确授权。远端执行的隔离需要在远端部署�
 - Codex/Hermes 没有通用 Application MCP 桥时，通过安装好的 RSI MCP CLI、使用原生 shell 工具调用同一批 server。
   模型指令包含 list/call 用法；轨迹中的规范工具事件属于原生 shell，MCP 的返回内容包含在工具输出中。
 - 当前本地执行要求 macOS，每个会话使用 `sandbox-exec`。只开放会话状态目录和当前工作区写权限，不能读取相邻实验答案或其他候选目录。
-  worker 从已安装的 RSI 包中提取执行所需的三个模块文件到会话目录，并禁止读取完整 RSI 包，
+  worker 从已安装的 RSI 包中提取执行所需的模块文件到会话目录，并禁止读取完整 RSI 包，
   避免工具从评测模块读取隐藏答案；没有复制 Runtime 内核。
   `readable_paths` 只用于可信部署明确指定的 Harness 安装/依赖目录，不要指向整个数据目录。
 - Codex 使用外层 RSI 沙箱；其内层配置默认 `danger-full-access`，用于避免 macOS 拒绝嵌套 sandbox-exec。

@@ -13,7 +13,9 @@ import json
 import os
 import shutil
 import signal
+import subprocess
 import sys
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -209,8 +211,13 @@ class PackageSession:
         self.ref: TrajectoryRef | None = None
         self.lock = asyncio.Lock()
         self.closed = False
+        self.export_id = (
+            new_id("trajectory") if (directory / "session-binding.json").exists() else session_id
+        )
 
-    async def send(self, message: str) -> str:
+    async def send(
+        self, message: str, *, event_sink: Callable[[dict[str, Any]], Awaitable[None]] | None = None
+    ) -> str:
         async with self.lock:
             if self.closed:
                 raise RuntimeError("Session 已结束")
@@ -229,6 +236,8 @@ class PackageSession:
                         item = json.loads(line)
                         if item["type"] == "event":
                             self.events.append(item["event"])
+                            if event_sink is not None:
+                                await event_sink(item["event"])
                         elif item["type"] == "run":
                             self.run_ids.append(item["runId"])
                         elif item["type"] == "result":
@@ -297,7 +306,7 @@ class PackageSession:
                         if isinstance(value, (int, float)):
                             usage[key] = usage.get(key, 0) + value
             self.ref = await self.runtime.trajectories.save(
-                Trajectory(self.session_id, self.spec.agent_id, content, usage, now())
+                Trajectory(self.export_id, self.spec.agent_id, content, usage, now())
             )
         return self.ref
 
@@ -335,22 +344,31 @@ class PackageAgentRuntime:
         self.mcp_registry: dict[str, dict[str, Any]] = {}
         self.sessions: set[PackageSession] = set()
 
-    async def open(self, agent: AgentSpec, *, workspace_root: str | None = None) -> PackageSession:
+    async def open(
+        self,
+        agent: AgentSpec,
+        *,
+        workspace_root: str | None = None,
+        session_id: str | None = None,
+        research_tools: dict[str, Any] | None = None,
+        codex_config: dict[str, Any] | None = None,
+        context_window_tokens: int | None = None,
+    ) -> PackageSession:
         if agent.runtime not in {"areal-agent-runtime@v1", "deepseek-harness@v1"}:
             raise ValueError(f"Unknown RSI Runtime binding: {agent.runtime}")
         unknown = set(agent.tools) - {"bash@v1", "editor@v1"}
         if unknown:
             raise ValueError(f"Unmapped RSI tools: {sorted(unknown)}")
-        session_id = new_id("trajectory")
+        session_id = safe_name(session_id) if session_id else new_id("trajectory")
         parent = (
             self.root / safe_name(agent.agent_id) / "sessions"
             if self.agent_directories
             else self.root
         )
         directory = parent / session_id
-        directory.mkdir(parents=True)
+        directory.mkdir(parents=True, exist_ok=True)
         modules = directory / "worker-code/areal_rsi/modules"
-        modules.mkdir(parents=True)
+        modules.mkdir(parents=True, exist_ok=True)
         (modules.parent / "__init__.py").write_text("")
         (modules / "__init__.py").write_text("")
         for name in (
@@ -359,12 +377,18 @@ class PackageAgentRuntime:
             "runtime_mcp.schema.json",
             "runtime_storage.py",
             "runtime_storage.schema.json",
+            "runtime_tools.py",
+            "runtime_tools.schema.json",
         ):
             shutil.copyfile(Path(__file__).parent / name, modules / name)
         workspace = Path(workspace_root).resolve() if workspace_root else directory / "workspace"
         workspace.mkdir(parents=True, exist_ok=True)
         selection = copy.deepcopy(self.selection)
         readable = list(self.settings.readable_paths)
+        if selection["kind"] == "codex-cli" and not selection.get("config", {}).get("codexBin"):
+            from codex_cli_bin import bundled_codex_path  # type: ignore[import-untyped]
+
+            selection.setdefault("config", {})["codexBin"] = str(bundled_codex_path())
         if selection["kind"] == "dsh" and not selection.get("config", {}).get("dshBin"):
             from areal_rsi.modules.dsh import ensure_cli
 
@@ -381,11 +405,12 @@ class PackageAgentRuntime:
             ).resolve()
             readable.append(home)
             profile = directory / "dsh-home/profiles/agent-runtime"
-            profile.mkdir(parents=True)
+            profile.mkdir(parents=True, exist_ok=True)
             shared = home / "profiles/agent-runtime"
             for name in ("package.json", "cordis.yml", "cordis.patch.yml"):
                 shutil.copyfile(shared / name, profile / name)
-            (profile / "node_modules").symlink_to(shared / "node_modules")
+            if not (profile / "node_modules").is_symlink():
+                (profile / "node_modules").symlink_to(shared / "node_modules")
             selection.setdefault("config", {}).update(
                 dshHome=str(directory / "dsh-home"), profile="agent-runtime"
             )
@@ -406,6 +431,28 @@ class PackageAgentRuntime:
             "base_url": self.base_url,
             "max_tokens": self.max_tokens,
         }
+        if research_tools is not None:
+            config["research_tools"] = research_tools
+            config["allow_empty_final"] = True
+            bin_dir = directory / "bin"
+            bin_dir.mkdir(exist_ok=True)
+            helper = bin_dir / "rsi-tools"
+            module = str(modules / "runtime_tools.py")
+            manifest = str(directory / "research-tools.json")
+            helper.write_text(
+                f"#!{sys.executable} -I\n"
+                "import runpy, sys\n"
+                f"sys.argv = [{module!r}, {manifest!r}, *sys.argv[1:]]\n"
+                f"runpy.run_path({module!r}, run_name='__main__')\n"
+            )
+            helper.chmod(0o700)
+            tool_manifest = directory / "research-tools.json"
+            tool_manifest.write_text(json.dumps(research_tools))
+            tool_manifest.chmod(0o600)
+        if codex_config is not None:
+            config["codex_config"] = codex_config
+        if context_window_tokens is not None:
+            config["context_window_tokens"] = context_window_tokens
         config_path = directory / "request.json"
         config_path.write_text(json.dumps(config))
         config_path.chmod(0o600)
@@ -422,13 +469,19 @@ class PackageAgentRuntime:
                 raise ValueError(f"Missing configured remote credential variable: {auth_name}")
             env[auth_name] = os.environ[auth_name]
         for name in ("tmp", "home", "cache"):
-            (directory / name).mkdir()
+            (directory / name).mkdir(exist_ok=True)
         env["PATH"] = (
-            str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "/usr/bin:/bin")
+            str(directory / "bin")
+            + os.pathsep
+            + str(Path(sys.executable).parent)
+            + os.pathsep
+            + env.get("PATH", "/usr/bin:/bin")
         )
         env.update(
             HOME=str(directory / "home"),
             TMPDIR=str(directory / "tmp"),
+            # zsh uses TMPPREFIX, not TMPDIR, for heredoc temporary files.
+            TMPPREFIX=str(directory / "tmp/zsh"),
             XDG_CACHE_HOME=str(directory / "cache"),
             RSI_RUNTIME_KEY=self.api_key,
             DSH_TELEMETRY_DISABLED="1",
@@ -440,6 +493,28 @@ class PackageAgentRuntime:
             tuple(readable),
             (Path(interpreter),) if interpreter else (),
         )
+        if research_tools is not None:
+            # Fail before spending model calls if the agent's actual shell cannot
+            # write heredocs/tempfiles or resolve its scoped task-tool command.
+            probe = await asyncio.to_thread(
+                subprocess.run,
+                [
+                    *command[:3],
+                    "/bin/zsh",
+                    "-lec",
+                    "python - <<'PY'\nimport tempfile\n"
+                    "with tempfile.TemporaryFile() as f:\n    f.write(b'ok')\nPY\n"
+                    "rsi-tools list >/dev/null",
+                ],
+                cwd=workspace,
+                env=env,
+                capture_output=True,
+                timeout=10,
+            )
+            if probe.returncode:
+                raise RuntimeError(
+                    "Agent preflight failed: shell, temporary directory or rsi-tools"
+                )
         with (directory / "worker.log").open("wb") as log:
             process = await asyncio.create_subprocess_exec(
                 *command,

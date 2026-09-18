@@ -6,6 +6,7 @@ import argparse
 import base64
 import hashlib
 import json
+import math
 import shlex
 import subprocess
 import time
@@ -84,7 +85,21 @@ def diagnose(
     candidate: str = "",
 ) -> None:
     script_source = input_source(workspace, script)
-    compile(base64.b64decode(script_source), "_rsi_diagnostic.py", "exec")
+    script_bytes = base64.b64decode(script_source)
+    compile(script_bytes, "_rsi_diagnostic.py", "exec")
+    if manifest.get("diagnostic_precision") == "strict-fp32-v1":
+        # Run the unmodified script with the formal reference precision. This
+        # wrapper is only for diagnostics, never for submitted candidates.
+        script_source = base64.b64encode(
+            (
+                "import torch\n"
+                "torch.backends.cuda.matmul.allow_tf32 = False\n"
+                "torch.backends.cudnn.allow_tf32 = False\n"
+                "print('RSI diagnostic: FP32 reference; matmul TF32=False; "
+                "cuDNN TF32=False', flush=True)\n"
+                f"exec(compile({script_bytes!r}, '_rsi_diagnostic.py', 'exec'))\n"
+            ).encode()
+        ).decode()
     source = input_source(workspace, candidate) if candidate else ""
     submit_and_wait(
         manifest, output, task, "submit_diagnostic", source=source, script=script_source
@@ -107,9 +122,17 @@ def submit_and_wait(
                 )
             else:
                 job = remote(manifest, operation, task=task, key=output.name, **sources)
+            if manifest.get("mode") == "passk":
+                job = {
+                    k: v
+                    for k, v in job.items()
+                    if "budget_used" not in k and k != "task_budget_remaining"
+                }
             write_json(record_path, job)
             budget_message = (
-                f"本题已提交 {job.get('task_budget_used', job['budget_used'])} 次，次数不限"
+                "GPU 提交次数不限"
+                if manifest.get("mode") == "passk"
+                else f"本题已提交 {job.get('task_budget_used', job['budget_used'])} 次，次数不限"
                 if budget is None
                 else f"本题已用 {job['task_budget_used']}/{budget} 次 GPU 提交，"
                 f"剩余 {job['task_budget_remaining']} 次"
@@ -163,6 +186,23 @@ def submit_and_wait(
         time.sleep(5)
 
 
+def attempt_status(status: dict[str, Any], run_root: Path, agent_id: str) -> dict[str, Any]:
+    """An identical peer artifact must not supply this attempt's verification result."""
+    jobs = json.loads((run_root / "coordination/jobs.json").read_text())
+    own = set()
+    for job_id, info in jobs.items():
+        receipt = run_root / "execution-outputs" / job_id / "remote-job.json"
+        if info["agent_id"] == agent_id and receipt.exists():
+            own.add(json.loads(receipt.read_text())["id"])
+    return {
+        task: {
+            "jobs": [job for job in value["jobs"] if job["id"] in own],
+            "used": sum(job["id"] in own for job in value["jobs"]),
+        }
+        for task, value in status.items()
+    }
+
+
 def score_bundle(
     manifest: dict[str, Any], workspace: Path, status: dict[str, Any], phase: str
 ) -> tuple[float, dict[str, float], dict[str, Any]]:
@@ -209,6 +249,17 @@ def score_bundle(
         metrics[task + "_speedup"] = speedup
         metrics[task + "_fast1"] = float(speedup > 1.0)
         metrics[task + "_submissions"] = status[task]["used"]
+        if chosen:
+            evaluation = chosen.get("evaluation") or {}
+            timings = {
+                "runtime_ms": evaluation.get("runtime_ms"),
+                "ref_ms": evaluation.get("ref_ms"),
+                "runtime_std_ms": (evaluation.get("runtime_stats") or {}).get("std"),
+                "ref_std_ms": (evaluation.get("ref_stats") or {}).get("std"),
+            }
+            for name, value in timings.items():
+                if isinstance(value, (int, float)) and math.isfinite(value) and value >= 0:
+                    metrics[task + "_" + name] = float(value)
         evidence[task] = {"sha256": digest, "job": chosen, "matching_evaluations": len(matches)}
     score = sum(metrics[task + "_fast1"] for task in manifest["tasks"]) / len(manifest["tasks"])
     metrics["fast_1"] = score
@@ -314,12 +365,14 @@ def main() -> None:
             )
         )
     else:
-        score, metrics, evidence = score_bundle(manifest, args.workspace, status, args.phase)
         snapshot = json.loads((args.workspace.parent / "snapshot.json").read_text())
         run_root = args.workspace.parents[2]
         execution = json.loads((run_root / "jobs" / args.output.name / "job.json").read_text())
         metadata = execution["spec"]["metadata"]
         assert snapshot["digest"] == metadata["candidate_digest"]
+        if manifest.get("mode") == "passk" and args.phase == "search":
+            status = attempt_status(status, run_root, metadata["agent_id"])
+        score, metrics, evidence = score_bundle(manifest, args.workspace, status, args.phase)
         result = {
             "status": "completed",
             "simulated": False,

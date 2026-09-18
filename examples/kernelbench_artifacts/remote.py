@@ -234,7 +234,12 @@ def handle(manifest: dict[str, Any], request_data: dict[str, Any]) -> Any:
                             candidate.unlink(missing_ok=True)
                         body = {
                             "kind": "run",
-                            "argv": [sys.executable, "-u", "_rsi_diagnostic.py"],
+                            # Control may run on a login host; execution uses
+                            # the configured interpreter inside the GPU service.
+                            "argv": [
+                                manifest.get("gpu_python", "/opt/.venv/bin/python"),
+                                "-u", "_rsi_diagnostic.py",
+                            ],
                             "gpus": 1,
                             "timeout_s": 300,
                             "idempotency_key": key,

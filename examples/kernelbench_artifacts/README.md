@@ -1,5 +1,7 @@
 # KernelBench 八题 demo
 
+只评测已有 kernel 代码，见 [代码评测最短指南](EVALUATE.md)。
+
 RSI 自主组织同时最多 5 名 Research Agent，直接优化八题的 kernel，调用 et15 上已部署的 GPUQ 评测；不需要 Task Agent。等待中的研究员也占名额，停止后可在研究中途创建新方向，累计创建数不限。默认 Astra / xhigh，每题 **10 次探索 + 1 次独立最终复测**，诊断和失败也计入额度，不设置总时间上限。
 
 新研究默认允许联网调研通用方法、文档和论文，禁止读取本题现成解法。RSI 先调研再规划，受阻时结合实验结果补充调研。若要沿用 goal baseline 的不联网条件，在启动命令中加 `--no-web-research`；恢复已有研究始终沿用原设置。
@@ -7,6 +9,8 @@ RSI 自主组织同时最多 5 名 Research Agent，直接优化八题的 kernel
 ## 快速启动
 
 先按[仓库启动指南](../../README.md#准备)安装依赖并填写 `.env`，确保 `ssh et15` 可用。[et15.json](et15.json) 提供当前集群入口；如果 Slurm 作业、队列地址或账号路径变化，复制一份修改并传入 `--environment /path/to/et15.json`。
+
+`continue_script` 和 `python` 配置远端控制入口；GPU 诊断使用独立的 `gpu_python`（默认 `/opt/.venv/bin/python`），该路径须在 GPU 容器内存在。当前 et15 控制入口经登录节点访问双节点 GPUQ（`http://33.180.160.37:38472`），两台机器共 16 张卡；提交、查询及 GPU 执行均不为每次请求创建 Slurm step。统一队列由独立 CPU 作业维护，GPU 仍使用原来的两个作业；单个多卡任务最多使用同一节点的 8 张卡。已有研究保留创建时的队列配置。
 
 在仓库根目录执行：
 
@@ -26,11 +30,11 @@ uv run --env-file .env --locked python run.py --type demo
 uv run --env-file .env --locked python run.py --type demo --resume <run_id>
 ```
 
-研究结束后自动选取每题最快的正式正确源码，以 seed 137 复测；最终反馈不再用于优化。记录位于 `<数据目录>/runs/<run_id>/`，最终源码在 `finalization/output/candidate/<题号>/model_new.py`，分题成绩见工作台最终验证及 `verifications/`。准备配置位于 `setup/research.json`。
+研究结束后自动选取每题未因具体反例撤回的最快正式正确源码，以 seed 137 复测；最终反馈不再用于优化。收尾适配器按通用选优清单中的源码摘要排除已撤回版本，保留其历史成绩。记录位于 `<数据目录>/runs/<run_id>/`，最终源码在 `finalization/output/candidate/<题号>/model_new.py`，分题成绩见工作台最终验证及 `verifications/`。准备配置位于 `setup/research.json`。
 
 ## 通过 Interaction 做单题研究
 
-在工作台新建研究，配置模型地址、密钥、`gpt-6-astra` 和 `xhigh`。然后告诉 Interaction：
+在工作台新建研究，配置模型地址、密钥、`gpt-5.6-luna` 和 `xhigh`。然后告诉 Interaction：
 
 > 本次只优化 L3P10，目标是正确前提下尽可能高的加速比，没有固定达标阈值。最多 3 名 Research Agent，全题共享 10 次探索 + 1 次最终复测，诊断和失败计数；总时间上限 1 小时，越快越好，不必用满。沿用 KernelBench example 的 et15 环境和 goal baseline 评分规则，允许联网调研通用方法，不查本题现成解法。请用当前研究 ID 运行下面的准备脚本，导入输出的配置，再总结需求给我确认。
 

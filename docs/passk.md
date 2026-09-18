@@ -4,6 +4,9 @@
 省略 mode 时保持原有 `collaborative` 模式。后端仍可选 `standard` 或 `codex`，都使用
 AReaL Agent Runtime。这个模式只实现独立尝试，不包含信息共享或 evidence 审核。
 
+工作台支持在创建研究或启动前选择协作方式，并冻结模块版本；通过“用此配置新建研究”
+复用选择。附加模块目前为空，后续以独立模块接入。配置和扩展方式见[协作与消融](collaboration.md)。
+
 ## 行为
 
 RSI Agent 调用 start_researchers，按同一份完整任务和初始文件启动固定的 k 个 researcher。
@@ -51,6 +54,7 @@ submit_report 记录进展并通知 RSI，不结束当前研究回合。研究�
 ```json
 {
   "mode": "passk",
+  "collaboration_modules": [],
   "backend": "codex",
   "model": "gpt-5.6-luna",
   "reasoning_effort": "xhigh",

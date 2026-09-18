@@ -42,6 +42,10 @@ const state = {
   modelDrafts: new Map(),
   modelFormRun: null,
   modelSavingRun: null,
+  collaborationCatalog: {modes: [], modules: []},
+  defaultCollaboration: {mode: "collaborative", modules: []},
+  collaborationDrafts: new Map(),
+  collaborationSavingRun: null,
 };
 const emptyChat = $("messages").firstElementChild.cloneNode(true);
 const mobileRunPicker = $("mobile-run-picker");
@@ -80,6 +84,96 @@ const backendOptions = [{value: "standard", text: "standard"}, {value: "codex", 
 const backendDropdown = new WorkbenchDropdown($("agent-backend"), {
   label: "Agent 后端", onChange: (value) => { modelDraft().backend = value; renderModelSettings(); },
 });
+
+const collaborationDropdown = new WorkbenchDropdown($("collaboration-mode"), {
+  label: "基础流程", onChange: (mode) => {
+    state.collaborationDrafts.set(state.runId, {mode, modules: []});
+    renderCollaboration();
+  },
+});
+const createCollaborationDropdown = new WorkbenchDropdown($("create-collaboration-mode"), {
+  label: "协作方式", onChange: (mode) => {
+    state.createCollaboration = {mode, modules: []};
+    renderCreateCollaboration();
+  },
+});
+function collaborationSelection(value) {
+  return {mode: value.mode, modules: [...(value.modules || [])].sort()};
+}
+function collaborationChanged() {
+  const draft = state.collaborationDrafts.get(state.runId), saved = state.run?.collaboration;
+  return !!draft && !!saved && JSON.stringify(collaborationSelection(draft)) !== JSON.stringify(collaborationSelection(saved));
+}
+function renderCollaborationFields(prefix, dropdown, selection, disabled, onChange) {
+  const catalog = state.collaborationCatalog;
+  dropdown.update(catalog.modes.map((mode) => ({value: mode.id, text: mode.label})), selection.mode, disabled);
+  $(`${prefix}description`).textContent = catalog.modes.find((mode) => mode.id === selection.mode)?.description || "";
+  const container = $(`${prefix}modules`);
+  container.replaceChildren();
+  const modules = catalog.modules.filter((module) => module.modes.includes(selection.mode));
+  if (!modules.length) container.append(element("p", "muted", "当前没有可选的附加模块。后续模块接入后可在这里组合。"));
+  for (const module of modules) {
+    const label = element("label", "collaboration-module");
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.value = module.id;
+    input.checked = selection.modules.includes(module.id);
+    input.disabled = disabled;
+    input.addEventListener("change", () => {
+      const selected = new Set(selection.modules);
+      if (input.checked) selected.add(module.id); else selected.delete(module.id);
+      onChange({mode: selection.mode, modules: [...selected].sort()});
+    });
+    const description = element("span", "", `${module.label} · v${module.version}`);
+    description.append(element("small", "muted", module.description));
+    label.append(input, description);
+    container.append(label);
+  }
+}
+function renderCreateCollaboration() {
+  renderCollaborationFields("create-collaboration-", createCollaborationDropdown, state.createCollaboration, state.creating,
+    (selection) => { state.createCollaboration = selection; renderCreateCollaboration(); });
+}
+function renderCollaboration() {
+  const saved = state.run?.collaboration;
+  $("collaboration-settings").hidden = !saved?.mode;
+  if (!saved?.mode) return;
+  if (!saved.editable) state.collaborationDrafts.delete(state.runId);
+  const draft = state.collaborationDrafts.get(state.runId) || collaborationSelection(saved);
+  const disabled = !saved.editable || !!state.collaborationSavingRun || state.busy;
+  $("collaboration-summary").textContent = [saved.label || saved.mode, ...(saved.modules || []), saved.editable ? "启动前可修改" : "已锁定"].join(" · ");
+  renderCollaborationFields("collaboration-", collaborationDropdown, draft, disabled, (selection) => {
+    state.collaborationDrafts.set(state.runId, selection); renderCollaboration();
+  });
+  if (!saved.editable) {
+    const recorded = new Map((saved.manifest?.modules || []).map((module) => [module.id, module.version]));
+    $("collaboration-modules").replaceChildren(...(saved.modules?.length ? saved.modules.map((id) =>
+      element("p", "muted", `${id} · ${recorded.has(id) ? `v${recorded.get(id)}` : "历史版本未记录"}`))
+      : [element("p", "muted", "未启用附加模块。")]) );
+  }
+  $("save-collaboration").hidden = !saved.editable;
+  $("save-collaboration").disabled = disabled || !collaborationChanged();
+  $("save-collaboration").textContent = state.collaborationSavingRun === state.runId ? "保存中…" : "保存协作配置";
+  $("collaboration-status").textContent = saved.editable
+    ? (collaborationChanged() ? "有未保存的修改，请保存后开始研究。" : "启动时冻结配置和模块版本；启动后不能修改。")
+    : saved.manifest ? `配置指纹 ${saved.manifest.fingerprint.slice(0, 12)} · v${saved.manifest.mode_version}`
+    : "历史研究：按原 mode 展示，未补写版本记录。";
+}
+$("collaboration-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!state.run?.collaboration?.editable || state.collaborationSavingRun || !collaborationChanged()) return;
+  const runId = state.runId, selection = collaborationSelection(state.collaborationDrafts.get(runId));
+  state.collaborationSavingRun = runId;
+  renderCollaboration();
+  notice();
+  try {
+    await api(`/api/runs/${encodeURIComponent(runId)}/collaboration`, selection);
+    state.collaborationDrafts.delete(runId);
+    await refresh(true);
+  } catch (error) { notice(error.message); }
+  finally { state.collaborationSavingRun = null; renderCollaboration(); }
+});
+$("reuse-collaboration").addEventListener("click", () => openCreate("", state.run.collaboration));
 const effortLabels = {
   none: "无推理 · none", low: "低 · low", medium: "中 · medium",
   high: "高 · high", xhigh: "很高 · xhigh", max: "最高 · max",
@@ -535,6 +629,7 @@ function render() {
   const run = state.run;
   if (!run) return;
   renderModelSettings();
+  renderCollaboration();
   $("welcome").hidden = true;
   $("workspace").hidden = false;
   $("objective").textContent =
@@ -1384,6 +1479,10 @@ function switchTab(tab) {
 
 async function control(action, params = {}) {
   if (!state.runId || state.busy) return;
+  if (action === "start" && (collaborationChanged() || state.collaborationSavingRun)) {
+    notice("请先保存协作配置。");
+    return;
+  }
   if (action === "start" && (modelSettingsChanged() || state.modelSavingRun)) {
     notice("请先保存模型设置。");
     return;
@@ -1470,7 +1569,7 @@ $("delete-form").addEventListener("submit", async (event) => {
   }
 });
 
-async function createConversation(message = "", modelSettings) {
+async function createConversation(message = "", modelSettings, collaboration) {
   if (state.creating) return;
   state.creating = true;
   $("new-run").disabled = $("mobile-new").disabled = $("welcome-send").disabled = true;
@@ -1478,7 +1577,7 @@ async function createConversation(message = "", modelSettings) {
   try {
     $("create-submit").disabled = true;
     $("create-submit").textContent = "正在创建…";
-    const result = await api("/api/runs", { message, message_id: crypto.randomUUID(), ...(modelSettings ? {model_settings: modelSettings} : {}) });
+    const result = await api("/api/runs", { message, message_id: crypto.randomUUID(), ...(modelSettings ? {model_settings: modelSettings} : {}), ...(collaboration ? {collaboration} : {}) });
     $("create-dialog").close();
     $("create-api-key").value = "";
     if (!result.run_id) throw new Error("未能读取研究记录，请刷新列表。");
@@ -1515,11 +1614,11 @@ function updateCreateModels() {
   createPreset.update(state.models.map((item) => ({value: item.id, text: item.id})), model);
   createEffort.update(efforts.map((value) => ({value, text: effortLabels[value]})), state.createEffort);
 }
-function openCreate(message = "") {
+function openCreate(message = "", collaboration = state.defaultCollaboration) {
   if (state.creating) return;
   const defaults = state.defaultModelSettings;
   $("create-base-url").value = defaults.base_url || "https://4ipic.com";
-  $("create-model").value = defaults.model || "gpt-6-astra";
+  $("create-model").value = defaults.model || "gpt-5.6-luna";
   $("create-api-key").value = "";
   $("create-api-key").placeholder = defaults.has_credentials ? "留空使用默认密钥（已配置）" : "请输入 API Key";
   $("create-message").value = message;
@@ -1527,6 +1626,8 @@ function openCreate(message = "") {
   state.createEffort = defaults.reasoning_effort || "xhigh";
   state.createBackend = defaults.backend || "standard";
   createBackend.update(backendOptions, state.createBackend);
+  state.createCollaboration = collaborationSelection(collaboration);
+  renderCreateCollaboration();
   updateCreateModels();
   $("create-dialog").showModal();
 }
@@ -1538,7 +1639,7 @@ $("create-form").addEventListener("submit", (event) => {
   createConversation($("create-message").value.trim(), {
     base_url: $("create-base-url").value.trim(), api_key: $("create-api-key").value.trim(),
     model: $("create-model").value.trim(), reasoning_effort: state.createEffort, backend: state.createBackend,
-  });
+  }, collaborationSelection(state.createCollaboration));
 });
 $("new-run").addEventListener("click", () => openCreate());
 $("mobile-new").addEventListener("click", () => openCreate());
@@ -1706,6 +1807,8 @@ async function bootstrap() {
   state.token = config.csrf_token;
   state.models = config.models || [];
   state.defaultModelSettings = config.default_model_settings || {};
+  state.collaborationCatalog = config.collaboration_catalog || {modes: [], modules: []};
+  state.defaultCollaboration = config.default_collaboration || {mode: "collaborative", modules: []};
 }
 
 async function boot() {

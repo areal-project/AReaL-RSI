@@ -10,6 +10,7 @@ from typing import Any
 
 from areal_rsi.api.research import TaskBrief
 from areal_rsi.base.storage import decode, encode
+from areal_rsi.coordination.collaboration import selected_modules
 from areal_rsi.execution import ApprovedCommand
 from areal_rsi.modules.responses import ResponsesConfig
 
@@ -54,6 +55,7 @@ def validate_model_settings(value: dict[str, Any]) -> dict[str, str]:
 class ResearchConfig:
     brief: TaskBrief
     mode: str = "collaborative"
+    collaboration_modules: tuple[str, ...] = ()
     seed_dir: str | None = None
     backend: str = "standard"
     research_prompt_variant: str = "simple"
@@ -78,8 +80,7 @@ class ResearchConfig:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if self.mode not in {"collaborative", "passk"}:
-            raise ValueError("Research mode must be collaborative or passk")
+        self.collaboration_modules = selected_modules(self.mode, self.collaboration_modules)
         if self.backend not in {"standard", "codex"}:
             raise ValueError("Agent 后端支持 standard 或 codex")
         if self.research_prompt_variant not in {"simple", "detailed"}:

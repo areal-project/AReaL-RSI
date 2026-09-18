@@ -108,6 +108,19 @@
             </div>
           </form>
         </details>
+        <details class="card model-settings" id="collaboration-settings" hidden>
+          <summary><span>协作方式</span><span id="collaboration-summary" class="muted"></span></summary>
+          <form id="collaboration-form">
+            <label for="collaboration-mode-trigger">基础流程</label><div id="collaboration-mode"></div>
+            <p id="collaboration-description" class="muted"></p>
+            <div id="collaboration-modules" class="collaboration-modules"></div>
+            <div class="model-settings-footer">
+              <p id="collaboration-status" class="muted" role="status"></p>
+              <button class="secondary" id="save-collaboration" type="submit">保存协作配置</button>
+              <button class="quiet" id="reuse-collaboration" type="button">用此配置新建研究</button>
+            </div>
+          </form>
+        </details>
         <section class="metrics" id="metrics" aria-label="研究概览">
           <div class="metric" id="score-metric">
             <span>最佳验证结果</span><strong id="best-score">—</strong
@@ -299,6 +312,9 @@
           <div><label for="create-model">模型名称</label><input id="create-model" required autocomplete="off" spellcheck="false" /><div id="create-model-preset"></div></div>
           <div><label for="create-effort-trigger">推理强度</label><div id="create-effort"></div></div>
         </div>
+        <label for="create-collaboration-mode-trigger">协作方式</label><div id="create-collaboration-mode"></div>
+        <p id="create-collaboration-description" class="muted"></p>
+        <div id="create-collaboration-modules" class="collaboration-modules"></div>
         <label class="create-message-label" for="create-message">研究想法 <span class="muted">（可稍后聊）</span></label>
         <textarea id="create-message" rows="3" maxlength="12000" placeholder="描述想解决的问题…"></textarea>
         <p id="create-error" class="form-error" role="alert" hidden></p>

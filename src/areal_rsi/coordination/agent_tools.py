@@ -30,8 +30,12 @@ class AgentTools:
         credential_names: tuple[str, ...],
         instructions: str | None = None,
         backend: str = "standard",
+        supervisor_only: bool | None = None,
     ):
         self.actions, self.backend = actions, backend
+        self.supervisor_only = (
+            actions.c.state.get("mode") == "passk" if supervisor_only is None else supervisor_only
+        )
         self.configure(instructions)
 
     def configure(self, instructions: str | None) -> None:
@@ -40,7 +44,7 @@ class AgentTools:
         )
 
     def instructions(self, agent_id: str) -> str:
-        if agent_id == "rsi" and self.actions.c.state.get("mode") == "passk":
+        if agent_id == "rsi" and self.supervisor_only:
             return (
                 "先用 start_researchers 启动团队；用 get_state 查看进展，"
                 "用 continue_researcher 提醒已停下来的研究员继续。\n"

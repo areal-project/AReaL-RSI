@@ -270,6 +270,11 @@ class ResearchIntake:
             "target_key_configured": bool(os.environ.get("RSI_TARGET_API_KEY")),
             "research_model": config.model_settings()["model"],
             "research_reasoning_effort": config.model_settings()["reasoning_effort"],
+            "collaboration": {
+                "mode": config.mode,
+                "modules": list(config.collaboration_modules),
+                "operator_selected": True,
+            },
         }
 
     def import_config(self, config: ResearchConfig, description: str) -> None:
@@ -305,6 +310,10 @@ class ResearchIntake:
         config.credential_file = current.credential_file
         config.model_settings_pinned = current.model_settings_pinned
         config.model_settings_revision = current.model_settings_revision
+        # Collaboration is an operator-selected ablation, not an environment
+        # adapter's choice. Importing tools must preserve that selection.
+        config.mode = current.mode
+        config.collaboration_modules = current.collaboration_modules
         config.brief.limits.gpu_ids = incoming.limits.gpu_ids
         config.brief.limits.allowed_paths = (
             incoming.limits.allowed_paths if allowed == ("*",) else allowed
@@ -314,6 +323,7 @@ class ResearchIntake:
             config.brief.verification = incoming.verification
         elif incoming.verification:
             config.brief.verification.identity = incoming.verification.identity
+        config.__post_init__()
         self.save(config, description)
         run = self.c.store.run()
         ref = self.c.store.put(

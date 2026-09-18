@@ -62,6 +62,19 @@ def _refs(value: Any) -> list[Json]:
     return [_fields(item, "uri") for item in value] if isinstance(value, list) else []
 
 
+def _collaboration(value: Any) -> Json:
+    result = _fields(value, "mode modules label editable")
+    frozen = value.get("manifest") if isinstance(value, dict) else None
+    result["manifest"] = None
+    if isinstance(frozen, dict):
+        result["manifest"] = {
+            **_fields(frozen, "schema_version mode mode_version fingerprint"),
+            "modules": [_fields(m, "id version") for m in frozen.get("modules", [])],
+            "prompt_sha256": _fields(frozen.get("prompt_sha256"), "rsi research"),
+        }
+    return result
+
+
 def _score(value: Any) -> Json | None:
     if not isinstance(value, dict):
         return None
@@ -133,6 +146,7 @@ def public_detail(value: Json) -> Json:
         value.get("model_settings"),
         "base_url model reasoning_effort backend editable has_credentials",
     )
+    result["collaboration"] = _collaboration(value.get("collaboration"))
     result["pending_agents"] = [a for a in value.get("pending_agents", []) if isinstance(a, str)]
     result["execution_blocker"] = _fields(value.get("execution_blocker"), "job_id error created_at")
     result["agent_activity"] = {
@@ -367,6 +381,21 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                             raw.get("default_model_settings"),
                             "base_url model reasoning_effort backend has_credentials",
                         ),
+                        "default_collaboration": _fields(
+                            raw.get("default_collaboration"), "mode modules"
+                        ),
+                        "collaboration_catalog": {
+                            "modes": [
+                                _fields(item, "id label description version")
+                                for item in raw.get("collaboration_catalog", {}).get("modes", [])
+                            ],
+                            "modules": [
+                                _fields(
+                                    item, "id label description version modes requires conflicts"
+                                )
+                                for item in raw.get("collaboration_catalog", {}).get("modules", [])
+                            ],
+                        },
                     },
                 )
                 return
@@ -440,10 +469,19 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             parts, _ = self._path()
             if parts == ["api", "runs"]:
                 action = "create"
-                if set(params) - {"message", "message_id", "model_settings", "config", "run_id"}:
+                if set(params) - {
+                    "message",
+                    "message_id",
+                    "model_settings",
+                    "collaboration",
+                    "config",
+                    "run_id",
+                }:
                     raise ValueError("请发送研究需求，或提供完整的 config")
                 params = {
-                    **_fields(params, "message message_id model_settings config run_id"),
+                    **_fields(
+                        params, "message message_id model_settings collaboration config run_id"
+                    ),
                     "conversation": "config" not in params,
                 }
             elif (
@@ -458,7 +496,8 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                     "stop": "reason",
                     "delete": "",
                     "retry": "agent_id",
-                    "model-settings": "base_url model reasoning_effort api_key",
+                    "model-settings": "base_url model reasoning_effort backend api_key",
+                    "collaboration": "mode modules",
                 }
                 if action not in allowed:
                     self._json(404, {"error": "操作不存在"})

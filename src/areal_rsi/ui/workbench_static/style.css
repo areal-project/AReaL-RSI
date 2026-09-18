@@ -1524,3 +1524,8 @@ button.primary.destructive { background: var(--red); }
 .chat-feedback small { display: block; margin-top: 6px; }
 .chat-feedback small:empty { display: none; }
 .delivery-status { display: block; margin-top: 8px; color: var(--muted); }
+.collaboration-modules { margin: 12px 0; }
+.collaboration-module { display: flex; align-items: start; gap: 10px; margin: 10px 0; }
+.collaboration-module input { width: auto; margin-top: 4px; }
+.collaboration-module small { display: block; margin-top: 4px; }
+#collaboration-form { padding: 16px; }

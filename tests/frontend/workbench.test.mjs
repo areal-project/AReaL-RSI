@@ -6,6 +6,10 @@ import {Window} from 'happy-dom';
 const assets = new URL('../../src/areal_rsi/ui/workbench_static/', import.meta.url);
 const source = (name) => readFileSync(new URL(name, assets), 'utf8');
 const defaults = {base_url: 'https://4ipic.com', model: 'gpt-6-astra', reasoning_effort: 'xhigh', has_credentials: true};
+const collaborationCatalog = {modes: [
+  {id: 'passk', label: '纯 pass@k', version: '1', description: '独立探索，RSI 只监督继续。'},
+  {id: 'collaborative', label: '旧版协作流程', version: '1', description: '原有完整协作流程。'},
+], modules: []};
 const settle = async () => { for (let i = 0; i < 6; i++) await new Promise((resolve) => setImmediate(resolve)); };
 const response = (value, ok = true) => ({ok, status: ok ? 200 : 503, json: async () => structuredClone(value)});
 function run(id, status = 'planned') {
@@ -13,6 +17,7 @@ function run(id, status = 'planned') {
     run_id: id, objective: `研究 ${id}`, status, nodes: [], jobs: [], edges: [], messages: [],
     brief: {objective: id, limits: {}}, budget: {}, agents: [{agent_id: 'interaction', state: 'waiting'}],
     model_settings: {...defaults, editable: status === 'planned'}, pending_agents: [], worker_alive: true,
+    collaboration: {mode: 'passk', modules: [], label: '纯 pass@k', editable: status === 'planned', manifest: null},
     events: [], event_cursor: 120, waiting_for_user: [],
   };
 }
@@ -26,7 +31,7 @@ async function setup(t, records, handler, savedStorage = {}) {
     calls.push({path, options, body: options.body ? JSON.parse(options.body) : null});
     const custom = handler?.(path, options, calls);
     if (custom) return custom;
-    if (path === '/api/bootstrap') return response({csrf_token: 'test', default_model_settings: defaults, models: [{id: 'gpt-6-astra', efforts: ['high', 'xhigh']}, {id: 'gpt-5.6-sol', efforts: ['medium', 'high', 'xhigh']}]});
+    if (path === '/api/bootstrap') return response({csrf_token: 'test', default_model_settings: defaults, collaboration_catalog: collaborationCatalog, default_collaboration: {mode: 'passk', modules: []}, models: [{id: 'gpt-6-astra', efforts: ['high', 'xhigh']}, {id: 'gpt-5.6-sol', efforts: ['medium', 'high', 'xhigh']}]});
     if (path === '/api/runs') return response({runs: Object.values(records)});
     const id = path.split('/')[3]?.split('?')[0];
     assert.ok(records[id], `Unexpected API request ${path}`);
@@ -89,6 +94,59 @@ test('new research stays accessible alongside saved groups and empty groups disa
   const empty = await setup(t, {});
   assert.equal(empty.$('run-list').querySelectorAll('.run-group').length, 0);
   assert.match(empty.$('run-list').textContent, /还没有研究记录/);
+});
+
+test('collaboration selection saves before start, stays per run, and locks historical runs', async (t) => {
+  const records = {a: run('a'), b: run('b', 'stopped')};
+  const ui = await setup(t, records, (path, options) => {
+    if (path === '/api/runs/a/collaboration' && options.method === 'POST') {
+      const selection = JSON.parse(options.body);
+      records.a.collaboration = {...selection, label: '旧版协作流程', editable: true, manifest: null};
+      return Promise.resolve(response(records.a));
+    }
+  });
+  assert.equal(ui.$('collaboration-settings').hidden, false);
+  ui.$('collaboration-mode-trigger').click();
+  ui.$('collaboration-mode-options').querySelectorAll('[role="option"]')[1].click();
+  ui.$('start').click(); await settle();
+  assert.ok(!ui.calls.some((call) => call.path.endsWith('/start')));
+  assert.match(ui.$('notice').textContent, /保存协作配置/);
+  ui.switchRun('b'); await settle();
+  assert.equal(ui.$('collaboration-mode-trigger').disabled, true);
+  assert.match(ui.$('collaboration-summary').textContent, /已锁定/);
+  assert.match(ui.$('collaboration-status').textContent, /历史研究/);
+  ui.switchRun('a'); await settle();
+  assert.match(ui.$('collaboration-mode-trigger').textContent, /旧版协作/);
+  ui.submit('collaboration-form'); await settle();
+  assert.deepEqual(ui.calls.find((call) => call.path.endsWith('/collaboration')).body, {mode: 'collaborative', modules: []});
+  assert.equal(ui.$('save-collaboration').disabled, true);
+  ui.$('reuse-collaboration').click();
+  assert.match(ui.$('create-collaboration-mode-trigger').textContent, /旧版协作/);
+});
+
+test('creation sends the selected recipe and registered modules appear without frontend edits', async (t) => {
+  let submitted;
+  const records = {a: run('a')};
+  const module = {id: 'test_evidence', label: '测试模块', version: '1', description: '仅测试注册入口', modes: ['passk'], requires: [], conflicts: []};
+  const ui = await setup(t, records, (path, options) => {
+    if (path === '/api/bootstrap') return Promise.resolve(response({
+      csrf_token: 'test', default_model_settings: defaults, models: [],
+      collaboration_catalog: {...collaborationCatalog, modules: [module]},
+      default_collaboration: {mode: 'passk', modules: []},
+    }));
+    if (path === '/api/runs' && options.method === 'POST') {
+      submitted = JSON.parse(options.body);
+      records.new = run('new');
+      return Promise.resolve(response(records.new));
+    }
+  });
+  ui.$('new-run').click();
+  assert.match(ui.$('create-collaboration-mode-trigger').textContent, /pass@k/);
+  assert.equal(ui.$('create-collaboration-mode-options').closest('dialog'), ui.$('create-dialog'));
+  const checkbox = ui.$('create-collaboration-modules').querySelector('input');
+  checkbox.click();
+  ui.submit('create-form'); await settle();
+  assert.deepEqual(submitted.collaboration, {mode: 'passk', modules: ['test_evidence']});
 });
 
 test('switching runs uses cached views and rejects a late response from the previous run', async (t) => {

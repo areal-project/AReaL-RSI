@@ -14,7 +14,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from areal_rsi.agents.research.prompt import PROMPT_VARIANTS as RESEARCH_PROMPTS
 from areal_rsi.api.base import ExperimentRun
 from areal_rsi.api.research import (
     CandidateSnapshot,
@@ -28,6 +27,7 @@ from areal_rsi.base.runs import FileRunStore
 from areal_rsi.base.storage import decode, encode, new_id, now, write_json
 from areal_rsi.coordination.actions import ResearchActions
 from areal_rsi.coordination.agent_tools import AgentTools
+from areal_rsi.coordination.collaboration import MODES, build_plan, catalog, manifest
 from areal_rsi.coordination.config import (
     MODEL_EFFORTS,
     MODEL_FIELDS,
@@ -143,6 +143,76 @@ class ResearchApp:
             "has_credentials": bool(config.api_key()),
             "editable": c.state["status"] == "planned" and not c.state.get("started_at"),
         }
+
+    def collaboration_settings(self, c: Coordinator) -> dict[str, Any]:
+        config = self.config(c)
+        path = c.store.root / "coordination/collaboration.json"
+        frozen = json.loads(path.read_text()) if path.exists() else None
+        return {
+            "mode": config.mode,
+            "modules": list(config.collaboration_modules),
+            "label": MODES[config.mode]["label"],
+            "editable": c.state["status"] == "planned"
+            and not c.state.get("started_at")
+            and frozen is None,
+            # Do not backfill current versions into historical experiments.
+            "manifest": frozen,
+        }
+
+    @staticmethod
+    def select_collaboration(config: ResearchConfig, values: dict[str, Any]) -> None:
+        if not isinstance(values, dict) or set(values) != {"mode", "modules"}:
+            raise ValueError("协作设置需要 mode 和 modules")
+        mode, modules = values["mode"], values["modules"]
+        if not isinstance(mode, str):
+            raise ValueError("协作方式须为名称")
+        from areal_rsi.coordination.collaboration import selected_modules
+
+        modules = selected_modules(mode, modules)
+        if mode == "passk" and config.mode != "passk":
+            # This is part of the explicit pass@k preset, described in the UI.
+            # Preserve the user's wall-time, target, k and execution resources.
+            config.brief.limits.max_model_calls = None
+            config.brief.limits.max_total_tokens = None
+            config.brief.limits.max_verify_calls = None
+            config.brief.limits.max_nodes = None
+            config.max_model_calls_per_turn = None
+        config.mode, config.collaboration_modules = mode, modules
+        config.__post_init__()
+
+    async def set_collaboration(self, c: Coordinator, values: dict[str, Any]) -> None:
+        async with self.run_lock(c):
+            c = self.coordinator(c.store.run_id)
+            if not self.collaboration_settings(c)["editable"]:
+                raise ValueError("研究已经开始，协作配置已锁定；请新建研究进行消融对比")
+            config = self.config(c)
+            config.brief = c.store.brief()
+            self.select_collaboration(config, values)
+            active = self.active.get(c.store.run_id)
+            if active:
+                active.task.cancel()
+                await asyncio.gather(active.task, return_exceptions=True)
+                active.execution.close(cancel=False)
+                await active.tools.close()
+                self.active.pop(c.store.run_id, None)
+                config = self.config(c)
+                config.brief = c.store.brief()
+                self.select_collaboration(config, values)
+            # Budget changes in the preset must also reach the displayed brief.
+            run = c.store.run()
+            run.brief_ref = c.store.put("briefs", new_id("collaboration"), config.brief)
+            run.plan.max_iterations = config.brief.limits.max_nodes
+            c.store.save_run(run)
+            write_json(c.store.root / "coordination/config.json", config.public())
+            c.state["mode"] = config.mode
+            c.save()
+            c.store.event(
+                "collaboration_updated",
+                mode=config.mode,
+                modules=list(config.collaboration_modules),
+            )
+            if active:
+                await self.attach(c)
 
     async def set_model_settings(self, c: Coordinator, values: dict[str, Any]) -> None:
         settings, key = self.parse_model_settings({"backend": self.config(c).backend, **values})
@@ -275,6 +345,8 @@ class ResearchApp:
             raise ValueError(
                 "This template is for workflow simulation; configure real runners first"
             )
+        if "collaboration" in params:
+            self.select_collaboration(config, params["collaboration"])
         config.pin_model_settings()
         if "model_settings" in params:
             settings, key = self.parse_model_settings(params["model_settings"])
@@ -411,6 +483,11 @@ class ResearchApp:
         write_json(
             c.store.root / "coordination" / "started-config.json", config.public(), immutable=True
         )
+        write_json(
+            c.store.root / "coordination/collaboration.json",
+            manifest(config.mode, config.collaboration_modules, config.research_prompt_variant),
+            immutable=True,
+        )
         if "intake" in c.state:
             c.state["intake"]["confirmation_message_id"] = confirmation_message_id
             c.save()
@@ -500,6 +577,12 @@ class ResearchApp:
             existing.execution.close()
             await existing.tools.close()
         config = self.config(c)
+        plan = build_plan(config.mode, config.collaboration_modules, config.research_prompt_variant)
+        frozen = c.store.root / "coordination/collaboration.json"
+        if frozen.exists() and json.loads(frozen.read_text()) != manifest(
+            config.mode, config.collaboration_modules, config.research_prompt_variant
+        ):
+            raise ValueError("协作实现与启动时冻结的版本不同；请使用原版本恢复或新建研究")
         runtime = self.runtime_factory(config)
         if c.state["status"] == "planned" and config.model_settings_revision:
             actor = c.actor("interaction")
@@ -509,14 +592,11 @@ class ResearchApp:
                 / (actor.session_id or "interaction")
             )
             await runtime.reconfigure_session(session, config.model_settings_revision)
-        from areal_rsi.agents.rsi.prompt import PROMPT as RSI_PROMPT
-        from areal_rsi.coordination.passk import PROMPT as PASSK_PROMPT
-        from areal_rsi.coordination.passk import RSI_PROMPT as PASSK_RSI_PROMPT
-        from areal_rsi.coordination.passk import PassKActions, PassKEngine, stop_on_target
+        from areal_rsi.coordination.passk import stop_on_target
 
         c.state["mode"] = config.mode
         c.save()
-        actions = PassKActions(c) if config.mode == "passk" else ResearchActions(c)
+        actions = plan.actions(c)
         await actions.initialize_workspace("rsi")
         register_sources(
             actions,
@@ -529,6 +609,7 @@ class ResearchApp:
             credential_names=(config.api_key_env,),
             instructions=config.metadata.get("agent_tool_instructions"),
             backend=config.backend,
+            supervisor_only=plan.supervisor_only,
         )
         execution = ResearchExecution(
             actions,
@@ -580,7 +661,7 @@ class ResearchApp:
                 stop_on_target(c)
             return pending
 
-        engine = (PassKEngine if config.mode == "passk" else ResearchEngine)(
+        engine = plan.engine(
             c,
             runtime,
             lambda agent_id: ToolSet(
@@ -591,10 +672,8 @@ class ResearchApp:
                 actions.workspace(agent_id),
                 config.execution_env,
             ),
-            research_prompt=PASSK_PROMPT
-            if config.mode == "passk"
-            else RESEARCH_PROMPTS[config.research_prompt_variant],
-            rsi_prompt=PASSK_RSI_PROMPT if config.mode == "passk" else RSI_PROMPT,
+            research_prompt=plan.research_prompt,
+            rsi_prompt=plan.rsi_prompt,
             tick_hook=poll,
         )
 
@@ -660,8 +739,11 @@ class ResearchApp:
             )
             message = report_messages.get(ref.uri)
             report_view["delivery_status"] = (
-                "delivered" if message and message.message_id in delivered
-                else "pending" if message else "archived"
+                "delivered"
+                if message and message.message_id in delivered
+                else "pending"
+                if message
+                else "archived"
             )
             reports_by_iteration.setdefault(report_record.iteration_id, []).append(report_view)
             if message:
@@ -773,9 +855,14 @@ class ResearchApp:
                 )
                 result = info.get("result")
                 if (
-                    contract and info.get("verification") and not baseline and result
-                    and result.get("status") == "succeeded" and result.get("passed") is True
-                    and result.get("score") is not None and result.get("phase") == "search"
+                    contract
+                    and info.get("verification")
+                    and not baseline
+                    and result
+                    and result.get("status") == "succeeded"
+                    and result.get("passed") is True
+                    and result.get("score") is not None
+                    and result.get("phase") == "search"
                     and result.get("contract_digest") == contract_digest
                     and result.get("simulated") == c.state["simulated"]
                 ):
@@ -805,7 +892,9 @@ class ResearchApp:
                 if event.kind == "message" and report_message:
                     report_record, sender = report_message
                     events[index] = replace(
-                        event, kind="report_submitted", agent_id=sender,
+                        event,
+                        kind="report_submitted",
+                        agent_id=sender,
                         iteration_id=report_record.iteration_id,
                         data={**event.data, "report_id": report_record.report_id},
                     )
@@ -818,6 +907,7 @@ class ResearchApp:
             "agent_activity": c.state.get("agent_activity", {}),
             "execution_setup": c.state.get("execution_setup", "ready"),
             "model_settings": self.model_settings(c),
+            "collaboration": self.collaboration_settings(c),
             "jobs": jobs,
             "evidence": evidence,
             "final": c.store.public_record(run.final_result_ref) if run.final_result_ref else None,
@@ -908,6 +998,11 @@ class ResearchApp:
                     **config.model_settings(),
                     "has_credentials": bool(config.api_key()),
                 },
+                "collaboration_catalog": catalog(),
+                "default_collaboration": {
+                    "mode": config.mode,
+                    "modules": list(config.collaboration_modules),
+                },
                 "allow_simulation": self.allow_simulation,
                 "default_simulated": self.allow_simulation and self.default_config is None,
                 "has_config": self.default_config is not None,
@@ -997,6 +1092,8 @@ class ResearchApp:
             return {"run_id": c.store.run_id, "message_id": message_id, "status": c.state["status"]}
         elif action == "model-settings":
             await self.set_model_settings(c, {k: v for k, v in params.items() if k != "run_id"})
+        elif action == "collaboration":
+            await self.set_collaboration(c, {k: v for k, v in params.items() if k != "run_id"})
         elif action == "start":
             await self.start(c)
         elif action == "pause":

@@ -157,6 +157,7 @@ def prepare(
         return prepared
     manifest = prepared["manifest"]
     if mode == "passk":
+        manifest["diagnostic_precision"] = "strict-fp32-v1"
         manifest["mode"] = mode
     manifest_path = setup / "gpuq-manifest.json"
     write_json(manifest_path, manifest, immutable=True)
@@ -183,6 +184,12 @@ def prepare(
         "各研究员共享额度，最终另由程序独立复测一次。"
         "禁止 triton.autotune、批量候选或配置搜索，包括诊断中的调参循环。"
     )
+    if mode == "passk":
+        budget_policy = (
+            "GPU 提交次数不限，每次根据反馈选择下一项实验。"
+            "与 goal baseline 保持一致：不使用 triton.autotune、批量配置扫描或自动调参循环，"
+            "诊断脚本也遵守这一要求。所有作业都会保留记录。"
+        )
     rules += "\n本次提交规则：" + budget_policy + "\n"
     web_policy = (
         "本次允许联网调研通用方法、官方文档和论文；禁止搜索题目答案、"
@@ -389,6 +396,15 @@ def prepare(
             "系统在探索结束后冻结历史最佳有效候选并独立复测，研究员不重复提交最终确认。"
         )
         config.metadata["finalization_reserve_seconds"] = 0
+        config.metadata["budget_clock"] = "wall"
+        config.metadata["comparison_protocol"] = {
+            "evaluation_policy": "strict-fp32-v1",
+            "diagnostic_precision": "strict-fp32-v1",
+            "batched_tuning": False,
+            "selection_metric": "speedup",
+            "budget_clock": "wall",
+            "final_confirmation_outside_exploration": True,
+        }
         config.__post_init__()
     write_json(config_path, config.public(), immutable=True)
     return config.public()

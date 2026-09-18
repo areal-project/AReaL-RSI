@@ -12,7 +12,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -118,6 +118,43 @@ def test_single_task_preparation_preserves_unlimited_time_and_submissions(
         )
         assert "阶段目标仍由 RSI 决定" not in prompt and "团队研究计划" not in prompt
         assert "独立完成整题" in rules and "不等待技术指导" in rules
+        assert "不使用 triton.autotune" in prompt
+        assert "TF32" in rules
+
+
+@pytest.mark.parametrize("strict", [True, False])
+def test_diagnostic_matches_formal_precision_without_changing_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, strict: bool
+) -> None:
+    diagnose = runpy.run_path("examples/kernelbench_artifacts/client.py")["diagnose"]
+    torch = ModuleType("torch")
+    torch.backends = SimpleNamespace(  # type: ignore[attr-defined]
+        cuda=SimpleNamespace(matmul=SimpleNamespace(allow_tf32=True)),
+        cudnn=SimpleNamespace(allow_tf32=True),
+    )
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    candidate = b"# original candidate\n"
+    script = (
+        "from __future__ import annotations\nimport torch\n"
+        f"assert torch.backends.cuda.matmul.allow_tf32 is {not strict}\n"
+        f"assert torch.backends.cudnn.allow_tf32 is {not strict}\n"
+    ).encode()
+    (tmp_path / "candidate.py").write_bytes(candidate)
+    (tmp_path / "diagnose.py").write_bytes(script)
+    captured = []
+
+    def submit(*args: Any, **sources: str) -> None:
+        captured.append(sources)
+        assert base64.b64decode(sources["source"]) == candidate
+        exec(compile(base64.b64decode(sources["script"]), "diagnostic.py", "exec"), {})
+        if not strict:
+            assert base64.b64decode(sources["script"]) == script
+
+    monkeypatch.setitem(diagnose.__globals__, "submit_and_wait", submit)
+    manifest = {"diagnostic_precision": "strict-fp32-v1"} if strict else {}
+    diagnose(manifest, tmp_path, tmp_path / "output", "L3P10", "diagnose.py", "candidate.py")
+    assert len(captured) == 1
+    assert (tmp_path / "candidate.py").read_bytes() == candidate
 
 
 @pytest.mark.parametrize(
@@ -251,6 +288,36 @@ def test_launcher_rejects_an_unrelated_listener() -> None:
         listener.listen()
         with pytest.raises(ValueError, match="占用"):
             ensure_workbench(listener.getsockname()[1])
+
+
+def test_score_keeps_raw_speedup_and_exposes_measurement_noise(tmp_path: Path) -> None:
+    score_bundle = runpy.run_path("examples/kernelbench_artifacts/client.py")["score_bundle"]
+    candidate = tmp_path / "L1P1/model_new.py"
+    candidate.parent.mkdir()
+    candidate.write_text("candidate")
+    job = {
+        "kind": "eval",
+        "state": "succeeded",
+        "source_sha256": hashlib.sha256(candidate.read_bytes()).hexdigest(),
+        "correct": True,
+        "speedup": 13.45,
+        "evaluation": {
+            "evaluation_policy": "strict-fp32-v1",
+            "runtime_ms": 0.426,
+            "ref_ms": 5.73,
+            "runtime_stats": {"std": 0.01},
+            "ref_stats": {"std": 6.5},
+        },
+    }
+    score, metrics, evidence = score_bundle(
+        {"tasks": {"L1P1": {}}, "metric": "speedup"},
+        tmp_path,
+        {"L1P1": {"jobs": [job], "used": 1}},
+        "search",
+    )
+    assert score == 13.45 and evidence["L1P1"]["job"] == job
+    assert metrics["L1P1_runtime_ms"] == 0.426
+    assert metrics["L1P1_ref_ms"] == 5.73 and metrics["L1P1_ref_std_ms"] == 6.5
 
 
 @pytest.mark.parametrize("withdraw_fastest", [False, True])

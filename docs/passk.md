@@ -16,6 +16,11 @@ submit_report 记录进展并通知 RSI，不结束当前研究回合。研究�
 启动或继续事项时系统最多每 30 秒提醒一次。执行故障按退避间隔恢复原任务和会话，不创建
 额外样本；模型原生重试仍由 Runtime 负责。
 
+`run_job(wait=true)` 和 `wait_for_job` 在当前原生回合内等待并返回反馈，不再在一秒后
+强制结束回合。单次等待最多 240 秒，仍未完成时返回原作业 ID，继续等待即可。
+日常续接只附带当前预算；进程重启时才补充恢复状态，且不重复完整任务和不断增长的引用列表。
+初始 developer prompt、原生会话历史和 compact 仍由 Runtime 管理。
+
 每个尝试只能访问自己的工作区、候选、作业和验证记录，以及共同起点和固定执行说明。
 不开放同伴交流、evidence 写入或跨尝试读取。向 RSI 的报告不转发给其他研究员。
 恢复状态只包含自己的最好结果。
@@ -47,6 +52,9 @@ submit_report 记录进展并通知 RSI，不结束当前研究回合。研究�
 {
   "mode": "passk",
   "backend": "codex",
+  "model": "gpt-5.6-luna",
+  "reasoning_effort": "xhigh",
+  "context_window_tokens": null,
   "brief": {
     "limits": {
       "max_agents": 4,
@@ -64,6 +72,8 @@ submit_report 记录进展并通知 RSI，不结束当前研究回合。研究�
 模型、token 和验证次数必须显式不设整组共享上限，防止一个尝试耗尽其他尝试的预算。
 `max_jobs` 是执行并发容量，不是累计提交数，应匹配实际 GPU/运行器资源。
 所有执行条件必须在启动前准备好；本模式不会等待 leader 配置环境。
+运行器在调用模型前检查沙箱中的 shell、临时目录和 `rsi-tools`。任务工具可用
+`rsi-tools list` 查看，用 `rsi-tools call TOOL 'JSON_ARGUMENTS' CALL_ID` 调用。
 
 ```bash
 RSI_DATA_ROOT=.rsi/passk uv run --env-file .env --locked rsi research --config /path/to/passk.json
@@ -83,3 +93,16 @@ RSI_DATA_ROOT=.rsi/passk uv run --env-file .env --locked rsi research --config /
 这里增加了 RSI 监督调用，比较时应单独记录其开销。它与 Codex 原生 goal pass@1 的提示和停止机制
 并非完全相同。工程测试验证独立性和执行行为；是否优于 goal pass@1 要通过实际重复实验
 检验，单次 pass@k 不保证必然胜出。
+
+当前 KernelBench pass@k 默认使用 Luna/xhigh，Codex CLI 0.153.4，保留 Codex 自己的
+默认上下文窗口。新的诊断作业在执行脚本前关闭 matmul 和 cuDNN 的 TF32，与正式验证
+采用相同的 FP32 参考精度。与 goal baseline 一样，禁止 autotune、批量配置扫描和自动
+调参循环；每次根据反馈决定下一项实验。正式结果除 speedup 外还记录候选/参考耗时和
+标准差，用于检查参考计时异常。原始评分、历史最佳选择和 seed 137 最终复测规则不变。
+
+`metadata.budget_clock = "wall"` 明确标记当前停止口径。这不等于 baseline 的有效时间预算：
+后者扣除了本地提交到 GPU 开始的等待，以及已记录的 API 故障等待。对照时必须将各尝试
+与 baseline 截到相同有效时间，再比较探索期正式结果；不能把最终独立复测混进搜索曲线，
+也不能将首次正确后的结果倒算到提交时刻。会话启动、正常思考、工具执行、编译和 compact
+均计入主要比较口径。Luna baseline 的 L3P10 是 2 小时有效预算，其他题是 1 小时。
+这次修复不改变停止时钟，也不新增扣时规则；完成工程修复后先跑 k=1 对照，再跑 k=4。

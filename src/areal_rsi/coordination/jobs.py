@@ -55,6 +55,9 @@ class ResearchExecution:
         self.instructions = ""
         self.simulated, self.mock_duration = simulated, mock_duration
         self.inline_wait_seconds = 1.0
+        # Independent attempts keep their native turn while GPU work runs.
+        # A bounded wait may return a running job, but never ends that turn.
+        self.continuous_wait_seconds = 240.0
         self._poll_lock = asyncio.Lock()
         limits = self.c.store.brief().limits
         self.manager = JobManager(
@@ -70,8 +73,12 @@ class ResearchExecution:
             definition(
                 "run_job",
                 "按已配置命令运行固定输入。candidate_id 为空时使用当前工作区。"
-                "wait=true 时短作业直接返回，长作业停止推理、完成后带回公开反馈。"
-                "返回的记录引用在作业运行中即可交接；实时状态用 job_status 查询。",
+                + (
+                    "wait=true 在当前回合等待结果；若仍在运行，继续 wait_for_job 等原作业。"
+                    if self.c.state.get("mode") == "passk"
+                    else "wait=true 时短作业直接返回，长作业停止推理、完成后带回公开反馈。"
+                )
+                + "返回的记录引用在作业运行中即可交接；实时状态用 job_status 查询。",
                 command_name=STRING,
                 candidate_id=STRING,
                 parameters_json={
@@ -124,7 +131,11 @@ class ResearchExecution:
             ),
             definition(
                 "wait_for_job",
-                "结束本回合，等作业完成后在同一任务中继续。作业已经完成时直接返回结果。",
+                (
+                    "在当前回合等待原作业并返回反馈；仍在运行时继续等待，不重复提交。"
+                    if self.c.state.get("mode") == "passk"
+                    else "结束本回合，等作业完成后在同一任务中继续。作业已经完成时直接返回结果。"
+                ),
                 job_id=STRING,
             ),
             definition(
@@ -343,7 +354,13 @@ class ResearchExecution:
     async def wait_for_result(
         self, agent_id: str, job_id: str, *, inline: bool = True
     ) -> ToolResult:
-        deadline = asyncio.get_running_loop().time() + (self.inline_wait_seconds if inline else 0)
+        continuous = self.c.state.get("mode") == "passk"
+        wait_seconds = (
+            self.continuous_wait_seconds
+            if continuous
+            else self.inline_wait_seconds if inline else 0
+        )
+        deadline = asyncio.get_running_loop().time() + wait_seconds
         while True:
             await self.poll()
             record = self.manager.get(job_id)
@@ -352,7 +369,14 @@ class ResearchExecution:
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
                 break
-            await asyncio.sleep(min(0.05, remaining))
+            await asyncio.sleep(min(0.25 if continuous else 0.05, remaining))
+        if continuous:
+            return ToolResult(
+                {
+                    **self.for_agent(record, agent_id),
+                    "instruction": "作业仍在运行，用 wait_for_job 等待原作业；不要重复提交。",
+                }
+            )
         info = self.jobs[job_id]
         self.waiters(info).setdefault(
             agent_id,

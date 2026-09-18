@@ -53,6 +53,87 @@ async def setup(root: Path, k: int = 3) -> tuple[Coordinator, PassKActions, list
     return c, actions, [actor.agent_id for actor in c.store.run().research_agents]
 
 
+def test_job_wait_keeps_turn_and_reuses_job_after_recovery(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        c, actions, agents = await setup(tmp_path, 1)
+        agent = agents[0]
+        c.begin_turn(agent)
+        execution = ResearchExecution(
+            actions,
+            commands={"test": ApprovedCommand("test", ("echo", "ok"))},
+            simulated=True,
+            mock_duration=0.2,
+        )
+        execution.continuous_wait_seconds = 0
+        call = ToolCall(
+            "run_job",
+            {"command_name": "test", "parameters_json": "{}", "wait": True},
+            "one-experiment",
+        )
+        try:
+            result = await actions.handler(agent)(call)
+            job_id = result.output["job_id"]
+            assert not result.stop
+            assert "wait_for_job" in result.output["instruction"]
+            assert not execution.waiters(execution.jobs[job_id])
+            assert c.actor(agent).state == AgentState.RUNNING
+            # Closing the coordinator's manager preserves the actual job.
+            execution.close()
+            execution = ResearchExecution(
+                actions,
+                commands={"test": ApprovedCommand("test", ("echo", "ok"))},
+                simulated=True,
+            )
+            execution.continuous_wait_seconds = 10
+            result = await asyncio.wait_for(actions.handler(agent)(call), 15)
+            assert not result.stop
+            assert result.output["job_id"] == job_id and len(execution.jobs) == 1
+            again = await actions.handler(agent)(
+                ToolCall("wait_for_job", {"job_id": job_id}, "wait-again")
+            )
+            assert not again.stop and again.output["state"] == "succeeded"
+            # The tool result is the feedback: no duplicate wakeup delivery.
+            assert not execution.waiters(execution.jobs[job_id])
+        finally:
+            execution.close(cancel=True)
+
+    asyncio.run(scenario())
+
+
+def test_continuous_wait_is_cancellable(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        c, actions, agents = await setup(tmp_path, 1)
+        agent = agents[0]
+        c.begin_turn(agent)
+        execution = ResearchExecution(
+            actions,
+            commands={"test": ApprovedCommand("test", ("echo", "ok"))},
+            simulated=True,
+            mock_duration=60,
+        )
+        try:
+            submitted = await actions.handler(agent)(
+                ToolCall(
+                    "run_job",
+                    {"command_name": "test", "parameters_json": "{}", "wait": False},
+                    "submit",
+                )
+            )
+            wait = asyncio.create_task(
+                execution.wait_for_result(agent, submitted.output["job_id"])
+            )
+            await asyncio.sleep(0.1)
+            assert not wait.done()
+            wait.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(wait, 1)
+            assert not execution.waiters(execution.jobs[submitted.output["job_id"]])
+        finally:
+            execution.close(cancel=True)
+
+    asyncio.run(scenario())
+
+
 def test_independent_records_jobs_and_identical_snapshots(tmp_path: Path) -> None:
     async def scenario() -> None:
         c, actions, agents = await setup(tmp_path, 2)

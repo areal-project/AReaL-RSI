@@ -34,7 +34,7 @@ uv run --env-file .env --locked python run.py --type demo --resume <run_id>
 
 ## 通过 Interaction 做单题研究
 
-在工作台新建研究，配置模型地址、密钥、`gpt-6-astra` 和 `xhigh`。然后告诉 Interaction：
+在工作台新建研究，配置模型地址、密钥、`gpt-5.6-luna` 和 `xhigh`。然后告诉 Interaction：
 
 > 本次只优化 L3P10，目标是正确前提下尽可能高的加速比，没有固定达标阈值。最多 3 名 Research Agent，全题共享 10 次探索 + 1 次最终复测，诊断和失败计数；总时间上限 1 小时，越快越好，不必用满。沿用 KernelBench example 的 et15 环境和 goal baseline 评分规则，允许联网调研通用方法，不查本题现成解法。请用当前研究 ID 运行下面的准备脚本，导入输出的配置，再总结需求给我确认。
 

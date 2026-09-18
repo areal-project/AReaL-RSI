@@ -6,7 +6,6 @@ import asyncio
 import copy
 import json
 import os
-import shlex
 import signal
 import sys
 from pathlib import Path
@@ -146,18 +145,10 @@ def compile_config(request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
             manifest = directory / "research-tools.json"
             manifest.write_text(json.dumps(bridge))
             manifest.chmod(0o600)
-            tool_command = shlex.join(
-                [
-                    sys.executable,
-                    "-I",
-                    str(Path(__file__).with_name("runtime_tools.py")),
-                    str(manifest),
-                ]
-            )
             prompts.append(
                 "RSI 任务工具通过以下命令调用，使用你的原生命令工具执行。\n"
-                f"查看工具及参数：{tool_command} list\n"
-                f"调用：{tool_command} call TOOL 'JSON_ARGUMENTS' CALL_ID\n"
+                "查看工具及参数：rsi-tools list\n"
+                "调用：rsi-tools call TOOL 'JSON_ARGUMENTS' CALL_ID\n"
                 "每次新操作使用新的 CALL_ID；重试同一操作时沿用原 ID。\n"
                 "常用工具：" + ", ".join(tool["name"] for tool in bridge["tools"])
             )

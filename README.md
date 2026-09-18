@@ -16,7 +16,7 @@ cp -n .env.example .env
 ```dotenv
 RSI_BASE_URL=https://4ipic.com
 RSI_API_KEY=<你的密钥>
-RSI_MODEL=gpt-6-astra
+RSI_MODEL=gpt-5.6-luna
 RSI_REASONING_EFFORT=xhigh
 RSI_DATA_ROOT=.rsi/research-lab
 ```
@@ -83,7 +83,7 @@ CLI 持续输出进度；Ctrl+C 保存状态供恢复。用同一数据目录打
 
 每次研究的数据集中在 `RSI_DATA_ROOT/runs/<run_id>/`，包含需求、会话、任务、报告、共享证据、冻结候选和验证记录。等待作业、报告或用户时不调用模型；临时 API 故障自动重试。
 
-研究配置中的 `context_window_tokens` 会传入原生后端。省略或设为 `null` 时，沿用现有窗口约定：`gpt-6-astra` 为 256,000 token，其他模型为 128,000。压缩时机和摘要由各后端负责，不再使用旧 Responses 循环的压缩规则；`compact_keep_recent_tokens` 仅保留配置兼容，不控制原生压缩。
+研究配置中的 `context_window_tokens` 会传入原生后端。省略或设为 `null` 时，Codex 使用自己的模型默认窗口；standard 沿用现有窗口约定：`gpt-6-astra` 为 256,000 token，其他模型为 128,000。压缩时机和摘要由各后端负责；`compact_keep_recent_tokens` 仅保留配置兼容，不控制原生压缩。Codex CLI 固定为 `0.153.4`，与当前 Luna goal baseline 一致。
 
 demo 在服务重启后自动恢复尚在执行的研究或收尾；手动暂停的研究保持暂停。完成最终复测后不能继续修改这次候选，需要新建 run。外部凭据失效或集群故障会明确报错或等待处理。
 

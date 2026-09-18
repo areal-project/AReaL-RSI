@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -160,11 +159,12 @@ class ResponsesModel:
         self.thread.join()
 
 
-@pytest.mark.parametrize("allow_web", [True, False])
+@pytest.mark.parametrize("allow_web,context_window", [(True, None), (False, 64000)])
 def test_codex_native_tools_history_resume_and_usage(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     allow_web: bool,
+    context_window: int | None,
 ) -> None:
     monkeypatch.setenv("RSI_API_KEY", "fixture")
     model = ResponsesModel()
@@ -174,9 +174,9 @@ def test_codex_native_tools_history_resume_and_usage(
             TaskBrief("test", "test"),
             backend="codex",
             base_url=model.url,
-            model="gpt-6-astra",
+            model="gpt-5.6-luna",
             model_settings_pinned=True,
-            context_window_tokens=64000,
+            context_window_tokens=context_window,
             metadata={"allow_web_access": allow_web},
         )
         runtime = ResearchApp._runtime(config)
@@ -192,7 +192,7 @@ def test_codex_native_tools_history_resume_and_usage(
         session = tmp_path / "session"
         binding = None
         try:
-            for i in range(2):
+            for i in range(3):
                 result = await asyncio.wait_for(
                     runtime.turn(
                         session,
@@ -203,18 +203,20 @@ def test_codex_native_tools_history_resume_and_usage(
                         handler=handle,
                         workspace=tmp_path / "workspace",
                         event_sink=emit,
+                        recovery_state={"brief": "recovery-only-task", "budget": {"remaining": 30}},
                     ),
                     30,
                 )
                 assert result.text == "Done"
                 current = json.loads((session / "runtime/session-binding.json").read_text())
                 native_config = (session / "runtime/codex-home/config.toml").read_text()
-                assert "model_context_window = 64000" in native_config
+                assert ("model_context_window = 64000" in native_config) == bool(context_window)
                 if binding:
                     assert current == binding
                 binding = current
                 assert runtime.has_session(session)
-                await runtime.close()  # Actual worker/process restart, not only a second turn.
+                if i == 1:
+                    await runtime.close()  # The third turn must recover the same native thread.
                 replay = await runtime.turn(
                     session,
                     system_prompt="Complete without tools",
@@ -226,8 +228,12 @@ def test_codex_native_tools_history_resume_and_usage(
                     event_sink=emit,
                 )
                 assert replay == result, "A committed delivery must not start another model turn"
-            assert len(model.requests) == 2
+            assert len(model.requests) == 3
             assert "Remember turn 0" in json.dumps(model.requests[-1]["input"])
+            for i, request in enumerate(model.requests):
+                inputs = json.dumps(request["input"])
+                assert ("recovery-only-task" in inputs) == (i == 2)
+                assert 'remaining' in inputs
             for request in model.requests:
                 tools = json.dumps(request.get("tools", [])) + json.dumps(
                     [item for item in request["input"] if item.get("type") == "additional_tools"]
@@ -334,16 +340,11 @@ def test_tool_capability_and_workspace_sandbox_survive_restart(
                 workspace=tmp_path / "workspace",
             )
             bridge = json.loads((session / "runtime/request.json").read_text())["research_tools"]
-            manifest = session / "runtime/bridge-proof.json"
-            manifest.write_text(json.dumps(bridge))
             process = await asyncio.create_subprocess_exec(
                 "/usr/bin/sandbox-exec",
                 "-f",
                 str(session / "runtime/sandbox.sb"),
-                sys.executable,
-                "-I",
-                str(session / "runtime/worker-code/areal_rsi/modules/runtime_tools.py"),
-                str(manifest),
+                str(session / "runtime/bin/rsi-tools"),
                 "call",
                 "get_state",
                 "{}",

@@ -13,6 +13,7 @@ import json
 import os
 import shutil
 import signal
+import subprocess
 import sys
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
@@ -433,6 +434,21 @@ class PackageAgentRuntime:
         if research_tools is not None:
             config["research_tools"] = research_tools
             config["allow_empty_final"] = True
+            bin_dir = directory / "bin"
+            bin_dir.mkdir(exist_ok=True)
+            helper = bin_dir / "rsi-tools"
+            module = str(modules / "runtime_tools.py")
+            manifest = str(directory / "research-tools.json")
+            helper.write_text(
+                f"#!{sys.executable} -I\n"
+                "import runpy, sys\n"
+                f"sys.argv = [{module!r}, {manifest!r}, *sys.argv[1:]]\n"
+                f"runpy.run_path({module!r}, run_name='__main__')\n"
+            )
+            helper.chmod(0o700)
+            tool_manifest = directory / "research-tools.json"
+            tool_manifest.write_text(json.dumps(research_tools))
+            tool_manifest.chmod(0o600)
         if codex_config is not None:
             config["codex_config"] = codex_config
         if context_window_tokens is not None:
@@ -455,7 +471,11 @@ class PackageAgentRuntime:
         for name in ("tmp", "home", "cache"):
             (directory / name).mkdir(exist_ok=True)
         env["PATH"] = (
-            str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "/usr/bin:/bin")
+            str(directory / "bin")
+            + os.pathsep
+            + str(Path(sys.executable).parent)
+            + os.pathsep
+            + env.get("PATH", "/usr/bin:/bin")
         )
         env.update(
             HOME=str(directory / "home"),
@@ -473,6 +493,28 @@ class PackageAgentRuntime:
             tuple(readable),
             (Path(interpreter),) if interpreter else (),
         )
+        if research_tools is not None:
+            # Fail before spending model calls if the agent's actual shell cannot
+            # write heredocs/tempfiles or resolve its scoped task-tool command.
+            probe = await asyncio.to_thread(
+                subprocess.run,
+                [
+                    *command[:3],
+                    "/bin/zsh",
+                    "-lec",
+                    "python - <<'PY'\nimport tempfile\n"
+                    "with tempfile.TemporaryFile() as f:\n    f.write(b'ok')\nPY\n"
+                    "rsi-tools list >/dev/null",
+                ],
+                cwd=workspace,
+                env=env,
+                capture_output=True,
+                timeout=10,
+            )
+            if probe.returncode:
+                raise RuntimeError(
+                    "Agent preflight failed: shell, temporary directory or rsi-tools"
+                )
         with (directory / "worker.log").open("wb") as log:
             process = await asyncio.create_subprocess_exec(
                 *command,

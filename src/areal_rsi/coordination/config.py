@@ -57,7 +57,7 @@ class ResearchConfig:
     seed_dir: str | None = None
     backend: str = "standard"
     research_prompt_variant: str = "simple"
-    model: str = "gpt-6-astra"
+    model: str = "gpt-5.6-luna"
     reasoning_effort: str = "xhigh"
     base_url: str = "https://api.openai.com"
     model_settings_pinned: bool = False

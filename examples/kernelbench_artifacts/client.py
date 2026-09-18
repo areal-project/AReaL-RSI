@@ -6,6 +6,7 @@ import argparse
 import base64
 import hashlib
 import json
+import math
 import shlex
 import subprocess
 import time
@@ -84,7 +85,21 @@ def diagnose(
     candidate: str = "",
 ) -> None:
     script_source = input_source(workspace, script)
-    compile(base64.b64decode(script_source), "_rsi_diagnostic.py", "exec")
+    script_bytes = base64.b64decode(script_source)
+    compile(script_bytes, "_rsi_diagnostic.py", "exec")
+    if manifest.get("diagnostic_precision") == "strict-fp32-v1":
+        # Run the unmodified script with the formal reference precision. This
+        # wrapper is only for diagnostics, never for submitted candidates.
+        script_source = base64.b64encode(
+            (
+                "import torch\n"
+                "torch.backends.cuda.matmul.allow_tf32 = False\n"
+                "torch.backends.cudnn.allow_tf32 = False\n"
+                "print('RSI diagnostic: FP32 reference; matmul TF32=False; "
+                "cuDNN TF32=False', flush=True)\n"
+                f"exec(compile({script_bytes!r}, '_rsi_diagnostic.py', 'exec'))\n"
+            ).encode()
+        ).decode()
     source = input_source(workspace, candidate) if candidate else ""
     submit_and_wait(
         manifest, output, task, "submit_diagnostic", source=source, script=script_source
@@ -234,6 +249,17 @@ def score_bundle(
         metrics[task + "_speedup"] = speedup
         metrics[task + "_fast1"] = float(speedup > 1.0)
         metrics[task + "_submissions"] = status[task]["used"]
+        if chosen:
+            evaluation = chosen.get("evaluation") or {}
+            timings = {
+                "runtime_ms": evaluation.get("runtime_ms"),
+                "ref_ms": evaluation.get("ref_ms"),
+                "runtime_std_ms": (evaluation.get("runtime_stats") or {}).get("std"),
+                "ref_std_ms": (evaluation.get("ref_stats") or {}).get("std"),
+            }
+            for name, value in timings.items():
+                if isinstance(value, (int, float)) and math.isfinite(value) and value >= 0:
+                    metrics[task + "_" + name] = float(value)
         evidence[task] = {"sha256": digest, "job": chosen, "matching_evaluations": len(matches)}
     score = sum(metrics[task + "_fast1"] for task in manifest["tasks"]) / len(manifest["tasks"])
     metrics["fast_1"] = score

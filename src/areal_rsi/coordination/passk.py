@@ -411,7 +411,16 @@ class PassKEngine(ResearchEngine):
     def _recovery_state(self, agent_id: str) -> dict[str, Any]:
         if agent_id == "interaction":
             return super()._recovery_state(agent_id)
-        return PassKActions(self.coordinator).state(agent_id)
+        state = PassKActions(self.coordinator).state(agent_id)
+        # Native history retains the task and evidence. Repeating the complete
+        # node reference list after every tool/turn makes context grow quadratically.
+        state.pop("brief", None)
+        node = state.get("current_node")
+        if node:
+            state["current_node"] = {
+                key: node[key] for key in ("iteration_id", "state", "assignment_ref")
+            }
+        return state
 
     def _complete_research_turn(
         self, agent_id: str, iteration_id: str | None, message_id: str, text: str

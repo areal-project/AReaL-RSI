@@ -233,25 +233,29 @@ class ResearchRuntime:
         allow_web = self.allow_web_access and not (
             self.config.mode == "passk" and agent_id == "rsi"
         )
+        codex_config = {
+            "model_reasoning_effort": self.connection.reasoning_effort,
+            "web_search": "live" if allow_web else "disabled",
+            "features.multi_agent": False,
+            "agents.enabled": False,
+            "features.goals": False,
+            "features.standalone_web_search": allow_web,
+            "model_providers.rsi.supports_standalone_web_search": allow_web,
+        }
+        if self.config.context_window_tokens is not None:
+            codex_config["model_context_window"] = self.config.context_window_tokens
         try:
             session = await runtime.open(
                 spec,
                 workspace_root=str(workspace),
                 session_id="runtime",
                 research_tools=bridge,
-                context_window_tokens=self.connection.effective_context_window_tokens,
-                codex_config={
-                    "model_reasoning_effort": self.connection.reasoning_effort,
-                    "model_context_window": self.connection.effective_context_window_tokens,
-                    "web_search": "live" if allow_web else "disabled",
-                    "features.multi_agent": False,
-                    "agents.enabled": False,
-                    "features.goals": False,
-                    "features.standalone_web_search": allow_web,
-                    "model_providers.rsi.supports_standalone_web_search": allow_web,
-                }
-                if self.backend == "codex"
-                else None,
+                context_window_tokens=(
+                    self.config.context_window_tokens
+                    if self.backend == "codex"
+                    else self.connection.effective_context_window_tokens
+                ),
+                codex_config=codex_config if self.backend == "codex" else None,
             )
         except BaseException:
             server.close()
@@ -292,6 +296,7 @@ class ResearchRuntime:
         if connection is not None and connection.session.closed:
             await self._close(connection)
             connection = None
+        recovering = connection is None and self.has_session(session_dir)
         if connection is None:
             if event_sink is not None:
                 from areal_rsi.modules.runtime_storage import read_journal
@@ -341,7 +346,15 @@ class ResearchRuntime:
             await event_sink({"type": "runtime_turn_started", "message_id": message_id})
         message = user_message or "继续上次尚未完成的任务；先检查已有操作与结果，避免重复提交。"
         if recovery_state:
-            message += "\n\n当前任务状态：\n" + json.dumps(recovery_state, ensure_ascii=False)
+            # The immutable developer prompt and native history already carry
+            # the task. Only process recovery needs a current state snapshot.
+            context = (
+                recovery_state
+                if recovering
+                else {"budget": recovery_state["budget"]} if "budget" in recovery_state else {}
+            )
+            if context:
+                message += "\n\n当前任务状态：\n" + json.dumps(context, ensure_ascii=False)
         try:
             text = await connection.session.send(message, event_sink=on_event)
         finally:

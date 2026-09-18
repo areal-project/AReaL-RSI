@@ -385,6 +385,10 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                             raw.get("default_collaboration"), "mode modules"
                         ),
                         "collaboration_catalog": {
+                            "presets": [
+                                _fields(item, "id label description mode modules")
+                                for item in raw.get("collaboration_catalog", {}).get("presets", [])
+                            ],
                             "modes": [
                                 _fields(item, "id label description version")
                                 for item in raw.get("collaboration_catalog", {}).get("modes", [])

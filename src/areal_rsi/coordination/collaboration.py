@@ -55,9 +55,37 @@ MODES = {
     },
 }
 
-# Future ablations register their implementation here. Do not expose a switch
-# until it changes the actual runtime behavior and has isolation tests.
-MODULES: dict[str, CollaborationModule] = {}
+
+def apply_leader_guidance(plan: CollaborationPlan) -> CollaborationPlan:
+    from areal_rsi.coordination.leader_guidance import apply
+
+    return apply(plan)
+
+
+MODULES: dict[str, CollaborationModule] = {
+    "leader_guidance": CollaborationModule(
+        "leader_guidance",
+        "RSI 协调",
+        "RSI 查看原始证据，定向共享并提供非阻塞建议；研究员仍独立完成整题，自行判断和验证。",
+        "1",
+        apply_leader_guidance,
+    ),
+}
+
+
+def presets() -> list[dict[str, Any]]:
+    choices = [{**mode, "mode": mode["id"], "modules": []} for mode in MODES.values()]
+    choices.insert(
+        1,
+        {
+            "id": "passk_guided",
+            "label": "pass@k + RSI 协调",
+            "mode": "passk",
+            "modules": ["leader_guidance"],
+            "description": MODULES["leader_guidance"].description,
+        },
+    )
+    return choices
 
 
 def selected_modules(mode: str, modules: tuple[str, ...]) -> tuple[str, ...]:
@@ -135,6 +163,7 @@ def manifest(
 def catalog() -> dict[str, Any]:
     return {
         "modes": list(MODES.values()),
+        "presets": presets(),
         "modules": [
             {
                 "id": module.id,

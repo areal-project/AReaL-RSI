@@ -13,6 +13,7 @@ from typing import Any
 
 from areal_rsi.api.research import ResearchLimits, TaskBrief, VerificationContract
 from areal_rsi.base.storage import safe_name, write_json
+from areal_rsi.coordination.collaboration import selected_modules
 from areal_rsi.coordination.config import ResearchConfig
 from areal_rsi.execution import ApprovedCommand
 
@@ -81,8 +82,11 @@ def prepare(
     name: str | None = None,
     time_limit_scope: str = "total",
     mode: str = "collaborative",
+    collaboration_modules: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     safe_name(run_id)
+    collaboration_modules = selected_modules(mode, collaboration_modules)
+    guided = "leader_guidance" in collaboration_modules
     if mode not in {"collaborative", "passk"}:
         raise ValueError("Unknown research mode")
     if mode == "passk" and (
@@ -177,6 +181,12 @@ def prepare(
         demo["tasks"][case]["sha256"] = manifest["tasks"][case]["reference_sha256"]
     write_json(setup / "demo.json", demo, immutable=True)
     rules = (HERE / ("PASSK_RULES.md" if mode == "passk" else "RULES.md")).read_text()
+    if guided:
+        rules = rules.replace(
+            "可以向 RSI 报告进展，但不等待技术指导，不与其他研究员交换信息。",
+            "向 RSI 报告关键进展和困难，报告后继续研究。RSI 可以定向分享原始证据和建议；"
+            "自行判断是否采纳并验证，只通过共享引用读取其他尝试的资料。",
+        )
     budget_policy = (
         "GPU 提交次数不限，可以按需要评测、调试和比较参数，无需逐次确认。所有作业都会保留记录。"
         if exploration_submissions is None
@@ -370,6 +380,7 @@ def prepare(
     }
     if mode == "passk":
         config.mode = mode
+        config.collaboration_modules = collaboration_modules
         config.brief.limits.max_jobs = max_agents
         config.commands = tuple(command for command in commands if command.name != "collect_bundle")
         config.brief.instructions = (
@@ -379,8 +390,14 @@ def prepare(
             "每个研究员从相同材料开始，独立完成调研、实现、实验和改进，自行决定研究方向。"
             "开始时主动联网调研，后续按需要继续查阅允许范围内的资料。\n\n"
             f"{time_policy}{budget_policy}固定启动 {max_agents} 名研究员，不替换或追加尝试。"
-            "可以向 RSI 简要报告进展；RSI 只监督持续探索，不提供建议，也不传递其他尝试的信息。"
-            "探索到时由系统停止，选取仍有效的历史最佳正式正确产物独立复测。"
+            + (
+                "向 RSI 报告关键进展和困难，报告后继续研究。"
+                "RSI 可以查看原始证据、定向共享经验并提出非阻塞建议；"
+                "研究员自行判断并验证，仍独立完成整题。"
+                if guided
+                else "可以向 RSI 简要报告进展；RSI 只监督持续探索，不提供建议，也不传递其他尝试的信息。"
+            )
+            + "探索到时由系统停止，选取仍有效的历史最佳正式正确产物独立复测。"
         )
         config.metadata["agent_tool_instructions"] = (
             "先阅读自己的 RULES.md 和公开题目。仅操作自己的工作区；"

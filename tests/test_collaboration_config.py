@@ -199,7 +199,10 @@ def test_http_selection_and_historical_read_only_projection(tmp_path: Path) -> N
             "passk",
             "collaborative",
         ]
-        assert bootstrap["collaboration_catalog"]["modules"] == []
+        assert [m["id"] for m in bootstrap["collaboration_catalog"]["modules"]] == [
+            "leader_guidance"
+        ]
+        assert bootstrap["collaboration_catalog"]["presets"][1]["modules"] == ["leader_guidance"]
         detail = client.request(
             "/api/runs",
             {

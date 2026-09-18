@@ -128,10 +128,12 @@ test('creation sends the selected recipe and registered modules appear without f
   let submitted;
   const records = {a: run('a')};
   const module = {id: 'test_evidence', label: '测试模块', version: '1', description: '仅测试注册入口', modes: ['passk'], requires: [], conflicts: []};
+  const presets = [...collaborationCatalog.modes.map((mode) => ({...mode, mode: mode.id, modules: []})),
+    {id: 'guided', label: 'pass@k + RSI 协调', mode: 'passk', modules: [module.id]}];
   const ui = await setup(t, records, (path, options) => {
     if (path === '/api/bootstrap') return Promise.resolve(response({
       csrf_token: 'test', default_model_settings: defaults, models: [],
-      collaboration_catalog: {...collaborationCatalog, modules: [module]},
+      collaboration_catalog: {...collaborationCatalog, modules: [module], presets},
       default_collaboration: {mode: 'passk', modules: []},
     }));
     if (path === '/api/runs' && options.method === 'POST') {
@@ -143,8 +145,9 @@ test('creation sends the selected recipe and registered modules appear without f
   ui.$('new-run').click();
   assert.match(ui.$('create-collaboration-mode-trigger').textContent, /pass@k/);
   assert.equal(ui.$('create-collaboration-mode-options').closest('dialog'), ui.$('create-dialog'));
-  const checkbox = ui.$('create-collaboration-modules').querySelector('input');
-  checkbox.click();
+  ui.$('create-collaboration-mode-trigger').click();
+  ui.$('create-collaboration-mode-options').querySelectorAll('[role="option"]')[2].click();
+  assert.equal(ui.$('create-collaboration-modules').querySelector('input').checked, true);
   ui.submit('create-form'); await settle();
   assert.deepEqual(submitted.collaboration, {mode: 'passk', modules: ['test_evidence']});
 });

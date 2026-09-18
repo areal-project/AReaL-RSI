@@ -9,14 +9,34 @@
 | 基础流程 | 配置值 | 行为 |
 | --- | --- | --- |
 | 纯 pass@k | `passk` | 固定 k 名研究员独立完成整题，RSI 接收报告并督促继续，不提供建议或共享信息 |
+| pass@k + RSI 协调 | `passk` + `leader_guidance` | 保留独立探索，RSI 查看原始证据，定向共享并发送非阻塞建议 |
 | 旧版协作流程 | `collaborative` | 保留原有分工、指导、消息、报告和证据共享流程 |
 
-旧版协作流程是完整对照组，不等于“pass@k 加一个 leader 协调模块”。本次没有新增
-leader 协调、共享 evidence pool 或投票审核算法；附加模块列表目前为空。未实现的模块
-会明确报错，不会保存一个没有实际效果的开关。
+工作台提供以上三个快捷选项。新协调模式实际保存为 `mode=passk`、
+`collaboration_modules=["leader_guidance"]`，也可以在纯 pass@k 下勾选“RSI 协调”。
+旧版协作流程仍是单独的完整对照组。共享 evidence pool 和审核尚未实现。
 
 原有配置保持兼容：省略 `mode` 时仍为 `collaborative`，省略 `collaboration_modules`
 时为空。现有 pass@k 研究的行为保持不变。
+
+## RSI 协调的边界
+
+研究员各自完成整题，在关键进展或持续受阻时报告，报告后继续探索。
+RSI 复用已有读取工具查看报告、正式结果、候选文件和公开作业反馈；
+`read_researcher_trace` 按页读取原生会话中的消息和工具调用，保存带来源的原始片段。
+
+`advise_researcher` 将建议和记录引用发送给一名研究员。消息本身保存读取授权：
+接收者通过 `read_record` 读取这些记录，通过 `read_shared_file` 查看明确共享的候选文件。
+记录中出现的其他引用不会自动获得授权。其他研究员仍看不到这些资料，也不能直接访问
+同伴工作区、切换到同伴候选或复用其评测回执。
+
+建议沿用持久化收件箱，在下一次 RSI 工具返回或下一回合送达，不取消当前执行，
+不等待对方确认。Codex 连续使用原生工具时，消息不会被强行插入；送达记录沿用现有事件。
+RSI 不新增、替换或停止研究员，不覆盖其代码，也不要求所有人采用同一路线。
+固定 k、停止条件、独立验证和最终复测均沿用 pass@k。
+
+KernelBench 的 `prepare(..., mode="passk", collaboration_modules=("leader_guidance",))`
+同步生成该模式的任务说明和 RULES.md，避免仍带有纯 pass@k 的禁止共享条款。
 
 ## 保存和复现
 
@@ -66,8 +86,8 @@ leader 协调、共享 evidence pool 或投票审核算法；附加模块列表�
 运行时按稳定依赖顺序组合。缺失依赖、不支持的基础流程、冲突、重复和循环依赖都会被拒绝。
 不从用户 JSON 动态导入代码，也不会在浏览器单独维护一份可选模块清单。
 
-例如未来实现 `leader_coordination` 时，需要同时提供协调 Actions、必要的调度扩展和
-简洁的角色 Prompt，而不只是改 Prompt。实现 `evidence_pool` 时，还需明确哪些资料可见、
+当前 `leader_guidance.py` 只增加协调 Actions 和简洁的角色 Prompt，直接复用 PassKEngine。
+实现 `evidence_pool` 时，还需明确哪些资料可见、
 哪些工具可用以及写入权限；不能为开放一个共享池而解除全部跨尝试访问限制。
 `mode` 保留基础流程的预算、生命周期和恢复语义，模块不能悄悄改变它们。
 

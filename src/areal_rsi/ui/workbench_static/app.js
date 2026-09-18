@@ -87,18 +87,27 @@ const backendDropdown = new WorkbenchDropdown($("agent-backend"), {
 
 const collaborationDropdown = new WorkbenchDropdown($("collaboration-mode"), {
   label: "基础流程", onChange: (mode) => {
-    state.collaborationDrafts.set(state.runId, {mode, modules: []});
+    state.collaborationDrafts.set(state.runId, selectCollaborationPreset(mode));
     renderCollaboration();
   },
 });
 const createCollaborationDropdown = new WorkbenchDropdown($("create-collaboration-mode"), {
   label: "协作方式", onChange: (mode) => {
-    state.createCollaboration = {mode, modules: []};
+    state.createCollaboration = selectCollaborationPreset(mode);
     renderCreateCollaboration();
   },
 });
 function collaborationSelection(value) {
   return {mode: value.mode, modules: [...(value.modules || [])].sort()};
+}
+function collaborationPresets() {
+  return state.collaborationCatalog.presets || state.collaborationCatalog.modes.map((mode) => ({...mode, mode: mode.id, modules: []}));
+}
+function selectCollaborationPreset(id) {
+  return collaborationSelection(collaborationPresets().find((preset) => preset.id === id));
+}
+function matchingCollaborationPreset(selection) {
+  return collaborationPresets().find((preset) => JSON.stringify(collaborationSelection(preset)) === JSON.stringify(collaborationSelection(selection)));
 }
 function collaborationChanged() {
   const draft = state.collaborationDrafts.get(state.runId), saved = state.run?.collaboration;
@@ -106,8 +115,9 @@ function collaborationChanged() {
 }
 function renderCollaborationFields(prefix, dropdown, selection, disabled, onChange) {
   const catalog = state.collaborationCatalog;
-  dropdown.update(catalog.modes.map((mode) => ({value: mode.id, text: mode.label})), selection.mode, disabled);
-  $(`${prefix}description`).textContent = catalog.modes.find((mode) => mode.id === selection.mode)?.description || "";
+  const preset = matchingCollaborationPreset(selection);
+  dropdown.update(collaborationPresets().map((item) => ({value: item.id, text: item.label})), preset?.id || selection.mode, disabled);
+  $(`${prefix}description`).textContent = preset?.description || catalog.modes.find((mode) => mode.id === selection.mode)?.description || "";
   const container = $(`${prefix}modules`);
   container.replaceChildren();
   const modules = catalog.modules.filter((module) => module.modes.includes(selection.mode));
@@ -141,7 +151,8 @@ function renderCollaboration() {
   if (!saved.editable) state.collaborationDrafts.delete(state.runId);
   const draft = state.collaborationDrafts.get(state.runId) || collaborationSelection(saved);
   const disabled = !saved.editable || !!state.collaborationSavingRun || state.busy;
-  $("collaboration-summary").textContent = [saved.label || saved.mode, ...(saved.modules || []), saved.editable ? "启动前可修改" : "已锁定"].join(" · ");
+  const label = matchingCollaborationPreset(saved)?.label || [saved.label || saved.mode, ...(saved.modules || [])].join(" + ");
+  $("collaboration-summary").textContent = [label, saved.editable ? "启动前可修改" : "已锁定"].join(" · ");
   renderCollaborationFields("collaboration-", collaborationDropdown, draft, disabled, (selection) => {
     state.collaborationDrafts.set(state.runId, selection); renderCollaboration();
   });

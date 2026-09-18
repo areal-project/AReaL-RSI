@@ -9,7 +9,7 @@ import json
 import os
 import shutil
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -20,6 +20,7 @@ from areal_rsi.api.research import (
     CandidateSnapshot,
     EvidenceRecord,
     ResearchMessage,
+    ResearchReport,
     TaskBrief,
     VerifiedResult,
 )
@@ -638,6 +639,33 @@ class ResearchApp:
         for item in evidence:
             if item["iteration_id"] is not None:
                 evidence_by_iteration.setdefault(item["iteration_id"], []).append(item)
+        all_messages = c.store.records("messages", ResearchMessage)
+        report_messages = {
+            ref.uri: message
+            for message in all_messages
+            if message.recipient == "rsi"
+            for ref in message.references
+            if "/reports/" in ref.uri
+        }
+        reports_by_iteration: dict[str, list[dict[str, Any]]] = {}
+        reports_by_message = {}
+        delivered = set(c.state["delivered"])
+        for report_record in sorted(
+            c.store.records("reports", ResearchReport),
+            key=lambda item: (item.created_at, item.report_id),
+        ):
+            report_view = encode(report_record)
+            ref = c.store.paths.reference(
+                c.store.root / "reports" / f"{report_record.report_id}.json"
+            )
+            message = report_messages.get(ref.uri)
+            report_view["delivery_status"] = (
+                "delivered" if message and message.message_id in delivered
+                else "pending" if message else "archived"
+            )
+            reports_by_iteration.setdefault(report_record.iteration_id, []).append(report_view)
+            if message:
+                reports_by_message[message.message_id] = (report_record, message.sender)
         nodes, edges = [], []
         for actor in run.research_agents:
             for node in actor.iterations:
@@ -648,6 +676,7 @@ class ResearchApp:
                         **encode(node),
                         "assignment": assignment,
                         "report": report,
+                        "reports": reports_by_iteration.get(node.iteration_id, []),
                         "evidence": evidence_by_iteration.get(node.iteration_id, []),
                         "verification": None,
                     }
@@ -677,12 +706,15 @@ class ResearchApp:
         archived_chat = set(c.state.get("archived_chat_message_ids", []))
         messages = [
             encode(m)
-            for m in c.store.records("messages", ResearchMessage)
+            for m in all_messages
             if (m.sender == "user" or m.recipient == "user") and m.message_id not in archived_chat
         ]
         messages.sort(key=lambda m: m["created_at"])
         jobs_path = c.store.root / "coordination" / "jobs.json"
         jobs = []
+        contract = c.store.brief().verification
+        contract_digest = c.store.contract_digest() if contract else None
+        withdrawn: dict[str, bool] = {}
         if jobs_path.exists():
             from areal_rsi.execution.progress import read_progress
 
@@ -739,11 +771,44 @@ class ResearchApp:
                         "progress": read_progress(Path(info["output"])),
                     }
                 )
-                if info.get("verification") and info.get("result"):
+                result = info.get("result")
+                if (
+                    contract and info.get("verification") and not baseline and result
+                    and result.get("status") == "succeeded" and result.get("passed") is True
+                    and result.get("score") is not None and result.get("phase") == "search"
+                    and result.get("contract_digest") == contract_digest
+                    and result.get("simulated") == c.state["simulated"]
+                ):
+                    candidate_id = result["candidate_id"]
+                    if candidate_id not in withdrawn:
+                        withdrawn[candidate_id] = c.store.is_withdrawn(candidate_id)
+                    if withdrawn[candidate_id]:
+                        continue
                     for public_node in nodes:
                         if public_node["iteration_id"] == info.get("iteration_id"):
-                            public_node["verification"] = info["result"]
+                            previous = public_node["verification"]
+                            if previous is None or (
+                                result["score"] > previous["score"]
+                                if contract.direction == "maximize"
+                                else result["score"] < previous["score"]
+                            ):
+                                public_node["verification"] = result
         events = c.store.events(after, limit=event_limit)
+        if c.state.get("mode") == "passk":
+            # Older runs have the durable report/message, but no named report event.
+            # Reuse its original cursor and timestamp; never rewrite archived events.
+            for index, event in enumerate(events):
+                message_id = event.data.get("message_id")
+                report_message = (
+                    reports_by_message.get(message_id) if isinstance(message_id, str) else None
+                )
+                if event.kind == "message" and report_message:
+                    report_record, sender = report_message
+                    events[index] = replace(
+                        event, kind="report_submitted", agent_id=sender,
+                        iteration_id=report_record.iteration_id,
+                        data={**event.data, "report_id": report_record.report_id},
+                    )
         return {
             **summary,
             "objective": c.store.brief().objective,
@@ -853,6 +918,14 @@ class ResearchApp:
             }
         if action == "list":
             runs = FileRunStore(self.root).list(ExperimentRun)
+            # Workbench organization is independent of frozen experiment records.
+            group_file = self.root / "workbench-groups.json"
+            groups = json.loads(group_file.read_text())["groups"] if group_file.exists() else []
+            run_groups = {
+                run_id: {key: group[key] for key in ("id", "name", "created_at")}
+                for group in groups
+                for run_id in group["run_ids"]
+            }
 
             def created_at(run: ExperimentRun) -> str:
                 c = self.coordinator(run.run_id)
@@ -876,6 +949,7 @@ class ResearchApp:
                             "status": self.coordinator(r.run_id).state["status"],
                             "simulated": self.coordinator(r.run_id).state["simulated"],
                             "created_at": created_at(r),
+                            "group": run_groups.get(r.run_id),
                         }
                         for r in runs
                         if r.plan.workflow == "research"

@@ -136,6 +136,8 @@ class Coordinator:
         key: str,
         references: tuple[RecordRef, ...] = (),
         reply_to: str | None = None,
+        event_kind: str = "message",
+        event_data: dict[str, Any] | None = None,
     ) -> str:
         message_id = effect_id("message", key)
         try:
@@ -153,12 +155,13 @@ class Coordinator:
             )
             self.store.put("messages", message_id, message)
             self.store.event(
-                "message",
+                event_kind,
                 sender=sender,
                 recipient=recipient,
                 message_id=message_id,
                 reply_to=reply_to,
                 text=text if recipient == "user" or sender == "user" else None,
+                **(event_data or {}),
             )
         if recipient != "user":
             inbox = self.state["inboxes"].setdefault(recipient, [])

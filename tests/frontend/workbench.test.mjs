@@ -16,9 +16,10 @@ function run(id, status = 'planned') {
     events: [], event_cursor: 120, waiting_for_user: [],
   };
 }
-async function setup(t, records, handler) {
+async function setup(t, records, handler, savedStorage = {}) {
   const window = new Window({url: 'http://localhost:8198/', settings: {disableJavaScriptFileLoading: true, disableCSSFileLoading: true}});
   t.after(() => window.happyDOM.close());
+  for (const [key, value] of Object.entries(savedStorage)) window.localStorage.setItem(key, value);
   window.setInterval = () => 0;
   const calls = [];
   window.fetch = async (path, options = {}) => {
@@ -43,6 +44,53 @@ async function setup(t, records, handler) {
   return {window, $, calls, switchRun, input, submit};
 }
 
+test('research groups collapse, persist across navigation and reload, and share mobile selection', async (t) => {
+  const recent = {id: 'recent', name: '0915-153620', created_at: '2026-09-15T07:36:20Z'};
+  const older = {id: 'older', name: '0910-224132', created_at: '2026-09-10T14:41:32Z'};
+  const records = {a: {...run('a'), group: recent}, b: {...run('b'), group: recent}, c: {...run('c'), group: older}};
+  const ui = await setup(t, records);
+  const groups = () => [...ui.$('run-list').querySelectorAll('.run-group')];
+  assert.deepEqual(groups().map((group) => group.querySelector('.run-group-name').textContent), [recent.name, older.name]);
+  assert.deepEqual(groups().map((group) => group.querySelector('.run-group-count').textContent), ['2', '1']);
+  assert.ok(groups().every((group) => !group.open));
+  groups()[0].querySelector('summary').click(); await settle();
+  assert.equal(groups()[0].open, true);
+  ui.switchRun('b'); await settle();
+  assert.equal(ui.$('objective').textContent, '研究 b');
+  assert.deepEqual(groups().map((group) => group.open), [true, false]);
+  groups()[0].querySelector('summary').click(); await settle();
+  ui.$('mobile-run-picker').querySelector('summary').click();
+  const mobileOlder = ui.$('mobile-run-list').querySelectorAll('.run-group')[1];
+  mobileOlder.querySelector('summary').click(); await settle();
+  mobileOlder.querySelector('button').click(); await settle();
+  assert.equal(ui.$('objective').textContent, '研究 c');
+  assert.equal(ui.$('mobile-run-picker').open, false);
+  assert.deepEqual(groups().map((group) => group.open), [false, true]);
+  const saved = Object.fromEntries(['recent', 'older'].map((id) => {
+    const key = `rsi.workbench.group.group:${id}`;
+    return [key, ui.window.localStorage.getItem(key)];
+  }));
+  const reloaded = await setup(t, records, undefined, saved);
+  assert.deepEqual([...reloaded.$('run-list').querySelectorAll('.run-group')].map((group) => group.open), [false, true]);
+});
+
+test('new research stays accessible alongside saved groups and empty groups disappear', async (t) => {
+  const records = {a: {...run('a'), group: {id: 'batch', name: '0915-153620', created_at: '2026-09-15T07:36:20Z'}}};
+  const ui = await setup(t, records, (path, options) => {
+    if (path === '/api/runs' && options.method === 'POST') {
+      records.new = run('new');
+      return Promise.resolve(response(records.new));
+    }
+  });
+  ui.$('new-run').click(); ui.submit('create-form'); await settle();
+  const groups = [...ui.$('run-list').querySelectorAll('.run-group')];
+  assert.deepEqual(groups.map((group) => group.querySelector('.run-group-name').textContent), ['未分组', '0915-153620']);
+  assert.equal(ui.$('objective').textContent, '研究 new');
+  const empty = await setup(t, {});
+  assert.equal(empty.$('run-list').querySelectorAll('.run-group').length, 0);
+  assert.match(empty.$('run-list').textContent, /还没有研究记录/);
+});
+
 test('switching runs uses cached views and rejects a late response from the previous run', async (t) => {
   const records = {a: run('a'), b: run('b')};
   let hold = false, resolve;
@@ -65,7 +113,7 @@ test('graph shows frozen durations, zoom controls, and completed jobs on demand'
   const record = run('a', 'stopped');
   Object.assign(record, {started_at: '2026-09-14T10:00:00Z', finished_at: '2026-09-14T11:00:00Z'});
   record.agents.push({agent_id: 'researcher', direction: '探索方向', state: 'stopped'});
-  record.nodes = [{iteration_id: 'node1', agent_id: 'researcher', state: 'completed', title: '分析方案', created_at: '2026-09-14T10:00:00Z', updated_at: '2026-09-14T10:50:00Z', assignment: {instruction: '研究一个方向'}, report: {created_at: '2026-09-14T10:10:00Z', message: '结论'}}];
+  record.nodes = [{iteration_id: 'node1', agent_id: 'researcher', state: 'completed', title: '分析方案', created_at: '2026-09-14T10:00:00Z', updated_at: '2026-09-14T10:10:00Z', assignment: {instruction: '研究一个方向'}, report: {created_at: '2026-09-14T10:10:00Z', message: '结论'}}];
   record.jobs = [{job_id: 'job1', agent_id: 'researcher', iteration_id: 'node1', status: 'succeeded', started_at: record.started_at, finished_at: record.finished_at}];
   const ui = await setup(t, {a: record});
   assert.equal(ui.$('run-elapsed').textContent, '1 小时 0 分');
@@ -80,6 +128,46 @@ test('graph shows frozen durations, zoom controls, and completed jobs on demand'
   assert.equal(ui.$('graph-expand').getAttribute('aria-pressed'), 'true');
   ui.$('graph-canvas').querySelector('[data-node="node1"]').click();
   assert.match(ui.$('node-panel').textContent, /本轮历时 10 分 0 秒/);
+});
+
+test('progress reports do not stop node clocks; stopped nodes show best and full report history', async (t) => {
+  const record = run('a', 'running');
+  record.started_at = '2026-09-16T10:27:17Z';
+  record.brief.verification = {metric: 'speedup'};
+  record.agents.push({agent_id: 'researcher', direction: '独立探索 2', state: 'running'});
+  const reports = [
+    {report_id: 'first', created_at: '2026-09-16T10:44:38Z', message: '尚未正确，继续探索。', delivery_status: 'delivered', references: [{uri: 'run://a/reports/first.json'}]},
+    {report_id: 'second', created_at: '2026-09-16T11:27:03Z', message: '已有正确版本，继续验证。', delivery_status: 'pending', references: []},
+  ];
+  record.nodes = [{iteration_id: 'node1', agent_id: 'researcher', state: 'running',
+    created_at: '2026-09-16T10:27:44Z', updated_at: '2026-09-16T10:27:44Z',
+    reports, report: reports[1], verification: {score: 0.5951515, phase: 'search'}, assignment: {instruction: '独立探索整题'}}];
+  record.events = [{sequence: 120, kind: 'report_submitted', agent_id: 'researcher', data: {report_id: 'second'}, created_at: reports[1].created_at}];
+  const ui = await setup(t, {a: record, b: run('b')});
+  let card = ui.$('graph-canvas').querySelector('[data-node="node1"]');
+  assert.equal(card.querySelector('[data-elapsed-start]').dataset.elapsedEnd, undefined);
+  assert.match(card.textContent, /最佳 0.5952×/);
+  assert.match(card.textContent, /2 份报告/);
+  assert.match(ui.$('activity').textContent, /提交研究报告/);
+  card.click();
+  const history = ui.$('node-panel').querySelector('.report-history');
+  assert.equal(history.querySelectorAll('.report-entry').length, 2);
+  assert.match(history.textContent, /已送达 RSI/);
+  assert.match(history.textContent, /等待送达 RSI/);
+  assert.match(history.textContent, /尚未正确，继续探索/);
+  assert.match(history.textContent, /run:\/\/a\/reports\/first.json/);
+  assert.equal(history.querySelectorAll('.report-entry')[0].open, true);
+  assert.equal(history.querySelectorAll('.report-entry')[1].open, false);
+  record.status = 'stopped'; record.finished_at = '2026-09-16T11:27:40Z';
+  record.nodes[0].state = 'cancelled'; record.nodes[0].updated_at = '2026-09-16T11:27:17Z';
+  ui.switchRun('b'); await settle();
+  ui.switchRun('a'); await settle();
+  card = ui.$('graph-canvas').querySelector('[data-node="node1"]');
+  assert.match(card.textContent, /历时 59 分 33 秒/);
+  card.click();
+  assert.match(ui.$('node-panel').textContent, /本轮历时 59 分 33 秒/);
+  assert.match(ui.$('node-panel').textContent, /结束时尚未送达 RSI/);
+  assert.match(ui.$('node-panel').textContent, /本节点最佳有效成绩/);
 });
 
 test('chat displays pending messages, reuses their IDs on retry, then waits for the agent', async (t) => {
@@ -143,8 +231,10 @@ test('creation configures the first conversation and modal dropdowns stay intera
   ui.input('create-base-url', 'https://custom.example/v1');
   ui.input('create-api-key', 'dummy-ui-key');
   ui.input('create-model', 'custom-model');
+  ui.$('create-backend-trigger').click();
+  ui.$('create-backend-options').querySelectorAll('[role="option"]')[1].click();
   ui.submit('create-form'); await settle();
-  assert.deepEqual(submitted.model_settings, {base_url: 'https://custom.example/v1', api_key: 'dummy-ui-key', model: 'custom-model', reasoning_effort: 'high'});
+  assert.deepEqual(submitted.model_settings, {base_url: 'https://custom.example/v1', api_key: 'dummy-ui-key', model: 'custom-model', reasoning_effort: 'high', backend: 'codex'});
   assert.equal(ui.$('create-dialog').open, false);
   assert.equal(ui.$('create-api-key').value, '');
   assert.equal(ui.$('objective').textContent, '研究 new');

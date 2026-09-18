@@ -291,6 +291,12 @@ class PassKActions(ResearchActions):
             "研究员进展：\n" + report.message[:4000],
             key=report_id,
             references=(node.report_ref,),
+            event_kind="report_submitted",
+            event_data={
+                "agent_id": agent_id,
+                "iteration_id": node.iteration_id,
+                "report_id": report_id,
+            },
         )
         return {"report_id": report_id, "status": "recorded", "continue_research": True}
 

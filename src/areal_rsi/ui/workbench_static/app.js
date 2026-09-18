@@ -11,10 +11,12 @@ const state = {
   refreshController: null,
   loading: false,
   runs: [],
+  groupExpansion: new Map(),
   events: new Map(),
   cursors: new Map(),
   selected: new Map(),
   assignmentExpansion: new Map(),
+  reportExpansion: new Map(),
   graphSignature: "",
   detailSignature: "",
   messageSignature: "",
@@ -42,8 +44,15 @@ const state = {
   modelSavingRun: null,
 };
 const emptyChat = $("messages").firstElementChild.cloneNode(true);
-const runDropdown = new WorkbenchDropdown($("mobile-runs"), {
-  label: "选择研究", placeholder: "暂无研究", onChange: (value) => selectRun(value),
+const mobileRunPicker = $("mobile-run-picker");
+document.addEventListener("click", (event) => {
+  if (!mobileRunPicker.contains(event.target)) mobileRunPicker.open = false;
+});
+mobileRunPicker.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    mobileRunPicker.open = false;
+    mobileRunPicker.querySelector("summary").focus();
+  }
 });
 const recipientDropdown = new WorkbenchDropdown($("chat-recipient"), {
   label: "发送给",
@@ -67,6 +76,10 @@ const effortDropdown = new WorkbenchDropdown($("reasoning-effort"), {
   label: "推理强度",
   onChange: (value) => { modelDraft().reasoning_effort = value; renderModelSettings(); },
 });
+const backendOptions = [{value: "standard", text: "standard"}, {value: "codex", text: "codex"}];
+const backendDropdown = new WorkbenchDropdown($("agent-backend"), {
+  label: "Agent 后端", onChange: (value) => { modelDraft().backend = value; renderModelSettings(); },
+});
 const effortLabels = {
   none: "无推理 · none", low: "低 · low", medium: "中 · medium",
   high: "高 · high", xhigh: "很高 · xhigh", max: "最高 · max",
@@ -77,7 +90,7 @@ function modelDraft() {
     const saved = state.run?.model_settings || {};
     state.modelDrafts.set(state.runId, {
       base_url: saved.base_url || "", model: saved.model || "",
-      reasoning_effort: saved.reasoning_effort || "", api_key: "",
+      reasoning_effort: saved.reasoning_effort || "", backend: saved.backend || "standard", api_key: "",
     });
   }
   return state.modelDrafts.get(state.runId);
@@ -87,7 +100,7 @@ function modelSettingsChanged() {
   const saved = state.run?.model_settings;
   const draft = state.modelDrafts.get(state.runId);
   return !!saved?.editable && !!draft &&
-    (!!draft.api_key || ["base_url", "model", "reasoning_effort"].some((key) => draft[key] !== saved[key]));
+    (!!draft.api_key || ["base_url", "model", "reasoning_effort", "backend"].some((key) => draft[key] !== (saved[key] || (key === "backend" ? "standard" : ""))));
 }
 
 function renderModelSettings() {
@@ -101,7 +114,7 @@ function renderModelSettings() {
   if (!saved.editable) state.modelDrafts.delete(state.runId);
   const draft = saved.editable ? (state.modelDrafts.get(state.runId) || saved) : saved;
   const disabled = !saved.editable || !!state.modelSavingRun;
-  $("model-settings-summary").textContent = `${saved.model} · ${saved.reasoning_effort}${saved.editable ? "" : " · 已锁定"}`;
+  $("model-settings-summary").textContent = `${saved.backend || "standard"} · ${saved.model} · ${saved.reasoning_effort}${saved.editable ? "" : " · 已锁定"}`;
   if ($("model-base-url").value !== draft.base_url) $("model-base-url").value = draft.base_url;
   $("model-base-url").disabled = disabled;
   $("model-name").value = draft.model;
@@ -113,6 +126,7 @@ function renderModelSettings() {
   if (!models.some((model) => model.value === draft.model))
     models.push({ value: draft.model, text: draft.model, disabled: true });
   modelDropdown.update(models, draft.model, disabled);
+  backendDropdown.update(backendOptions, draft.backend || "standard", disabled);
   const efforts = [...(state.models.find((model) => model.id === draft.model)?.efforts || Object.keys(effortLabels))];
   if (!efforts.includes(draft.reasoning_effort)) efforts.push(draft.reasoning_effort);
   effortDropdown.update(efforts.map((value) => ({ value, text: effortLabels[value] || value })), draft.reasoning_effort, disabled);
@@ -177,7 +191,7 @@ const eventNames = {
   run_reopened: "恢复研究",
   agent_created: "建立研究方向",
   assignment_created: "下发研究任务",
-  report_submitted: "收到研究报告",
+  report_submitted: "提交研究报告",
   evidence_shared: "共享研究经验",
   candidate_saved: "保存候选产物",
   verification_completed: "验证完成",
@@ -251,8 +265,14 @@ function elapsed(start, end, className = "") {
 }
 function nodeTimes(run, node) {
   const start = node.created_at || node.assignment?.created_at;
-  const end = node.report?.created_at || (!activeNode(node) ? node.updated_at : null) || run.finished_at;
+  const end = (!activeNode(node) ? node.updated_at || node.report?.created_at : null) || run.finished_at;
   return [start, end];
+}
+function nodeReports(node) {
+  return node.reports?.length ? node.reports : node.report ? [node.report] : [];
+}
+function nodeScore(run, node) {
+  return `${score(node.verification.score)}${run.brief?.verification?.metric === "speedup" ? "×" : ""}`;
 }
 function tickElapsed() {
   for (const item of document.querySelectorAll("[data-elapsed-start]")) {
@@ -370,11 +390,51 @@ async function loadRuns() {
   }
 }
 function renderRuns() {
-  const buttons = state.runs.map((run) => {
+  const groups = new Map();
+  for (const run of state.runs) {
+    const key = run.group?.id ? `group:${run.group.id}` : "ungrouped";
+    if (!groups.has(key)) groups.set(key, {
+      key, name: run.group?.name || "未分组", createdAt: run.group?.created_at || "", runs: [],
+    });
+    groups.get(key).runs.push(run);
+  }
+  const ordered = [...groups.values()].sort((a, b) =>
+    (b.createdAt || "\uffff").localeCompare(a.createdAt || "\uffff"));
+  for (const id of ["run-list", "mobile-run-list"]) {
+    replace(id, ...(ordered.length
+      ? ordered.map(renderRunGroup)
+      : [element("p", "muted", "还没有研究记录")]));
+  }
+  const current = state.runs.find((run) => run.run_id === state.runId);
+  $("mobile-run-name").textContent = current?.objective || "选择研究";
+}
+
+function renderRunGroup(group) {
+  const details = element("details", "run-group");
+  details.dataset.group = group.key;
+  const storageKey = `rsi.workbench.group.${group.key}`;
+  if (!state.groupExpansion.has(group.key))
+    state.groupExpansion.set(group.key, localStorage.getItem(storageKey) === "open");
+  details.open = state.groupExpansion.get(group.key);
+  const summary = element("summary");
+  summary.append(element("span", "run-group-name", group.name));
+  summary.append(element("span", "run-group-count", String(group.runs.length)));
+  details.classList.toggle("has-selected", group.runs.some((run) => run.run_id === state.runId));
+  details.addEventListener("toggle", () => {
+    if (!details.isConnected || state.groupExpansion.get(group.key) === details.open) return;
+    state.groupExpansion.set(group.key, details.open);
+    localStorage.setItem(storageKey, details.open ? "open" : "closed");
+    for (const peer of document.querySelectorAll(".run-group"))
+      if (peer.dataset.group === group.key) peer.open = details.open;
+  });
+  const items = element("div", "run-group-items");
+  for (const run of group.runs) {
     const button = element(
       "button",
       `run-item ${run.run_id === state.runId ? "selected" : ""}`,
     );
+    button.title = run.objective || "未命名研究";
+    if (run.run_id === state.runId) button.setAttribute("aria-current", "true");
     button.append(element("span", "run-indicator"));
     const body = element("span");
     body.append(element("span", "run-name", run.objective || "未命名研究"));
@@ -386,19 +446,14 @@ function renderRuns() {
       ),
     );
     button.append(body);
-    button.addEventListener("click", () => selectRun(run.run_id));
-    return button;
-  });
-  replace(
-    "run-list",
-    ...(buttons.length ? buttons : [element("p", "muted", "还没有研究记录")]),
-  );
-  runDropdown.update(
-    state.runs.map((run) => ({
-      value: run.run_id, text: run.objective || "未命名研究", description: label(run.status),
-    })),
-    state.runId,
-  );
+    button.addEventListener("click", () => {
+      mobileRunPicker.open = false;
+      selectRun(run.run_id);
+    });
+    items.append(button);
+  }
+  details.append(summary, items);
+  return details;
 }
 async function selectRun(runId) {
   if (state.deleting) return;
@@ -512,7 +567,7 @@ function render() {
   $("delete-run").title = deletionBlocked(run) ? "请先停止研究再删除" : "删除这项研究的本地记录";
   $("best-score").textContent = score(run.best?.score);
   $("best-caption").textContent = run.best
-    ? `${run.brief?.verification?.metric || "验证分数"} · 同一验证条件`
+    ? `${run.brief?.verification?.metric || "验证分数"} · 探索阶段最佳`
     : "尚无可比较的验证结果";
   replace(
     "baseline-score",
@@ -522,7 +577,7 @@ function render() {
   );
   $("baseline-caption").textContent = run.baseline
     ? "起点结果 / 最终确认"
-    : "暂无起点评测结果";
+    : "起点未评测 / 最终确认";
   const nodes = run.nodes || [];
   $("node-count").textContent = integer(nodes.length);
   $("node-caption").textContent =
@@ -875,9 +930,13 @@ function renderGraph(run) {
             element(
               "p",
               "node-score",
-              score(node.verification.score),
+              `最佳 ${nodeScore(run, node)}`,
             ),
           );
+        if (!node.job && !node.verification && run.brief?.verification)
+          button.append(element("p", "node-score muted", "暂无有效成绩"));
+        if (!node.job)
+          button.append(element("p", "node-reports", `${nodeReports(node).length} 份报告`));
         const [started, finished] = node.job ? [node.job.started_at || node.job.created_at, node.job.finished_at || run.finished_at] : nodeTimes(run, node);
         const timing = element("div", "node-timing");
         timing.append(document.createTextNode("历时 "), elapsed(started, finished));
@@ -963,6 +1022,40 @@ function assignmentDetails(run, node) {
   });
   return details;
 }
+function reportHistory(run, node) {
+  const reports = nodeReports(node);
+  const block = element("section", "detail-section report-history");
+  block.append(element("h4", "", `研究报告 · ${reports.length} 份`));
+  if (!reports.length) block.append(element("p", "muted", "尚未提交报告。"));
+  for (const [index, report] of [...reports].reverse().entries()) {
+    const item = element("details", "report-entry");
+    const key = `${run.run_id}/${node.iteration_id}/${report.report_id || report.created_at}`;
+    item.open = state.reportExpansion.get(key) ?? index === 0;
+    const delivery = report.delivery_status === "delivered" ? "已送达 RSI"
+      : report.delivery_status === "pending" ? (run.finished_at ? "结束时尚未送达 RSI" : "等待送达 RSI")
+      : report.delivery_status === "archived" ? "已归档" : "";
+    const date = report.created_at ? new Date(timestamp(report.created_at)).toLocaleString("zh-CN") : "";
+    item.append(element("summary", "", [`报告 ${reports.length - index}`, date, delivery].filter(Boolean).join(" · ")));
+    if (report.message) {
+      const body = element("div", "message-content");
+      appendFormattedText(body, report.message);
+      item.append(body);
+    } else {
+      for (const [name, title] of Object.entries({task_status: "任务执行情况", work: "具体尝试",
+        problems: "遇到的问题", results: "实际结果", interpretation: "结论与不确定性", next_steps: "建议的下一步"}))
+        if (report[name]) item.append(section(title, report[name]));
+      if (report.shared_findings?.length)
+        item.append(section("可共享的发现", report.shared_findings.join("\n")));
+    }
+    for (const ref of report.references || [])
+      item.append(element("div", "record-ref", ref.uri));
+    item.addEventListener("toggle", () => {
+      if (item.isConnected) state.reportExpansion.set(key, item.open);
+    });
+    block.append(item);
+  }
+  return block;
+}
 function renderNode(run) {
   const job = run.jobs?.find((item) => `job:${item.job_id}` === state.selected.get(run.run_id));
   if (job) {
@@ -972,7 +1065,7 @@ function renderNode(run) {
   const node = run.nodes?.find(
     (item) => item.iteration_id === state.selected.get(run.run_id),
   );
-  const signature = JSON.stringify([run.run_id, node]);
+  const signature = JSON.stringify([run.run_id, run.finished_at, node]);
   if (signature === state.detailSignature) return;
   state.detailSignature = signature;
   if (!node) {
@@ -999,6 +1092,9 @@ function renderNode(run) {
   timing.append(document.createTextNode("本轮历时 "), elapsed(started, finished));
   if (started) timing.append(element("small", "muted", `开始 ${new Date(timestamp(started)).toLocaleString("zh-CN")}${finished ? ` · 结束 ${new Date(timestamp(finished)).toLocaleString("zh-CN")}` : " · 进行中"}`));
   const blocks = [heading, timing, assignmentDetails(run, node)];
+  if (node.verification)
+    blocks.push(section("本节点最佳有效成绩", `${nodeScore(run, node)} · 探索阶段正式验证`));
+  blocks.push(reportHistory(run, node));
   const jobs = (run.jobs || []).filter((job) => job.iteration_id === node.iteration_id);
   if (jobs.length) {
     const links = element("div", "node-job-links");
@@ -1009,43 +1105,6 @@ function renderNode(run) {
     }
     blocks.push(links);
   }
-  if (node.report?.message) {
-    const report = element("section", "detail-section");
-    const body = element("div", "message-content");
-    appendFormattedText(body, node.report.message);
-    report.append(element("h4", "", "本轮报告"), body);
-    blocks.push(report);
-  } else if (node.report) {
-    const names = {
-      task_status: "任务执行情况",
-      work: "具体尝试",
-      problems: "遇到的问题",
-      results: "实际结果",
-      interpretation: "结论与不确定性",
-      next_steps: "建议的下一步",
-    };
-    for (const [name, title] of Object.entries(names))
-      blocks.push(section(title, node.report[name]));
-    if (node.report.shared_findings?.length)
-      blocks.push(
-        section("可共享的发现", node.report.shared_findings.join("\n")),
-      );
-  } else
-    blocks.push(
-      section(
-        "本轮报告",
-        ["pending", "running"].includes(node.state)
-          ? "尚未提交报告。"
-          : "此节点未产生报告。",
-      ),
-    );
-  if (node.verification)
-    blocks.push(
-      section(
-        "验证记录",
-        `${score(node.verification.score)} · ${phaseName(node.verification.phase)}`,
-      ),
-    );
   for (const evidence of node.evidence || []) {
     const item = element("section", "evidence-card");
     item.append(
@@ -1296,6 +1355,7 @@ function renderEvents() {
           const row = element("div", "event-row");
           const detail =
             (event.kind === "model_retry" ? `${event.data?.error_code} · 已失败 ${event.data?.attempt} 次` : "") ||
+            (event.kind === "report_submitted" ? agentName(event.agent_id) : "") ||
             event.data?.title ||
             event.data?.direction ||
             event.data?.reason ||
@@ -1442,6 +1502,9 @@ async function createConversation(message = "", modelSettings) {
 const createPreset = new WorkbenchDropdown($("create-model-preset"), {
   label: "常用模型", onChange: (value) => { $("create-model").value = value; updateCreateModels(); },
 });
+const createBackend = new WorkbenchDropdown($("create-backend"), {
+  label: "Agent 后端", onChange: (value) => { state.createBackend = value; },
+});
 const createEffort = new WorkbenchDropdown($("create-effort"), {
   label: "推理强度", onChange: (value) => { state.createEffort = value; },
 });
@@ -1462,6 +1525,8 @@ function openCreate(message = "") {
   $("create-message").value = message;
   $("create-error").hidden = true;
   state.createEffort = defaults.reasoning_effort || "xhigh";
+  state.createBackend = defaults.backend || "standard";
+  createBackend.update(backendOptions, state.createBackend);
   updateCreateModels();
   $("create-dialog").showModal();
 }
@@ -1472,7 +1537,7 @@ $("create-form").addEventListener("submit", (event) => {
   event.preventDefault();
   createConversation($("create-message").value.trim(), {
     base_url: $("create-base-url").value.trim(), api_key: $("create-api-key").value.trim(),
-    model: $("create-model").value.trim(), reasoning_effort: state.createEffort,
+    model: $("create-model").value.trim(), reasoning_effort: state.createEffort, backend: state.createBackend,
   });
 });
 $("new-run").addEventListener("click", () => openCreate());
@@ -1634,6 +1699,10 @@ $("chat-input").addEventListener("keydown", (event) => {
 
 async function bootstrap() {
   const config = await api("/api/bootstrap");
+  const branch = config.branch || "";
+  document.title = `RSI · 研究工作台${branch ? ` — ${branch}` : ""}`;
+  $("workbench-caption").textContent = branch || "研究工作台";
+  $("workbench-name").textContent = branch ? `研究空间 · ${branch}` : "研究空间";
   state.token = config.csrf_token;
   state.models = config.models || [];
   state.defaultModelSettings = config.default_model_settings || {};

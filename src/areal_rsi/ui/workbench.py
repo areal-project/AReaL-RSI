@@ -13,6 +13,7 @@ import json
 import mimetypes
 import re
 import secrets
+import subprocess
 import threading
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -24,6 +25,20 @@ Json = dict[str, Any]
 STATIC_ROOT = Path(__file__).with_name("workbench_static")
 IDENTIFIER = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 MAX_BODY_BYTES = 128 * 1024
+
+
+def branch_name() -> str:
+    try:
+        return subprocess.run(
+            ["git", "branch", "--show-current"],
+            cwd=Path(__file__).resolve().parents[3],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
 
 
 @dataclass(frozen=True)
@@ -69,7 +84,7 @@ def _report(value: Any) -> Json | None:
     result = _fields(
         value,
         "report_id iteration_id assignment_id message task_status work problems results "
-        "interpretation next_steps shared_findings created_at",
+        "interpretation next_steps shared_findings created_at delivery_status",
     )
     result["references"] = _refs(value.get("references"))
     return result
@@ -115,7 +130,8 @@ def public_detail(value: Json) -> Json:
     )
     result["intake"] = _fields(value.get("intake"), "status summary environment execution_required")
     result["model_settings"] = _fields(
-        value.get("model_settings"), "base_url model reasoning_effort editable has_credentials"
+        value.get("model_settings"),
+        "base_url model reasoning_effort backend editable has_credentials",
     )
     result["pending_agents"] = [a for a in value.get("pending_agents", []) if isinstance(a, str)]
     result["execution_blocker"] = _fields(value.get("execution_blocker"), "job_id error created_at")
@@ -158,6 +174,9 @@ def public_detail(value: Json) -> Json:
         )
         entry["assignment"]["references"] = _refs((node.get("assignment") or {}).get("references"))
         entry["report"] = _report(node.get("report"))
+        entry["reports"] = [
+            _report(report) for report in node.get("reports", []) if isinstance(report, dict)
+        ]
         entry["evidence"] = [_evidence(item) for item in node.get("evidence", [])]
         entry["references"] = _refs(node.get("references"))
         entry["verification"] = _score(node.get("verification"))
@@ -220,6 +239,7 @@ class WorkbenchServer(ThreadingHTTPServer):
     ):
         self.backend = backend
         self.backend_timeout = backend_timeout
+        self.branch = branch_name()
         self.csrf_token = secrets.token_urlsafe(32)
         self._owns_loop = loop is None
         self.loop = loop or asyncio.new_event_loop()
@@ -336,6 +356,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                     200,
                     {
                         "csrf_token": self.server.csrf_token,
+                        "branch": self.server.branch,
                         **_fields(raw, "service api_version capabilities data_root"),
                         **{
                             name: raw.get(name) is True
@@ -344,7 +365,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                         "models": [_fields(model, "id efforts") for model in raw.get("models", [])],
                         "default_model_settings": _fields(
                             raw.get("default_model_settings"),
-                            "base_url model reasoning_effort has_credentials",
+                            "base_url model reasoning_effort backend has_credentials",
                         ),
                     },
                 )
@@ -357,7 +378,12 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                     200,
                     {
                         "runs": [
-                            _fields(run, "run_id objective status simulated started_at created_at")
+                            {
+                                **_fields(
+                                    run, "run_id objective status simulated started_at created_at"
+                                ),
+                                "group": _fields(run.get("group"), "id name created_at") or None,
+                            }
                             for run in raw.get("runs", [])
                         ]
                     },

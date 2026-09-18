@@ -14,7 +14,7 @@ from areal_rsi.api.base import AgentState
 from areal_rsi.api.research import ResearchLimits, TaskBrief, VerificationContract, VerifiedResult
 from areal_rsi.base.storage import encode, now
 from areal_rsi.coordination.config import ResearchConfig
-from areal_rsi.coordination.coordinator import Coordinator
+from areal_rsi.coordination.coordinator import Coordinator, effect_id
 from areal_rsi.coordination.engine import ToolSet
 from areal_rsi.coordination.jobs import ResearchExecution
 from areal_rsi.coordination.passk import PassKActions, PassKEngine, launch, stop_on_target
@@ -351,6 +351,15 @@ def test_supervisor_reports_do_not_block_or_share_research(tmp_path: Path) -> No
         assert len(c.actor(actor_id).iterations) == 1
         report = c.state["passk_reports"][actor_id]
         assert report["message"] == "我自己的实验发现"
+        events = [event for event in c.store.events() if event.kind == "report_submitted"]
+        assert len(events) == 1
+        assert events[0].agent_id == actor_id
+        assert events[0].data["report_id"] == result.output["report_id"]
+        # Replaying the durable operation must not duplicate the timeline event.
+        actions.progress(
+            actor_id, effect_id("action", actor_id + ":progress"), "我自己的实验发现", []
+        )
+        assert len([e for e in c.store.events() if e.kind == "report_submitted"]) == 1
         with pytest.raises(ValueError, match="not part"):
             actions.read_record(agents[1], report["uri"])
         assert not any(

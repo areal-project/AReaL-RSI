@@ -1,5 +1,5 @@
 {
-  "model": "gpt-6-astra",
+  "model": "gpt-5.6-luna",
   "reasoning_effort": "xhigh",
   "base_url": "https://4ipic.com",
   "max_agents": 5,

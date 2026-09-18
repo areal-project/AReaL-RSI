@@ -41,7 +41,7 @@ class AgentConfig:
             if source is not None and (not isinstance(source, str) or not source.strip()):
                 raise ValueError("Research method paths must be nonempty strings")
 
-    def freeze(self, role: str = "research") -> None:
+    def freeze(self, role: str = "research", default_prompt: str | None = None) -> None:
         if self.snapshot is not None:
             if self.snapshot.sha256 != self.snapshot.digest():
                 raise ValueError("Research method snapshot digest mismatch")
@@ -52,7 +52,11 @@ class AgentConfig:
         from areal_rsi.agents.research.prompt import PROMPT as RESEARCH_PROMPT
         from areal_rsi.agents.rsi.prompt import PROMPT as RSI_PROMPT
 
-        result = MethodSnapshot(prompt={"research": RESEARCH_PROMPT, "rsi": RSI_PROMPT}[role])
+        result = MethodSnapshot(
+            prompt=default_prompt
+            if default_prompt is not None
+            else {"research": RESEARCH_PROMPT, "rsi": RSI_PROMPT}[role]
+        )
         total = 0
 
         def read(path: Path) -> str:
@@ -92,11 +96,11 @@ class AgentOverrides:
     research: AgentConfig | None = None
     rsi: AgentConfig | None = None
 
-    def freeze(self) -> None:
+    def freeze(self, defaults: dict[str, str] | None = None) -> None:
         for role in ("research", "rsi"):
             agent = getattr(self, role)
             if agent is not None:
-                agent.freeze(role)
+                agent.freeze(role, (defaults or {}).get(role))
 
 
 def run_method(run_root: Path, role: str = "research") -> MethodSnapshot | None:

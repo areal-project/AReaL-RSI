@@ -16,15 +16,23 @@ from areal_rsi.modules.runtime_storage import JournalStateStore, read_journal
 
 def initial() -> RunSnapshot:
     return RunSnapshot(
-        run_id="run", session_id="session", profile="default",
-        status=RunStatus.QUEUED, last_sequence=-1,
+        run_id="run",
+        session_id="session",
+        profile="default",
+        status=RunStatus.QUEUED,
+        last_sequence=-1,
     )
 
 
 def event(sequence: int, kind: EventType) -> RunEvent:
     return RunEvent(
-        event_id=f"event-{sequence}", sequence=sequence, time=datetime.now(UTC),
-        run_id="run", session_id="session", correlation_id="run", type=kind,
+        event_id=f"event-{sequence}",
+        sequence=sequence,
+        time=datetime.now(UTC),
+        run_id="run",
+        session_id="session",
+        correlation_id="run",
+        type=kind,
     )
 
 
@@ -100,6 +108,34 @@ def test_crash_tail_is_ignored_but_complete_corruption_is_rejected(tmp_path: Pat
     with path.open("ab") as stream:
         stream.write(b'{"version": "unfinished')
     assert read_journal(tmp_path) == ([], {"run": initial()})
-    path.write_bytes(data + b'not-json\n')
+    path.write_bytes(data + b"not-json\n")
     with pytest.raises(ValueError):
         read_journal(tmp_path)
+
+
+def test_restart_replays_valid_prefix_and_excludes_another_writer(tmp_path: Path) -> None:
+    async def check() -> None:
+        state = JournalStateStore(tmp_path)
+        await state.create_run(initial())
+        queued = initial().model_copy(update={"last_sequence": 0})
+        await state.commit_event(event(0, EventType.RUN_QUEUED), queued, outbox_sinks=())
+        with pytest.raises(BlockingIOError):
+            JournalStateStore(tmp_path, resume=True)
+        state.close()
+        path = tmp_path / "journal.jsonl"
+        prefix = path.read_bytes()
+        with path.open("ab") as stream:
+            stream.write(b'{"unfinished":')
+        reopened = JournalStateStore(tmp_path, resume=True)
+        try:
+            await reopened.restore()
+            assert await reopened.get_run("run") == queued
+            assert path.read_bytes() == prefix
+            running = queued.model_copy(update={"last_sequence": 1, "status": RunStatus.RUNNING})
+            await reopened.commit_event(event(1, EventType.RUN_STARTED), running, outbox_sinks=())
+            assert len(await reopened.list_events("run")) == 2
+            assert path.read_bytes().startswith(prefix)
+        finally:
+            reopened.close()
+
+    asyncio.run(check())

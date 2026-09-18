@@ -23,7 +23,7 @@ async def main() -> None:
         ResponsesConfig(
             base_url=os.environ.get("RSI_BASE_URL", "https://api.openai.com"),
             api_key=key,
-            model=os.environ.get("RSI_MODEL", "gpt-6-astra"),
+            model=os.environ.get("RSI_MODEL", "gpt-5.6-luna"),
             reasoning_effort=os.environ.get("RSI_REASONING_EFFORT", "xhigh"),
             max_output_tokens=4096,
             max_model_calls_per_turn=3,

@@ -195,17 +195,24 @@ def finish(manifest: dict[str, Any]) -> dict[str, Any]:
                 ]
                 if not valid:
                     continue
-                best = max(valid, key=lambda j: j["evaluation"]["speedup"])
-                source = (Path(best["cwd"]) / "model_new.py").read_bytes()
-                selected[case] = {
-                    "job_id": best["id"],
-                    "sha256": hashlib.sha256(source).hexdigest(),
-                    "source": base64.b64encode(source).decode(),
-                }
+                excluded = set(manifest.get("excluded_source_sha256", {}).get(case, []))
+                for best in sorted(valid, key=lambda j: j["evaluation"]["speedup"], reverse=True):
+                    source = (Path(best["cwd"]) / "model_new.py").read_bytes()
+                    digest = hashlib.sha256(source).hexdigest()
+                    if digest in excluded:
+                        continue
+                    selected[case] = {
+                        "job_id": best["id"],
+                        "sha256": digest,
+                        "source": base64.b64encode(source).decode(),
+                    }
+                    break
             save(path, selected)
         selected = json.loads(path.read_text())
         receipts = {}
         for case, chosen in selected.items():
+            if chosen["sha256"] in manifest.get("excluded_source_sha256", {}).get(case, []):
+                raise ValueError("冻结的最终产物已被撤回，不能继续交付")
             info = manifest["tasks"][case]
             workspace = Path(info["workspace"])
             with (workspace.parent / "submission.lock").open("a+") as task_lock:

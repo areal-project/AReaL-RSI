@@ -190,6 +190,38 @@ def test_documented_example_loads() -> None:
     assert "dispatch/SKILL.md" in config.agents.rsi.snapshot.skills
 
 
+def test_skills_override_preserves_main_prompt_variant(tmp_path: Path) -> None:
+    from areal_rsi.coordination.collaboration import build_plan
+
+    path = experiment(tmp_path / "method")
+    path.write_text(
+        "brief:\n  objective: Inspect\n  instructions: Report\n"
+        "research_prompt_variant: detailed\n"
+        "agents:\n  research:\n    skills: skills\n"
+    )
+    config = load_config(path)
+    assert config.agents.research is not None
+    assert config.agents.research.snapshot is not None
+    expected = build_plan(config.mode, config.collaboration_modules, "detailed")
+    assert config.agents.research.snapshot.prompt == expected.research_prompt
+
+
+def test_passk_keeps_configured_skill_tools_for_both_roles(tmp_path: Path) -> None:
+    from areal_rsi.coordination.passk import PassKActions
+
+    config = load_config(experiment(tmp_path / "method"))
+    config.agents.rsi = config.agents.research
+    c = Coordinator.create(tmp_path / "data", TaskBrief("Inspect", "Report findings"))
+    write_json(c.store.root / "coordination/config.json", config.public())
+    c.start()
+    agent = c.spawn(
+        key="spawn", direction="Inspect", instruction="Check", completion_criteria="Report"
+    )
+    actions = PassKActions(c)
+    for role in ("rsi", agent["agent_id"]):
+        assert "read_agent_skill" in {tool["name"] for tool in actions.definitions(role)}
+
+
 @pytest.mark.parametrize("role", ["research", "rsi"])
 @pytest.mark.parametrize("component", ["prompt", "skills"])
 def test_single_component_for_one_role_keeps_other_role_default(

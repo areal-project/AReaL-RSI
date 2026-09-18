@@ -14,11 +14,12 @@ import os
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import IO, Any
 
+from areal_rsi.agents.communication import INTEGRITY_PROMPT
 from areal_rsi.agents.interaction.prompt import PROMPT as INTERACTION_PROMPT
 from areal_rsi.agents.research.prompt import PROMPT as RESEARCH_PROMPT
 from areal_rsi.agents.rsi.prompt import PROMPT as RSI_PROMPT
@@ -27,7 +28,9 @@ from areal_rsi.api.research import ResearchMessage
 from areal_rsi.base.storage import encode, now, write_json
 from areal_rsi.coordination.agent_config import research_prompt, run_method
 from areal_rsi.coordination.coordinator import Coordinator
-from areal_rsi.modules.responses import ResponsesError, ResponsesRuntime, ToolHandler
+from areal_rsi.coordination.sources import archive_codex_source
+from areal_rsi.modules.agent_runtime import AgentRuntime, ToolHandler
+from areal_rsi.modules.responses import ResponsesError
 
 Json = dict[str, Any]
 TickHook = Callable[[], Awaitable[bool | None]]
@@ -54,6 +57,8 @@ class ToolSet:
     call: ToolHandler
     instructions: str = ""
     advertised: list[Json] | None = None
+    workspace: Path | None = None
+    environment: dict[str, str] | None = None
 
 
 class BudgetExceeded(ResponsesError):
@@ -64,9 +69,11 @@ class ResearchEngine:
     def __init__(
         self,
         coordinator: Coordinator,
-        runtime: ResponsesRuntime,
+        runtime: AgentRuntime,
         tools_factory: Callable[[str], ToolSet],
         *,
+        research_prompt: str = RESEARCH_PROMPT,
+        rsi_prompt: str = RSI_PROMPT,
         max_concurrent_turns: int | None = None,
         tick_hook: TickHook | None = None,
         poll_interval: float = 0.1,
@@ -74,10 +81,10 @@ class ResearchEngine:
     ):
         self.coordinator = coordinator
         self.runtime = runtime
-        self.interaction_runtime = ResponsesRuntime(
-            replace(runtime.config, max_model_calls_per_turn=None), runtime.transport
-        )
+        self.interaction_runtime = runtime.for_interaction()
         self.tools_factory = tools_factory
+        self.research_prompt = research_prompt
+        self.rsi_prompt = rsi_prompt
         self.max_concurrent_turns = (
             coordinator.store.brief().limits.max_agents + 2
             if max_concurrent_turns is None
@@ -192,6 +199,22 @@ class ResearchEngine:
 
     async def _event(self, agent_id: str, session: Path, event: Json) -> None:
         kind = event["type"]
+        if kind == "runtime_usage":
+            settled = self.coordinator.state.setdefault("runtime_usage", {})
+            if event["event_id"] not in settled:
+                settled[event["event_id"]] = {"agent_id": agent_id, "usage": event["usage"]}
+                self.coordinator.state["total_tokens"] += event["usage"].get("total_tokens", 0)
+                self.coordinator.save()
+                limit = self.coordinator.store.brief().limits.max_total_tokens
+                if limit is not None and self.coordinator.state["total_tokens"] >= limit:
+                    self._pause_for_budget("Run token budget exhausted")
+        if kind == "runtime_turn_started":
+            # A native harness turn can contain many provider calls. Do not
+            # misrepresent it as one model request in comparison statistics.
+            self.coordinator.state["runtime_turns"] = (
+                self.coordinator.state.get("runtime_turns", 0) + 1
+            )
+            self.coordinator.save()
         if kind in {
             "model_request",
             "model_attempt",
@@ -214,6 +237,8 @@ class ResearchEngine:
             self.coordinator.save()
         if kind == "message_injected":
             self.coordinator.receive_during_turn(agent_id, event["message_id"])
+        if kind == "web_search_response":
+            archive_codex_source(self.coordinator, agent_id, session, event["request_id"])
         if kind == "model_stream":
             # Full provider events remain in the private session archive. Public
             # output is published only after a successful terminal response, so
@@ -341,6 +366,21 @@ class ResearchEngine:
         self.coordinator.store.event(kind, agent_id=agent_id, **data)
         self.wake()
 
+    def _model_message(self, message: ResearchMessage) -> Json:
+        """Keep a delivery's origin beside its text, including the first message."""
+        value: Json = encode(message)
+        researcher = next(
+            (
+                actor
+                for actor in self.coordinator.store.run().research_agents
+                if actor.agent_id == message.sender
+            ),
+            None,
+        )
+        if researcher is not None:
+            value["sender_direction"] = researcher.direction
+        return value
+
     def _recovery_state(self, agent_id: str) -> Json:
         c = self.coordinator
         actor = c.actor(agent_id)
@@ -363,6 +403,7 @@ class ResearchEngine:
             if run.baseline_result_ref
             else None,
             "execution_setup": c.state.get("execution_setup", "ready"),
+            "withdrawn_candidates": c.store.withdrawals(),
             "plan": c.state["plan"],
             "agent_id": agent_id,
             "current_message": {
@@ -375,6 +416,7 @@ class ResearchEngine:
             "followup_message_ids": c.state.get("turn_followups", {}).get(agent_id, []),
             "waiting_for_user": c.user_questions() if agent_id in {"rsi", "interaction"} else [],
             "direction": actor.direction,
+            "collaborators": c.collaborators(agent_id),
             "current_node": encode(current),
             # A completion notification is a new delivery, not a replacement
             # assignment. Keep the task itself available after wakeups/compaction.
@@ -384,9 +426,7 @@ class ResearchEngine:
             }
             if assignment
             else None,
-            "budget": {
-                name: c.state[name] for name in ("model_calls", "total_tokens", "verify_calls")
-            },
+            "budget": c.budget(observed_at=self.clock()),
             "directions": [
                 {
                     "agent_id": researcher.agent_id,
@@ -410,44 +450,37 @@ class ResearchEngine:
             iteration_id = actor.current_iteration_id
             session = c.store.paths.agent(agent_id) / "sessions" / (actor.session_id or agent_id)
             state = self._recovery_state(agent_id)
-            role_prompt = {"rsi": RSI_PROMPT, "interaction": INTERACTION_PROMPT}.get(
-                agent_id, RESEARCH_PROMPT
-            )
+            handoff = session / "backend-handoff.json"
+            if handoff.exists():
+                state["backend_handoff"] = json.loads(handoff.read_text())
+            toolset = self.tools_factory(agent_id)
+            if agent_id == "rsi":
+                prompt = self.rsi_prompt.replace(
+                    "{{max_agents}}", str(c.store.brief().limits.max_agents)
+                ).replace("{{tool_instructions}}", toolset.instructions)
+            elif agent_id == "interaction":
+                prompt = (
+                    INTERACTION_PROMPT + "\n\n" + toolset.instructions + "\n\n" + INTEGRITY_PROMPT
+                )
+            else:
+                prompt = self.research_prompt.replace("{{tool_instructions}}", toolset.instructions)
             if agent_id != "interaction":
                 role = "rsi" if agent_id == "rsi" else "research"
-                role_prompt = research_prompt(role_prompt, run_method(c.store.root, role))
-            toolset = self.tools_factory(agent_id)
-            prompt = (
-                role_prompt
-                + "\n\n"
-                + toolset.instructions
-                + "\n\n以下是本次模型回合开始时的状态快照。"
-                "事实变化后，以后续工具结果和更新的会话检查点为准。"
-                "不要用这份初始快照覆盖较新的计划、方向或预算记录。"
-                + "\n\n当前 run 的系统状态：\n"
-                + json.dumps(state, ensure_ascii=False)
-            )
+                method = run_method(c.store.root, role)
+                if method is not None:
+                    template = research_prompt(prompt, method)
+                    prompt = template.replace(
+                        "{{max_agents}}", str(c.store.brief().limits.max_agents)
+                    ).replace("{{tool_instructions}}", toolset.instructions)
+                    if "{{tool_instructions}}" not in template:
+                        prompt += "\n\n" + toolset.instructions
+                    prompt += "\n\n" + INTEGRITY_PROMPT
             prompt_id = hashlib.sha256(prompt.encode()).hexdigest()
             write_json(session / "prompts" / f"{prompt_id}.json", {"prompt": prompt})
             runtime = self.interaction_runtime if agent_id == "interaction" else self.runtime
-            config = runtime.config
             write_json(
                 session / "configuration.json",
-                {
-                    "runtime": "responses",
-                    "model": config.model,
-                    "base_url": config.base_url,
-                    "reasoning_effort": config.reasoning_effort,
-                    "max_output_tokens": config.max_output_tokens,
-                    "max_model_calls_per_turn": config.max_model_calls_per_turn,
-                    "compact_after_chars": config.compact_after_chars,
-                    "context_window_tokens": config.context_window_tokens,
-                    "compact_keep_recent_tokens": config.compact_keep_recent_tokens,
-                    "timeout": config.timeout,
-                    "retry_initial_seconds": config.retry_initial_seconds,
-                    "retry_max_seconds": config.retry_max_seconds,
-                    "prompt_id": prompt_id,
-                },
+                {**runtime.configuration(), "prompt_id": prompt_id},
             )
 
             async def event_sink(event: Json) -> None:
@@ -456,6 +489,8 @@ class ResearchEngine:
                     # Keep the object passed to runtime current throughout a long
                     # turn; checkpoint creation takes its own immutable copy.
                     latest = self._recovery_state(agent_id)
+                    if "backend_handoff" in state:
+                        latest["backend_handoff"] = state["backend_handoff"]
                     state.clear()
                     state.update(latest)
 
@@ -468,14 +503,22 @@ class ResearchEngine:
                     for identifier in c.state["inboxes"].get(agent_id, [])
                     if identifier != message.message_id
                 )
-                return [encode(update) for update in updates if update.sender in allowed]
+                return [
+                    self._model_message(update) for update in updates if update.sender in allowed
+                ]
 
+            # Peer reports and progress use the same envelope whether they wake
+            # an idle actor or arrive during its turn. Literal user input stays
+            # literal; archived turns resume their original payload unchanged.
+            delivered_text = (
+                message.text
+                if message.sender == "user"
+                else json.dumps(self._model_message(message), ensure_ascii=False)
+            )
             result = await runtime.turn(
                 session,
                 system_prompt=prompt,
-                user_message=None
-                if resumed and (session / "session.json").exists()
-                else message.text,
+                user_message=None if resumed and runtime.has_session(session) else delivered_text,
                 message_id=message.message_id,
                 tools=toolset.definitions,
                 advertised_tools=toolset.advertised,
@@ -486,6 +529,8 @@ class ResearchEngine:
                 if retry.get("mode") != "report" and retry.get("message_id") == message.message_id
                 else None,
                 incoming_messages=incoming_messages,
+                workspace=toolset.workspace,
+                environment=toolset.environment,
             )
             user_messages = [
                 identifier
@@ -509,23 +554,9 @@ class ResearchEngine:
                     agent_id, error="Per-turn model-call budget exhausted; explicit review required"
                 )
             elif result.stop_reason == "completed" and agent_id not in {"rsi", "interaction"}:
-                node = next(
-                    n for n in c.actor(agent_id).iterations if n.iteration_id == iteration_id
+                self._complete_research_turn(
+                    agent_id, iteration_id, message.message_id, result.text
                 )
-                if node.report_ref is None and not c.pending_updates(agent_id):
-                    if not result.text.strip():
-                        c.end_turn(
-                            agent_id,
-                            error="Research Agent returned an empty final reply",
-                            missing_report=True,
-                        )
-                        return
-                    c.report(
-                        agent_id,
-                        key="final:" + message.message_id,
-                        fields={"message": result.text.strip(), "references": node.references},
-                    )
-                c.end_turn(agent_id)
             else:
                 c.end_turn(agent_id)
         except BudgetExceeded as exc:
@@ -554,6 +585,26 @@ class ResearchEngine:
     def _actor_allowed(self, agent_id: str) -> bool:
         status = self.coordinator.state["status"]
         return status == "running" or (status == "planned" and agent_id == "interaction")
+
+    def _complete_research_turn(
+        self, agent_id: str, iteration_id: str | None, message_id: str, text: str
+    ) -> None:
+        c = self.coordinator
+        node = next(n for n in c.actor(agent_id).iterations if n.iteration_id == iteration_id)
+        if node.report_ref is None and not c.pending_updates(agent_id):
+            if not text.strip():
+                c.end_turn(
+                    agent_id,
+                    error="Research Agent returned an empty final reply",
+                    missing_report=True,
+                )
+                return
+            c.report(
+                agent_id,
+                key="final:" + message_id,
+                fields={"message": text.strip(), "references": node.references},
+            )
+        c.end_turn(agent_id)
 
     async def tick(self) -> int:
         """Poll jobs, apply controls and dispatch ready actors without awaiting their turns."""
@@ -588,7 +639,11 @@ class ResearchEngine:
                         self.coordinator.save_actor(actor)
                 self.coordinator.reconcile_report_replies()
                 for agent_id in self.coordinator.pending():
-                    if agent_id not in self._tasks and len(self._tasks) < self.max_concurrent_turns:
+                    if (
+                        self._actor_allowed(agent_id)
+                        and agent_id not in self._tasks
+                        and len(self._tasks) < self.max_concurrent_turns
+                    ):
                         self._tasks[agent_id] = asyncio.create_task(
                             self._drive(agent_id),
                             name=f"research:{self.coordinator.store.run_id}:{agent_id}",

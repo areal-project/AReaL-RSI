@@ -1,4 +1,4 @@
-"""Runnable workflow simulations; real operators provide execution configuration."""
+"""Runnable research simulations; real operators provide execution configuration."""
 
 from __future__ import annotations
 

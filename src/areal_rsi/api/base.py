@@ -15,12 +15,6 @@ TRAJECTORY_BUNDLE_MEDIA_TYPE = "application/vnd.areal-rsi.trajectories+json"
 EVIDENCE_BUNDLE_MEDIA_TYPE = "application/vnd.areal-rsi.evidence+json"
 
 
-class EvolutionTarget(StrEnum):
-    MODEL = "model"
-    HARNESS = "harness"
-    ARTIFACT = "artifact"
-
-
 class BenchmarkSplit(StrEnum):
     TRAIN = "train"
     VALIDATE = "validate"
@@ -90,37 +84,6 @@ class ContentRef:
 
 
 @dataclass(slots=True)
-class EvidenceFile:
-    """描述一份内容在本次证据交接中的身份，不另存一份文件内容。
-
-    ContentRef 只回答“内容在哪里、如何校验”；此对象补充“导出叫什么、
-    用来做什么、属于哪个任务”。同一 ContentRef 可以出现在不同证据清单中，
-    使用不同路径或用途。路径、用途和元数据由生产者定义，不绑定 Benchmark。
-    """
-
-    # 导出到 Agent 工作目录时的相对文件路径，不是底层存储地址。
-    path: str
-    # 引用已有内容；文件字节仍由 ContentStore 保存。
-    content: ContentRef
-    # 例如 output、trajectory、verification；供访问策略筛选，本身不授予权限。
-    kind: str
-    # 例如 task_id、trajectory_id；被授权文件的这些信息也会出现在导出清单中。
-    metadata: JsonObject = field(default_factory=dict)
-
-
-@dataclass(slots=True)
-class EvidenceBundle:
-    """一组证据文件的清单，只关联内容引用，不拼接各文件的正文。
-
-    metadata 描述整组证据，例如所属 solution_id 和 split；具体研究方法
-    负责解释这些字段。清单不等于授权，导出时还需显式选择允许访问的路径。
-    """
-
-    files: tuple[EvidenceFile, ...]
-    metadata: JsonObject = field(default_factory=dict)
-
-
-@dataclass(slots=True)
 class ModelVersion:
     version_id: str
     name: str
@@ -169,27 +132,6 @@ class HarnessChange:
 
     patch: ContentRef
     reason: str
-
-
-@dataclass(slots=True)
-class ModelChange:
-    """A single training request proposed against the current Model version."""
-
-    training_data: ContentRef
-    config: JsonObject
-    reason: str
-
-
-@dataclass(slots=True)
-class ArtifactChange:
-    """A single patch that creates or updates one user artifact."""
-
-    artifact_name: str
-    patch: ContentRef
-    reason: str
-
-
-ResearchChange: TypeAlias = HarnessChange | ModelChange | ArtifactChange
 
 
 @dataclass(slots=True)
@@ -381,21 +323,6 @@ class EvaluationReport:
 
 
 @dataclass(slots=True)
-class MemoryRecord:
-    memory_id: str
-    text: str
-    source: str
-    tags: tuple[str, ...]
-    created_at: str
-
-
-@dataclass(slots=True)
-class MemoryHit:
-    memory: MemoryRecord
-    score: float
-
-
-@dataclass(slots=True)
 class AgentSpec:
     """Explicit dependencies used to assemble one infrastructure Agent."""
 
@@ -447,24 +374,17 @@ class ResearchAgentState:
 
 
 @dataclass(slots=True)
-class ExperimentPlan:
+class ResearchPlan:
     goal: str
-    workflow: str
-    benchmark: str
-    baseline_solution_id: str | None
-    target: EvolutionTarget | None
     max_iterations: int | None
     research_agent_count: int = 1
-    stop_when_goal_reached: bool = True
-    config: JsonObject = field(default_factory=dict)
 
 
 @dataclass(slots=True)
-class ExperimentRun:
+class ResearchRun:
     run_id: str
-    plan: ExperimentPlan
+    plan: ResearchPlan
     state: RunState
-    best_solution_id: str | None = None
     research_agents: tuple[ResearchAgentState, ...] = ()
     started_at: str | None = None
     finished_at: str | None = None

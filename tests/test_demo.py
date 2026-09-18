@@ -17,11 +17,11 @@ from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
+from runtime_fakes import ActionRuntime
 
 from areal_rsi.api.research import TaskBrief, VerificationContract
 from areal_rsi.coordination.config import ResearchConfig
 from areal_rsi.execution import ApprovedCommand
-from areal_rsi.modules.responses import ResponsesConfig, ResponsesRuntime
 from areal_rsi.research_app import ResearchApp
 from areal_rsi.ui.launch import ensure_workbench
 from areal_rsi.ui.workbench import WorkbenchServer
@@ -30,26 +30,6 @@ from areal_rsi.ui.workbench import WorkbenchServer
 @pytest.fixture(autouse=True)
 def adapter_imports(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.syspath_prepend(str(Path("examples/kernelbench_artifacts").resolve()))
-
-
-class StopTransport:
-    def __init__(self, action: str = "stop_run"):
-        self.action = action
-
-    async def request(self, config: Any, payload: Any, sink: Any) -> dict[str, Any]:
-        return {
-            "id": "stop",
-            "status": "completed",
-            "output": [
-                {
-                    "type": "function_call",
-                    "name": self.action,
-                    "call_id": "finished",
-                    "arguments": '{"reason":"探索结束"}',
-                }
-            ],
-            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
-        }
 
 
 @pytest.mark.parametrize("limit", [None, 1800])
@@ -109,7 +89,7 @@ def test_single_task_preparation_requires_time_budget_and_unlimited_submissions(
     limits = config["brief"]["limits"]
     assert limits["max_wall_seconds"] == limit
     assert limits["max_jobs"] == 6
-    assert limits["max_model_calls"] is None
+    assert "max_model_calls" not in limits
     assert limits["max_agents"] == 6
     assert config["metadata"]["finalization_reserve_seconds"] == 0
     assert ("本次不设时间上限" in config["brief"]["instructions"]) == (limit is None)
@@ -235,10 +215,7 @@ else:
     config.metadata["time_limit_scope"] = "exploration"
     app = ResearchApp(
         tmp_path,
-        runtime_factory=lambda _: ResponsesRuntime(
-            ResponsesConfig(base_url="https://example.test", api_key="test"),
-            StopTransport("wait"),
-        ),
+        runtime_factory=lambda _: ActionRuntime("wait"),
     )
     server = WorkbenchServer(app, port=0)
     thread = threading.Thread(target=server.serve_forever, daemon=True)

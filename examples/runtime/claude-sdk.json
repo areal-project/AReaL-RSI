@@ -1,8 +1,0 @@
-{
-  "default": {
-    "kind": "claude-agent-sdk",
-    "config": {
-      "permissionMode": "dontAsk"
-    }
-  }
-}

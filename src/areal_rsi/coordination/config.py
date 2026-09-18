@@ -12,7 +12,7 @@ from areal_rsi.api.research import TaskBrief
 from areal_rsi.base.storage import decode, encode
 from areal_rsi.coordination.collaboration import selected_modules
 from areal_rsi.execution import ApprovedCommand
-from areal_rsi.modules.responses import ResponsesConfig
+from areal_rsi.modules.research_settings import ResearchConnection, validate_base_url
 
 MODEL_EFFORTS = {
     "gpt-5.6-luna": ("none", "low", "medium", "high", "xhigh", "max"),
@@ -38,16 +38,7 @@ def validate_model_settings(value: dict[str, Any]) -> dict[str, str]:
         settings["model"], ("none", "low", "medium", "high", "xhigh", "max")
     ):
         raise ValueError("该模型不支持所选推理强度")
-    # Reuse the actual transport's URL validation; no request or credential is needed.
-    try:
-        ResponsesConfig(
-            api_key="validation-only", **{k: v for k, v in settings.items() if k != "backend"}
-        )
-        if any(char.isspace() for char in settings["base_url"]):
-            raise ValueError
-    except ValueError as exc:
-        raise ValueError("API 地址须为不含密钥、查询参数或空格的 HTTP(S) 地址") from exc
-    settings["base_url"] = settings["base_url"].rstrip("/")
+    settings["base_url"] = validate_base_url(settings["base_url"])
     return settings
 
 
@@ -67,10 +58,6 @@ class ResearchConfig:
     credential_file: str | None = None
     max_output_tokens: int = 16384
     context_window_tokens: int | None = None
-    compact_keep_recent_tokens: int = 8_000
-    max_model_calls_per_turn: int | None = None
-    retry_initial_seconds: float = 2
-    retry_max_seconds: float = 60
     commands: tuple[ApprovedCommand, ...] = ()
     verifier: ApprovedCommand | None = None
     finalizer: ApprovedCommand | None = None
@@ -86,20 +73,21 @@ class ResearchConfig:
             raise ValueError("Agent 后端支持 standard 或 codex")
         if self.brief.limits.max_effective_seconds is not None and self.mode != "passk":
             raise ValueError("Per-researcher effective time requires passk")
+        ResearchConnection(
+            self.base_url, self.model, self.reasoning_effort,
+            self.max_output_tokens, self.context_window_tokens, self.backend,
+        )
         if self.mode == "passk":
             limits = self.brief.limits
-            if self.max_model_calls_per_turn is not None:
-                raise ValueError("passk requires max_model_calls_per_turn to be null")
             if any(
                 getattr(limits, name) is not None
                 for name in (
-                    "max_model_calls",
                     "max_total_tokens",
                     "max_verify_calls",
                 )
             ):
                 raise ValueError(
-                    "passk requires unlimited model/token/verification counts (null); "
+                    "passk requires unlimited token/verification counts (null); "
                     "use a wall-time limit"
                 )
             if limits.max_nodes is not None and limits.max_nodes < limits.max_agents:
@@ -128,22 +116,22 @@ class ResearchConfig:
         self.model_settings_pinned = True
         self.__post_init__()
 
-    def runtime(self) -> ResponsesConfig:
-        key = self.api_key()
-        if not key:
+    def runtime(self) -> ResearchConnection:
+        connection = self.connection_settings()
+        if not self.api_key():
             raise ValueError(f"Set {self.api_key_env} before starting model agents")
-        settings = self.model_settings()
-        return ResponsesConfig(
-            api_key=key,
+        return connection
+
+    def connection_settings(self) -> ResearchConnection:
+        """Validate effective native settings without requiring credentials for a draft."""
+        settings = validate_model_settings(self.model_settings())
+        return ResearchConnection(
             base_url=settings["base_url"],
             model=settings["model"],
             reasoning_effort=settings["reasoning_effort"],
             max_output_tokens=self.max_output_tokens,
             context_window_tokens=self.context_window_tokens,
-            compact_keep_recent_tokens=self.compact_keep_recent_tokens,
-            max_model_calls_per_turn=self.max_model_calls_per_turn,
-            retry_initial_seconds=self.retry_initial_seconds,
-            retry_max_seconds=self.retry_max_seconds,
+            backend=settings["backend"],
         )
 
     def validate_clock(self) -> None:
@@ -175,7 +163,13 @@ def config_from_dict(value: dict[str, Any]) -> ResearchConfig:
     selected_modules(value.get("mode", "passk"), value.get("collaboration_modules", ()))
     if "research_prompt_variant" in value:
         raise ValueError("research_prompt_variant 已移除；Prompt 由协作配置选择")
-    config: ResearchConfig = decode(ResearchConfig, value)
+    unknown = set(value) - ResearchConfig.__dataclass_fields__.keys()
+    if unknown:
+        raise ValueError("Unknown research configuration fields: " + ", ".join(sorted(unknown)))
+    try:
+        config: ResearchConfig = decode(ResearchConfig, value)
+    except KeyError as exc:
+        raise ValueError(f"Unknown research configuration field: {exc.args[0]}") from None
     if config.metadata.get("time_limit_scope", "total") not in {"total", "exploration"}:
         raise ValueError("time_limit_scope must be total or exploration")
     names = [command.name for command in config.commands]

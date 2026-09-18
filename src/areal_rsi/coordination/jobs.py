@@ -19,7 +19,7 @@ from areal_rsi.coordination.coordinator import effect_id
 from areal_rsi.coordination.effective_time import EffectiveTime
 from areal_rsi.execution import ApprovedCommand, JobManager, JobRecord, JobSpec
 from areal_rsi.execution.progress import read_progress
-from areal_rsi.modules.responses import ToolCall, ToolHandler, ToolResult
+from areal_rsi.modules.agent_runtime import ToolCall, ToolHandler, ToolResult
 
 VerificationReader = Callable[[JobRecord, CandidateSnapshot, str], VerifiedResult]
 INLINE_INSTRUCTIONS_CHARS = 8000

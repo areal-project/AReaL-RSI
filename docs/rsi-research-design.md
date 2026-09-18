@@ -47,7 +47,7 @@ Research 可通过 `share_update` 将关键事实和产物定向交给正在执�
 
 RSI 可以在其他方向运行时继续调研和协调；没有可推进事项时等待。只有用户能解决的阻碍，通过 `ask_user` 说明现状和需要的帮助，用户回复后在原会话继续。
 
-消息、模型响应、工具效果和作业具有稳定身份。临时 API 故障自动重试；暂停和重启沿用已有会话与完成记录，结果不明的外部操作先核查，不自动重复提交。compact 根据上下文用量生成摘要，结合最新系统状态恢复；完整原文继续归档。
+消息、模型响应、工具效果和作业具有稳定身份。临时 API 故障自动重试；暂停和重启沿用已有会话与完成记录，结果不明的外部操作先核查，不自动重复提交。上下文压缩由原生后端管理，进程恢复时结合最新系统状态；完整事件保存在 Runtime journal 中。
 
 角色和工具指令保持稳定，变化的系统状态与调用预算作为运行时消息追加，保留历史前缀以便缓存复用。状态更新在工具序列完成后投递；中断中的 API 请求先重放原始请求。压缩单独保留原始任务、最新系统状态和最近消息。
 历史摘要围绕下一步决策保留已验证结论、反例、未解决依赖与必要引用，合并重复结论及已更正判断，不重复另行保留的任务和状态。篇幅目标可因关键事实较多而放宽；压缩不能新增限制，也不能将某个实现的失败扩大为整个方法不可行。
@@ -90,8 +90,8 @@ runs/<run_id>/
 
 ## 代码位置
 
-- `agents/{rsi,research}/*_prompt.py`：现行协作角色职责；`agents/interaction/prompt.py`：需求交互。`modules/responses.py`：会话、重试和 compact。
+- `agents/{rsi,research}/*_prompt.py`：现行协作角色职责；`agents/interaction/prompt.py`：需求交互。`modules/research_runtime.py`：原生运行时适配；会话、重试和 compact 由 AReaL Agent Runtime 及其后端管理。
 - `api/research.py`、`base/runs.py`、`coordination/store.py`：数据记录与 run 归属。
 - `coordination/`：需求交接、任务与消息、调度、工具和验证；`execution/`：后台作业。
 - `research_app.py`、`ui/workbench*`：应用入口与本地工作台。
-- `adapters/`、`examples/`：任务接入；`app.py`、`remote_app.py`、`workflows/`：固定工作流。
+- `adapters/`、`examples/`：通过 ResearchApp 的实验命令与可信验证器接入任务。

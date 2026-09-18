@@ -27,7 +27,7 @@ from areal_rsi.coordination.jobs import ResearchExecution
 from areal_rsi.coordination.store import ResearchStore
 from areal_rsi.coordination.verification import read_trusted_result
 from areal_rsi.execution import ApprovedCommand, JobRecord, JobSpec
-from areal_rsi.modules.responses import ToolCall
+from areal_rsi.modules.agent_runtime import ToolCall
 
 
 def test_command_parameter_help_survives_config_and_preserves_execution(tmp_path: Path) -> None:

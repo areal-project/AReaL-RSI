@@ -49,7 +49,6 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument("--max-agents", type=int, help="Default: 1")
     result.add_argument("--max-nodes", type=integer_limit, default=None)
-    result.add_argument("--max-model-calls", type=integer_limit, default=None)
     result.add_argument("--max-total-tokens", type=integer_limit, default=None)
     result.add_argument("--max-verify-calls", type=integer_limit, default=None)
     result.add_argument("--max-jobs", type=integer_limit, default=1)
@@ -191,7 +190,6 @@ def build_config(args: argparse.Namespace) -> ResearchConfig:
     limits = ResearchLimits(
         max_agents=args.max_agents if args.max_agents is not None else 1,
         max_nodes=args.max_nodes,
-        max_model_calls=args.max_model_calls,
         max_total_tokens=args.max_total_tokens,
         max_verify_calls=args.max_verify_calls,
         max_jobs=args.max_jobs,

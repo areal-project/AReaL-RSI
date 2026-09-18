@@ -44,7 +44,14 @@ Agent 后端有 `standard`（默认，AReaL Runtime 的 DSH 适配器）和 `cod
 
 研究图中每个 Agent 占一列，进展按实际发生时间向下展开，空白时段压缩；个人有效时间单独显示在研究员卡片中。默认展示成绩突破、汇报、建议和待完成作业，也可切换“只看协作”或展开全部作业。虚线根据建议附带的同一研究内的引用标明信息来源；点击事件可查看原文和送达状态。送达不代表已被采纳，没有明确同伴来源的消息显示为 RSI 的建议。此视图只读取历史记录，不改变 agent 协作或补写实验数据。
 
-入口自动在后台启动服务；已有兼容的 RSI 工作台则复用，其他进程占用端口则报错，不关闭或覆盖它。用 `--port 8200` 指定端口，用 `--data-root /path/to/data` 指定数据目录。旧版 RSI 服务需要先重启到当前版本。
+`rsi`、`rsi web` 和 `rsi workbench` 均以前台方式启动同一个新工作台；
+`python run.py --type web` 负责后台启动或复用服务。新工作台、`rsi research` 和
+`rsi preflight` 的数据目录统一按 `--data-root`、`RSI_DATA_ROOT`、`.rsi/research-lab`
+的顺序选择。以前直接运行 CLI 保存在 `.rsi` 的研究，可用 `--data-root .rsi` 打开。
+研究入口统一为 ResearchApp；旧 `tui/run/resume/status/local-app`、TUI/MCP 控制器和
+固定轮次调度器已移除。旧计划与检查点不迁移，请使用当前配置新建研究。
+
+仓库入口自动在后台启动服务；已有兼容的 RSI 工作台则复用，其他进程占用端口则报错，不关闭或覆盖它。用 `--port 8200` 指定端口，用 `--data-root /path/to/data` 指定数据目录。旧版 RSI 服务需要先重启到当前版本。
 
 服务日志和 PID 位于 `<数据目录>/runtime/workbench-<端口>.log / .pid`。若希望前台运行、用 Ctrl+C 停止服务：
 
@@ -88,12 +95,33 @@ CLI 持续输出进度；Ctrl+C 保存状态供恢复。用同一数据目录打
 | `POST /api/runs/<id>/chat`，body 为 `{"text":"补充要求"}` | 发送消息 |
 | `POST /api/runs/<id>/pause`、`resume`、`stop` | 控制执行，body 为 `{}` |
 
+## 数学与 LCB
+
+数学和 LCB 均使用 ResearchApp。操作员适配器准备固定的题目、目标模型和评分身份，
+研究模型自主调用候选与验证工具：
+
+- [数学示例](examples/local/README.md)：3 道 TRAIN / 3 道 VALIDATE 原创算术题。
+- [LCB 示例](examples/remote/README.md)：EnvArena 固定题目与 Reward，研究员修改通用 system prompt。
+
+## 检查研究运行时
+
+```bash
+uv run --env-file .env --locked rsi preflight --backend standard
+uv run --env-file .env --locked rsi preflight --backend codex
+# 也可传入实际研究配置：rsi preflight --config /absolute/path/research.json
+```
+
+预检使用生产工作台的 Runtime 工厂，实际调用配置的模型与任务工具，并检查进程重启后
+的会话记忆、会话标识和重复消息回执。默认总超时 180 秒，可用 `--timeout` 调整。
+记录写入数据目录下的 `preflight/`，不会创建正式研究或提交 GPU 作业。
+旧 `scripts/preflight_responses.py` 命令转发到同一个预检。
+
 ## 记录与恢复
 
 每次研究的数据集中在 `RSI_DATA_ROOT/runs/<run_id>/`，包含需求、会话、任务、报告、共享证据、冻结候选和验证记录。等待作业、报告或用户时不调用模型；临时 API 故障自动重试。
 
-研究配置中的 `context_window_tokens` 会传入原生后端。省略或设为 `null` 时，Codex 使用自己的模型默认窗口；standard 沿用现有窗口约定：`gpt-6-astra` 为 256,000 token，其他模型为 128,000。压缩时机和摘要由各后端负责；`compact_keep_recent_tokens` 仅保留配置兼容，不控制原生压缩。Codex CLI 固定为 `0.153.4`，与当前 Luna goal baseline 一致。
+研究配置中的 `context_window_tokens` 会传入原生后端。省略或设为 `null` 时，Codex 使用自己的模型默认窗口；standard 沿用现有窗口约定：`gpt-6-astra` 为 256,000 token，其他模型为 128,000。压缩时机和摘要由各后端负责。旧的压缩、重试和模型调用上限字段已移除；包含旧字段的配置不再兼容，不自动迁移旧配置或会话，详见 [Agent 后端说明](docs/agent-backends.md)。Codex CLI 固定为 `0.153.4`，与当前 Luna goal baseline 一致。
 
 demo 在服务重启后自动恢复尚在执行的研究或收尾；手动暂停的研究保持暂停。完成最终复测后不能继续修改这次候选，需要新建 run。外部凭据失效或集群故障会明确报错或等待处理。
 
-系统职责和数据模型见[设计说明](docs/rsi-research-design.md)。旧固定流程和可选运行后端见 [Runtime 指南](docs/runtime-quickstart.md)。开发检查：`make check`；前端检查：`npm ci --prefix tests/frontend && npm test --prefix tests/frontend`。
+系统职责和数据模型见[设计说明](docs/rsi-research-design.md)。运行和配置见 [Runtime 指南](docs/runtime-quickstart.md)。开发检查：`make check`；前端检查：`npm ci --prefix tests/frontend && npm test --prefix tests/frontend`。

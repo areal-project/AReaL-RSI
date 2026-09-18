@@ -20,7 +20,7 @@ from areal_rsi.coordination.config import ResearchConfig, archived_config, load_
 from areal_rsi.coordination.coordinator import effect_id
 from areal_rsi.coordination.verification import IDENTITY_FIELDS
 from areal_rsi.execution import ApprovedCommand
-from areal_rsi.modules.responses import ToolCall, ToolHandler, ToolResult
+from areal_rsi.modules.agent_runtime import ToolCall, ToolHandler, ToolResult
 
 
 def reject_credentials(value: Any) -> None:

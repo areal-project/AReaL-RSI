@@ -311,7 +311,6 @@ def prepare(
         ResearchLimits(
             max_agents=demo["max_agents"],
             max_nodes=None,
-            max_model_calls=None,
             max_total_tokens=None,
             max_wall_seconds=max_wall_seconds,
             max_effective_seconds=max_effective_seconds,

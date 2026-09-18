@@ -16,7 +16,6 @@ class ResearchLimits:
         1  # Simultaneously live researchers, including waiting; not lifetime creations.
     )
     max_nodes: int | None = None
-    max_model_calls: int | None = None
     max_total_tokens: int | None = None
     max_wall_seconds: float | None = 14400
     max_verify_calls: int | None = None
@@ -29,7 +28,6 @@ class ResearchLimits:
         for name in (
             "max_agents",
             "max_nodes",
-            "max_model_calls",
             "max_total_tokens",
             "max_wall_seconds",
             "max_effective_seconds",

@@ -11,6 +11,10 @@ Json = dict[str, Any]
 EventSink = Callable[[Json], Awaitable[None]]
 
 
+class AgentRuntimeError(RuntimeError):
+    """A runtime or scheduler could not execute the requested delivery."""
+
+
 @dataclass(frozen=True)
 class ToolCall:
     name: str

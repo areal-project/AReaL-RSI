@@ -63,7 +63,6 @@ submit_report 记录进展并通知 RSI，不结束当前研究回合。研究�
     "limits": {
       "max_agents": 4,
       "max_nodes": null,
-      "max_model_calls": null,
       "max_total_tokens": null,
       "max_verify_calls": null,
       "max_wall_seconds": 3600,

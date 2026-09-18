@@ -1,4 +1,4 @@
-"""Minimal module interfaces used by RSI workflows."""
+"""Task execution, storage and evaluation interfaces."""
 
 from __future__ import annotations
 
@@ -8,19 +8,14 @@ from typing import Any, Protocol, runtime_checkable
 
 from areal_rsi.api.base import (
     AgentSpec,
-    ArtifactChange,
     ArtifactVersion,
     BenchmarkSplit,
     ContentRef,
     EvaluationReport,
-    EvidenceBundle,
     HarnessChange,
     HarnessVersion,
     JsonObject,
     JsonValue,
-    MemoryHit,
-    MemoryRecord,
-    ModelChange,
     ModelVersion,
     SolutionVersion,
     Task,
@@ -57,38 +52,6 @@ class ContentStore(Protocol):
     async def read_json(self, ref: ContentRef) -> JsonValue: ...
 
     async def resolve_path(self, ref: ContentRef) -> Path: ...
-
-
-class EvidenceStore(Protocol):
-    """Persist file manifests and export only explicitly granted files.
-
-    Agent runtimes must additionally isolate the exported workspace from the
-    backing store and other workspaces. Exporting is not itself a sandbox.
-    """
-
-    async def put(self, bundle: EvidenceBundle) -> ContentRef: ...
-
-    async def get(self, ref: ContentRef) -> EvidenceBundle: ...
-
-    async def materialize(
-        self, ref: ContentRef, destination: Path, *, paths: Sequence[str]
-    ) -> ContentRef:
-        """Create a fresh directory and index; return the exact exported grant."""
-        ...
-
-
-class Memory(Protocol):
-    async def add(
-        self,
-        text: str,
-        *,
-        source: str,
-        tags: Sequence[str] = (),
-    ) -> MemoryRecord: ...
-
-    async def get(self, memory_id: str) -> MemoryRecord | None: ...
-
-    async def search(self, query: str, *, limit: int = 10) -> Sequence[MemoryHit]: ...
 
 
 class TrajectoryStore(Protocol):
@@ -237,20 +200,6 @@ class BatchHarnessRuntime(HarnessRuntime, Protocol):
 
 class HarnessBuilder(Protocol):
     async def build(self, base: HarnessVersion, change: HarnessChange) -> ContentRef: ...
-
-
-class ArtifactBuilder(Protocol):
-    async def build(
-        self,
-        base: ArtifactVersion | None,
-        change: ArtifactChange,
-    ) -> ContentRef: ...
-
-
-class TrainingBackend(Protocol):
-    """Backend-neutral model training interface; AReaL is one implementation."""
-
-    async def train(self, base: ModelVersion, change: ModelChange) -> ContentRef: ...
 
 
 class Benchmark(Protocol):

@@ -22,8 +22,6 @@ from areal_rsi.api.base import (
     ContentRef,
     HarnessVersion,
     JsonValue,
-    MemoryHit,
-    MemoryRecord,
     ModelVersion,
     SolutionVersion,
     Trajectory,
@@ -306,10 +304,9 @@ class FileVersionManager:
 
 
 class FileTrajectoryStore:
-    def __init__(self, root: Path, content: FileContentStore, *, legacy_root: Path | None = None):
+    def __init__(self, root: Path, content: FileContentStore):
         self.records = FileRecords(root)
         self.content = content
-        self.legacy = FileRecords(legacy_root) if legacy_root is not None else None
 
     async def save(self, trajectory: Trajectory) -> TrajectoryRef:
         self.records.save(trajectory.trajectory_id, trajectory)
@@ -319,8 +316,6 @@ class FileTrajectoryStore:
         record = self.records.get(trajectory_id, Trajectory)
         # Legacy checkpoints already contain explicit trajectory IDs. Searches
         # remain scoped to the Run; no global records are enumerated or imported.
-        if record is None and self.legacy is not None:
-            return self.legacy.get(trajectory_id, Trajectory)
         return record
 
     async def query(self, query: TrajectoryQuery) -> TrajectoryPage:
@@ -354,36 +349,3 @@ class FileTrajectoryStore:
         return await self.content.put_bytes(
             json_bytes({"trajectories": entries}), media_type=TRAJECTORY_BUNDLE_MEDIA_TYPE
         )
-
-
-class FileMemory:
-    def __init__(self, root: Path):
-        self.records = FileRecords(root)
-
-    async def add(self, text: str, *, source: str, tags: Sequence[str] = ()) -> MemoryRecord:
-        if not text.strip() or not source.strip():
-            raise ValueError("Memory 内容和来源不能为空")
-        record = MemoryRecord(new_id("memory"), text, source, tuple(tags), now())
-        self.records.save(record.memory_id, record)
-        return record
-
-    async def get(self, memory_id: str) -> MemoryRecord | None:
-        return self.records.get(memory_id, MemoryRecord)
-
-    async def search(self, query: str, *, limit: int = 10) -> Sequence[MemoryHit]:
-        terms = memory_terms(query)
-        hits = []
-        for item in self.records.list(MemoryRecord):
-            words = memory_terms(item.text + " " + " ".join(item.tags))
-            score = len(terms & words) / max(1, len(terms))
-            if score:
-                hits.append(MemoryHit(item, score))
-        return sorted(hits, key=lambda h: (-h.score, h.memory.memory_id))[: max(0, min(limit, 50))]
-
-
-def memory_terms(text: str) -> set[str]:
-    """轻量中英文检索；中文用双字片段，不把整句话当一个词。"""
-    terms = set(re.findall(r"[a-z0-9_]+", text.lower()))
-    for fragment in re.findall(r"[\u4e00-\u9fff]+", text):
-        terms.update(fragment[i : i + 2] for i in range(max(1, len(fragment) - 1)))
-    return terms

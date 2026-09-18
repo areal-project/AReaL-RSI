@@ -1,11 +1,10 @@
-"""CLI 与 DSH 薄入口；聊天由 DSH TUI 处理，实验经本地 MCP 管理。"""
+"""CLI entry points for the ResearchApp workbench, research runs and preflight."""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
 import json
-import os
 import shlex
 import signal
 from contextlib import suppress
@@ -13,57 +12,7 @@ from pathlib import Path
 from types import FrameType
 from typing import Any
 
-from areal_rsi.api.base import ExperimentPlan, ExperimentRun, RunState
-from areal_rsi.app import create_app
-from areal_rsi.base.runs import FileRunStore
-from areal_rsi.base.storage import decode, encode
-from areal_rsi.config import ModelConfigurationError
-from areal_rsi.experiment_config import environment_scope, experiment_roots, plan_environment
-
-
-def data_root() -> Path:
-    return Path(os.environ.get("RSI_DATA_ROOT") or ".rsi").resolve()
-
-
-async def run_experiment(plan_file: str | None, resume: str | None) -> int:
-    root = data_root()
-    if resume:
-        from areal_rsi.ui.workspace import ExperimentWorkspace
-
-        controller = ExperimentWorkspace(root).locate(resume)
-        root = controller.root
-        plan = controller._run(resume).plan
-    else:
-        assert plan_file is not None
-        path = Path(plan_file).resolve()
-        value = json.loads(path.read_text())
-        plan = decode(ExperimentPlan, value.get("plan", value))
-        candidate = path.parent.parent if path.parent.name == "experiment-plans" else path.parent
-        if (candidate / "launch.json").exists():
-            root = candidate
-    with environment_scope(plan_environment(root, plan.config)):
-        return await _execute(root, plan, resume)
-
-
-async def _execute(root: Path, plan: ExperimentPlan, resume: str | None) -> int:
-    app = await create_app(root, lambda text: print(text, flush=True))
-    try:
-        await app.bind_plan(plan)
-        if resume:
-            run = await app.service.resume(resume)
-        else:
-            run = await app.service.start(plan)
-        print(f"实验已启动 run={run.run_id}", flush=True)
-        if run.run_id in app.service.tasks:
-            task = app.service.tasks[run.run_id]
-            loop = asyncio.get_running_loop()
-            for sig in (signal.SIGTERM, signal.SIGINT):
-                loop.add_signal_handler(sig, task.cancel)
-            run = await task
-        print(json.dumps(encode(run), ensure_ascii=False), flush=True)
-        return 0 if run.state == RunState.SUCCEEDED else 1
-    finally:
-        await app.close()
+from areal_rsi.base.paths import data_root
 
 
 def _workbench_command(root: Path, *, simulated: bool) -> str:
@@ -132,6 +81,7 @@ async def run_research(
     simulate_gpu: bool = False,
     timeout: float | None = None,
     poll_interval: float = 2,
+    root: Path | None = None,
 ) -> int:
     """Run real research models; poll only stored state and preserve work on interruption."""
     from areal_rsi.coordination.config import load_config
@@ -146,7 +96,7 @@ async def run_research(
         )
     if (timeout is not None and timeout <= 0) or poll_interval <= 0:
         raise ValueError("Timeout and polling interval must be positive")
-    root = data_root()
+    root = data_root(root)
     config = load_config(config_file) if config_file else None
     if example:
         config = example_config(example, repository=Path(__file__).resolve().parents[3])
@@ -247,13 +197,15 @@ async def run_research(
                 signal.signal(sig, previous)
 
 
-def serve_workbench(*, port: int, config_file: Path | None, simulate_gpu: bool) -> int:
+def serve_workbench(
+    *, port: int, config_file: Path | None, simulate_gpu: bool, root: Path | None = None
+) -> int:
     from areal_rsi.coordination.config import load_config
     from areal_rsi.research_app import ResearchApp
     from areal_rsi.ui.workbench import WorkbenchServer
 
     config = load_config(config_file) if config_file else None
-    app = ResearchApp(data_root(), config=config, allow_simulation=simulate_gpu)
+    app = ResearchApp(data_root(root), config=config, allow_simulation=simulate_gpu)
     server = WorkbenchServer(app, port=port)
     server.invoke("recover", {})
     previous = signal.getsignal(signal.SIGTERM)
@@ -281,92 +233,55 @@ def serve_workbench(*, port: int, config_file: Path | None, simulate_gpu: bool) 
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="RSI 研发入口（local / remote）")
+    parser = argparse.ArgumentParser(description="RSI 持续研究：工作台与 Research CLI")
     commands = parser.add_subparsers(dest="command")
-    local_app = commands.add_parser("local-app", help="管理当前项目的可信本地应用")
-    app_commands = local_app.add_subparsers(dest="app_command", required=True)
-    register = app_commands.add_parser("register", help="一次性注册本地应用入口（会导入可信代码）")
-    register.add_argument("name")
-    register.add_argument("factory", help="可导入的 module:factory")
-    register.add_argument("--replace", action="store_true", help="替换已有名称的入口")
-    tui = commands.add_parser("tui", help="打开 DSH 原生 TUI")
-    tui.add_argument("--resume", dest="session_id", help="恢复 DSH 对话 Session")
-    tui.add_argument("--setup-only", action="store_true", help="安装并准备本地 DSH profile")
-    worker = commands.add_parser("_experiment-worker", help=argparse.SUPPRESS)
-    worker.add_argument("--root", type=Path, required=True)
-    worker.add_argument("--run-id", required=True)
-    worker.add_argument("--token", required=True)
-    worker.add_argument("--lock-fd", type=int, required=True)
-    mcp = commands.add_parser("_mcp", help=argparse.SUPPRESS)
-    mcp.add_argument("--root", type=Path, required=True)
-    run = commands.add_parser("run", help="执行已经确认的计划")
-    run.add_argument("--plan", required=True)
-    resume = commands.add_parser("resume", help="恢复到最后一个已完成轮次")
-    resume.add_argument("run_id")
-    commands.add_parser("status", help="列出本地实验")
-    web = commands.add_parser("web", help="启动本地只读研究面板，不启动实验")
-    web.add_argument("--port", type=int, default=8765)
-    web.add_argument("--root", type=Path, help="实验工作区，优先于 RSI_DATA_ROOT")
-    web.add_argument("--run", dest="run_id")
-    workbench = commands.add_parser("workbench", help="打开可交互的本地研究工作台")
+    parser.set_defaults(command="workbench", port=8197, root=None, config=None, simulate_gpu=False)
+    workbench = commands.add_parser(
+        "workbench", aliases=["web"], help="打开可交互的本地研究工作台（默认入口）"
+    )
     workbench.add_argument("--port", type=int, default=8197)
+    workbench.add_argument("--data-root", "--root", dest="root", type=Path)
     workbench.add_argument("--config", type=Path, help="可信操作员配置 JSON")
     workbench.add_argument(
         "--simulate-gpu", action="store_true", help="允许模拟 GPU/Task 作业；研究模型仍调用真实 API"
     )
     research = commands.add_parser("research", help="运行开放式多 Agent 研究，并保留可恢复状态")
+    research.add_argument("--data-root", "--root", dest="root", type=Path)
     source = research.add_mutually_exclusive_group(required=True)
     source.add_argument("--config", type=Path, help="可信操作员配置 JSON")
-    source.add_argument("--example", choices=("kernelbench",), help="使用工作流模拟示例")
+    source.add_argument("--example", choices=("kernelbench",), help="使用研究模拟示例")
     source.add_argument("--resume", help="恢复 run 的已归档配置与会话")
     research.add_argument(
         "--simulate-gpu", action="store_true", help="模拟 GPU/Task 作业；研究模型仍调用真实 API"
     )
     research.add_argument("--timeout", type=float, help="本次前台运行秒数；到时保留状态供恢复")
     research.add_argument("--poll-interval", type=float, default=2, help="读取本地进展的间隔秒数")
+    preflight_parser = commands.add_parser("preflight", help="检查实际研究后端、工具和会话重启")
+    preflight_parser.add_argument("--config", type=Path, help="使用与研究相同的配置")
+    preflight_parser.add_argument("--backend", choices=("standard", "codex"))
+    preflight_parser.add_argument("--data-root", "--root", dest="root", type=Path)
+    preflight_parser.add_argument("--timeout", type=float, default=180)
     args = parser.parse_args()
-    if args.command == "_mcp":
-        from areal_rsi.ui.mcp import serve as serve_mcp
-
-        serve_mcp(args.root)
-        return
-    if args.command == "_experiment-worker":
-        from areal_rsi.ui.experiments import run_worker
-
-        raise SystemExit(asyncio.run(run_worker(args.root, args.run_id, args.token, args.lock_fd)))
-    if args.command == "web":
-        from areal_rsi.ui.web import serve
-
-        serve(
-            args.root.expanduser() if args.root else data_root(), port=args.port, run_id=args.run_id
-        )
-        return
-    if args.command == "status":
-        print(
-            json.dumps(
-                encode(
-                    [
-                        run
-                        for root in experiment_roots(data_root())
-                        for run in FileRunStore(root).list(ExperimentRun)
-                    ]
-                ),
-                ensure_ascii=False,
-                indent=2,
-            )
-        )
-        return
     try:
-        if args.command == "local-app":
-            from areal_rsi.modules.local.registry import register_local_app
-
-            path = register_local_app(args.name, args.factory, replace=args.replace)
-            print(f"已注册 {args.name}：{path}")
-            code = 0
-        elif args.command == "workbench":
+        if args.command in {"workbench", "web"}:
             code = serve_workbench(
-                port=args.port, config_file=args.config, simulate_gpu=args.simulate_gpu
+                port=args.port, config_file=args.config,
+                simulate_gpu=args.simulate_gpu, root=args.root,
             )
+        elif args.command == "preflight":
+            from areal_rsi.api.research import TaskBrief
+            from areal_rsi.coordination.config import ResearchConfig, load_config
+            from areal_rsi.ui.preflight import preflight
+
+            config = load_config(args.config) if args.config else ResearchConfig(
+                TaskBrief("Runtime preflight", "Check tools and durable sessions")
+            )
+            config.pin_model_settings()
+            if args.backend is not None:
+                config.backend = args.backend
+            result = asyncio.run(preflight(config, root=args.root, timeout=args.timeout))
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            code = 0
         elif args.command == "research":
             code = asyncio.run(
                 run_research(
@@ -376,30 +291,10 @@ def main() -> None:
                     simulate_gpu=args.simulate_gpu,
                     timeout=args.timeout,
                     poll_interval=args.poll_interval,
+                    root=args.root,
                 )
             )
-        elif args.command == "run":
-            code = asyncio.run(run_experiment(args.plan, None))
-        elif args.command == "resume":
-            code = asyncio.run(run_experiment(None, args.run_id))
-        else:
-            from areal_rsi.ui.dsh import launch_tui
-
-            code = launch_tui(
-                data_root(),
-                resume=getattr(args, "session_id", None),
-                setup_only=getattr(args, "setup_only", False),
-            )
-    except ModelConfigurationError as exc:
-        parser.exit(
-            2,
-            f"配置错误：{exc}\n"
-            "可填写本地 .env（参考 .env.example），然后运行：\n"
-            "  uv run --env-file .env --locked rsi tui\n",
-        )
     except (ValueError, OSError) as exc:
-        if args.command not in {"workbench", "research"}:
-            raise
         parser.exit(2, f"研究配置或启动错误：{exc}\n检查配置及 .env 后重试。\n")
     except KeyboardInterrupt:
         raise SystemExit(130) from None

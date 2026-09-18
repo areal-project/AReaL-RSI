@@ -31,7 +31,6 @@ def configuration(k: int = 3, seconds: float = 60) -> ResearchConfig:
             ResearchLimits(
                 max_agents=k,
                 max_nodes=None,
-                max_model_calls=None,
                 max_total_tokens=None,
                 max_verify_calls=None,
                 max_wall_seconds=seconds,
@@ -390,7 +389,7 @@ def test_workbench_mode_stops_and_rejects_intervention(tmp_path: Path) -> None:
 
 def test_mode_validation_prevents_shared_budget_interference() -> None:
     config = configuration()
-    for name in ("max_model_calls", "max_total_tokens", "max_verify_calls"):
+    for name in ("max_total_tokens", "max_verify_calls"):
         setattr(config.brief.limits, name, 10)
         with pytest.raises(ValueError, match="unlimited"):
             ResearchConfig(**{**encode(config), "brief": config.brief})
@@ -532,3 +531,15 @@ def test_kernelbench_verification_uses_only_own_attempt_receipts(tmp_path: Path)
     assert score == 1.2 and metrics["L3P10_submissions"] == 1
     assert evidence["L3P10"]["matching_evaluations"] == 1
     assert "peer" not in json.dumps(evidence)
+
+
+def test_leader_budget_preserves_native_model_input_contract(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        c, actions, agents = await setup(tmp_path, 1)
+        c.state["runtime_turns"] = 7
+        # Keep native-turn diagnostics, without adding them to model-visible budgets.
+        assert c.summary()["runtime_turns"] == 7
+        for agent in ["rsi", *agents]:
+            assert "runtime_turns" not in actions.state(agent)["budget"]
+
+    asyncio.run(scenario())

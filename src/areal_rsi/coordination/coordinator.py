@@ -10,12 +10,12 @@ from typing import Any
 
 from areal_rsi.api.base import (
     AgentState,
-    ExperimentPlan,
-    ExperimentRun,
     IterationState,
     RecordRef,
     ResearchAgentState,
     ResearchIteration,
+    ResearchPlan,
+    ResearchRun,
     RunState,
 )
 from areal_rsi.api.research import (
@@ -57,14 +57,10 @@ class Coordinator:
         brief_ref = store.put("briefs", "initial", brief)
         store.runs.save(
             store.run_id,
-            ExperimentRun(
+            ResearchRun(
                 store.run_id,
-                ExperimentPlan(
+                ResearchPlan(
                     brief.objective,
-                    "research",
-                    "",
-                    None,
-                    None,
                     brief.limits.max_nodes,
                     brief.limits.max_agents,
                 ),
@@ -992,6 +988,7 @@ class Coordinator:
         )
         result = {
             **{name: self.state[name] for name in ("model_calls", "total_tokens", "verify_calls")},
+            # Read-only historical counters; native runs do not create request reservations.
             "reserved_tokens": sum(
                 record.get("reserved_tokens", 0)
                 for record in self.state.get("model_requests", {}).values()

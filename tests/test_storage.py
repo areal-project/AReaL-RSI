@@ -5,7 +5,6 @@ from pathlib import Path
 from areal_rsi.api.base import Trajectory, TrajectoryQuery
 from areal_rsi.base.storage import (
     FileContentStore,
-    FileMemory,
     FileTrajectoryStore,
     FileVersionManager,
 )
@@ -46,18 +45,6 @@ class StorageTest(unittest.IsolatedAsyncioTestCase):
             artifact.name = "changed"
             with self.assertRaises(ValueError):
                 await versions.create_solution(model, harness, artifacts=(artifact,))
-
-    async def test_memory_preserves_text_and_finds_chinese_experience(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            memory = FileMemory(Path(directory))
-            text = "工具验证失败时检查参数和输出格式。" * 1000
-            record = await memory.add(text, source="trajectory:example", tags=("验证",))
-            stored = await memory.get(record.memory_id)
-            assert stored is not None
-            self.assertEqual(stored.text, text)
-            hits = await memory.search("如何改善工具验证？")
-            self.assertEqual(hits[0].memory.memory_id, record.memory_id)
-            self.assertEqual(await memory.search("不存在的主题xyz"), [])
 
     async def test_reload_is_detached_and_content_is_verified(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

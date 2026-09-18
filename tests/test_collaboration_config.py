@@ -7,9 +7,9 @@ import json
 import threading
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
 
 import pytest
+from runtime_fakes import ActionRuntime
 
 from areal_rsi.api.research import TaskBrief
 from areal_rsi.base.storage import write_json
@@ -22,25 +22,13 @@ from areal_rsi.coordination.collaboration import (
 from areal_rsi.coordination.config import ResearchConfig, config_from_dict
 from areal_rsi.coordination.intake import ResearchIntake
 from areal_rsi.coordination.passk import PassKActions, PassKEngine
-from areal_rsi.modules.responses import ResponsesConfig, ResponsesRuntime
 from areal_rsi.research_app import ResearchApp
 from areal_rsi.ui.launch import WorkbenchClient
 from areal_rsi.ui.workbench import WorkbenchServer
 
 
-class IdleTransport:
-    async def request(self, config: Any, payload: Any, sink: Any) -> dict[str, Any]:
-        await asyncio.Event().wait()
-        raise AssertionError("cancelled before a model response")
-
-
 def app_at(root: Path) -> ResearchApp:
-    return ResearchApp(
-        root,
-        runtime_factory=lambda _: ResponsesRuntime(
-            ResponsesConfig(api_key="test", base_url="https://example.test"), IdleTransport()
-        ),
-    )
+    return ResearchApp(root, runtime_factory=lambda _: ActionRuntime())
 
 
 def test_default_config_and_unimplemented_modules() -> None:
@@ -56,7 +44,6 @@ def test_default_config_and_unimplemented_modules() -> None:
     assert plan.actions is PassKActions and plan.engine is PassKEngine
     assert plan.supervisor_only
     assert restored.brief.limits.max_wall_seconds == 14400
-    assert restored.brief.limits.max_model_calls is None
     assert restored.brief.limits.max_total_tokens is None
     assert restored.brief.limits.max_verify_calls is None
     restored.brief.limits.max_effective_seconds = 60
@@ -92,7 +79,6 @@ def test_selection_rebuilds_runtime_and_freezes_versions(
             assert active.engine.rsi_prompt == plan.rsi_prompt
             assert active.engine.research_prompt == plan.research_prompt
             assert not active.tools.supervisor_only
-            assert c.store.brief().limits.max_model_calls is None
             # Starting directly here avoids invoking a real Interaction agent.
             c.state["intake"]["status"] = "ready"
             c.save()

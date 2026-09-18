@@ -16,7 +16,7 @@ from areal_rsi.coordination.coordinator import Coordinator
 from areal_rsi.coordination.jobs import ResearchExecution
 from areal_rsi.coordination.views import record_preview
 from areal_rsi.execution import ApprovedCommand
-from areal_rsi.modules.responses import ToolCall
+from areal_rsi.modules.agent_runtime import ToolCall
 
 
 @pytest.mark.parametrize("direction,withdrawer", [("maximize", "rsi"), ("minimize", "research")])

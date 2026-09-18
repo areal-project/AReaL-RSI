@@ -87,33 +87,6 @@ class RuntimeSettings:
             + provenance.read_bytes()
         ).hexdigest()
 
-    @classmethod
-    def from_environment(cls) -> RuntimeSettings:
-        from areal_rsi.experiment_config import configured_research_harness
-
-        path = os.environ.get("RSI_RUNTIME_CONFIG")
-        value = json.loads(Path(path).expanduser().read_text()) if path else {}
-        harness = configured_research_harness()
-        if harness:
-            if not isinstance(value, dict):
-                raise ValueError("Runtime config must be an object")
-            roles = value.setdefault("roles", {})
-            if not isinstance(roles, dict):
-                raise ValueError("Runtime roles must be an object")
-            for role in ("rsi-agent", "research-agent"):
-                selected = roles.get(role, value.get("default", {}))
-                # Preserve backend-specific settings only when the selected kind matches.
-                if isinstance(selected, dict) and selected.get("kind") == harness:
-                    selected = copy.deepcopy(selected)
-                else:
-                    selected = {"kind": harness, "config": {}}
-                config = selected.setdefault("config", {})
-                if not isinstance(config, dict):
-                    raise ValueError("Runtime backend config must be an object")
-                if harness == "codex-cli":
-                    config.setdefault("modelProtocol", "responses")
-                roles[role] = selected
-        return cls(value)
 
     def select(self, role: str) -> dict[str, Any]:
         role = "research-agent" if role.startswith("research-agent-") else role

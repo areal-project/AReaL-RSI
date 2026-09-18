@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from areal_rsi.api.base import ExperimentPlan, ExperimentRun, RecordRef, RunState
+from areal_rsi.api.base import RecordRef, ResearchPlan, ResearchRun, RunState
 from areal_rsi.api.research import (
     ResearchLimits,
     TaskBrief,
@@ -27,9 +27,9 @@ def make_store(root: Path, name: str = "example") -> ResearchStore:
     )
     brief_ref = store.put("briefs", "initial", brief)
     store.save_run(
-        ExperimentRun(
+        ResearchRun(
             name,
-            ExperimentPlan(brief.objective, "research", "", None, None, 10),
+            ResearchPlan(brief.objective, 10),
             RunState.PLANNED,
             brief_ref=brief_ref,
         )

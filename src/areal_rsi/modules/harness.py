@@ -2,19 +2,14 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 
 from areal_rsi.api.base import (
     AgentSpec,
     ContentRef,
-    HarnessChange,
-    HarnessVersion,
     JsonObject,
     SolutionVersion,
     Task,
@@ -61,45 +56,6 @@ def validate_harness(directory: Path) -> None:
         safe_relative(server["script"])
         if not (directory / server["script"]).is_file():
             raise ValueError("MCP 脚本不存在")
-
-
-class LocalHarnessBuilder:
-    def __init__(self, content: FileContentStore, root: Path):
-        self.content = content
-        self.root = root
-
-    async def build(self, base: HarnessVersion, change: HarnessChange) -> ContentRef:
-        self.root.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=self.root) as temporary:
-            directory = Path(temporary) / "harness"
-            await self.content.materialize(base.content, directory)
-            patch = await self.content.read_bytes(change.patch)
-            if not patch.strip():
-                raise ValueError("拒绝空 patch")
-            # git apply 校验路径穿越并在全部 hunk 合法后应用；不修改用户 checkout。
-            check = await asyncio.to_thread(
-                subprocess.run,
-                ["git", "apply", "--no-index", "--check", "-"],
-                input=patch,
-                cwd=directory,
-                capture_output=True,
-            )
-            if check.returncode:
-                raise ValueError(f"无法应用候选 patch: {check.stderr.decode()[:1500]}")
-            applied = await asyncio.to_thread(
-                subprocess.run,
-                ["git", "apply", "--no-index", "-"],
-                input=patch,
-                cwd=directory,
-                capture_output=True,
-            )
-            if applied.returncode:
-                raise ValueError(applied.stderr.decode()[:1500])
-            validate_harness(directory)
-            content = await self.content.snapshot(directory)
-            if content.digest == base.content.digest:
-                raise ValueError("候选未改变 Harness 内容")
-            return content
 
 
 class LocalHarnessRuntime:

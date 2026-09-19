@@ -110,6 +110,7 @@ class ResearchEngine:
 
     def _acquire(self) -> None:
         if self._lock_file is not None:
+            self._initialize_effective_time()
             return
         path = self.coordinator.store.paths.execution_lock
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -122,12 +123,8 @@ class ResearchEngine:
         self._lock_file = handle
         # A previous owner may have advanced state since this object was created.
         self.coordinator.state = json.loads(self.coordinator.path.read_text())
-        if self.coordinator.store.brief().limits.max_effective_seconds is not None:
-            self.effective = EffectiveTime(self.coordinator.state)
-            if self.coordinator.state["status"] == "paused":
-                self.effective.close_worker(self.effective.data.get("heartbeat_at", self.clock()))
-            else:
-                self.effective.open_worker(self.clock())
+        self.effective = None
+        self._initialize_effective_time()
         # Older runs copied per-item provider attribution into every state save.
         # Normalize only after acquiring ownership, without settling usage again.
         for record in self._request_records().values():
@@ -140,6 +137,21 @@ class ResearchEngine:
         self.coordinator.save()
         self._reconcile_usage()
         self.coordinator.store.event("worker_started", pid=os.getpid())
+
+    def _initialize_effective_time(self) -> None:
+        # Intake can change the budget while this worker already owns the lock.
+        # Bind the clock to the frozen research brief, before dispatching researchers.
+        c = self.coordinator
+        if self.effective is not None or c.state["status"] not in {"running", "paused"}:
+            return
+        if c.store.brief().limits.max_effective_seconds is None:
+            return
+        self.effective = EffectiveTime(c.state)
+        if c.state["status"] == "paused":
+            self.effective.close_worker(self.effective.data.get("heartbeat_at", self.clock()))
+        else:
+            self.effective.open_worker(self.clock())
+        c.save()
 
     def _request_records(self) -> Json:
         records: Json = self.coordinator.state.setdefault("model_requests", {})

@@ -106,6 +106,10 @@ uv run --locked --env-file .env python examples/kernelbench_artifacts/v0.2.1/run
   并记录本次 1800 秒预算调整。若文件发生变化，脚本会拒绝以本版本启动；以后改实验应新建版本，
   不要更新此清单来绕过检查。历史实验的源码快照与一小时预算均保持不变。
 
+当前源码锁已纳入本 PR 的生命周期、计时和证据归属修复，包括在需求对话确定预算后
+初始化有效时间计时器。v0.2.1 的角色 Prompt、模型、人数和预算参数保持不变；复现历史批次
+应使用该批次归档的源码锁和对应 Git 版本。
+
 Prompt 仍由仓库内的一套实现生成，不维护另一份副本：
 
 - [RSI Prompt](../../../src/areal_rsi/agents/rsi/leader_guidance_prompt.py)

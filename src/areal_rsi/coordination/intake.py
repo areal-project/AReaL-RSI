@@ -101,8 +101,14 @@ def validate_execution(config: ResearchConfig) -> list[str]:
                     issues.append(f"{cmd.name} 的参数 {marker} 必须独占一个 argv 元素")
     if config.verifier and not config.metadata.get("verification_identity"):
         issues.append("验证程序尚未提供固定的协议和数据身份")
-    if config.brief.verification is not None and config.verifier is None:
-        issues.append("已约定验证指标，但尚未接入实际验证程序")
+    # Existing experiment commands may produce scores for researchers to inspect.
+    # A trusted verifier remains mandatory for target-based stopping.
+    if (
+        config.brief.verification is not None
+        and config.verifier is None
+        and (config.brief.verification.target is not None or not config.commands)
+    ):
+        issues.append("已约定验证目标或缺少实验命令，但尚未接入实际验证程序")
     if config.brief.verification is not None and config.brief.limits.max_verify_calls == 0:
         issues.append("已约定验证指标，但验证调用预算为零")
     if config.verifier and config.brief.verification is None:
@@ -245,6 +251,7 @@ class ResearchIntake:
         return config
 
     def save(self, config: ResearchConfig, description: str) -> None:
+        config.__post_init__()
         value = config.public()
         reject_credentials(value)
         digest = hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
@@ -265,6 +272,14 @@ class ResearchIntake:
             "seed_dir": config.seed_dir,
             "commands": encode(config.commands),
             "verifier_available": config.verifier is not None,
+            "experiment_commands_available": bool(config.commands),
+            "result_evaluation": (
+                "trusted_verifier"
+                if config.verifier
+                else "researcher_reads_command_results"
+                if config.commands
+                else "unconfigured"
+            ),
             "execution_env": config.execution_env,
             "issues": validate_execution(config),
             "target_key_configured": bool(os.environ.get("RSI_TARGET_API_KEY")),

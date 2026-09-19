@@ -1,7 +1,7 @@
 """RSI sessions backed by the public ARealAgentRuntime Python package.
 
-Each conversation owns an embedded composition in a sandboxed Python process.
-The process boundary protects RSI's hidden evaluation data from native tools.
+Each conversation owns an embedded composition in a separate Python process.
+macOS uses a sandbox; trusted Linux deployments can explicitly disable isolation.
 """
 
 from __future__ import annotations
@@ -59,6 +59,8 @@ class RuntimeSettings:
         check_secrets(value)
         if set(value) - {"default", "roles", "readable_paths"}:
             raise ValueError("Runtime config only accepts default, roles, readable_paths")
+        self.isolation = os.environ.get("RSI_RUNTIME_ISOLATION", "sandbox")
+        validate_isolation(self.isolation)
         self.default = value.get("default", {"kind": "dsh", "config": {}})
         self.roles = value.get("roles", {})
         if set(self.roles) - {"rsi-agent", "research-agent", "task-agent"}:
@@ -69,7 +71,12 @@ class RuntimeSettings:
         provenance = Path(__file__).parents[1] / "resources/runtime/provenance.json"
         self.identity = hashlib.sha256(
             json.dumps(
-                {"runtime": value, "state_backend": "rsi-runtime-journal-v1", "event_sinks": []},
+                {
+                    "runtime": value,
+                    **({"isolation": self.isolation} if self.isolation != "sandbox" else {}),
+                    "state_backend": "rsi-runtime-journal-v1",
+                    "event_sinks": [],
+                },
                 sort_keys=True,
             ).encode()
             + provenance.read_bytes()
@@ -129,14 +136,37 @@ class RuntimeSettings:
         return result
 
 
+def validate_isolation(mode: str) -> None:
+    if mode not in {"sandbox", "linux-unrestricted"}:
+        raise ValueError("RSI_RUNTIME_ISOLATION must be sandbox or linux-unrestricted")
+    if mode == "linux-unrestricted" and sys.platform != "linux":
+        raise RuntimeError("linux-unrestricted mode is only supported on Linux")
+
+
 def sandbox_command(
     directory: Path,
     workspace: Path,
     readable: tuple[Path, ...],
     executable_aliases: tuple[Path, ...] = (),
+    *,
+    isolation: str = "sandbox",
 ) -> list[str]:
+    validate_isolation(isolation)
+    worker = [
+        sys.executable,
+        "-I",
+        "-c",
+        "import runpy,sys;sys.path.insert(0,sys.argv.pop(1));"
+        "runpy.run_module('areal_rsi.modules.runtime_worker',run_name='__main__')",
+        str(directory / "worker-code"),
+    ]
+    if isolation == "linux-unrestricted":
+        return worker
     if sys.platform != "darwin":
-        raise RuntimeError("RSI package worker currently requires macOS sandbox-exec")
+        raise RuntimeError(
+            "Agent sandbox requires macOS sandbox-exec; on trusted Linux hosts explicitly set "
+            "RSI_RUNTIME_ISOLATION=linux-unrestricted (no filesystem or process isolation)"
+        )
     # Installed packages are readable, experiment data is not. No source checkout is granted.
     roots = {
         directory.resolve(),
@@ -185,12 +215,7 @@ def sandbox_command(
         "/usr/bin/sandbox-exec",
         "-f",
         str(target),
-        sys.executable,
-        "-I",
-        "-c",
-        "import runpy,sys;sys.path.insert(0,sys.argv.pop(1));"
-        "runpy.run_module('areal_rsi.modules.runtime_worker',run_name='__main__')",
-        str(directory / "worker-code"),
+        *worker,
     ]
 
 
@@ -379,6 +404,8 @@ class PackageAgentRuntime:
             "runtime_storage.schema.json",
             "runtime_tools.py",
             "runtime_tools.schema.json",
+            "runtime_workspace.py",
+            "runtime_workspace.schema.json",
         ):
             shutil.copyfile(Path(__file__).parent / name, modules / name)
         workspace = Path(workspace_root).resolve() if workspace_root else directory / "workspace"
@@ -419,6 +446,7 @@ class PackageAgentRuntime:
             raise ValueError(f"Unknown MCP servers: {missing_mcp}")
         config = {
             "runtime": selection,
+            "isolation": self.settings.isolation,
             "directory": str(directory),
             "workspace": str(workspace),
             "agent_id": agent.agent_id,
@@ -463,6 +491,22 @@ class PackageAgentRuntime:
             if key
             in {"PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR"}
         }
+        if self.settings.isolation == "linux-unrestricted":
+            for name in (
+                "HTTP_PROXY",
+                "HTTPS_PROXY",
+                "ALL_PROXY",
+                "NO_PROXY",
+                "http_proxy",
+                "https_proxy",
+                "all_proxy",
+                "no_proxy",
+            ):
+                if name in os.environ:
+                    env[name] = os.environ[name]
+            # Node's native fetch needs an explicit opt-in to use these proxies.
+            env["NODE_USE_ENV_PROXY"] = "1"
+            env["SHELL"] = "/bin/bash"
         auth_name = selection.get("config", {}).get("authTokenEnv")
         if auth_name:
             if auth_name not in os.environ:
@@ -492,16 +536,20 @@ class PackageAgentRuntime:
             workspace,
             tuple(readable),
             (Path(interpreter),) if interpreter else (),
+            isolation=self.settings.isolation,
         )
         if research_tools is not None:
             # Fail before spending model calls if the agent's actual shell cannot
             # write heredocs/tempfiles or resolve its scoped task-tool command.
+            shell_command = (
+                ["/bin/bash", "-ec"]
+                if self.settings.isolation == "linux-unrestricted"
+                else [*command[:3], "/bin/zsh", "-lec"]
+            )
             probe = await asyncio.to_thread(
                 subprocess.run,
                 [
-                    *command[:3],
-                    "/bin/zsh",
-                    "-lec",
+                    *shell_command,
                     "python - <<'PY'\nimport tempfile\n"
                     "with tempfile.TemporaryFile() as f:\n    f.write(b'ok')\nPY\n"
                     "rsi-tools list >/dev/null",

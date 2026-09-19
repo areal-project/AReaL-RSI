@@ -197,6 +197,12 @@ def compile_config(request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
         "plugins": plugins,
         "toolBindings": [{"profileId": "general.default", "toolNames": tools}] if tools else [],
     }
+    if request.get("isolation") == "linux-unrestricted":
+        configuration["workspaceTools"] = {
+            "entrypoint": "areal_rsi.modules.runtime_workspace:create_plugin",
+            "enabled": bool(request["tools"]),
+            "config": {"unrestricted": True},
+        }
     invocation = {
         "systemPrompts": [
             {"kind": "inline", "resourceId": f"rsi-prompt-{i}", "content": text}

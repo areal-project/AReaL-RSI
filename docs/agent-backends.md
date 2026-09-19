@@ -28,8 +28,25 @@ DSH 通过 Runtime 的 ToolProvider 插件调用 RSI 工具。当前版本的 Ru
 
 ## 会话、停止和记录
 
-每个会话有独立工作区、原生运行目录和 macOS `sandbox-exec` 子进程。原有的隐藏评测数据
-和其他研究员工作区不向子进程开放。RSI 管理任务和正式验证，Runtime 管理推理、工具、
+默认 `sandbox` 模式下，每个会话有独立工作区、原生运行目录和 macOS
+`sandbox-exec` 子进程，隐藏评测数据和其他研究员工作区不向子进程开放。
+
+可信 Linux 服务器可在启动工作台前显式设置：
+
+```dotenv
+RSI_RUNTIME_ISOLATION=linux-unrestricted
+```
+
+此模式适用于 standard 和 codex 后端。它直接启动独立 Python 子进程，使用 bash，
+保留每个会话的 HOME、TMPDIR、日志、工具回执及进程组取消机制，并传递网络代理变量。
+内置 workspace 工具同时允许绝对路径（含符号链接）、工作区外的仓库/训练池，
+以及 bash、/bin/bash 和任意可执行文件；相对路径仍以当前 Agent 工作区为起点。
+命令保留 60 秒超时和输出上限，长时间训练应由现有脚本异步提交。
+它不提供文件、进程或网络隔离；Agent 拥有工作台启动用户的权限，root 启动即拥有 root
+权限，也能访问该用户可读的其他研究目录、凭据文件和隐藏评测数据。仅用于可信研究，
+不能用于要求答案隔离的评测。环境变量默认是 `sandbox`，Linux 不会自动降级。
+修改后须重启工作台；这是操作员环境配置，不能由模型的研究配置启用。
+RSI 管理任务和正式验证，Runtime 管理推理、工具、
 上下文压缩及供应商重试；不会把 Runtime 当成外壳再运行自定义 harness。
 
 完整角色 prompt 绑定在 Runtime 的 AgentEnvironment 中。每个 RSI 回合提供当前任务状态，
@@ -47,3 +64,25 @@ Runtime journal 是执行事实来源，包含原生事件、工具执行和 usa
 
 停止会取消原生执行和受管作业；探索时限使用持久化的启动时间，不因恢复会话而重置。
 正式复测沿用原有 finalizer。具体实验约定见 [pass@k](passk.md)。
+
+### 需求更新工具
+
+Interaction 的 `update_brief` 使用结构化的 `objective`、`instructions`、`limits` 和
+`verification` 参数，按当前协作模式生成定义。协作模式提供全部预算字段；pass@k
+隐藏模型调用次数、token 总量、验证次数和累计节点数上限，由后端将这些字段保持为
+`null`。工具仍提供研究员数量、研究时限、并发作业数、GPU 和可修改路径。
+服务端使用同一份 schema 校验，并在写入任何需求记录前验证完整研究配置。
+旧的 `brief_json` 参数不再接受；已完成工具调用的回放记录保留。
+用户要求与所选模式冲突时，Interaction 应说明冲突，让用户选择切换模式或取消对应
+预算，不自行放宽限制。验证 `identity` 由后端保留，接入工具负责其配置。
+
+### 使用现有实验脚本启动研究
+
+已登记实验命令且没有自动达标目标（`verification.target=null`）时，可以记录比较指标，
+由研究员读取脚本输出的成绩，无需额外接入平台 verifier。`verifier_available=false`
+仅表示没有平台自动验证器；`experiment_commands_available` 和 `result_evaluation`
+说明实验命令及成绩读取方式。自动判定达标仍要求可信 verifier，不能把普通脚本输出
+自动提升为平台验证结果。pass@k 仍在启动前检查命令配置是否完整，不执行 smoke。
+
+原生后端的工具调用 ID 按会话目录和消息回合划分作用域，防止不同回合复用 ID 时
+读到旧状态或触发错误的去重；同一消息恢复执行仍使用稳定标识。

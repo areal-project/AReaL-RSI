@@ -57,6 +57,7 @@ class Conversation:
     incoming: Callable[[], list[Json]] | None = None
     stop_reason: str | None = None
     calls: set[asyncio.Task[Any]] = field(default_factory=set)
+    call_namespace: str = ""
 
 
 class ResearchRuntime:
@@ -144,7 +145,13 @@ class ResearchRuntime:
                 if name not in catalog:
                     raise ValueError("Tool is not available to this agent")
                 validate(request["arguments"], catalog[name]["parameters"])
-                call = ToolCall(name, request["arguments"], request["call_id"])
+                # Native adapters may restart their call sequence each delivery.
+                # Scope durable receipts to the session and delivery, retaining
+                # stable identities when the same delivery resumes after a crash.
+                identity = json.dumps([connection.call_namespace, request["call_id"]])
+                call = ToolCall(
+                    name, request["arguments"], hashlib.sha256(identity.encode()).hexdigest()
+                )
                 if connection.sink:
                     await connection.sink(
                         {"type": "tool_started", "name": name, "call_id": call.call_id}
@@ -300,6 +307,7 @@ class ResearchRuntime:
             await self._close(connection)
             connection = None
         recovering = connection is None and self.has_session(session_dir)
+        fresh_session = connection is None and not recovering
         if connection is None:
             if event_sink is not None:
                 from areal_rsi.modules.runtime_storage import read_journal
@@ -316,6 +324,12 @@ class ResearchRuntime:
                 handler,
                 (recovery_state or {}).get("agent_id", "research-agent"),
             )
+        connection.call_namespace = json.dumps(
+            [
+                str(session_dir.resolve()),
+                message_id if message_id is not None else secrets.token_hex(16),
+            ]
+        )
         connection.handler, connection.sink = handler, event_sink
         connection.incoming, connection.stop_reason = incoming_messages, None
         usage: Json = {}
@@ -349,12 +363,14 @@ class ResearchRuntime:
             await event_sink({"type": "runtime_turn_started", "message_id": message_id})
         message = user_message or "继续上次尚未完成的任务；先检查已有操作与结果，避免重复提交。"
         if recovery_state:
-            # The immutable developer prompt and native history already carry
-            # the task. Only process recovery needs a current state snapshot.
+            # Existing native history carries the task. A fresh session after a
+            # configuration change also needs its archived dialogue and current brief.
             context = (
                 recovery_state
-                if recovering
-                else {"budget": recovery_state["budget"]} if "budget" in recovery_state else {}
+                if recovering or (fresh_session and "backend_handoff" in recovery_state)
+                else {"budget": recovery_state["budget"]}
+                if "budget" in recovery_state
+                else {}
             )
             if context:
                 message += "\n\n当前任务状态：\n" + json.dumps(context, ensure_ascii=False)

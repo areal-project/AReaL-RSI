@@ -203,6 +203,9 @@ class ResearchApp:
             run.brief_ref = c.store.put("briefs", new_id("collaboration"), config.brief)
             run.plan.max_iterations = config.brief.limits.max_nodes
             c.store.save_run(run)
+            if c.state.get("mode", "collaborative") != config.mode:
+                # update_brief has a mode-specific schema frozen in the native session.
+                self._reset_interaction_session(c)
             write_json(c.store.root / "coordination/config.json", config.public())
             c.state["mode"] = config.mode
             c.save()
@@ -232,30 +235,7 @@ class ResearchApp:
             # cancellation. Reload them instead of replacing the whole config.
             config = self.config(c)
             if any(settings[field] != getattr(config, field) for field in MODEL_FIELDS):
-                # Preserve the intake dialogue when switching runtimes before
-                # research starts; native session histories have different formats.
-                actor = c.actor("interaction")
-                actor.session_id = new_id("session")
-                c.save_actor(actor)
-                dialogue = sorted(
-                    (
-                        item
-                        for item in c.store.records("messages", ResearchMessage)
-                        if item.sender == "user" or item.recipient == "user"
-                    ),
-                    key=lambda item: item.created_at,
-                )
-                write_json(
-                    c.store.paths.agent("interaction")
-                    / "sessions"
-                    / actor.session_id
-                    / "backend-handoff.json",
-                    {
-                        "previous_dialogue": [
-                            {"sender": item.sender, "text": item.text} for item in dialogue
-                        ]
-                    },
-                )
+                self._reset_interaction_session(c)
             for field, value in settings.items():
                 setattr(config, field, value)
             config.model_settings_pinned = True
@@ -271,9 +251,34 @@ class ResearchApp:
             write_json(directory / "config.json", config.public())
             c.store.event("model_settings_updated", **settings)
             if active:
-                # Resume the same delivery and session, including an interrupted
-                # API retry. The attach path also handles a later process restart.
+                # Resume the pending delivery using the selected session.
                 await self.attach(c)
+
+    @staticmethod
+    def _reset_interaction_session(c: Coordinator) -> None:
+        """Keep intake dialogue when a frozen runtime or tool schema changes."""
+        actor = c.actor("interaction")
+        actor.session_id = new_id("session")
+        dialogue = sorted(
+            (
+                item
+                for item in c.store.records("messages", ResearchMessage)
+                if item.sender == "user" or item.recipient == "user"
+            ),
+            key=lambda item: item.created_at,
+        )
+        write_json(
+            c.store.paths.agent("interaction")
+            / "sessions"
+            / actor.session_id
+            / "backend-handoff.json",
+            {
+                "previous_dialogue": [
+                    {"sender": item.sender, "text": item.text} for item in dialogue
+                ]
+            },
+        )
+        c.save_actor(actor)
 
     @staticmethod
     def parse_model_settings(values: dict[str, Any]) -> tuple[dict[str, str], str]:
@@ -458,7 +463,11 @@ class ResearchApp:
             and not validate_execution(config)
         )
         if config.mode == "passk" and pending_setup and not prepared_setup:
-            raise ValueError("passk requires the execution setup to be complete before starting")
+            issues = validate_execution(config)
+            raise ValueError(
+                "passk requires the execution setup to be complete before starting: "
+                + ("；".join(issues) if issues else "尚未登记实际执行命令")
+            )
         if "intake" in c.state and not pending_setup:
             issues = validate_execution(config)
             if issues:

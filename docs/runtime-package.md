@@ -129,11 +129,12 @@ portable ToolSpec 的精确授权。远端执行的隔离需要在远端部署�
   通过 RSI 的 `ToolProvider` Plugin 注册并绑定；调用和结果进入 Runtime 的规范事件。目前投影支持文本 MCP 结果。
 - Codex/Hermes 没有通用 Application MCP 桥时，通过安装好的 RSI MCP CLI、使用原生 shell 工具调用同一批 server。
   模型指令包含 list/call 用法；轨迹中的规范工具事件属于原生 shell，MCP 的返回内容包含在工具输出中。
-- 当前本地执行要求 macOS，每个会话使用 `sandbox-exec`。只开放会话状态目录和当前工作区写权限，不能读取相邻实验答案或其他候选目录。
+- 默认本地执行要求 macOS，每个会话使用 `sandbox-exec`。只开放会话状态目录和当前工作区写权限，不能读取相邻实验答案或其他候选目录。
+- 可信 Linux 可显式设置 `RSI_RUNTIME_ISOLATION=linux-unrestricted`，以服务用户权限直接启动 worker；不限制文件、进程或网络访问，不能提供上述答案隔离。参见[后端说明](agent-backends.md)。
   worker 从已安装的 RSI 包中提取执行所需的模块文件到会话目录，并禁止读取完整 RSI 包，
   避免工具从评测模块读取隐藏答案；没有复制 Runtime 内核。
   `readable_paths` 只用于可信部署明确指定的 Harness 安装/依赖目录，不要指向整个数据目录。
-- Codex 使用外层 RSI 沙箱；其内层配置默认 `danger-full-access`，用于避免 macOS 拒绝嵌套 sandbox-exec。
+- Codex 在默认模式下使用外层 RSI 沙箱；其内层配置默认 `danger-full-access`，用于避免 macOS 拒绝嵌套 sandbox-exec。
   实际进程仍受 RSI 外层文件权限限制，该字段不意味着拥有宿主文件访问权限。
 - 子进程从最小环境构建，不继承桌面 Agent 的会话、工具或宿主密钥。模型密钥保留在父进程代理。
   Remote Wire 的认证使用显式 `authTokenEnv`。不要用候选文件安装 Runtime Plugin 或选择 endpoint。

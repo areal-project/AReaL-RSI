@@ -27,6 +27,8 @@ class ResponsesModel:
     def __init__(self) -> None:
         self.requests: list[dict[str, Any]] = []
         self.force_tool = False
+        self.tool_name = "rsi_mcp_probe"
+        self.tool_arguments = {"expression": "6 * 7"}
         self.entered = threading.Event()
         self.release = threading.Event()
         self.release.set()
@@ -50,13 +52,17 @@ class ResponsesModel:
                 if owner.force_tool and not any(
                     x.get("type") == "function_call_output" for x in request["input"]
                 ):
-                    tool = next(t for t in request["tools"] if "rsi_mcp_probe" in t["name"])
+                    tool = next(
+                        t
+                        for t in request["tools"]
+                        if owner.tool_name in t["name"].replace(".", "_")
+                    )
                     output = {
                         "id": "fc_probe",
                         "type": "function_call",
                         "call_id": "probe",
                         "name": tool["name"],
-                        "arguments": '{"expression":"6 * 7"}',
+                        "arguments": json.dumps(owner.tool_arguments),
                         "status": "completed",
                     }
                 events: list[dict[str, Any]] = [
@@ -233,7 +239,7 @@ def test_codex_native_tools_history_resume_and_usage(
             for i, request in enumerate(model.requests):
                 inputs = json.dumps(request["input"])
                 assert ("recovery-only-task" in inputs) == (i == 2)
-                assert 'remaining' in inputs
+                assert "remaining" in inputs
             for request in model.requests:
                 tools = json.dumps(request.get("tools", [])) + json.dumps(
                     [item for item in request["input"] if item.get("type") == "additional_tools"]
@@ -298,12 +304,11 @@ def test_standard_uses_package_dsh_and_scoped_application_tools(
             assert "42" in json.dumps(model.requests[-1]["input"])
             assert model.requests[0]["reasoning"]["effort"] == "xhigh"
             assert runtime.configuration()["harness"] == "dsh"
-            patch = json.loads(
-                (tmp_path / "session/runtime/research-model.patch.json").read_text()
+            patch = json.loads((tmp_path / "session/runtime/research-model.patch.json").read_text())
+            assert (
+                patch[0]["config"]["providers"]["rsi-responses"]["models"][0]["contextWindow"]
+                == 96000
             )
-            assert patch[0]["config"]["providers"]["rsi-responses"]["models"][0][
-                "contextWindow"
-            ] == 96000
         finally:
             await runtime.close()
 
@@ -313,6 +318,7 @@ def test_standard_uses_package_dsh_and_scoped_application_tools(
         model.close()
 
 
+@pytest.mark.skipif(os.uname().sysname != "Darwin", reason="macOS sandbox-exec policy")
 def test_tool_capability_and_workspace_sandbox_survive_restart(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -541,6 +547,62 @@ def test_native_codex_passk_launches_independent_attempts_and_stops_on_result(
             assert c.state["total_tokens"] > 0
         finally:
             await app.close()
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        model.close()
+
+
+@pytest.mark.skipif(
+    os.environ.get("RSI_TEST_NATIVE_HARNESSES") != "1",
+    reason="Opt in to native DSH installation",
+)
+def test_linux_dsh_executes_workspace_shell(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sys
+
+    if sys.platform != "linux":
+        pytest.skip("Linux unrestricted mode")
+    monkeypatch.setenv("RSI_RUNTIME_ISOLATION", "linux-unrestricted")
+    monkeypatch.setenv("RSI_API_KEY", "fixture")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("LINUX_WORKSPACE_OK")
+    model = ResponsesModel()
+    model.force_tool = True
+    model.tool_name = "workspace_run"
+    model.tool_arguments = {"argv": ["/bin/bash", "-c", 'cat "$1"', "bash", str(outside)]}
+
+    async def scenario() -> None:
+        runtime = ResearchRuntime(
+            ResearchConfig(
+                TaskBrief("test", "test"),
+                base_url=model.url,
+                model="fixture",
+                model_settings_pinned=True,
+            )
+        )
+
+        async def handle(call: ToolCall) -> ToolResult:
+            raise AssertionError("No application task tools expected")
+
+        try:
+            result = await asyncio.wait_for(
+                runtime.turn(
+                    tmp_path / "session",
+                    system_prompt="Run the command then finish",
+                    user_message="Test",
+                    tools=[],
+                    handler=handle,
+                    workspace=tmp_path / "workspace",
+                ),
+                120,
+            )
+            assert result.text == "Done"
+            assert "LINUX_WORKSPACE_OK" in json.dumps(model.requests[-1]["input"])
+        finally:
+            await runtime.close()
 
     try:
         asyncio.run(scenario())

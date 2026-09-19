@@ -12,8 +12,10 @@ import pytest
 
 from areal_rsi.api.research import TaskBrief
 from areal_rsi.base.storage import encode
+from areal_rsi.coordination.brief_tool import PASSK_HIDDEN_LIMITS
 from areal_rsi.coordination.config import config_from_dict
 from areal_rsi.coordination.engine import ResearchEngine
+from areal_rsi.coordination.passk import PassKActions, launch
 from areal_rsi.execution import ApprovedCommand
 from areal_rsi.modules.responses import ResponsesConfig, ResponsesRuntime, ToolCall
 from areal_rsi.research_app import ResearchApp
@@ -46,9 +48,9 @@ def app_at(root: Path) -> ResearchApp:
 
 
 @pytest.mark.parametrize("backend", ["standard", "codex"])
-@pytest.mark.parametrize("variant", [None, "simple", "detailed"])
+@pytest.mark.parametrize("modules", [(), ("leader_guidance",)])
 def test_research_prompt_selection_reaches_the_model(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend: str, variant: str | None
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend: str, modules: tuple[str, ...]
 ) -> None:
     monkeypatch.setenv("RSI_API_KEY", "fixture")
     payloads: list[dict[str, Any]] = []
@@ -87,27 +89,27 @@ def test_research_prompt_selection_reaches_the_model(
                 "brief": {"objective": "检查研究说明", "instructions": "整理已有资料"},
                 "backend": backend,
             }
-            if variant is not None:
-                config["research_prompt_variant"] = variant
+            config["collaboration_modules"] = list(modules)
             detail = await app.create({"config": config})
             c = app.coordinator(detail["run_id"])
             active = await app.attach(c)
-            assert app.config(c).research_prompt_variant == (variant or "simple")
+            assert app.config(c).collaboration_modules == modules
             c.start()
             c.begin_turn("rsi")
-            researcher = c.spawn(key="researcher", direction="资料", instruction="整理资料")
+            assert isinstance(active.actions, PassKActions)
+            await launch(c, active.actions)
+            researcher = c.store.run().research_agents[0]
             c.end_turn("rsi")
-            await active.engine._drive(researcher["agent_id"])
+            await active.engine._drive(researcher.agent_id)
             assert len(payloads) == 1
             prompt = payloads[0]["instructions"]
             assert prompt.startswith("你是 Research Agent")
             assert "{{tool_instructions}}" not in prompt
-            assert ("二、判断实验结果" in prompt) == (variant == "detailed")
+            assert ("read_researcher_trace" in prompt) == bool(modules)
             assert ("Codex 原生网页工具" in prompt) == (backend == "codex")
             assert prompt.count("你的默认工作区：") == 1
             assert prompt.count("不允许以任何方式作弊") == 1
-            assert "message_researcher" in prompt and "assign" in prompt
-            assert c.actor(researcher["agent_id"]).wait_reason == "rsi_reply"
+            assert c.actor(researcher.agent_id).wait_reason != "rsi_reply"
         finally:
             await app.close()
 
@@ -115,7 +117,7 @@ def test_research_prompt_selection_reaches_the_model(
 
 
 def test_unknown_research_prompt_variant_is_rejected() -> None:
-    with pytest.raises(ValueError, match="simple 或 detailed"):
+    with pytest.raises(ValueError, match="已移除"):
         config_from_dict(
             {"brief": {"objective": "研究", "instructions": ""}, "research_prompt_variant": "typo"}
         )
@@ -137,7 +139,11 @@ def test_conversation_can_bind_real_cpu_execution_without_template_or_baseline(
         tools = active.actions.handler("interaction")
         brief = TaskBrief("研究文本处理", "比较规则与结果，保留具体观察")
         brief.limits.max_agents = 3
-        await tools(ToolCall("update_brief", encode(brief), "brief"))
+        arguments = encode(brief)
+        for name in PASSK_HIDDEN_LIMITS:
+            arguments["limits"].pop(name)
+        result = await tools(ToolCall("update_brief", arguments, "brief"))
+        assert "error" not in result.output
         command = ApprovedCommand(
             "inspect",
             (
@@ -184,7 +190,9 @@ def test_conversation_can_bind_real_cpu_execution_without_template_or_baseline(
             frozen = json.loads((c.store.root / "coordination/started-config.json").read_text())
             assert frozen["brief"]["objective"] == brief.objective
             assert frozen["execution_env"]["RSI_TEST_VALUE"] == "真实进程输出"
-            job = await active.actions.handler("rsi")(
+            await active.actions.handler("rsi")(ToolCall("start_researchers", {}, "spawn"))
+            researcher = c.store.run().research_agents[0].agent_id
+            job = await active.actions.handler(researcher)(
                 ToolCall(
                     "run_job",
                     {
@@ -207,7 +215,7 @@ def test_conversation_can_bind_real_cpu_execution_without_template_or_baseline(
             output = Path(active.execution.jobs[job_id]["output"]) / "result.txt"
             assert output.read_text() == "真实进程输出"
             blocked = await tools(ToolCall("set_execution", {"execution_json": "{}"}, "late"))
-            assert "已经开始" in blocked.output["error"]
+            assert "not available" in blocked.output["error"]
             assert (await app.detail(c.store.run_id))["best"] is None
             with pytest.raises(ValueError, match="先停止"):
                 await app.call("delete", {"run_id": c.store.run_id})
@@ -242,8 +250,6 @@ def test_invalid_passk_brief_does_not_corrupt_draft(tmp_path: Path) -> None:
             assert c.store.run() == original_run
             detail = await app.detail(c.store.run_id)
             assert detail["collaboration"]["mode"] == "passk"
-            from areal_rsi.coordination.brief_tool import PASSK_HIDDEN_LIMITS
-
             arguments = encode(brief)
             for key in PASSK_HIDDEN_LIMITS:
                 arguments["limits"].pop(key)

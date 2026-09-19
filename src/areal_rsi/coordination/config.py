@@ -54,11 +54,10 @@ def validate_model_settings(value: dict[str, Any]) -> dict[str, str]:
 @dataclass(slots=True)
 class ResearchConfig:
     brief: TaskBrief
-    mode: str = "collaborative"
+    mode: str = "passk"
     collaboration_modules: tuple[str, ...] = ()
     seed_dir: str | None = None
     backend: str = "standard"
-    research_prompt_variant: str = "simple"
     model: str = "gpt-5.6-luna"
     reasoning_effort: str = "xhigh"
     base_url: str = "https://api.openai.com"
@@ -80,11 +79,11 @@ class ResearchConfig:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        self.collaboration_modules = selected_modules(self.mode, self.collaboration_modules)
+        # Old configurations remain decodable for viewing; executable entry points reject them.
+        if self.mode != "collaborative":
+            self.collaboration_modules = selected_modules(self.mode, self.collaboration_modules)
         if self.backend not in {"standard", "codex"}:
             raise ValueError("Agent 后端支持 standard 或 codex")
-        if self.research_prompt_variant not in {"simple", "detailed"}:
-            raise ValueError("Research Prompt 支持 simple 或 detailed")
         if self.brief.limits.max_effective_seconds is not None and self.mode != "passk":
             raise ValueError("Per-researcher effective time requires passk")
         if self.mode == "passk":
@@ -161,6 +160,9 @@ class ResearchConfig:
 def config_from_dict(value: dict[str, Any]) -> ResearchConfig:
     if "api_key" in value:
         raise ValueError("Use api_key_env; credentials must not be saved in research configuration")
+    selected_modules(value.get("mode", "passk"), value.get("collaboration_modules", ()))
+    if "research_prompt_variant" in value:
+        raise ValueError("research_prompt_variant 已移除；Prompt 由协作配置选择")
     config: ResearchConfig = decode(ResearchConfig, value)
     if config.metadata.get("time_limit_scope", "total") not in {"total", "exploration"}:
         raise ValueError("time_limit_scope must be total or exploration")
@@ -173,6 +175,15 @@ def config_from_dict(value: dict[str, Any]) -> ResearchConfig:
         raise ValueError("Automatic artifact verification requires a trusted verifier")
     if config.finalizer and (config.verifier is None or config.finalizer.parameters != ("output",)):
         raise ValueError("Finalizer requires a verifier and exactly one output parameter")
+    return config
+
+
+def archived_config(value: dict[str, Any]) -> ResearchConfig:
+    """Read historical configuration without rewriting its mode, prompts, or budgets."""
+    value = dict(value)
+    value.pop("research_prompt_variant", None)
+    value.setdefault("mode", "collaborative")
+    config: ResearchConfig = decode(ResearchConfig, value)
     return config
 
 

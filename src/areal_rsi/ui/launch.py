@@ -106,7 +106,7 @@ def ensure_workbench(port: int, root: Path | None = None) -> tuple[WorkbenchClie
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="启动 RSI 工作台或 KernelBench 八题 demo")
+    parser = argparse.ArgumentParser(description="启动 RSI 工作台或 KernelBench 单题 pass@k demo")
     parser.add_argument("--type", choices=("web", "demo"), default="web")
     parser.add_argument("--port", type=int, default=8197)
     parser.add_argument("--data-root", type=Path, help="新服务的数据目录；复用时必须一致")

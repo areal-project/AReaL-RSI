@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 from areal_rsi.api.research import ResearchMessage
 from areal_rsi.base.storage import decode, encode, now, write_json
 from areal_rsi.coordination.actions import STRING, ResearchActions, definition
-from areal_rsi.coordination.config import ResearchConfig, load_config
+from areal_rsi.coordination.config import ResearchConfig, archived_config, load_config
 from areal_rsi.coordination.coordinator import effect_id
 from areal_rsi.coordination.verification import IDENTITY_FIELDS
 from areal_rsi.execution import ApprovedCommand
@@ -246,7 +246,7 @@ class ResearchIntake:
         return self.c.store.root / "coordination" / "config.json"
 
     def config(self) -> ResearchConfig:
-        config: ResearchConfig = decode(ResearchConfig, json.loads(self.path.read_text()))
+        config: ResearchConfig = archived_config(json.loads(self.path.read_text()))
         config.brief = self.c.store.brief()
         return config
 

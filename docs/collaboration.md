@@ -1,5 +1,8 @@
 # 协作配置与消融实验
 
+新研究默认采用 **v0.2.2**，并可选择 v0.2.1 或纯 pass@k 做对照。
+版本配置与 Prompt 差异见 [v0.2.2 说明](leader-guidance-v0.2.2.md)。
+
 模型后端（standard / codex）和协作方式是两项独立配置。工作台的新建研究窗口可以选择
 协作方式，研究页面的“协作方式”区域允许启动前修改，并支持“用此配置新建研究”。
 这个按钮只复制协作选择；新研究的模型、任务和资源仍需单独确认。
@@ -9,15 +12,14 @@
 | 基础流程 | 配置值 | 行为 |
 | --- | --- | --- |
 | 纯 pass@k | `passk` | 固定 k 名研究员独立完成整题，RSI 接收报告并督促继续，不提供建议或共享信息 |
-| pass@k + RSI 协调 | `passk` + `leader_guidance` | 保留独立探索，RSI 查看原始证据，定向共享并发送非阻塞建议 |
-| 旧版协作流程 | `collaborative` | 保留原有分工、指导、消息、报告和证据共享流程 |
+| v0.2.1 · pass@k + RSI 协调 | `passk` + `leader_guidance` | 保留独立探索，RSI 查看原始证据，定向共享并发送非阻塞建议 |
+| v0.2.2 · pass@k + RSI 协调 | `passk` + `leader_guidance` + `leader_guidance_v022` | 沿用 v0.2.1，仅调整 leader Prompt，关注未验证的思路和具体困难 |
 
-工作台提供以上三个快捷选项。新协调模式实际保存为 `mode=passk`、
-`collaboration_modules=["leader_guidance"]`，也可以在纯 pass@k 下勾选“RSI 协调”。
-旧版协作流程仍是单独的完整对照组。共享 evidence pool 和审核尚未实现。
+工作台提供以上三个快捷选项，新研究默认 v0.2.2。也可以直接选择模块组合。
+共享 evidence pool 和审核尚未实现。更早的 `collaborative` 分工流程仅保留历史记录供查看、导出，不能启动或恢复。
 
-原有配置保持兼容：省略 `mode` 时仍为 `collaborative`，省略 `collaboration_modules`
-时为空。旧研究保留启动时冻结的配置，不会被改成新的协作方式。
+完整 JSON 配置省略 `mode` 时为 `passk`，省略 `collaboration_modules` 时仍为空，
+不会给显式导入的配置自动增加模块。旧研究保留启动时冻结的配置，不会被改成新版本。
 
 ## RSI 协调的边界
 
@@ -82,22 +84,22 @@ mount/PID namespace 内增加私有根目录、网络隔离和权限收缩；只
 | --- | --- | --- |
 | `passk` | `PassKEngine` + `PassKActions` | [RSI](../src/areal_rsi/agents/rsi/passk_prompt.py)、[researcher](../src/areal_rsi/agents/research/passk_prompt.py) |
 | `passk` + `leader_guidance` | 同一个 `PassKEngine` + `GuidedPassKActions` | [RSI](../src/areal_rsi/agents/rsi/leader_guidance_prompt.py)、[researcher](../src/areal_rsi/agents/research/leader_guidance_prompt.py) |
-| `collaborative`（旧版） | `ResearchEngine` + `ResearchActions` | [RSI](../src/areal_rsi/agents/rsi/deprecated/prompt.py)；researcher 的 [simple](../src/areal_rsi/agents/research/deprecated/prompt.py) / [detailed](../src/areal_rsi/agents/research/deprecated/detailed_prompt.py) |
+| `passk` + `leader_guidance` + `leader_guidance_v022` | 与 v0.2.1 相同 | [RSI v0.2.2](../src/areal_rsi/agents/rsi/leader_guidance_v022_prompt.py)，researcher 复用上一行 |
 
-角色正文集中放在 `agents/rsi/` 和 `agents/research/`；旧版放在各自的 `deprecated/` 子目录。
-`coordination/` 负责选择和加载模板，不再内嵌这两种现行模式的角色正文。
+角色正文集中放在 `agents/rsi/` 和 `agents/research/`。
+`coordination/` 负责选择和加载模板，不内嵌角色正文。
 
-目前确实维护了 **3 份 RSI 正文、4 份 researcher 正文**；另有一份公共 interaction Prompt。
-`research_prompt_variant` 的 simple/detailed 仅用于旧版 collaborative。
+目前维护 **3 份 RSI 正文、2 份 researcher 正文**；另有一份公共 interaction Prompt。
 运行时再填入人数、工作区、任务工具说明，并组合公共诚信规则、任务材料和 Runtime 调用说明。
 这些公共部分不按模型或每个实验复制。公共 communication 模块的文字按角色引用；
 不是每种模式都机械拼上同一整段。
 
-当前唯一的附加模块 `leader_guidance` 复用 pass@k 调度器，但替换两份角色正文及 Actions；
-并非已经实现任意 Prompt 片段的自动组合。以后增加 evidence pool/审核时，优先增加简短的
+`leader_guidance` 复用 pass@k 调度器，但替换两份角色正文及 Actions；
+`leader_guidance_v022` 依赖它，只替换 RSI 正文。以后增加 evidence pool/审核时，优先增加简短的
 模块说明和权限，避免为每个模块组合再复制一整套 Prompt。
-本次重点调整全局计划、方向判断和持续探索，完整正文见 [Prompt 审阅](leader-guidance-prompt-review.md)。
-基础 pass@k 版本为 2，`leader_guidance` 模块版本为 3；旧实验仍须用原版本恢复。
+v0.2.1 完整正文见 [Prompt 审阅](leader-guidance-prompt-review.md)，新版见 [v0.2.2](leader-guidance-v0.2.2.md)。
+基础 pass@k 版本为 2，`leader_guidance` 模块版本为 3，新增 Prompt 模块版本为 1。
+两种协调方式都可在当前代码中选择；更早实验若版本不匹配，仍须用原版本恢复。
 
 ## 保存和复现
 
@@ -123,8 +125,8 @@ mount/PID namespace 内增加私有根目录、网络隔离和权限收缩；只
 ```
 
 启动前修改使用 `POST /api/runs/<run_id>/collaboration`，请求体为
-`{"mode":"passk","modules":[]}`。选择 pass@k 时，预设将模型调用、Token、验证和节点
-数量上限设为 null，保留原有 k、时限、目标和执行资源。完整 JSON 导入仍要求调用者明确
+`{"mode":"passk","modules":[]}`。模型调用、Token、验证和节点
+数量上限默认均为 null。完整 JSON 导入仍要求调用者明确
 配置符合 pass@k 的预算；无时限时必须有可信验证目标。
 
 启动时保存：
@@ -157,7 +159,7 @@ mount/PID namespace 内增加私有根目录、网络隔离和权限收缩；只
 
 每个模块接入前测试实际工具权限、消息路径、Prompt、组合行为和恢复过程。改变模块或基础
 流程的行为时提升相应版本；版本号需要开发者维护，Prompt 内容另有自动摘要检查。
-旧流程的边界条件仍由其原有测试覆盖，纯 pass@k 的隔离测试必须继续通过。
+纯 pass@k 的隔离测试必须继续通过，历史研究的读取不能改写原始记录。
 
 ## 任务评测与协作流程的边界
 

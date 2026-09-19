@@ -240,9 +240,7 @@ class ResearchRuntime:
         }
         from areal_rsi.coordination.collaboration import build_plan
 
-        plan = build_plan(
-            self.config.mode, self.config.collaboration_modules, self.config.research_prompt_variant
-        )
+        plan = build_plan(self.config.mode, self.config.collaboration_modules)
         allow_web = self.allow_web_access and not (plan.supervisor_only and agent_id == "rsi")
         codex_config = {
             "model_reasoning_effort": self.connection.reasoning_effort,

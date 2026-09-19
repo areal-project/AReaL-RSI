@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -46,13 +46,6 @@ MODES = {
         "description": "每人独立完成整题；RSI 只启动和督促继续，不指导、不共享。"
         "使用时间或目标停止，不限制模型调用、Token 和验证次数。",
     },
-    "collaborative": {
-        "id": "collaborative",
-        "label": "旧版协作流程",
-        "version": "1",
-        "description": "沿用原有 leader 分工、消息交流、报告与共享证据的完整流程。"
-        "这是旧流程对照，不是 pass@k 的单模块消融。",
-    },
 }
 
 
@@ -60,6 +53,15 @@ def apply_leader_guidance(plan: CollaborationPlan) -> CollaborationPlan:
     from areal_rsi.coordination.leader_guidance import apply
 
     return apply(plan)
+
+
+def apply_leader_guidance_v022(plan: CollaborationPlan) -> CollaborationPlan:
+    from areal_rsi.agents.rsi.leader_guidance_v022_prompt import PROMPT
+
+    return replace(plan, rsi_prompt=PROMPT)
+
+
+DEFAULT_MODULES = ("leader_guidance", "leader_guidance_v022")
 
 
 MODULES: dict[str, CollaborationModule] = {
@@ -70,6 +72,14 @@ MODULES: dict[str, CollaborationModule] = {
         "3",
         apply_leader_guidance,
     ),
+    "leader_guidance_v022": CollaborationModule(
+        "leader_guidance_v022",
+        "v0.2.2 Leader Prompt",
+        "关注未验证的思路，分享具体经验；保留独立探索，允许有依据地反驳建议。",
+        "1",
+        apply_leader_guidance_v022,
+        requires=("leader_guidance",),
+    ),
 }
 
 
@@ -79,18 +89,27 @@ def presets() -> list[dict[str, Any]]:
         1,
         {
             "id": "passk_guided",
-            "label": "pass@k + RSI 协调",
+            "label": "v0.2.1 · pass@k + RSI 协调",
             "mode": "passk",
             "modules": ["leader_guidance"],
             "description": MODULES["leader_guidance"].description,
         },
+    )
+    choices.append(
+        {
+            "id": "passk_guided_v022",
+            "label": "v0.2.2 · pass@k + RSI 协调",
+            "mode": "passk",
+            "modules": list(DEFAULT_MODULES),
+            "description": MODULES["leader_guidance_v022"].description,
+        }
     )
     return choices
 
 
 def selected_modules(mode: str, modules: tuple[str, ...]) -> tuple[str, ...]:
     if mode not in MODES:
-        raise ValueError("Research mode must be collaborative or passk")
+        raise ValueError("旧版协作模式已移除；请新建 passk 研究，可选 leader_guidance 模块")
     if not isinstance(modules, (tuple, list)) or any(not isinstance(m, str) for m in modules):
         raise ValueError("协作模块须为名称列表")
     if len(set(modules)) != len(modules):
@@ -116,35 +135,23 @@ def selected_modules(mode: str, modules: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(ordered)
 
 
-def build_plan(
-    mode: str, modules: tuple[str, ...] = (), research_prompt_variant: str = "simple"
-) -> CollaborationPlan:
-    from areal_rsi.agents.research.deprecated.prompt import PROMPT_VARIANTS
+def build_plan(mode: str, modules: tuple[str, ...] = ()) -> CollaborationPlan:
     from areal_rsi.agents.research.passk_prompt import PROMPT as PASSK_RESEARCH_PROMPT
-    from areal_rsi.agents.rsi.deprecated.prompt import PROMPT as RSI_PROMPT
     from areal_rsi.agents.rsi.passk_prompt import PROMPT as PASSK_RSI_PROMPT
-    from areal_rsi.coordination.actions import ResearchActions
-    from areal_rsi.coordination.engine import ResearchEngine
     from areal_rsi.coordination.passk import PassKActions, PassKEngine
 
     ordered = selected_modules(mode, modules)
-    plan = (
-        CollaborationPlan(PassKActions, PassKEngine, PASSK_RESEARCH_PROMPT, PASSK_RSI_PROMPT, True)
-        if mode == "passk"
-        else CollaborationPlan(
-            ResearchActions, ResearchEngine, PROMPT_VARIANTS[research_prompt_variant], RSI_PROMPT
-        )
+    plan = CollaborationPlan(
+        PassKActions, PassKEngine, PASSK_RESEARCH_PROMPT, PASSK_RSI_PROMPT, True
     )
     for name in ordered:
         plan = MODULES[name].apply(plan)
     return plan
 
 
-def manifest(
-    mode: str, modules: tuple[str, ...] = (), research_prompt_variant: str = "simple"
-) -> dict[str, Any]:
+def manifest(mode: str, modules: tuple[str, ...] = ()) -> dict[str, Any]:
     ordered = selected_modules(mode, modules)
-    plan = build_plan(mode, ordered, research_prompt_variant)
+    plan = build_plan(mode, ordered)
     value: dict[str, Any] = {
         "schema_version": 1,
         "mode": mode,

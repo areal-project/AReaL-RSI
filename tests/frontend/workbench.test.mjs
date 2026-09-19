@@ -8,8 +8,10 @@ const source = (name) => readFileSync(new URL(name, assets), 'utf8');
 const defaults = {base_url: 'https://4ipic.com', model: 'gpt-6-astra', reasoning_effort: 'xhigh', has_credentials: true};
 const collaborationCatalog = {modes: [
   {id: 'passk', label: '纯 pass@k', version: '1', description: '独立探索，RSI 只监督继续。'},
-  {id: 'collaborative', label: '旧版协作流程', version: '1', description: '原有完整协作流程。'},
-], modules: []};
+], modules: [{id: 'leader_guidance', label: 'RSI 协调', version: '3', modes: ['passk'], requires: [], conflicts: []}], presets: [
+  {id: 'passk', label: '纯 pass@k', mode: 'passk', modules: []},
+  {id: 'passk_guided', label: 'pass@k + RSI 协调', mode: 'passk', modules: ['leader_guidance']},
+]};
 const settle = async () => { for (let i = 0; i < 6; i++) await new Promise((resolve) => setImmediate(resolve)); };
 const response = (value, ok = true) => ({ok, status: ok ? 200 : 503, json: async () => structuredClone(value)});
 function run(id, status = 'planned') {
@@ -103,7 +105,7 @@ test('collaboration selection saves before start, stays per run, and locks histo
   const ui = await setup(t, records, (path, options) => {
     if (path === '/api/runs/a/collaboration' && options.method === 'POST') {
       const selection = JSON.parse(options.body);
-      records.a.collaboration = {...selection, label: '旧版协作流程', editable: true, manifest: null};
+      records.a.collaboration = {...selection, label: 'pass@k + RSI 协调', editable: true, manifest: null};
       return Promise.resolve(response(records.a));
     }
   });
@@ -118,12 +120,12 @@ test('collaboration selection saves before start, stays per run, and locks histo
   assert.match(ui.$('collaboration-summary').textContent, /已锁定/);
   assert.match(ui.$('collaboration-status').textContent, /历史研究/);
   ui.switchRun('a'); await settle();
-  assert.match(ui.$('collaboration-mode-trigger').textContent, /旧版协作/);
+  assert.match(ui.$('collaboration-mode-trigger').textContent, /RSI 协调/);
   ui.submit('collaboration-form'); await settle();
-  assert.deepEqual(ui.calls.find((call) => call.path.endsWith('/collaboration')).body, {mode: 'collaborative', modules: []});
+  assert.deepEqual(ui.calls.find((call) => call.path.endsWith('/collaboration')).body, {mode: 'passk', modules: ['leader_guidance']});
   assert.equal(ui.$('save-collaboration').disabled, true);
   ui.$('reuse-collaboration').click();
-  assert.match(ui.$('create-collaboration-mode-trigger').textContent, /旧版协作/);
+  assert.match(ui.$('create-collaboration-mode-trigger').textContent, /RSI 协调/);
 });
 
 test('creation sends the selected recipe and registered modules appear without frontend edits', async (t) => {
@@ -148,10 +150,53 @@ test('creation sends the selected recipe and registered modules appear without f
   assert.match(ui.$('create-collaboration-mode-trigger').textContent, /pass@k/);
   assert.equal(ui.$('create-collaboration-mode-options').closest('dialog'), ui.$('create-dialog'));
   ui.$('create-collaboration-mode-trigger').click();
-  ui.$('create-collaboration-mode-options').querySelectorAll('[role="option"]')[2].click();
+  ui.$('create-collaboration-mode-options').querySelectorAll('[role="option"]')[1].click();
   assert.equal(ui.$('create-collaboration-modules').querySelector('input').checked, true);
   ui.submit('create-form'); await settle();
   assert.deepEqual(submitted.collaboration, {mode: 'passk', modules: ['test_evidence']});
+});
+
+test('new studies default to v0.2.2 and can select v0.2.1 with its original modules', async (t) => {
+  const base = {id: 'leader_guidance', label: 'RSI 协调', version: '3', modes: ['passk'], requires: []};
+  const prompt = {id: 'leader_guidance_v022', label: 'v0.2.2 Leader Prompt', version: '1', modes: ['passk'], requires: [base.id]};
+  const presets = [
+    {id: 'passk', label: '纯 pass@k', mode: 'passk', modules: []},
+    {id: 'passk_guided', label: 'v0.2.1 · pass@k + RSI 协调', mode: 'passk', modules: [base.id]},
+    {id: 'passk_guided_v022', label: 'v0.2.2 · pass@k + RSI 协调', mode: 'passk', modules: [base.id, prompt.id]},
+  ];
+  const records = {a: run('a')};
+  const ui = await setup(t, records, (path, options) => {
+    if (path === '/api/bootstrap') return Promise.resolve(response({
+      csrf_token: 'test', default_model_settings: defaults, models: [],
+      collaboration_catalog: {modes: [collaborationCatalog.modes[0]], modules: [base, prompt], presets},
+      default_collaboration: {mode: 'passk', modules: [base.id, prompt.id]},
+    }));
+    if (path === '/api/runs' && options.method === 'POST') {
+      records.new = run('new');
+      return Promise.resolve(response(records.new));
+    }
+  });
+  ui.$('new-run').click();
+  assert.match(ui.$('create-collaboration-mode-trigger').textContent, /v0\.2\.2/);
+  assert.equal(ui.$('create-collaboration-modules').querySelector('input').disabled, true);
+  ui.$('create-collaboration-mode-trigger').click();
+  ui.$('create-collaboration-mode-options').querySelectorAll('[role="option"]')[1].click();
+  assert.match(ui.$('create-collaboration-mode-trigger').textContent, /v0\.2\.1/);
+  ui.submit('create-form'); await settle();
+  assert.deepEqual(ui.calls.find((call) => call.path === '/api/runs' && call.options.method === 'POST').body.collaboration,
+    {mode: 'passk', modules: [base.id]});
+});
+
+test('retired collaboration stays viewable without execution or reuse controls', async (t) => {
+  const record = run('archived', 'paused');
+  record.collaboration = {mode: 'collaborative', modules: [], label: '旧版协作（仅供查看）', supported: false, editable: false};
+  record.model_settings.editable = false;
+  const ui = await setup(t, {archived: record});
+  assert.equal(ui.$('objective').textContent, '研究 archived');
+  for (const id of ['start', 'pause', 'resume', 'stop', 'reuse-collaboration']) assert.equal(ui.$(id).hidden, true);
+  assert.equal(ui.$('chat-input').disabled, true);
+  assert.equal(ui.$('collaboration-mode-trigger').disabled, true);
+  assert.match(ui.$('collaboration-summary').textContent, /仅供查看/);
 });
 
 test('switching runs uses cached views and rejects a late response from the previous run', async (t) => {

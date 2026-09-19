@@ -45,11 +45,13 @@ def app_at(root: Path) -> ResearchApp:
     )
 
 
-def test_legacy_config_and_unimplemented_modules() -> None:
+def test_default_config_and_unimplemented_modules() -> None:
     config = ResearchConfig(TaskBrief("task", "complete task"))
     legacy = config.public()
     legacy.pop("collaboration_modules")
-    assert config_from_dict(legacy).mode == "collaborative"
+    assert config_from_dict(legacy).mode == "passk"
+    with pytest.raises(ValueError, match="已移除"):
+        config_from_dict({**legacy, "mode": "collaborative"})
     ResearchApp.select_collaboration(config, {"mode": "passk", "modules": []})
     restored = config_from_dict(config.public())
     plan = build_plan(restored.mode, restored.collaboration_modules)
@@ -79,7 +81,7 @@ def test_module_dependencies_and_stable_fingerprint(monkeypatch: pytest.MonkeyPa
         selected_modules("passk", ("b",))
     with pytest.raises(ValueError, match="重复"):
         selected_modules("passk", ("a", "a"))
-    with pytest.raises(ValueError, match="不支持"):
+    with pytest.raises(ValueError, match="已移除"):
         selected_modules("collaborative", ("a",))
     monkeypatch.setitem(MODULES, "a", replace(a, conflicts=("b",)))
     with pytest.raises(ValueError, match="冲突"):
@@ -195,13 +197,8 @@ def test_http_selection_and_historical_read_only_projection(tmp_path: Path) -> N
         client = WorkbenchClient(server.server_port)
         bootstrap = client.request("/api/bootstrap")
         client.token = bootstrap["csrf_token"]
-        assert [m["id"] for m in bootstrap["collaboration_catalog"]["modes"]] == [
-            "passk",
-            "collaborative",
-        ]
-        assert [m["id"] for m in bootstrap["collaboration_catalog"]["modules"]] == [
-            "leader_guidance"
-        ]
+        assert [m["id"] for m in bootstrap["collaboration_catalog"]["modes"]] == ["passk"]
+        assert "leader_guidance" in {m["id"] for m in bootstrap["collaboration_catalog"]["modules"]}
         assert bootstrap["collaboration_catalog"]["presets"][1]["modules"] == ["leader_guidance"]
         detail = client.request(
             "/api/runs",
@@ -218,12 +215,13 @@ def test_http_selection_and_historical_read_only_projection(tmp_path: Path) -> N
         client.request(
             f"/api/runs/{run_id}/collaboration",
             {
-                "mode": "collaborative",
-                "modules": [],
+                "mode": "passk",
+                "modules": ["leader_guidance"],
             },
         )
         updated = client.request(f"/api/runs/{run_id}")
-        assert updated["collaboration"]["mode"] == "collaborative"
+        assert updated["collaboration"]["mode"] == "passk"
+        assert updated["collaboration"]["modules"] == ["leader_guidance"]
         # A pre-feature stopped run has no manifest. Reading it never rewrites
         # frozen config to pretend its implementation version was recorded.
         c = app.coordinator(run_id)
@@ -232,10 +230,19 @@ def test_http_selection_and_historical_read_only_projection(tmp_path: Path) -> N
         path = c.store.root / "coordination/config.json"
         config = json.loads(path.read_text())
         config.pop("collaboration_modules")
+        config.pop("mode")  # Pre-mode historical configuration.
+        config["research_prompt_variant"] = "detailed"
         write_json(path, config)
         before = path.read_bytes()
         archived = client.request(f"/api/runs/{run_id}")
+        assert archived["collaboration"]["mode"] == "collaborative"
+        assert not archived["collaboration"]["supported"]
         assert not archived["collaboration"]["editable"]
+        assert not archived["model_settings"]["editable"]
+        for action in ("start", "resume", "chat"):
+            with pytest.raises(ValueError, match="已移除"):
+                client.request(f"/api/runs/{run_id}/{action}", {"text": "continue"})
+
         assert archived["collaboration"]["manifest"] is None
         assert path.read_bytes() == before
         assert not (c.store.root / "coordination/collaboration.json").exists()
@@ -243,3 +250,29 @@ def test_http_selection_and_historical_read_only_projection(tmp_path: Path) -> N
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_recovery_skips_retired_mode_without_writing_history(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        app = app_at(tmp_path)
+        try:
+            detail = await app.create({"conversation": True})
+            c = app.coordinator(detail["run_id"])
+            c.state.update(status="running", started_at="2026-09-16T10:00:00Z")
+            c.save()
+            path = c.store.root / "coordination/config.json"
+            config = json.loads(path.read_text())
+            config.update(
+                mode="collaborative", collaboration_modules=[], research_prompt_variant="simple"
+            )
+            config["metadata"]["auto_resume"] = True
+            write_json(path, config)
+            before = {p: p.read_bytes() for p in c.store.root.rglob("*") if p.is_file()}
+            await app.call("recover", {})
+            assert not app.active
+            assert not (await app.detail(c.store.run_id))["collaboration"]["supported"]
+            assert before == {p: p.read_bytes() for p in c.store.root.rglob("*") if p.is_file()}
+        finally:
+            await app.close()
+
+    asyncio.run(scenario())

@@ -53,10 +53,8 @@ class StopTransport:
 
 
 @pytest.mark.parametrize("limit", [None, 1800])
-@pytest.mark.parametrize("scope", ["total", "exploration"])
-@pytest.mark.parametrize("mode", ["collaborative", "passk"])
-def test_single_task_preparation_preserves_unlimited_time_and_submissions(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, limit: int | None, scope: str, mode: str
+def test_single_task_preparation_requires_time_budget_and_unlimited_submissions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, limit: int | None
 ) -> None:
     prepare = runpy.run_path("examples/kernelbench_artifacts/demo.py")["prepare"]
     source = b"# Public reference fixture\n"
@@ -85,14 +83,13 @@ def test_single_task_preparation_preserves_unlimited_time_and_submissions(
     monkeypatch.setitem(prepare.__globals__, "control_request", remote)
     environment = tmp_path / "environment.json"
     environment.write_text("{}")
-    if mode == "passk" and limit is None:
+    if limit is None:
         with pytest.raises(ValueError, match="wall limit"):
             prepare(
                 tmp_path,
                 environment,
                 "unlimited",
                 task="L3P10",
-                mode=mode,
                 max_wall_seconds=None,
                 exploration_submissions=None,
                 check_credentials=False,
@@ -105,19 +102,16 @@ def test_single_task_preparation_preserves_unlimited_time_and_submissions(
         task="L3P10",
         max_agents=6,
         max_wall_seconds=limit,
-        time_limit_scope=scope,
         exploration_submissions=None,
         check_credentials=False,
-        mode=mode,
+        collaboration_modules=(),
     )
     limits = config["brief"]["limits"]
     assert limits["max_wall_seconds"] == limit
-    assert limits["max_jobs"] == (6 if mode == "passk" else None)
+    assert limits["max_jobs"] == 6
     assert limits["max_model_calls"] is None
     assert limits["max_agents"] == 6
-    assert config["metadata"]["finalization_reserve_seconds"] == (
-        180 if limit is not None and scope == "total" and mode != "passk" else 0
-    )
+    assert config["metadata"]["finalization_reserve_seconds"] == 0
     assert ("本次不设时间上限" in config["brief"]["instructions"]) == (limit is None)
     assert "None 秒" not in config["brief"]["instructions"]
     assert "GPU 提交次数不限" in config["brief"]["instructions"]
@@ -127,19 +121,16 @@ def test_single_task_preparation_preserves_unlimited_time_and_submissions(
         json.loads(Path(config["seed_dir"]).joinpath("tasks/L3P10/baseline.json").read_text())
         == reference
     )
-    if mode == "passk":
-        assert config["mode"] == "passk"
-        assert "collect_bundle" not in {c["name"] for c in config["commands"]}
-        rules = Path(config["seed_dir"]).joinpath("RULES.md").read_text()
-        prompt = (
-            config["brief"]["instructions"]
-            + rules
-            + json.dumps(config["metadata"], ensure_ascii=False)
-        )
-        assert "阶段目标仍由 RSI 决定" not in prompt and "团队研究计划" not in prompt
-        assert "独立完成整题" in rules and "不等待技术指导" in rules
-        assert "不使用 triton.autotune" in prompt
-        assert "TF32" in rules
+    assert config["mode"] == "passk"
+    assert "collect_bundle" not in {c["name"] for c in config["commands"]}
+    rules = Path(config["seed_dir"]).joinpath("RULES.md").read_text()
+    prompt = (
+        config["brief"]["instructions"] + rules + json.dumps(config["metadata"], ensure_ascii=False)
+    )
+    assert "阶段目标仍由 RSI 决定" not in prompt and "团队研究计划" not in prompt
+    assert "独立完成整题" in rules and "不等待技术指导" in rules
+    assert "不使用 triton.autotune" in prompt
+    assert "TF32" in rules
 
 
 @pytest.mark.parametrize("strict", [True, False])
@@ -178,17 +169,11 @@ def test_diagnostic_matches_formal_precision_without_changing_candidate(
 
 
 @pytest.mark.parametrize(
-    "retry_verifier,deadline,withdraw_final",
-    [
-        (False, False, False),
-        (True, False, False),
-        (False, True, False),
-        (True, True, False),
-        (False, False, True),
-    ],
+    "retry_verifier,withdraw_final",
+    [(False, False), (True, False), (False, True)],
 )
 def test_configured_http_run_finishes_without_a_monitor_and_reuses_service(
-    tmp_path: Path, retry_verifier: bool, deadline: bool, withdraw_final: bool
+    tmp_path: Path, retry_verifier: bool, withdraw_final: bool
 ) -> None:
     script = tmp_path / "cpu_runner.py"
     script.write_text("""import json,sys,os
@@ -235,14 +220,13 @@ else:
             }
         },
     )
-    if deadline:
-        config.brief.limits.max_wall_seconds = 0.2
-        config.metadata["time_limit_scope"] = "exploration"
+    config.brief.limits.max_wall_seconds = 0.2
+    config.metadata["time_limit_scope"] = "exploration"
     app = ResearchApp(
         tmp_path,
         runtime_factory=lambda _: ResponsesRuntime(
             ResponsesConfig(base_url="https://example.test", api_key="test"),
-            StopTransport("wait" if deadline else "stop_run"),
+            StopTransport("wait"),
         ),
     )
     server = WorkbenchServer(app, port=0)

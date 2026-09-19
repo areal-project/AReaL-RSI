@@ -44,7 +44,7 @@ const state = {
   modelFormRun: null,
   modelSavingRun: null,
   collaborationCatalog: {modes: [], modules: []},
-  defaultCollaboration: {mode: "collaborative", modules: []},
+  defaultCollaboration: {mode: "passk", modules: []},
   collaborationDrafts: new Map(),
   collaborationSavingRun: null,
 };
@@ -129,10 +129,13 @@ function renderCollaborationFields(prefix, dropdown, selection, disabled, onChan
     input.type = "checkbox";
     input.value = module.id;
     input.checked = selection.modules.includes(module.id);
-    input.disabled = disabled;
+    input.disabled = disabled || modules.some((item) => selection.modules.includes(item.id) && (item.requires || []).includes(module.id));
     input.addEventListener("change", () => {
       const selected = new Set(selection.modules);
-      if (input.checked) selected.add(module.id); else selected.delete(module.id);
+      if (input.checked) {
+        selected.add(module.id);
+        for (const dependency of module.requires || []) selected.add(dependency);
+      } else selected.delete(module.id);
       onChange({mode: selection.mode, modules: [...selected].sort()});
     });
     const description = element("span", "", `${module.label} · v${module.version}`);
@@ -152,7 +155,11 @@ function renderCollaboration() {
   if (!saved.editable) state.collaborationDrafts.delete(state.runId);
   const draft = state.collaborationDrafts.get(state.runId) || collaborationSelection(saved);
   const disabled = !saved.editable || !!state.collaborationSavingRun || state.busy;
-  const label = matchingCollaborationPreset(saved)?.label || [saved.label || saved.mode, ...(saved.modules || [])].join(" + ");
+  const currentVersion = !saved.manifest || (saved.manifest.modules || []).every((recorded) =>
+    state.collaborationCatalog.modules.some((module) => module.id === recorded.id && module.version === recorded.version));
+  const label = currentVersion
+    ? matchingCollaborationPreset(saved)?.label || [saved.label || saved.mode, ...(saved.modules || [])].join(" + ")
+    : `${saved.mode} · 历史协作版本`;
   $("collaboration-summary").textContent = [label, saved.editable ? "启动前可修改" : "已锁定"].join(" · ");
   renderCollaborationFields("collaboration-", collaborationDropdown, draft, disabled, (selection) => {
     state.collaborationDrafts.set(state.runId, selection); renderCollaboration();
@@ -163,6 +170,7 @@ function renderCollaboration() {
       element("p", "muted", `${id} · ${recorded.has(id) ? `v${recorded.get(id)}` : "历史版本未记录"}`))
       : [element("p", "muted", "未启用附加模块。")]) );
   }
+  $("reuse-collaboration").hidden = saved.supported === false;
   $("save-collaboration").hidden = !saved.editable;
   $("save-collaboration").disabled = disabled || !collaborationChanged();
   $("save-collaboration").textContent = state.collaborationSavingRun === state.runId ? "保存中…" : "保存协作配置";
@@ -672,6 +680,9 @@ function render() {
   $("stop").hidden = !["planned", "running", "paused"].includes(run.status)
     && run.finalization?.status !== "running";
   $("stop").textContent = run.status === "planned" ? "结束对话" : "停止";
+  if (run.collaboration?.supported === false) {
+    for (const id of ["start", "pause", "resume", "stop"]) $(id).hidden = true;
+  }
   $("delete-run").disabled = state.busy || state.sending.has(run.run_id) || !!state.modelSavingRun;
   $("delete-run").title = deletionBlocked(run) ? "请先停止研究再删除" : "删除这项研究的本地记录";
   $("best-score").textContent = score(run.best?.score);
@@ -697,7 +708,7 @@ function render() {
   renderEvents();
   const target = renderReplyTarget(run);
   renderAgentErrors(run);
-  const ended = !["planned", "running", "paused"].includes(run.status);
+  const ended = run.collaboration?.supported === false || !["planned", "running", "paused"].includes(run.status);
   const responding = (run.agents || []).find((agent) => agent.agent_id === target.recipient);
   $("chat-input").disabled = ended;
   $("send-message").disabled = ended || state.sending.has(run.run_id) || target.stale;
@@ -790,7 +801,7 @@ function renderAgentErrors(run) {
     block.append(element("strong", "", `${agentName(agent.agent_id)} 暂时无法继续`),
       element("p", "", agent.error || "调用失败，请检查模型服务与网络。"));
     const retry = element("button", "secondary", "处理后重试");
-    retry.disabled = !["planned", "running"].includes(run.status);
+    retry.disabled = run.collaboration?.supported === false || !["planned", "running"].includes(run.status);
     retry.addEventListener("click", () => control("retry", { agent_id: agent.agent_id }));
     block.append(retry);
     return block;
@@ -1842,7 +1853,7 @@ async function bootstrap() {
   state.models = config.models || [];
   state.defaultModelSettings = config.default_model_settings || {};
   state.collaborationCatalog = config.collaboration_catalog || {modes: [], modules: []};
-  state.defaultCollaboration = config.default_collaboration || {mode: "collaborative", modules: []};
+  state.defaultCollaboration = config.default_collaboration || {mode: "passk", modules: []};
 }
 
 async function boot() {

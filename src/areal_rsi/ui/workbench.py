@@ -63,7 +63,7 @@ def _refs(value: Any) -> list[Json]:
 
 
 def _collaboration(value: Any) -> Json:
-    result = _fields(value, "mode modules label editable")
+    result = _fields(value, "mode modules label editable supported")
     frozen = value.get("manifest") if isinstance(value, dict) else None
     result["manifest"] = None
     if isinstance(frozen, dict):

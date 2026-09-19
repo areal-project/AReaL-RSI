@@ -22,16 +22,14 @@ def arguments(mode: str) -> dict[str, Any]:
     return value
 
 
-def test_schema_changes_by_mode_without_mutating_other_catalogs() -> None:
-    collaborative = brief_tool("collaborative")
-    passk = brief_tool("passk")
-    for tool in (collaborative, passk):
-        Draft202012Validator.check_schema(tool["parameters"])
-        assert "brief_json" not in tool["parameters"]["properties"]
+def test_schema_only_exposes_supported_passk_budgets() -> None:
+    tool = brief_tool("passk")
+    Draft202012Validator.check_schema(tool["parameters"])
+    assert "brief_json" not in tool["parameters"]["properties"]
     for key in PASSK_HIDDEN_LIMITS:
-        assert key in collaborative["parameters"]["properties"]["limits"]["properties"]
-        assert key not in passk["parameters"]["properties"]["limits"]["properties"]
-    assert brief_tool("collaborative") == collaborative
+        assert key not in tool["parameters"]["properties"]["limits"]["properties"]
+    with pytest.raises(ValueError, match="已移除"):
+        brief_tool("collaborative")
 
 
 @pytest.mark.parametrize("key", PASSK_HIDDEN_LIMITS)
@@ -43,8 +41,8 @@ def test_passk_rejects_hidden_keys_even_when_null(key: str, value: int | None) -
         updated_brief("passk", TaskBrief("old", "old"), args)
 
 
-@pytest.mark.parametrize("mode", ["passk", "collaborative"])
-def test_structured_update_preserves_verification_identity(mode: str) -> None:
+def test_structured_update_preserves_verification_identity() -> None:
+    mode = "passk"
     current = TaskBrief(
         "old",
         "old",
@@ -66,16 +64,16 @@ def test_structured_update_preserves_verification_identity(mode: str) -> None:
     assert result.verification.identity == current.verification.identity
     assert result.limits.max_agents == 1
     for key in PASSK_HIDDEN_LIMITS:
-        assert getattr(result.limits, key) == (None if mode == "passk" else args["limits"][key])
+        assert getattr(result.limits, key) is None
 
 
 def test_rejects_legacy_string_and_bad_types() -> None:
     with pytest.raises(ValueError):
         updated_brief("passk", TaskBrief("old", "old"), {"brief_json": "{}"})
-    args = arguments("collaborative")
+    args = arguments("passk")
     args["limits"]["max_jobs"] = "8"
     with pytest.raises(ValueError, match="max_jobs"):
-        updated_brief("collaborative", TaskBrief("old", "old"), args)
+        updated_brief("passk", TaskBrief("old", "old"), args)
 
 
 def test_effective_budget_is_per_researcher_and_only_available_in_passk() -> None:
@@ -84,10 +82,6 @@ def test_effective_budget_is_per_researcher_and_only_available_in_passk() -> Non
     result = updated_brief("passk", TaskBrief("old", "old"), args)
     assert result.limits.max_effective_seconds == 1800
     assert result.limits.max_wall_seconds is None
-    args = arguments("collaborative")
-    args["limits"]["max_effective_seconds"] = 1800
-    with pytest.raises(ValueError, match="max_effective_seconds"):
-        updated_brief("collaborative", TaskBrief("old", "old"), args)
 
 
 def test_action_catalog_follows_current_mode(tmp_path: Path) -> None:
@@ -96,10 +90,8 @@ def test_action_catalog_follows_current_mode(tmp_path: Path) -> None:
 
     coordinator = Coordinator.create(tmp_path, TaskBrief("test", "test"))
     actions = ResearchActions(coordinator)
-    for mode in ("collaborative", "passk", "collaborative"):
-        coordinator.state["mode"] = mode
-        tools = actions.definitions("interaction")
-        tool = next(tool for tool in tools if tool["name"] == "update_brief")
-        assert tool == brief_tool(mode)
+    tools = actions.definitions("interaction")
+    tool = next(tool for tool in tools if tool["name"] == "update_brief")
+    assert tool == brief_tool("passk")
     coordinator.state["status"] = "running"
     assert all(tool["name"] != "update_brief" for tool in actions.definitions("interaction"))

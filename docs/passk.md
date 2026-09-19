@@ -1,11 +1,11 @@
 # Isolated pass@k
 
 设置 `ResearchConfig.mode = "passk"`，`brief.limits.max_agents` 即固定的 k。
-省略 mode 时保持原有 `collaborative` 模式。后端仍可选 `standard` 或 `codex`，都使用
+省略 mode 时默认使用 `passk`。后端仍可选 `standard` 或 `codex`，都使用
 AReaL Agent Runtime。这个模式只实现独立尝试，不包含信息共享或 evidence 审核。
 
 工作台支持在创建研究或启动前选择协作方式，并冻结模块版本；通过“用此配置新建研究”
-复用选择。附加模块目前为空，后续以独立模块接入。配置和扩展方式见[协作与消融](collaboration.md)。
+复用选择。`leader_guidance` 可增加 RSI 协调，不启用时保持纯 pass@k。配置和扩展方式见[协作与消融](collaboration.md)。
 
 ## 行为
 

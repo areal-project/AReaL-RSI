@@ -15,11 +15,11 @@ class ResearchLimits:
     max_agents: int = (
         1  # Simultaneously live researchers, including waiting; not lifetime creations.
     )
-    max_nodes: int | None = 20
-    max_model_calls: int | None = 200
-    max_total_tokens: int | None = 1_000_000
+    max_nodes: int | None = None
+    max_model_calls: int | None = None
+    max_total_tokens: int | None = None
     max_wall_seconds: float | None = 14400
-    max_verify_calls: int | None = 20
+    max_verify_calls: int | None = None
     max_jobs: int | None = 1
     gpu_ids: tuple[str, ...] = ()
     allowed_paths: tuple[str, ...] = ("*",)

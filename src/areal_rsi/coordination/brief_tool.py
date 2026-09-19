@@ -8,6 +8,7 @@ from jsonschema import Draft202012Validator
 
 from areal_rsi.api.research import TaskBrief
 from areal_rsi.base.storage import decode, encode
+from areal_rsi.coordination.collaboration import selected_modules
 
 PASSK_HIDDEN_LIMITS = (
     "max_nodes",
@@ -27,20 +28,15 @@ def object_schema(properties: dict[str, Any]) -> dict[str, Any]:
 
 
 def brief_tool(mode: str) -> dict[str, Any]:
+    selected_modules(mode, ())
     limits: dict[str, Any] = {}
     descriptions = {
         "max_agents": "同时存活的 AI 研究员上限，等待中的研究员也计入；不是实验并发数。",
-        "max_nodes": "累计研究节点上限；null 表示不限。",
-        "max_model_calls": "整个研究的模型调用次数上限；null 表示不限。",
-        "max_total_tokens": "整个研究的模型 token 总量上限；null 表示不限。",
         "max_wall_seconds": "研究总时限，单位秒，例如 3 小时为 10800；null 表示不限。",
         "max_effective_seconds": "pass@k 每名研究员的有效时间上限，单位秒；null 表示不限。",
-        "max_verify_calls": "正式验证次数上限；0 表示不允许，null 表示不限。",
         "max_jobs": "并发实验作业上限，与 AI 研究员数量独立；null 表示不限。",
     }
     for name, description in descriptions.items():
-        if mode == "passk" and name in PASSK_HIDDEN_LIMITS:
-            continue
         limits[name] = {
             "type": "integer"
             if name == "max_agents"
@@ -49,13 +45,8 @@ def brief_tool(mode: str) -> dict[str, Any]:
                 "null",
             ],
             "description": description,
-            **({"minimum": 0} if name == "max_verify_calls" else {"exclusiveMinimum": 0}),
+            "exclusiveMinimum": 0,
         }
-        if name == "max_effective_seconds" and mode != "passk":
-            limits[name] = {
-                "type": "null",
-                "description": "有效时间预算仅支持 pass@k；此处填 null。",
-            }
     for name, description in {
         "gpu_ids": "允许使用的 GPU 标识，保留当前约定。",
         "allowed_paths": "允许修改的相对路径模式，保留当前约定；* 表示全部。",
@@ -73,15 +64,12 @@ def brief_tool(mode: str) -> dict[str, Any]:
         "启动前更新需求。先读取 get_state，填写结构化参数并保留未修改字段。"
         "验证 identity 由后端保留，不在此工具修改。"
     )
-    if mode == "passk":
-        description += (
-            "当前为 pass@k：仅提供研究时限、研究员数量和执行资源限制；"
-            "调用次数、token 总量、验证次数及累计节点数由系统保持不限。"
-            "若用户要求这些上限，说明模式冲突，请用户在界面切换协作模式或明确取消上限；"
-            "不要擅自忽略用户预算，也不要把冲突上限写进 instructions。"
-        )
-    else:
-        description += "当前为协作模式；用户明确不限的预算填写 null。"
+    description += (
+        "当前为 pass@k：仅提供研究时限、研究员数量和执行资源限制；"
+        "调用次数、token 总量、验证次数及累计节点数由系统保持不限。"
+        "若用户要求这些上限，先说明当前不支持并明确预算；"
+        "不要擅自忽略用户要求，也不要把冲突上限写进 instructions。"
+    )
     return {
         "type": "function",
         "name": "update_brief",
@@ -110,8 +98,7 @@ def updated_brief(mode: str, current: TaskBrief, arguments: dict[str, Any]) -> T
     value = encode(current)
     value.update(arguments)
     value["limits"] = dict(arguments["limits"])
-    if mode == "passk":
-        value["limits"].update(dict.fromkeys(PASSK_HIDDEN_LIMITS))
+    value["limits"].update(dict.fromkeys(PASSK_HIDDEN_LIMITS))
     if arguments["verification"] is not None:
         value["verification"] = {
             **arguments["verification"],

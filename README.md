@@ -32,7 +32,7 @@ RSI_DATA_ROOT=.rsi/research-lab
 uv run --env-file .env --locked python run.py --type web
 ```
 
-打开 **http://127.0.0.1:8197**，新建研究，与 Interaction 讨论任务、环境、资源限制和目标，要求开始后交给 RSI。开始前可选择 Agent 后端，并修改模型地址、密钥、名称和推理强度；运行中可以回答问题、补充要求、暂停和恢复。
+打开 **http://127.0.0.1:8197**，新建研究，与 Interaction 讨论任务、环境、资源限制和目标，要求开始后交给 RSI。开始前可选择 Agent 后端，并修改模型地址、密钥、名称和推理强度；开始后任务和协作配置锁定，可查看进展或明确停止。
 
 Agent 后端有 `standard`（默认，AReaL Runtime 的 DSH 适配器）和 `codex`（Codex 原生循环、编程工具与网页搜索）。选择对 Interaction、RSI 和所有 Research Agents 生效。完整研究配置使用 `"backend": "codex"`；旧配置省略此字段时沿用 `standard`。研究开始后后端与模型配置一起锁定。两种后端都使用本研究配置的 API 地址和密钥。
 
@@ -40,7 +40,7 @@ Agent 后端有 `standard`（默认，AReaL Runtime 的 DSH 适配器）和 `cod
 
 新实验可设置 `"mode": "passk"`：RSI 启动 k 个独立完成整题的 researcher，接收进展并督促持续探索；不提供研究建议、不调整方向，也不在研究员之间分享信息。任一正式结果达标或整组到时即停止。配置与比较方法见 [pass@k](docs/passk.md)。
 
-工作台可在新建研究或启动前选择纯 pass@k、pass@k + RSI 协调或旧版协作流程。RSI 协调作为附加模块，只增加原始证据查看、定向共享和非阻塞建议。启动配置和模块版本会冻结，历史配置可以复用到新研究；详见[协作配置](docs/collaboration.md)。
+工作台可在新建研究或启动前选择纯 pass@k 或 pass@k + RSI 协调，协调模式提供 v0.2.1 和 v0.2.2，新研究默认 v0.2.2。RSI 协调作为附加模块，增加原始证据查看、定向共享和非阻塞建议。启动配置和模块版本会冻结；已下线的旧版分工模式仍可查看历史记录，不能启动或恢复。详见[协作配置](docs/collaboration.md)。
 
 研究图中每个 Agent 占一列，进展按实际发生时间向下展开，空白时段压缩；个人有效时间单独显示在研究员卡片中。默认展示成绩突破、汇报、建议和待完成作业，也可切换“只看协作”或展开全部作业。虚线根据建议附带的同一研究内的引用标明信息来源；点击事件可查看原文和送达状态。送达不代表已被采纳，没有明确同伴来源的消息显示为 RSI 的建议。此视图只读取历史记录，不改变 agent 协作或补写实验数据。
 
@@ -52,7 +52,7 @@ Agent 后端有 `standard`（默认，AReaL Runtime 的 DSH 适配器）和 `cod
 uv run --env-file .env --locked rsi workbench --port 8197
 ```
 
-## 一键运行 KernelBench 八题 demo
+## 一键运行 KernelBench pass@k demo
 
 拥有 et15 SSH 和已部署 GPUQ 的访问权限后，无需先打开浏览器或重复填写需求：
 
@@ -60,7 +60,9 @@ uv run --env-file .env --locked rsi workbench --port 8197
 uv run --env-file .env --locked python run.py --type demo
 ```
 
-脚本自动启动或复用工作台，注册独立的八题额度并启动研究，输出可直接打开的研究链接。RSI 自主分工，结束探索后程序自动冻结候选、独立复测并归档。关闭浏览器或启动终端不影响后台研究。
+脚本自动启动或复用工作台，默认以 v0.2.2 协调模式启动 L3P10 的四名独立研究员，探索限时一小时、提交不限次数。结束后自动冻结最佳候选、独立复测并归档。关闭浏览器或启动终端不影响后台研究。
+
+三题并行、每名研究员半小时有效时间的固定实验，见 [v0.2.1 示例](examples/kernelbench_artifacts/v0.2.1/README.md)。
 
 题目、提交预算、环境检查、恢复命令和历史结果见 [KernelBench demo 快速指南](examples/kernelbench_artifacts/README.md)。这条入口优化具体 kernel，不需要额外 Task Agent；[通用 harness 优化](examples/kernelbench/README.md)是另一种任务。
 

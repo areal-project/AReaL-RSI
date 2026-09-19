@@ -90,7 +90,7 @@ def test_single_task_preparation_requires_time_budget_and_unlimited_submissions(
     limits = config["brief"]["limits"]
     assert limits["max_wall_seconds"] == limit
     assert limits["max_jobs"] == 6
-    assert "max_model_calls" not in limits
+    assert limits["max_model_calls"] is None
     assert limits["max_agents"] == 6
     assert config["metadata"]["finalization_reserve_seconds"] == 0
     assert ("本次不设时间上限" in config["brief"]["instructions"]) == (limit is None)
@@ -748,7 +748,7 @@ def test_harness_config_defaults_and_early_budget_rejection(
     monkeypatch.setitem(module["build_config"].__globals__, "describe", describe)
     config = module["build_config"](args)
     assert config.needs_finalization and config.finalizer is None
-    assert "max_model_calls" not in encode(config.brief.limits)
+    assert encode(config.brief.limits)["max_model_calls"] is None
     assert config.brief.limits.max_total_tokens is None
     assert config.brief.limits.max_verify_calls is None
     args.max_total_tokens = 200

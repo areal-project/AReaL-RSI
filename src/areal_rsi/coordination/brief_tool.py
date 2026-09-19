@@ -11,6 +11,7 @@ from areal_rsi.base.storage import decode, encode
 from areal_rsi.coordination.collaboration import selected_modules
 
 PASSK_HIDDEN_LIMITS = (
+    "max_model_calls",
     "max_nodes",
     "max_total_tokens",
     "max_verify_calls",

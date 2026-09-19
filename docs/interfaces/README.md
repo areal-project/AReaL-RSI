@@ -53,3 +53,31 @@ verifier 和 finalizer。只接受当前字段，不支持旧字段自动迁移�
 
 数学与 LCB 通过 ResearchApp 登记的验证命令调用上述组件。EnvArena 发布版本不可变，
 候选只修改允许的能力字段，模型、运行底座、题目和 Reward 始终固定。
+
+## 优化对象与可复用领域接口
+
+`ResearchConfig.evolution_target` 可选值为 `model`、`harness`、`artifact`，由操作员配置，
+保存到研究配置和原生会话配置记录；未声明时为 `null`，不根据文件名猜测。
+数学/LCB 的接入声明 `harness`，KernelBench 产物接入声明 `artifact`。
+分类本身不选择另一套 Workflow、不授予权限，也不自动提供训练能力；任务说明、
+`allowed_paths`、登记命令和可信评测器仍决定具体执行与验证。模型训练需要接入真实后端。
+
+以下通用 API 与旧 Workflow 无关，保留原有导入路径：
+
+| API | 职责与实现 |
+| --- | --- |
+| `EvolutionTarget` | 优化对象的领域分类 |
+| `HarnessChange / ModelChange / ArtifactChange / ResearchChange` | 候选修改或训练请求的数据契约 |
+| `ArtifactBuilder / TrainingBackend` | 产物构建和训练接口；`LocalArtifactBuilder` 可独立构建产物，训练接口不等于已实现训练链路 |
+| `EvidenceFile / EvidenceBundle / EvidenceStore` | 证据清单及显式文件授权；实现为 `FileEvidenceStore`，分页读取工具为 `FileReader` |
+| `MemoryRecord / MemoryHit / Memory` | 可复用的记忆存储；实现为 `FileMemory`，不自动注入研究员上下文 |
+| `LocalModelCatalog` | 按内容复用模型及基线版本 |
+| `BenchmarkCatalog / BenchmarkRegistry / BenchmarkAdapter / BenchmarkBundle` | 评测元数据、适配器注册和装配，不负责研究编排 |
+
+这些接口可以由集成方独立使用，不表示 ResearchApp 自动调用了所有组件。
+`ResearchLimits.max_model_calls` 保留可空字段，当前仅接受 `null`；非空值明确报错，
+不会静默忽略模型调用次数上限。工作台与需求工具不展示无法执行的限制。
+
+旧 `api.workflow`、`WorkflowContext`、`RsiWorkflow`、`ExperimentService`、
+绑定 Workflow 的 `ExperimentPlan / ExperimentRun` 和 `ResearchAgent.propose/select`、
+`RsiAgent.chat/prune` 协议不恢复；当前应用使用 ResearchApp 和原生回合接口。

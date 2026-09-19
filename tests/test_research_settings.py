@@ -57,7 +57,7 @@ def test_current_brief_can_be_updated_and_started(tmp_path: Path) -> None:
             await app.start(c)
             assert app.coordinator(c.store.run_id).state["status"] == "running"
             started = json.loads((c.store.root / "coordination/started-config.json").read_text())
-            assert "max_model_calls" not in started["brief"]["limits"]
+            assert started["brief"]["limits"]["max_model_calls"] is None
         finally:
             await app.close()
 
@@ -101,9 +101,9 @@ def test_research_imports_do_not_load_legacy_responses(tmp_path: Path) -> None:
     )
 
 
-@pytest.mark.parametrize("cap", [None, 200])
-def test_removed_request_cap_is_rejected(cap: int | None) -> None:
-    with pytest.raises(ValueError, match="Unknown research configuration field: max_model_calls"):
+def test_unenforceable_request_cap_is_rejected() -> None:
+    cap = 200
+    with pytest.raises(ValueError, match="max_model_calls is not supported"):
         config_from_dict({"brief": {
             "objective": "test", "instructions": "test", "limits": {"max_model_calls": cap},
         }})

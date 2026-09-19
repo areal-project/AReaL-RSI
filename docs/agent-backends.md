@@ -91,8 +91,8 @@ Codex 使用原生默认窗口。`max_output_tokens` 仅支持 standard 自定�
 Runtime journal 是执行事实来源，包含原生事件、工具执行和 usage。工作台汇总供应商实际
 报告的 token，并单独记录 runtime turns。当前 Runtime 的两个适配器没有逐次 model-call
 数据；runtime turn 不等于一次模型请求。原先请求代理的逐请求预算预留和请求文件不再生成，
-不能用该字段进行请求数或精确费用比较。`ResearchLimits` 已移除 `max_model_calls`，
-新配置、需求工具和工作台不再提供模型调用次数上限；包含该旧字段的配置不再兼容。
+不能用该字段进行请求数或精确费用比较。`ResearchLimits.max_model_calls` 保留为可空兼容字段，默认 `null`；
+当前原生运行时无法执行该上限，非空值会明确报错，需求工具和工作台不提供这个设置。
 token 限制按
 已收到的 usage 停止，不代表供应商账单的严格上限。中断请求可能没有完整 usage。
 工具参数定义改变后不自动迁移旧草稿会话，需要新建研究。

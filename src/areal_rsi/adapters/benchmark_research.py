@@ -18,6 +18,7 @@ from typing import Any
 
 from areal_rsi.api.base import (
     BenchmarkSplit,
+    EvolutionTarget,
     HarnessChange,
     VerificationRequest,
     VerifierSpec,
@@ -147,6 +148,7 @@ async def prepare(
             ),
         ),
         backend=backend,
+        evolution_target=EvolutionTarget.HARNESS,
         collaboration_modules=DEFAULT_MODULES,
         seed_dir=str(seed),
         verifier=ApprovedCommand(

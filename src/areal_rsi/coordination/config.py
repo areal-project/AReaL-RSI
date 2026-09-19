@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from areal_rsi.api.base import EvolutionTarget
 from areal_rsi.api.research import TaskBrief
 from areal_rsi.base.storage import decode, encode
 from areal_rsi.coordination.collaboration import selected_modules
@@ -68,8 +69,13 @@ class ResearchConfig:
     execution_env: dict[str, str] = field(default_factory=dict)
     simulation_scores: tuple[float, ...] = (0.3, 0.5, 0.7)
     metadata: dict[str, Any] = field(default_factory=dict)
+    evolution_target: EvolutionTarget | None = None
 
     def __post_init__(self) -> None:
+        if self.evolution_target is not None:
+            self.evolution_target = EvolutionTarget(self.evolution_target)
+        if self.brief.limits.max_model_calls is not None:
+            raise ValueError("max_model_calls is not supported by native runtimes; use null")
         # Old configurations remain decodable for viewing; executable entry points reject them.
         if self.mode != "collaborative":
             self.collaboration_modules = selected_modules(self.mode, self.collaboration_modules)

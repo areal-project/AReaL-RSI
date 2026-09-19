@@ -88,6 +88,7 @@ class ResearchRuntime:
         return {
             **self.config.model_settings(),
             "runtime": "areal-agent-runtime",
+            "evolution_target": self.config.evolution_target,
             "harness": self.settings.select(self.role_for(agent_id))["kind"],
             "allow_web_access": self.allow_web_access,
         }

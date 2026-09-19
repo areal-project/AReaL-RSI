@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from areal_rsi.api.base import EvolutionTarget
 from areal_rsi.api.research import ResearchLimits, TaskBrief, VerificationContract
 from areal_rsi.base.storage import safe_name, write_json
 from areal_rsi.coordination.collaboration import DEFAULT_MODULES, selected_modules
@@ -327,6 +328,7 @@ def prepare(
             identity={"require_final_confirmation": True},
         ),
     )
+    config.evolution_target = EvolutionTarget.ARTIFACT
     config.seed_dir = str(seed)
     config.commands = commands
     config.verifier = ApprovedCommand(

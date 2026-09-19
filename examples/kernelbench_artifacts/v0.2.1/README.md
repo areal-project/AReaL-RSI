@@ -83,6 +83,24 @@ uv run --locked python examples/kernelbench_artifacts/v0.2.1/run.py \
 或浏览器不会停止研究，但本机需要保持唤醒与网络连接。macOS 可另开终端运行
 `caffeinate -i`，完成后结束该进程。
 
+## 在当前开发代码上复跑 smoke
+
+原 `source-lock.json` 保留历史源码约束，代码已变更时默认启动会拒绝运行。
+如果需要验证当前开发代码下的同一实验配置，可由操作员审查源码差异后提供独立快照：
+
+```bash
+uv run --locked python examples/kernelbench_artifacts/v0.2.1/run.py \
+  --check --source-lock /absolute/path/reviewed-source-lock.json
+uv run --locked --env-file .env python examples/kernelbench_artifacts/v0.2.1/run.py \
+  --source-lock /absolute/path/reviewed-source-lock.json --data-root /absolute/path/smoke-data
+```
+
+独立快照使用原锁的 `files`（仓库相对路径到 SHA256）和 `packages`（固定版本）格式，
+应覆盖实际执行的源码和依赖，并注明当前提交及相对历史版本的差异。脚本仍逐项校验摘要
+和依赖版本，不自动生成、更新或跳过源码锁；所用快照会存入批次，恢复时必须一致。
+题目、模型、人数、预算、Prompt 和评分规则仍来自本目录的 recipe。此类运行应标记为
+“当前代码 smoke”，不能声称逐字复现历史源码；原始版本复现仍使用默认锁及其匹配代码。
+
 ## 中断后继续
 
 脚本一开始会输出 `v021_...` 批次 ID。准备或启动中断后，沿用原参数，加上该 ID：

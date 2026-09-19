@@ -10,25 +10,41 @@ import os
 import runpy
 import sys
 import tempfile
+from collections.abc import Iterator, Mapping
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 from areal_rsi.base.storage import new_id, safe_name, write_json
-from areal_rsi.experiment_config import environment_scope
 from areal_rsi.ui.launch import WorkbenchClient, ensure_workbench
 
 HERE = Path(__file__).resolve().parent
 REPOSITORY = HERE.parents[2]
 
 
+@contextmanager
+def environment_scope(values: Mapping[str, str]) -> Iterator[None]:
+    """Pin one preparation process without importing the retired Workflow config."""
+    previous = {key: os.environ.get(key) for key in values}
+    os.environ.update(values)
+    try:
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
 def read_json(path: Path) -> Any:
     return json.loads(path.read_text())
 
 
-def check_source() -> None:
+def check_source(path: Path = HERE / "source-lock.json") -> None:
     """Do not silently run a later prompt, scheduler, or evaluator under this version."""
-    lock = read_json(HERE / "source-lock.json")
+    lock = read_json(path)
     changed = [
         name
         for name, digest in lock["files"].items()
@@ -132,6 +148,10 @@ def register_and_start(batch: dict[str, Any], client: WorkbenchClient, key: str)
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="v0.2.1：三题并行，四名研究员各 30 分钟有效时间")
+    parser.add_argument(
+        "--source-lock", type=Path, default=HERE / "source-lock.json",
+        help="经审查的独立源码快照；默认仍验证原版本，不自动更新或跳过校验",
+    )
     parser.add_argument("--check", action="store_true", help="只检查代码与远端环境，不启动模型/GPU")
     parser.add_argument("--port", type=int, default=8199)
     parser.add_argument("--data-root", type=Path, default=REPOSITORY / ".rsi/kernelbench-v0.2.1")
@@ -141,12 +161,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--resume", help="重试本脚本输出的 batch ID，不新建研究或重置预算")
     args = parser.parse_args(argv)
-    check_source()
+    check_source(args.source_lock)
     root = args.data_root.expanduser().resolve()
     batch_id = safe_name(args.resume) if args.resume else new_id("v021")
     directory = root / "operator" / batch_id
     if args.resume:
         batch = read_json(directory / "batch.json")
+        saved_lock = directory / "source-lock.json"
+        if read_json(saved_lock) != read_json(args.source_lock):
+            raise ValueError("重试须使用该批次保存的源码锁")
         if batch["data_root"] != str(root) or batch["port"] != args.port:
             raise ValueError("重试时请沿用原 data-root 和 port")
         if args.ssh_host:
@@ -200,7 +223,7 @@ def main(argv: list[str] | None = None) -> int:
         write_json(Path(batch["environment_file"]), environment, immutable=True)
         write_json(directory / "batch.json", batch, immutable=True)
         write_json(
-            directory / "source-lock.json", read_json(HERE / "source-lock.json"), immutable=True
+            directory / "source-lock.json", read_json(args.source_lock), immutable=True
         )
     print(f"批次：{batch_id}；中断后使用相同参数加 --resume {batch_id}", flush=True)
     print(f"工作台：{client.url}；正在准备三题并校准 reference…", flush=True)

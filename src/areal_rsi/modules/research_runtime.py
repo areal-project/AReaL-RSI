@@ -307,6 +307,7 @@ class ResearchRuntime:
             await self._close(connection)
             connection = None
         recovering = connection is None and self.has_session(session_dir)
+        fresh_session = connection is None and not recovering
         if connection is None:
             if event_sink is not None:
                 from areal_rsi.modules.runtime_storage import read_journal
@@ -362,11 +363,11 @@ class ResearchRuntime:
             await event_sink({"type": "runtime_turn_started", "message_id": message_id})
         message = user_message or "继续上次尚未完成的任务；先检查已有操作与结果，避免重复提交。"
         if recovery_state:
-            # The immutable developer prompt and native history already carry
-            # the task. Only process recovery needs a current state snapshot.
+            # Existing native history carries the task. A fresh session after a
+            # configuration change also needs its archived dialogue and current brief.
             context = (
                 recovery_state
-                if recovering
+                if recovering or (fresh_session and "backend_handoff" in recovery_state)
                 else {"budget": recovery_state["budget"]}
                 if "budget" in recovery_state
                 else {}

@@ -140,7 +140,7 @@ def describe(
 def build_config(args: argparse.Namespace) -> ResearchConfig:
     if any(
         getattr(args, field) is not None
-        for field in ("max_model_calls", "max_total_tokens", "max_verify_calls")
+        for field in ("max_total_tokens", "max_verify_calls")
     ):
         raise ValueError("pass@k 不支持调用次数、Token 或验证次数上限；请使用 --max-wall-seconds")
     if args.max_wall_seconds is None and args.target is None:

@@ -1,6 +1,6 @@
 # Agent backends
 
-ResearchConfig 的 `backend` 保留两个选项：`standard`（默认）和 `codex`。
+ResearchConfig 的 `backend` 支持 `standard`（默认）、`codex` 和 `runtime`。
 两者均通过仓库原有的 `PackageAgentRuntime` 使用 AReaL Agent Runtime 的公开
 `build_composition` / Application API。RSI 不再维护独立的 Codex App Server 客户端、
 请求代理或研究模型执行循环。旧 `ResponsesRuntime` 及其自建请求、重试、压缩循环
@@ -15,6 +15,27 @@ ResearchConfig 的 `backend` 保留两个选项：`standard`（默认）和 `cod
 两个后端使用同一份研究配置中的模型、API 地址和密钥。DSH 通过原生 provider 配置使用
 Responses 协议，并明确声明模型的推理强度。Codex 使用锁定版本的 CLI，由 Runtime 管理
 App Server；原生搜索保留，原生 subagent 和 goal 禁用。无需 OpenAI Codex Python SDK。
+
+## 其他 Runtime 后端
+
+`examples/runtime/` 保留 Claude Code、Claude Agent SDK、Anthropic、Hermes、
+remote、entrypoint 和混合角色示例。这些是适配器配置，不是另一套编排器；仍由 ResearchApp
+执行研究。示例不代表所有后端已完成当前版本的端到端验收。
+
+```bash
+export RSI_RUNTIME_CONFIG="$PWD/examples/runtime/hermes.json"
+export RSI_BACKEND=runtime
+uv run --env-file .env rsi preflight --backend runtime
+```
+
+也可在 ResearchConfig 写入 `backend: "runtime"` 和 `runtime_config` 对象。
+配置文件在创建研究时保存快照，之后修改文件不会改变该研究。
+`roles` 支持 `interaction-agent`、`rsi-agent`、`research-agent`；未指定的角色用 `default`。
+模型连接仍共用研究配置；不同协议的后端需要模型端点支持对应协议。
+Hermes 本次验证版本为 0.17.0（commit `2f5950a83a66d2b91918bb78e6d1b60f3f48b938`），
+Tirith 为 0.4.1。需要安装源码、Python 环境及真实 Tirith 扫描器，更新示例中的路径；
+通过原生 terminal 调用 `rsi-tools`。remote/entrypoint 需要管理员部署相应服务或插件。
+配置仅供受信操作员设置，不能内嵌 API key；使用研究凭证或 `authTokenEnv`。
 
 ## RSI 任务工具
 

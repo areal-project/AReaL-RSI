@@ -4,6 +4,8 @@ import copy
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from areal_rsi.api.research import ResearchLimits, TaskBrief, VerificationContract
 from areal_rsi.base.storage import encode
 from areal_rsi.coordination.brief_tool import PASSK_HIDDEN_LIMITS, brief_tool, updated_brief

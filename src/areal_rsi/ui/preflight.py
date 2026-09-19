@@ -42,6 +42,8 @@ async def preflight(
     prompt = (
         "Runtime smoke test. Remember the user's value in this conversation. "
         "Use the acknowledge task tool exactly once per turn, then finish. "
+        'The acknowledge tool accepts exactly {"value": "text"}. '
+        "Read its schema before calling; a failed tool call is not an acknowledgement. "
         "Do not write notes to files. Use the Runtime tool instructions below."
     )
     runtime = ResearchApp._runtime(config)

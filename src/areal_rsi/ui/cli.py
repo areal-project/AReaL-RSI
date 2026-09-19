@@ -258,7 +258,7 @@ def main() -> None:
     research.add_argument("--poll-interval", type=float, default=2, help="读取本地进展的间隔秒数")
     preflight_parser = commands.add_parser("preflight", help="检查实际研究后端、工具和会话重启")
     preflight_parser.add_argument("--config", type=Path, help="使用与研究相同的配置")
-    preflight_parser.add_argument("--backend", choices=("standard", "codex"))
+    preflight_parser.add_argument("--backend", choices=("standard", "codex", "runtime"))
     preflight_parser.add_argument("--data-root", "--root", dest="root", type=Path)
     preflight_parser.add_argument("--timeout", type=float, default=180)
     args = parser.parse_args()

@@ -1,0 +1,18 @@
+{
+  "default": {
+    "kind": "hermes",
+    "config": {
+      "hermesRoot": "~/.hermes/hermes-agent",
+      "python": "~/.hermes/hermes-agent/venv/bin/python",
+      "nativeToolsets": [
+        "terminal"
+      ],
+      "env": {
+        "TIRITH_BIN": "~/.hermes/hermes-agent/venv/bin/tirith"
+      }
+    }
+  },
+  "readable_paths": [
+    "~/.hermes/hermes-agent"
+  ]
+}

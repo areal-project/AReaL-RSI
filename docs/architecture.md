@@ -13,9 +13,10 @@ ResearchApp 是唯一的研究应用入口。CLI、Web 工作台和仓库启动�
 ## 编排与执行
 
 Interaction、RSI 和 Research Agents 的角色 prompt 位于 `agents/`，均由同一个
-`ResearchRuntime` 执行。协作模式下 RSI 自主规划、创建研究员、分配任务和选版；
-pass@k 模式创建固定数量的独立尝试。两种模式都使用 ResearchApp 的消息、节点、
-作业和验证记录，不存在另一套固定轮次实验调度器。
+`ResearchRuntime` 执行。所有新研究都使用 pass@k，固定启动 k 名独立研究员；
+纯 pass@k 中 RSI 只监督，leader guidance 模块增加证据共享和非阻塞建议，
+不增加、替换或停止研究员。它们共用消息、节点、作业和验证记录，探索停止后
+由系统执行最终复测，不存在另一套固定轮次实验调度器。
 
 原生 Runtime 负责推理、工具调用、会话历史、压缩和供应商重试。ResearchEngine
 负责收件箱交付、并发、时限、token 使用量、等待和取消。等待外部作业时不调用模型。

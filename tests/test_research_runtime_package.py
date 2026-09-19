@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 import threading
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -320,6 +321,10 @@ def test_standard_uses_package_dsh_and_scoped_application_tools(
             assert "42" in json.dumps(model.requests[-1]["input"])
             assert model.requests[0]["reasoning"]["effort"] == "xhigh"
             assert runtime.configuration()["harness"] == "dsh"
+            if sys.platform == "darwin":
+                profile = tmp_path / "session/runtime/sandbox.sb"
+                assert '(allow network-outbound (remote ip "localhost:*"))' in profile.read_text()
+                assert '(deny file-write*)' in profile.read_text()
             patch = json.loads((tmp_path / "session/runtime/research-model.patch.json").read_text())
             assert (
                 patch[0]["config"]["providers"]["rsi-responses"]["models"][0]["contextWindow"]
@@ -414,9 +419,7 @@ def test_tool_capability_and_workspace_sandbox_survive_restart(
             async with asyncio.timeout(2):
                 while pending:
                     await asyncio.sleep(0.01)
-            again = await invoke(
-                bridge, {"name": "get_state", "arguments": {}, "call_id": "again"}
-            )
+            again = await invoke(bridge, {"name": "get_state", "arguments": {}, "call_id": "again"})
             assert again == "own-state"
             assert sum(e["type"] == "message_injected" for e in delivered) == 1
             pending.append({"message_id": "late-job", "text": "late result"})

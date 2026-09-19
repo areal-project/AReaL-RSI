@@ -1,0 +1,8 @@
+{
+  "default": {
+    "kind": "codex-cli",
+    "config": {
+      "modelProtocol": "responses"
+    }
+  }
+}

@@ -6,22 +6,21 @@ API。每个会话有独立的 Python worker，不需要单独部署 Runtime HTT
 
 ```text
 Web / Research CLI → ResearchApp → ResearchRuntime → PackageAgentRuntime
-                                                     └─ DSH / Codex
+                                                     └─ DSH / Codex / Hermes / 其他适配器
 ```
 
 研究模型使用 `RSI_MODEL / RSI_BASE_URL / RSI_API_KEY / RSI_REASONING_EFFORT`。
-后端由 ResearchConfig 的 `backend` 或启动前工作台选择决定，所有研究角色使用同一份
-固定设置。Task benchmark 的被测模型使用独立 `RSI_TARGET_*` 或远端固定模型引用。
+后端由 ResearchConfig 的 `backend` 或启动前工作台选择决定，研究模型连接在启动时固定，Runtime 配置可按角色选择适配器。Task benchmark 的被测模型使用独立 `RSI_TARGET_*` 或远端固定模型引用。
 
 ## 制品与执行
 
-Runtime wheel 固定在 `vendor/`，版本为 `0.4.0.dev1`。来源和摘要见
+Runtime wheel 固定在 `vendor/`，版本为 `0.4.0.dev1+rsi1`。来源和摘要见
 `vendor/PROVENANCE.json` 及 `resources/runtime/provenance.json`。
 DSH 需要 Node.js 和 pnpm；首次启动安装随包冻结的 CLI/profile 依赖。
 
 每次 `send` 创建一个原生 Run，后续消息继续使用已绑定的 Session。
 Runtime 管理推理、工具、压缩和供应商重试，应用管理实验消息、权限、作业和验证。
-低层 Runtime 可以加载其他公开适配器，ResearchApp 的产品入口只提供 standard/codex。
+ResearchApp 提供 standard/codex 和 runtime（受信配置文件）入口。
 
 ## 工具与隔离
 
@@ -43,6 +42,10 @@ API/key 或重试策略；默认只允许公网 443，另允许部署配置中�
 解析后连接固定 IP，拒绝其他本地/私网目标；各进程的沙箱只开放自己的通道端口。
 这避免依赖沙箱内无法正常使用的 macOS 网络/证书服务，也不会开放系统代理或其他 run。
 实现位于 `modules/runtime_network.py`，独立于 Runtime wheel 的计时事件补丁。
+
+DSH / Claude 的 MCP 工具桥由上游动态选择端口，因此这些后端允许访问 localhost，
+不再提供精确的本地端口隔离；文件沙箱仍保留。此 PR 不新增 Runtime 补丁，沿用 main 的
+`+rsi1`（已有 Codex 可用性事件补丁）。RSI 工具桥的会话令牌和角色检查仍生效。
 
 ## 日志与失败
 

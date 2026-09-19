@@ -33,6 +33,7 @@ from areal_rsi.base.storage import (
     write_json,
 )
 from areal_rsi.config import ModelConfig
+from areal_rsi.coordination.collaboration import DEFAULT_MODULES
 from areal_rsi.coordination.config import ResearchConfig
 from areal_rsi.execution import ApprovedCommand
 from areal_rsi.modules.benchmark import AccuracyEvaluation, ArithmeticBenchmark, ArithmeticVerifier
@@ -123,20 +124,18 @@ async def prepare(
         TaskBrief(
             name,
             "完成一次真实的 harness 研究端到端实验。固定目标模型、题目划分、运行时和评分器。"
-            "先用 verify_candidate(phase='search') 评测 seed_candidate_id，读取 TRAIN 反馈；"
-            "然后创建一名研究员，根据反馈修改工作区的 prompt.md 或允许的 skill，"
-            "生成与起点不同的通用候选，禁止写入具体题目的答案或针对题号分支。"
-            "研究员使用 save_candidate 保存候选，并通过 verify_candidate(phase='search') "
-            "执行真实 TRAIN 评测，然后正式报告候选与结果。"
-            "RSI 对选中的新候选调用 verify_candidate(phase='final') 完成固定 VALIDATE 复测；"
-            "最终反馈仅用于验收，不再修改候选。最后 finish(candidate_id=该候选) 结束研究。"
-            "本次是小规模端到端验证，不要求超过基线；正确候选应尽快完成，不扩展题目和预算。",
+            "RSI 按所选 pass@k 协调配置启动研究员；每位研究员自行完成整个任务。"
+            "先将工作区起点 save_candidate 为自己的候选，用 verify_candidate(phase='diagnostic') "
+            "执行 TRAIN 基线诊断；诊断结果仅作为反馈，不参与最佳候选排名。"
+            "然后修改通用 prompt.md 或允许的 skill，生成与起点不同的候选，"
+            "禁止写入具体题目的答案或针对题号分支。保存新候选并用 "
+            "verify_candidate(phase='search') 执行真实 TRAIN 评测，报告候选和证据。"
+            "在研究预算内继续分析与改进，不自行调用 final、finish 或 stop_run。"
+            "探索到时系统会冻结最佳正式候选并在固定 VALIDATE 上独立最终复测。"
+            "本次是小规模端到端验证，不要求超过基线，不扩展题目或改变评测协议。",
             ResearchLimits(
                 max_agents=1,
-                max_nodes=4,
-                max_total_tokens=2_000_000,
                 max_wall_seconds=max_wall_seconds,
-                max_verify_calls=4,
                 max_jobs=1,
                 allowed_paths=allowed,
             ),
@@ -148,6 +147,7 @@ async def prepare(
             ),
         ),
         backend=backend,
+        collaboration_modules=DEFAULT_MODULES,
         seed_dir=str(seed),
         verifier=ApprovedCommand(
             "evaluate_benchmark",
@@ -172,18 +172,24 @@ async def prepare(
             public_output_subdir="public",
         ),
         metadata={
-            "evaluate_seed_as_baseline": True,
+            "time_limit_scope": "exploration",
             "allow_web_access": False,
             "agent_tool_instructions": "只修改自己的候选目录；用登记的验证工具运行目标模型，"
             "不要直接调用外部模型或读取宿主评测实现、答案及其他实验。",
-            "execution_instructions": "verify_candidate 的 search 使用 TRAIN，final 使用 VALIDATE。"
+            "execution_instructions": "verify_candidate 的 diagnostic/search 使用 TRAIN，"
+            "final 使用 VALIDATE。"
             "每次验证是真实目标模型执行。完整 TRAIN 轨迹和反馈在验证作业的公开输出目录；"
-            "通过 job_status/read_job_output 读取。当前没有额外的 run_job 命令。",
+            "通过 job_status/read_job_output_file 读取。final 由系统在探索停止后执行；"
+            "研究员不自行请求 final。当前没有额外的 run_job 命令。",
             "verification_identity": {
                 "adapter": "content",
                 "phases": {
                     phase: {"protocol_id": PROTOCOL, "manifest_id": identity, "split": split}
-                    for phase, split in (("search", "train"), ("final", "validate"))
+                    for phase, split in (
+                        ("diagnostic", "train"),
+                        ("search", "train"),
+                        ("final", "validate"),
+                    )
                 },
             },
         },
@@ -202,8 +208,8 @@ async def evaluate(
     manifest = json.loads(manifest_path.read_text())
     if manifest_identity(manifest) != identity or manifest.get("protocol_id") != PROTOCOL:
         raise ValueError("Benchmark manifest changed after configuration was frozen")
-    if phase not in {"search", "final"}:
-        raise ValueError("Benchmark verification phase must be search or final")
+    if phase not in {"diagnostic", "search", "final"}:
+        raise ValueError("Benchmark verification phase must be diagnostic, search or final")
     workspace, output = workspace.resolve(), output.resolve()
     run_root = workspace.parents[2]
     job = json.loads((run_root / "jobs" / output.name / "job.json").read_text())
@@ -211,7 +217,7 @@ async def evaluate(
     frozen = json.loads((workspace.parent / "snapshot.json").read_text())
     if metadata["candidate_digest"] != frozen["digest"] or metadata["phase"] != phase:
         raise ValueError("Evaluation job does not match its frozen candidate")
-    split = BenchmarkSplit.TRAIN if phase == "search" else BenchmarkSplit.VALIDATE
+    split = BenchmarkSplit.VALIDATE if phase == "final" else BenchmarkSplit.TRAIN
     output.mkdir(parents=True, exist_ok=True)
     content = FileContentStore(output / "private/content")
     versions = FileVersionManager(output / "private/versions")
@@ -340,7 +346,7 @@ async def evaluate(
             public / "feedback.json",
             {"score": report.score, "split": split.value, "tasks": encode(checks)},
         )
-        if phase == "search":
+        if phase != "final":
             for task in tasks:
                 task_result = results[task.task_id]
                 trace = await traces.get(task_result.trajectory.trajectory_id)
@@ -369,12 +375,12 @@ def main() -> None:
     setup.add_argument("--directory", type=Path, required=True)
     setup.add_argument("--arena-config", type=Path)
     setup.add_argument("--time-limit", type=float, default=1200)
-    setup.add_argument("--backend", choices=("standard", "codex"), default="standard")
+    setup.add_argument("--backend", choices=("standard", "codex", "runtime"), default="standard")
     execute = commands.add_parser("evaluate", help="Operator-owned verification job")
     for name in ("manifest", "workspace", "output"):
         execute.add_argument("--" + name, type=Path, required=True)
     execute.add_argument("--identity", required=True)
-    execute.add_argument("--phase", choices=("search", "final"), required=True)
+    execute.add_argument("--phase", choices=("diagnostic", "search", "final"), required=True)
     args = parser.parse_args()
 
     async def run() -> None:

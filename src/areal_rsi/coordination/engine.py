@@ -289,9 +289,13 @@ class ResearchEngine:
             prompt_id = hashlib.sha256(prompt.encode()).hexdigest()
             write_json(session / "prompts" / f"{prompt_id}.json", {"prompt": prompt})
             runtime = self.interaction_runtime if agent_id == "interaction" else self.runtime
+            configuration = (
+                runtime.configuration_for(agent_id)
+                if hasattr(runtime, "configuration_for") else runtime.configuration()
+            )
             write_json(
                 session / "configuration.json",
-                {**runtime.configuration(), "prompt_id": prompt_id},
+                {**configuration, "prompt_id": prompt_id},
             )
 
             async def event_sink(event: Json) -> None:

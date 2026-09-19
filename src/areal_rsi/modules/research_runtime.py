@@ -69,26 +69,26 @@ class ResearchRuntime:
         self.connection = config.runtime()
         self.backend = config.backend
         self.allow_web_access = config.metadata.get("allow_web_access", True)
-        self.settings = settings or RuntimeSettings(
-            {
-                "default": {
-                    "kind": "codex-cli" if self.backend == "codex" else "dsh",
-                    "config": {"modelProtocol": "responses", "timeoutSeconds": 86400}
-                    if self.backend == "codex"
-                    else {"reasoningEffort": self.connection.reasoning_effort},
-                }
-            }
-        )
+        self.settings = settings or config.runtime_settings()
         self.conversations: dict[Path, Conversation] = {}
 
     def for_interaction(self) -> ResearchRuntime:
         return ResearchRuntime(self.config, settings=self.settings)
 
     def configuration(self) -> Json:
+        return self.configuration_for("research-agent")
+
+    @staticmethod
+    def role_for(agent_id: str) -> str:
+        return {"interaction": "interaction-agent", "rsi": "rsi-agent"}.get(
+            agent_id, "research-agent"
+        )
+
+    def configuration_for(self, agent_id: str) -> Json:
         return {
             **self.config.model_settings(),
             "runtime": "areal-agent-runtime",
-            "harness": self.settings.select("research-agent")["kind"],
+            "harness": self.settings.select(self.role_for(agent_id))["kind"],
             "allow_web_access": self.allow_web_access,
         }
 
@@ -116,6 +116,8 @@ class ResearchRuntime:
         handler: ToolHandler,
         agent_id: str,
     ) -> Conversation:
+        role = self.role_for(agent_id)
+        kind = self.settings.select(role)["kind"]
         request_path = directory / "runtime/request.json"
         if not request_path.exists() and any(
             (directory / name).exists() for name in ("session.json", "codex-session.json")
@@ -202,7 +204,7 @@ class ResearchRuntime:
             content,
             FileTrajectoryStore(directory / "trajectories", content),
             settings=self.settings,
-            role="research-agent",
+            role=role,
             base_url=self.connection.runtime_base_url,
             api_key=self.config.api_key(),
             timeout=86400,
@@ -262,12 +264,13 @@ class ResearchRuntime:
                 workspace_root=str(workspace),
                 session_id="runtime",
                 research_tools=bridge,
+                reasoning_effort=self.connection.reasoning_effort,
                 context_window_tokens=(
                     self.config.context_window_tokens
-                    if self.backend == "codex"
+                    if kind == "codex-cli"
                     else self.connection.effective_context_window_tokens
                 ),
-                codex_config=codex_config if self.backend == "codex" else None,
+                codex_config=codex_config if kind == "codex-cli" else None,
             )
         except BaseException:
             server.close()

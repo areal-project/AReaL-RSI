@@ -9,9 +9,11 @@ from pathlib import Path
 import pytest
 from runtime_fakes import ActionRuntime
 
-from areal_rsi.base.storage import encode
+from areal_rsi.base.storage import encode, write_json
 from areal_rsi.coordination.actions import ResearchActions
+from areal_rsi.coordination.brief_tool import PASSK_HIDDEN_LIMITS
 from areal_rsi.coordination.config import config_from_dict
+from areal_rsi.execution import ApprovedCommand
 from areal_rsi.modules.agent_runtime import ToolCall
 from areal_rsi.modules.research_runtime import ResearchRuntime
 from areal_rsi.modules.research_settings import ResearchConnection
@@ -38,12 +40,17 @@ def test_current_brief_can_be_updated_and_started(tmp_path: Path) -> None:
             detail = await app.create({"conversation": True})
             c = app.coordinator(detail["run_id"])
             arguments = encode(c.store.brief())
+            for key in PASSK_HIDDEN_LIMITS:
+                arguments["limits"].pop(key)
             arguments.update(objective="Research", instructions="Keep fixed data")
             result = await ResearchActions(c).handler("interaction")(
                 ToolCall("update_brief", arguments, "update")
             )
             assert "error" not in result.output
             assert c.store.brief().instructions == "Keep fixed data"
+            config = app.config(c)
+            config.commands = (ApprovedCommand("noop", (sys.executable, "-c", "pass")),)
+            write_json(c.store.root / "coordination/config.json", config.public())
             c.state["intake"]["status"] = "ready"
             c.state["execution_setup"] = "pending"
             c.save()
@@ -142,3 +149,37 @@ def test_research_context_budget_survives_pinning_and_configuration_recovery(
     assert recovered.runtime().model == "gpt-6-astra"
     assert recovered.runtime().effective_context_window_tokens == (window or 256_000)
     assert recovered.context_window_tokens == window
+
+
+def test_runtime_profile_is_frozen_and_routes_roles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "runtime.json"
+    profile = {
+        "default": {"kind": "hermes", "config": {"hermesRoot": "/opt/hermes"}},
+        "roles": {"interaction-agent": {"kind": "dsh", "config": {}}},
+    }
+    path.write_text(json.dumps(profile))
+    monkeypatch.delenv("RSI_BACKEND", raising=False)
+    monkeypatch.setenv("RSI_RUNTIME_CONFIG", str(path))
+    monkeypatch.setenv("RSI_API_KEY", "fixture")
+    config = config_from_dict({"brief": {"objective": "test", "instructions": "test"}})
+    config.pin_model_settings()
+    assert config.backend == "runtime"
+    path.write_text('{"default":{"kind":"fake"}}')
+    restored = config_from_dict(config.public())
+    runtime = ResearchRuntime(restored)
+    assert runtime.configuration_for("research-agent-1")["harness"] == "hermes"
+    assert runtime.configuration_for("rsi")["harness"] == "hermes"
+    assert runtime.configuration_for("interaction")["harness"] == "dsh"
+    assert restored.runtime_config == profile
+
+
+def test_runtime_profile_rejects_literal_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("RSI_BACKEND", raising=False)
+    config = config_from_dict({
+        "brief": {"objective": "test", "instructions": "test"},
+        "runtime_config": {"default": {"kind": "dsh", "config": {"apiKey": "secret"}}},
+    })
+    with pytest.raises(ValueError, match="literal Runtime secrets"):
+        config.pin_model_settings()

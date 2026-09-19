@@ -110,7 +110,7 @@ class ResearchApp:
     def _configure_agent_tools(active: ActiveResearch, config: ResearchConfig) -> None:
         active.tools.configure(config.metadata.get("agent_tool_instructions"))
         allow_web = config.metadata.get("allow_web_access", True)
-        register_sources(active.actions, enabled=config.backend == "standard" and allow_web)
+        register_sources(active.actions, enabled=config.backend != "codex" and allow_web)
         for runtime in (active.engine.runtime, active.engine.interaction_runtime):
             if isinstance(runtime, ResearchRuntime):
                 runtime.allow_web_access = allow_web
@@ -241,7 +241,7 @@ class ResearchApp:
                 self._reset_interaction_session(c)
             for field, value in settings.items():
                 setattr(config, field, value)
-            config.model_settings_pinned = True
+            config.pin_model_settings()
             config.model_settings_revision = new_id("model")
             if key:
                 self.save_credentials(c, config, key)
@@ -363,6 +363,7 @@ class ResearchApp:
                 setattr(config, field, value)
         else:
             key = ""
+        config.pin_model_settings()
         config.connection_settings()
         key = key or config.api_key()
         if not conversation and config.seed_dir and not Path(config.seed_dir).is_dir():
@@ -460,6 +461,7 @@ class ResearchApp:
         config.brief = c.store.brief()
         config.__post_init__()
         config.validate_clock()
+        config.pin_model_settings()
         config.connection_settings()
         write_json(c.store.root / "coordination" / "config.json", config.public())
         pending_setup = c.state.get("execution_setup") == "pending"
@@ -619,7 +621,7 @@ class ResearchApp:
         await actions.initialize_workspace("rsi")
         register_sources(
             actions,
-            enabled=config.backend == "standard" and config.metadata.get("allow_web_access", True),
+            enabled=config.backend != "codex" and config.metadata.get("allow_web_access", True),
         )
         agent_tools = AgentTools(
             actions,

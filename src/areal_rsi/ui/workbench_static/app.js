@@ -81,7 +81,7 @@ const effortDropdown = new WorkbenchDropdown($("reasoning-effort"), {
   label: "推理强度",
   onChange: (value) => { modelDraft().reasoning_effort = value; renderModelSettings(); },
 });
-const backendOptions = [{value: "standard", text: "standard"}, {value: "codex", text: "codex"}];
+const backendOptions = [{value: "standard", text: "standard"}, {value: "codex", text: "codex"}, {value: "runtime", text: "Runtime 配置"}];
 const backendDropdown = new WorkbenchDropdown($("agent-backend"), {
   label: "Agent 后端", onChange: (value) => { modelDraft().backend = value; renderModelSettings(); },
 });

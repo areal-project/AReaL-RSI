@@ -97,5 +97,5 @@ def test_old_preflight_script_forwards_native_options() -> None:
         text=True,
         timeout=10,
     )
-    assert "--backend {standard,codex}" in result.stdout
+    assert "--backend {standard,codex,runtime}" in result.stdout
     assert "--config" in result.stdout

@@ -41,7 +41,11 @@ class AgentTools:
 
     def configure(self, instructions: str | None) -> None:
         self.tool_prompt = (instructions + "\n" if instructions else "") + (
-            CODEX_TOOL_PROMPT if self.backend == "codex" else TOOL_PROMPT
+            CODEX_TOOL_PROMPT if self.backend == "codex" else (
+                "文件操作和命令执行使用当前后端的原生工具。RSI 工具调用方法见下方 Runtime 说明。\n"
+                "允许联网时使用 search_web / fetch_url；实验使用 run_job / wait_for_job。\n"
+                if self.backend == "runtime" else TOOL_PROMPT
+            )
         )
 
     def instructions(self, agent_id: str) -> str:

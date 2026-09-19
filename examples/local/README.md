@@ -15,6 +15,9 @@ uv run --env-file .env --locked rsi research \
 
 也可将生成的 ResearchConfig 导入工作台。准备命令只固定配置，不启动研究。
 
-ResearchApp 自主安排基线 TRAIN 评测、研究员改写、候选 TRAIN 评测与最终 VALIDATE。
-`verify_candidate(search)` 返回 TRAIN 反馈和完整目标模型轨迹；`final` 只反馈最终评分。
-最终确认后调用 `finish`。没有固定轮次调度器，也不调用另一套应用。
+ResearchApp 使用默认 v0.2.2 pass@k 协调配置，研究员固定为 1 名。
+研究员先保存自己的起点候选，用 `verify_candidate(diagnostic)` 做 TRAIN 基线诊断；
+再改写通用 prompt/skill、保存新候选并用 `search` 做正式 TRAIN 评测。
+诊断成绩不参与选优，完整 TRAIN 轨迹随公开反馈提供。
+探索预算结束后，系统冻结最佳正式候选并独立执行 VALIDATE；研究员不调用 `final` 或 `finish`。
+默认探索时限 1200 秒，可在准备时用 `--time-limit` 调整，最终复测另计时。

@@ -109,7 +109,7 @@ def test_research_candidate_is_evaluated_by_fixed_benchmark(
         manifest_path = path.parent / "manifest.json"
         identity = adapter.manifest_identity(json.loads(manifest_path.read_text()))
         assert config.verifier is not None
-        for phase in ("search", "final"):
+        for phase in ("diagnostic", "search", "final"):
             job_id = "job-" + phase
             workspace = c.store.root / "execution-inputs" / job_id / "workspace"
             await c.store.content.materialize(candidate.content, workspace)
@@ -129,7 +129,7 @@ def test_research_candidate_is_evaluated_by_fixed_benchmark(
             job = JobRecord(job_id, spec, "succeeded", 1, 1, exit_code=0)
             write_json(c.store.root / "jobs" / job_id / "job.json", job)
             result = await adapter.evaluate(manifest_path, identity, workspace, output, phase)
-            assert result["split"] == ("train" if phase == "search" else "validate")
+            assert result["split"] == ("validate" if phase == "final" else "train")
             verified = read_trusted_result(
                 c.store, job, candidate, phase, identity=config.metadata["verification_identity"]
             )
@@ -137,12 +137,12 @@ def test_research_candidate_is_evaluated_by_fixed_benchmark(
             assert verified.passed is True, "Partial accuracy must remain a comparable result"
             assert verified.score == (1.0 if benchmark == "math" else 0.5)
             assert result["candidate_digest"] == candidate.content.digest
-            if phase == "search":
+            if phase != "final":
                 assert len(list((output / "public").glob("*.json"))) > 1
             else:
                 assert list(p.name for p in (output / "public").glob("*.json")) == ["feedback.json"]
         if benchmark == "lcb":
-            assert len(client.jobs) == 2
+            assert len(client.jobs) == 3
             assert all(
                 j["model_ref"] == {"key": "base", "version": "1.0.0"} for j in client.jobs.values()
             )

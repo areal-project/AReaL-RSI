@@ -20,6 +20,7 @@ import pytest
 from runtime_fakes import ActionRuntime
 
 from areal_rsi.api.research import TaskBrief, VerificationContract
+from areal_rsi.base.storage import encode
 from areal_rsi.coordination.config import ResearchConfig
 from areal_rsi.execution import ApprovedCommand
 from areal_rsi.research_app import ResearchApp
@@ -747,10 +748,10 @@ def test_harness_config_defaults_and_early_budget_rejection(
     monkeypatch.setitem(module["build_config"].__globals__, "describe", describe)
     config = module["build_config"](args)
     assert config.needs_finalization and config.finalizer is None
-    assert config.brief.limits.max_model_calls is None
+    assert "max_model_calls" not in encode(config.brief.limits)
     assert config.brief.limits.max_total_tokens is None
     assert config.brief.limits.max_verify_calls is None
-    args.max_model_calls = 200
+    args.max_total_tokens = 200
     calls.clear()
     with pytest.raises(ValueError, match="不支持"):
         module["build_config"](args)

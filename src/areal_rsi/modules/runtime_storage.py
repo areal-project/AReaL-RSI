@@ -185,11 +185,15 @@ class JournalStateStore(InMemoryStateStore):
         self.stream.close()
 
 
-def read_journal(root: Path) -> tuple[list[RunEvent], dict[str, RunSnapshot]]:
+def read_journal(
+    root: Path, *, boundary: Path | None = None
+) -> tuple[list[RunEvent], dict[str, RunSnapshot]]:
     """Read a stopped worker; ignore only an incomplete final write after a crash."""
     events: list[RunEvent] = []
     snapshots: dict[str, RunSnapshot] = {}
-    path = root / "journal.jsonl"
+    path = (root / "journal.jsonl").resolve()
+    if not path.is_relative_to((boundary or root).resolve()):
+        raise ValueError("Runtime journal escapes its research boundary")
     if not path.exists():
         return events, snapshots  # Bootstrap can fail before storage is configured.
     with path.open("rb") as stream:

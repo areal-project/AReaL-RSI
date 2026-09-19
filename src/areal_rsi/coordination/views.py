@@ -130,5 +130,9 @@ def record_preview(
         # Older output excerpts have no archival timestamp. Keep that unknown
         # while exposing the producing job's real date for discovery/sorting.
         **({"job_created_at": source_job.get("created_at")} if source_job else {}),
-        **{key: value[key] for key in ("status", "score", "shared") if key in value},
+        **{
+            key: value[key]
+            for key in ("status", "score", "shared", "agent_id", "source_agent_id", "candidate_id")
+            if key in value
+        },
     }

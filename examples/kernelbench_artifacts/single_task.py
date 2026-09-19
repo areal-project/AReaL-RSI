@@ -1,4 +1,4 @@
-"""Prepare one task for an existing Interaction conversation; no model/GPU eval calls."""
+"""Prepare one task for Interaction, including reference calibration before research."""
 
 from __future__ import annotations
 
@@ -15,17 +15,17 @@ def main() -> None:
     parser.add_argument("--run-id", required=True, help="当前工作台研究 ID")
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--environment", type=Path, default=HERE / "et15.json")
-    parser.add_argument("--max-agents", type=int, default=3, help="同时存活的研究员上限，含等待")
+    parser.add_argument("--max-agents", type=int, default=4, help="固定独立研究员数量")
     parser.add_argument("--time-limit", type=int, default=3600, help="时间上限（秒）")
     parser.add_argument(
         "--time-scope",
-        choices=("total", "exploration"),
-        default="total",
-        help="total 包含最终复测；exploration 只限制探索，最终复测另计",
+        choices=("exploration",),
+        default="exploration",
+        help="只限制探索，最终复测另计",
     )
     parser.add_argument("--name", help="工作台中的研究名称")
     parser.add_argument(
-        "--submissions", default="10", help="探索提交次数，或 unlimited；最终独立复测另计"
+        "--submissions", choices=("unlimited",), default="unlimited", help="探索提交不限次数"
     )
     parser.add_argument(
         "--web-research",
@@ -43,7 +43,7 @@ def main() -> None:
         max_wall_seconds=args.time_limit,
         check_credentials=False,
         web_research=args.web_research,
-        exploration_submissions=None if args.submissions == "unlimited" else int(args.submissions),
+        exploration_submissions=None,
         name=args.name,
         time_limit_scope=args.time_scope,
     )

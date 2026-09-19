@@ -40,7 +40,9 @@ uv sync --locked --extra codex --extra anthropic
 uv sync --locked --extra claude
 ```
 
-Runtime wheel 固定在 `vendor/`，版本为 `0.4.0.dev1`，来自 Runtime 提交 `223af018a1e1e3d1cd3ed8303da47553f16e929e`。
+Runtime wheel 固定在 `vendor/`，上游版本为 `0.4.0.dev1`，来自 Runtime 提交 `223af018a1e1e3d1cd3ed8303da47553f16e929e`。
+当前使用 `0.4.0.dev1+rsi1`，仅补充 Codex API 故障/恢复事件，用于[有效时间计时](effective-time.md)。
+补丁为 `vendor/codex-availability.patch`，运行 `python vendor/build_timing_wheel.py` 可从保留的原始 wheel 重建。
 `vendor/PROVENANCE.json` 记录 wheel 与 DSH npm bundle 的摘要。它是从确定源码构建的制品，不表示已发布到 PyPI。
 DSH npm bundle 仍使用原来的 `0.3.0` 制品，其来源提交单独记录在 `artifact_source_commits` 中。
 消费代码只导入公开 Python API，不需要相邻 Runtime checkout 或手工修改 PYTHONPATH。
@@ -152,6 +154,13 @@ Runtime 数据根与工作区在失败后保留，诊断入口是对应会话的
 实验恢复复用 RSI 已有检查点；进程崩溃发生在任务结果登记之前时，未完成样本可能重跑，不承诺跨进程 exactly-once。
 
 ## 验收
+
+macOS 文件隔离下，Codex 使用进程专属的 HTTPS CONNECT 通道和明确的 CA 证书
+（未配置 `SSL_CERT_FILE` 时使用 certifi）。通道只转发加密字节，不改写模型请求、
+API/key 或重试策略；默认只允许公网 443，另允许部署配置中明确指定的模型端点。
+解析后连接固定 IP，拒绝其他本地/私网目标；各进程的沙箱只开放自己的通道端口。
+这避免依赖沙箱内无法正常使用的 macOS 网络/证书服务，也不会开放系统代理或其他 run。
+实现位于 `modules/runtime_network.py`，独立于 Runtime wheel 的计时事件补丁。
 
 本次执行结果和测试范围见 [验收记录](runtime-package-validation.md)。
 

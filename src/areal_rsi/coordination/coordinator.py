@@ -26,6 +26,7 @@ from areal_rsi.api.research import (
     VerifiedResult,
 )
 from areal_rsi.base.storage import decode, encode, new_id, now, safe_name, write_json
+from areal_rsi.coordination.effective_time import EffectiveTime
 from areal_rsi.coordination.store import ResearchStore
 
 
@@ -893,6 +894,8 @@ class Coordinator:
         if self.state["status"] != "running":
             raise ValueError("Only a running run can be paused")
         self.state["status"] = "paused"
+        if "effective_time" in self.state:
+            EffectiveTime(self.state).close_worker(datetime.fromisoformat(now()).timestamp())
         self.save()
         self.store.event("run_paused")
 
@@ -900,6 +903,8 @@ class Coordinator:
         if self.state["status"] != "paused":
             raise ValueError("Only a paused run can be resumed")
         self.state["status"] = "running"
+        if "effective_time" in self.state:
+            EffectiveTime(self.state).open_worker(datetime.fromisoformat(now()).timestamp())
         self.save()
         self.store.event("run_resumed")
 
@@ -985,7 +990,7 @@ class Coordinator:
             if started
             else 0.0
         )
-        return {
+        result = {
             **{name: self.state[name] for name in ("model_calls", "total_tokens", "verify_calls")},
             "reserved_tokens": sum(
                 record.get("reserved_tokens", 0)
@@ -1002,6 +1007,17 @@ class Coordinator:
                 for record in self.state.get("model_requests", {}).values()
             ),
         }
+        effective_limit = self.store.brief().limits.max_effective_seconds
+        if effective_limit is not None:
+            from areal_rsi.coordination.effective_time import PROTOCOL, EffectiveTime
+
+            timer = EffectiveTime(self.state)
+            result["clock"] = PROTOCOL
+            result["researchers"] = {
+                actor.agent_id: timer.budget(actor.agent_id, observed.timestamp(), effective_limit)
+                for actor in self.store.run().research_agents
+            }
+        return result
 
     def summary(self) -> dict[str, Any]:
         run = self.store.run()

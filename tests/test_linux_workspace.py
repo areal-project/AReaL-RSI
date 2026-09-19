@@ -3,15 +3,16 @@ from __future__ import annotations
 import asyncio
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 from areal_agent_runtime.adapters.workspace import LocalWorkspaceToolProvider
-from areal_agent_runtime.contracts import ToolCall
+from areal_agent_runtime.contracts import ToolCall, ToolResult
 
 from areal_rsi.modules.runtime_workspace import LinuxWorkspaceTools
 
 
-def tool_call(workspace: Path, name: str, arguments: dict) -> ToolCall:
+def tool_call(workspace: Path, name: str, arguments: dict[str, Any]) -> ToolCall:
     return ToolCall.model_validate(
         {
             "callId": "test",
@@ -32,6 +33,12 @@ def tool_call(workspace: Path, name: str, arguments: dict) -> ToolCall:
     )
 
 
+def object_result(result: ToolResult) -> dict[str, Any]:
+    assert result.error is None
+    assert isinstance(result.value, dict)
+    return result.value
+
+
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux tools")
 def test_absolute_paths_executables_and_relative_workspace(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
@@ -46,17 +53,17 @@ def test_absolute_paths_executables_and_relative_workspace(tmp_path: Path) -> No
         for path in [str(external / "input.txt"), "link/input.txt"]:
             call = tool_call(workspace, "workspace.read", {"path": path})
             result = await provider.invoke(call)
-            assert result.error is None
-            assert result.value["content"] == "external input"
+            value = object_result(result)
+            assert value["content"] == "external input"
             assert (await LocalWorkspaceToolProvider().invoke(call)).error is not None
 
         for executable in ["bash", "/bin/bash"]:
             argv = [executable, "-c", 'printf "%s" "$1"; pwd', "test", "$(touch should-not-exist)"]
             result = await provider.invoke(tool_call(workspace, "workspace.run", {"argv": argv}))
-            assert result.error is None
-            assert result.value["argv"] == argv
-            assert "$(touch should-not-exist)" in result.value["stdout"]
-            assert str(workspace) in result.value["stdout"]
+            value = object_result(result)
+            assert value["argv"] == argv
+            assert "$(touch should-not-exist)" in value["stdout"]
+            assert str(workspace) in value["stdout"]
             assert not (workspace / "should-not-exist").exists()
 
         result = await provider.invoke(
@@ -69,8 +76,8 @@ def test_absolute_paths_executables_and_relative_workspace(tmp_path: Path) -> No
                 },
             )
         )
-        assert result.error is None
-        assert str(external) in result.value["stdout"]
+        value = object_result(result)
+        assert str(external) in value["stdout"]
         result = await provider.invoke(
             tool_call(
                 workspace,
@@ -81,7 +88,7 @@ def test_absolute_paths_executables_and_relative_workspace(tmp_path: Path) -> No
                 },
             )
         )
-        assert result.error is None
+        value = object_result(result)
         assert (workspace / "local.txt").read_text() == "own workspace"
 
     asyncio.run(scenario())
@@ -109,40 +116,40 @@ def test_returned_paths_can_be_reused(tmp_path: Path, discovery: str, location: 
         if discovery == "workspace.search":
             arguments["query"] = "original"
         result = await provider.invoke(tool_call(workspace, discovery, arguments))
-        assert result.error is None
-        entries = result.value["entries" if discovery == "workspace.list" else "matches"]
+        value = object_result(result)
+        entries = value["entries" if discovery == "workspace.list" else "matches"]
         assert len(entries) == 1
         returned_path = entries[0]["path"]
         # Feed each tool's output into the next without repairing the path.
         result = await provider.invoke(
             tool_call(workspace, "workspace.read", {"path": returned_path})
         )
-        assert result.error is None
-        assert result.value["content"] == "original content"
+        value = object_result(result)
+        assert value["content"] == "original content"
         assert returned_path == str(target.resolve())
         result = await provider.invoke(
             tool_call(
                 workspace,
                 "workspace.edit",
-                {"path": result.value["path"], "oldText": "original", "newText": "edited"},
+                {"path": value["path"], "oldText": "original", "newText": "edited"},
             )
         )
-        assert result.error is None
+        value = object_result(result)
         assert target.read_text() == "edited content"
         result = await provider.invoke(
             tool_call(
                 workspace,
                 "workspace.write",
-                {"path": result.value["path"], "content": "rewritten content"},
+                {"path": value["path"], "content": "rewritten content"},
             )
         )
-        assert result.error is None
+        value = object_result(result)
         result = await provider.invoke(
-            tool_call(workspace, "workspace.read", {"path": result.value["path"]})
+            tool_call(workspace, "workspace.read", {"path": value["path"]})
         )
-        assert result.error is None
-        assert result.value["content"] == target.read_text() == "rewritten content"
-        assert result.value["path"] == str(target.resolve())
+        value = object_result(result)
+        assert value["content"] == target.read_text() == "rewritten content"
+        assert value["path"] == str(target.resolve())
         assert arguments["path"] == requested
 
     asyncio.run(scenario())

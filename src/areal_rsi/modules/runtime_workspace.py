@@ -132,6 +132,8 @@ class LinuxWorkspaceTools:
 
 
 class LinuxWorkspacePlugin:
+    provider: LinuxWorkspaceTools
+
     manifest = PluginManifest(
         name="rsi-linux-workspace",
         version="1.0.0",

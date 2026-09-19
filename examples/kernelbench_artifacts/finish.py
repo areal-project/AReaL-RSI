@@ -19,7 +19,8 @@ from areal_rsi.base.storage import write_json
 def finish(manifest: dict, output: Path) -> None:
     output.mkdir(parents=True, exist_ok=True)
     if os.environ.get("RSI_CANDIDATE_SELECTION"):
-        selection = json.loads(Path(os.environ["RSI_CANDIDATE_SELECTION"]).read_text())
+        selection_path = Path(os.environ["RSI_CANDIDATE_SELECTION"])
+        selection = json.loads(selection_path.read_text())
         if selection["run_id"] != manifest["run_id"] or selection["schema_version"] != 1:
             raise ValueError("候选选优记录不属于当前研究或版本不受支持")
         manifest = {
@@ -35,6 +36,15 @@ def finish(manifest: dict, output: Path) -> None:
                 for task in manifest["tasks"]
             },
         }
+        if "execution_cutoffs" in selection:
+            cutoffs = {}
+            for job_id, cutoff in selection["execution_cutoffs"].items():
+                receipt = (
+                    selection_path.parent.parent / "execution-outputs" / job_id / "remote-job.json"
+                )
+                if receipt.is_file():
+                    cutoffs[json.loads(receipt.read_text())["id"]] = cutoff
+            manifest = {**manifest, "exploration_job_cutoffs": cutoffs}
     if os.environ.get("RSI_EXPLORATION_FINISHED_AT"):
         manifest = {
             **manifest,

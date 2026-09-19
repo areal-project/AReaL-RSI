@@ -15,6 +15,7 @@ import os
 import secrets
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -239,9 +240,7 @@ class ResearchRuntime:
         }
         from areal_rsi.coordination.collaboration import build_plan
 
-        plan = build_plan(
-            self.config.mode, self.config.collaboration_modules, self.config.research_prompt_variant
-        )
+        plan = build_plan(self.config.mode, self.config.collaboration_modules)
         allow_web = self.allow_web_access and not (plan.supervisor_only and agent_id == "rsi")
         codex_config = {
             "model_reasoning_effort": self.connection.reasoning_effort,
@@ -270,6 +269,7 @@ class ResearchRuntime:
         except BaseException:
             server.close()
             await server.wait_closed()
+            await runtime.close()
             raise
         connection = Conversation(runtime, session, server, handler)
         self.conversations[directory] = connection
@@ -312,7 +312,7 @@ class ResearchRuntime:
             if event_sink is not None:
                 from areal_rsi.modules.runtime_storage import read_journal
 
-                history, _ = read_journal(session_dir / "runtime/data/state")
+                history, _ = read_journal(session_dir / "runtime/data/state", boundary=session_dir)
                 for event in history:
                     if event.type == "usage.updated":
                         await event_sink(usage_event(event.model_dump(mode="json", by_alias=True)))
@@ -342,6 +342,16 @@ class ResearchRuntime:
                     usage[name] = usage.get(name, 0) + value
             if event_sink is None:
                 return
+            if kind == "runtime.status" and "apiAvailable" in data:
+                await event_sink(
+                    {
+                        "type": "api_availability",
+                        "available": data["apiAvailable"],
+                        "timestamp": datetime.fromisoformat(
+                            event["time"].replace("Z", "+00:00")
+                        ).timestamp(),
+                    }
+                )
             if normalized is not None:
                 await event_sink(normalized)
             elif kind == "message.completed" and not event.get("parentAgentId"):

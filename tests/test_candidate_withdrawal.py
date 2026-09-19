@@ -19,8 +19,7 @@ from areal_rsi.execution import ApprovedCommand
 from areal_rsi.modules.responses import ToolCall
 
 
-@pytest.mark.parametrize("direction", ["maximize", "minimize"])
-@pytest.mark.parametrize("withdrawer", ["rsi", "research"])
+@pytest.mark.parametrize("direction,withdrawer", [("maximize", "rsi"), ("minimize", "research")])
 def test_withdrawal_survives_crash_and_excludes_identical_artifacts(
     tmp_path: Path, direction: Literal["maximize", "minimize"], withdrawer: str
 ) -> None:

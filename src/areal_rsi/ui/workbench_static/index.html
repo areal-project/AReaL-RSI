@@ -10,6 +10,7 @@
     />
     <link rel="stylesheet" href="/style.css" />
     <script defer src="/dropdown.js"></script>
+    <script defer src="/research-graph.js"></script>
     <script defer src="/app.js"></script>
   </head>
   <body>
@@ -123,46 +124,41 @@
         </details>
         <section class="metrics" id="metrics" aria-label="研究概览">
           <div class="metric" id="score-metric">
-            <span>最佳验证结果</span><strong id="best-score">—</strong
-            ><small id="best-caption">尚无验证结果</small>
+            <span>最佳验证结果</span><strong id="best-score">—</strong>
           </div>
-          <div class="metric" id="baseline-metric">
-            <span>起点 / 最终确认</span
-            ><strong id="baseline-score">— <i>/</i> —</strong
-            ><small id="baseline-caption">起点可以为空</small>
+          <div class="metric" id="final-metric">
+            <span>最终确认</span><strong id="final-score">—</strong>
           </div>
           <div class="metric">
-            <span>研究节点</span><strong id="node-count">0</strong
-            ><small id="node-caption">尚未开始探索</small>
+            <span>研究员</span><strong id="node-count">0</strong>
           </div>
           <div class="metric">
-            <span>模型调用 / Token</span><strong id="model-count">0</strong
-            ><small id="token-count">尚未调用模型</small>
+            <span>模型调用</span><strong id="model-count">0</strong>
           </div>
-          <div class="metric"><span>研究历时</span><strong id="run-elapsed">尚未开始</strong><small id="elapsed-caption">从开始研究计时，含等待和暂停</small></div>
+          <div class="metric"><span>总历时</span><strong id="run-elapsed">尚未开始</strong></div>
         </section>
             <section class="card graph-card">
               <div class="card-heading">
                 <div>
-                  <h2>研究图</h2>
+                  <h2>Agent 研究图</h2>
                   <span id="graph-count" class="muted graph-count"></span>
                 </div>
                 <div class="graph-controls">
                   <button id="graph-active" class="quiet" hidden>定位进行中 ◎</button>
+                  <button id="graph-sharing" class="quiet" aria-pressed="false">只看协作</button>
                   <button id="graph-jobs" class="quiet" aria-pressed="false">显示全部作业</button>
                   <div class="zoom-controls" role="group" aria-label="研究图缩放">
                     <button id="graph-zoom-out" class="quiet" aria-label="缩小研究图">−</button>
                     <button id="graph-reset" class="quiet" title="恢复 100%" aria-label="恢复研究图原始比例">100%</button>
                     <button id="graph-zoom-in" class="quiet" aria-label="放大研究图">＋</button>
                   </div>
-                  <button id="graph-fit" class="quiet">适应画布</button>
+                  <button id="graph-fit" class="quiet">适应宽度</button>
                   <button id="graph-expand" class="quiet" aria-pressed="false">展开画布 ⛶</button>
                 </div>
               </div>
               <div class="graph-legend">
-                <span><i class="legend-line"></i>继续探索</span
-                ><span><i class="legend-line shared"></i>引用 / 合并经验</span
-                ><span><i class="legend-line execution"></i>执行作业</span>
+                <span class="sharing-legend"><i class="legend-line shared"></i>经验共享</span>
+                <span><i class="legend-line advice"></i>RSI 建议</span>
               </div>
               <div
                 id="graph-viewport"
@@ -170,12 +166,14 @@
                 tabindex="0"
                 aria-label="研究图，可拖动画布，按加减号或 Ctrl 加滚轮缩放"
               >
+                <div id="graph-column-headings" class="graph-column-headings" hidden></div>
                 <div id="graph-empty" class="graph-empty">
                   <span class="empty-symbol">◎</span>
-                  <h3>研究方向将在这里展开</h3>
+                  <h3>暂无研究</h3>
                 </div>
                 <div id="graph-surface" class="graph-surface"><div id="graph-canvas" class="graph-canvas" hidden></div></div>
               </div>
+              <section id="graph-detail" class="sharing-detail" aria-live="polite" hidden></section>
             </section>
         <div class="workspace-grid">
           <div class="research-column">
@@ -279,7 +277,7 @@
             <section id="node-panel" class="detail-panel" hidden>
               <div class="empty-detail">
                 <span class="empty-symbol">↖</span>
-                <h3>选择一个研究节点</h3>
+                <h3>选择研究员或时间线事件</h3>
                 <p>查看具体任务、尝试、问题、结果和共享证据。</p>
               </div>
             </section>

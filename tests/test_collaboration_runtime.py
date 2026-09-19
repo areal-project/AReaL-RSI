@@ -11,6 +11,7 @@ import pytest
 
 from areal_rsi.base.storage import encode
 from areal_rsi.coordination.brief_tool import PASSK_HIDDEN_LIMITS, brief_tool
+from areal_rsi.coordination.collaboration import DEFAULT_MODULES, build_plan
 from areal_rsi.coordination.config import ResearchConfig
 from areal_rsi.coordination.engine import ResearchEngine
 from areal_rsi.modules.research_runtime import ResearchRuntime
@@ -19,9 +20,8 @@ from areal_rsi.modules.runtime_tools import invoke
 from areal_rsi.research_app import ResearchApp
 
 
-@pytest.mark.parametrize("restart", [False, True])
 def test_mode_changes_preserve_intake_with_fresh_native_sessions(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, restart: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("RSI_API_KEY", "fixture")
     monkeypatch.setenv(
@@ -41,19 +41,22 @@ def test_mode_changes_preserve_intake_with_fresh_native_sessions(
     async def scenario() -> None:
         app = ResearchApp(tmp_path, runtime_factory=runtime)
         try:
-            detail = await app.create({"conversation": True})
+            detail = await app.create(
+                {"conversation": True, "collaboration": {"mode": "passk", "modules": []}}
+            )
             c = app.coordinator(detail["run_id"])
             sessions: list[Path] = []
-            for index, mode in enumerate(("collaborative", "passk", "collaborative")):
+            for index, modules in enumerate(((), ("leader_guidance",), DEFAULT_MODULES)):
                 if index:
-                    if restart:
+                    if index == 2:
                         await app.close()
                         app = ResearchApp(tmp_path, runtime_factory=runtime)
-                    await app.set_collaboration(c, {"mode": mode, "modules": []})
-                    if restart:
+                    await app.set_collaboration(c, {"mode": "passk", "modules": list(modules)})
+                    if index == 2:
                         await app.close()
                         app = ResearchApp(tmp_path, runtime_factory=runtime)
                 active = await app.attach(app.coordinator(c.store.run_id))
+                assert active.engine.rsi_prompt == build_plan("passk", modules).rsi_prompt
                 c = active.coordinator
                 text = "Keep the dataset fixed" if index == 0 else "Continue the discussion"
                 c.enqueue("user", "interaction", text, key=f"input-{index}")
@@ -69,12 +72,11 @@ def test_mode_changes_preserve_intake_with_fresh_native_sessions(
                 request = json.loads((session / "runtime/request.json").read_text())
                 bridge = request["research_tools"]
                 tool = next(tool for tool in bridge["tools"] if tool["name"] == "update_brief")
-                assert tool["inputSchema"] == brief_tool(mode)["parameters"]
+                assert tool["inputSchema"] == brief_tool("passk")["parameters"]
                 arguments = encode(c.store.brief())
                 arguments.update(objective="Preserve the task", instructions="Use fixed data")
-                if mode == "passk":
-                    for name in PASSK_HIDDEN_LIMITS:
-                        arguments["limits"].pop(name)
+                for name in PASSK_HIDDEN_LIMITS:
+                    arguments["limits"].pop(name)
                 result = await invoke(
                     bridge, {"name": "update_brief", "arguments": arguments, "call_id": "brief"}
                 )
@@ -95,7 +97,7 @@ def test_mode_changes_preserve_intake_with_fresh_native_sessions(
                     assert "backend_handoff" not in followup
 
                 # Saving the same selection must not discard a compatible session.
-                await app.set_collaboration(c, {"mode": mode, "modules": []})
+                await app.set_collaboration(c, {"mode": "passk", "modules": list(modules)})
                 assert c.actor("interaction").session_id == actor.session_id
         finally:
             await app.close()

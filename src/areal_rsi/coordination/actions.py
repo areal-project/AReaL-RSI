@@ -14,7 +14,7 @@ from areal_rsi.api.base import AgentState, RecordRef, RunState
 from areal_rsi.api.research import CandidateSnapshot, EvidenceRecord, VerifiedResult
 from areal_rsi.base.storage import decode, encode, now, safe_name, safe_relative, write_json
 from areal_rsi.coordination.brief_tool import brief_tool, updated_brief
-from areal_rsi.coordination.config import ResearchConfig
+from areal_rsi.coordination.config import archived_config
 from areal_rsi.coordination.coordinator import Coordinator, effect_id
 from areal_rsi.coordination.views import model_state, record_preview
 from areal_rsi.modules.responses import ToolCall, ToolHandler, ToolResult
@@ -287,11 +287,7 @@ class ResearchActions:
             tool
             for tool in [
                 *common,
-                *(
-                    [brief_tool(self.c.state.get("mode", "collaborative"))]
-                    if role == "interaction"
-                    else []
-                ),
+                *([brief_tool(self.c.state.get("mode", "passk"))] if role == "interaction" else []),
                 *{"rsi": RSI, "interaction": INTERACTION, "research": RESEARCH}[role],
                 *(tool for tool, _, roles in self.extras.values() if role in roles),
             ]
@@ -728,14 +724,14 @@ class ResearchActions:
         if name == "update_brief":
             if c.state["status"] != "planned":
                 raise ValueError("Hard constraints are frozen after start; discuss a new run")
-            brief = updated_brief(c.state.get("mode", "collaborative"), c.store.brief(), args)
+            brief = updated_brief(c.state.get("mode", "passk"), c.store.brief(), args)
             config_path = c.store.root / "coordination" / "config.json"
             config = None
             if "intake" in c.state:
                 config = json.loads(config_path.read_text())
                 config["brief"] = encode(brief)
                 # Validate the combined configuration before changing any durable record.
-                decode(ResearchConfig, config)
+                archived_config(config)
             run = c.store.run()
             run.brief_ref = c.store.put("briefs", key, brief)
             run.plan.goal = brief.objective

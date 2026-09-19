@@ -880,6 +880,7 @@ class ResearchApp:
                         withdrawn[candidate_id] = c.store.is_withdrawn(candidate_id)
                     if withdrawn[candidate_id]:
                         continue
+                    jobs[-1]["search_eligible"] = True
                     for public_node in nodes:
                         if public_node["iteration_id"] == info.get("iteration_id"):
                             previous = public_node["verification"]
@@ -907,9 +908,12 @@ class ResearchApp:
                         iteration_id=report_record.iteration_id,
                         data={**event.data, "report_id": report_record.report_id},
                     )
+        from areal_rsi.ui.research_graph import communications
+
         return {
             **summary,
             "objective": c.store.brief().objective,
+            "communications": communications(c.store, all_messages, nodes, jobs, delivered),
             "nodes": nodes,
             "edges": edges,
             "messages": messages,

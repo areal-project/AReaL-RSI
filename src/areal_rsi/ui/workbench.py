@@ -118,7 +118,8 @@ def _brief(value: Any) -> Json:
     result = _fields(value, "objective instructions")
     result["limits"] = _fields(
         value.get("limits"),
-        "max_agents max_nodes max_model_calls max_total_tokens max_wall_seconds "
+        "max_agents max_nodes max_model_calls max_total_tokens "
+        "max_wall_seconds max_effective_seconds "
         "max_verify_calls max_jobs gpu_ids allowed_paths",
     )
     verification = value.get("verification")
@@ -167,8 +168,18 @@ def public_detail(value: Json) -> Json:
         result[name] = _score(value.get(name))
     result["budget"] = _fields(
         value.get("budget"),
-        "model_calls api_attempts total_tokens verify_calls reserved_tokens elapsed_seconds",
+        "model_calls api_attempts total_tokens verify_calls reserved_tokens elapsed_seconds clock",
     )
+    if isinstance(value.get("budget", {}).get("researchers"), dict):
+        result["budget"]["researchers"] = {
+            agent_id: _fields(
+                budget,
+                "clock limit_seconds worker_wall_seconds gpu_queue_seconds "
+                "api_wait_seconds excluded_union_seconds effective_seconds "
+                "remaining_effective_seconds started_at finished_at",
+            )
+            for agent_id, budget in value["budget"]["researchers"].items()
+        }
     result["agents"] = [
         _fields(agent, "agent_id direction state current_iteration_id wait_reason error")
         for agent in value.get("agents", [])
@@ -207,6 +218,21 @@ def public_detail(value: Json) -> Json:
         if isinstance(message, dict)
         and (message.get("sender") == "user" or message.get("recipient") == "user")
     ]
+    result["communications"] = [
+        {
+            **_fields(
+                message,
+                "message_id kind sender recipient text created_at delivery_status report_id",
+            ),
+            "references": _refs(message.get("references")),
+            "sources": [
+                _fields(source, "agent_id uri created_at summary")
+                for source in message.get("sources", [])
+            ],
+        }
+        for message in value.get("communications", [])
+        if isinstance(message, dict)
+    ]
     from areal_rsi.execution.progress import public_progress
 
     result["jobs"] = [
@@ -216,7 +242,7 @@ def public_detail(value: Json) -> Json:
                 "job_id agent_id status title description created_at started_at finished_at error "
                 "gpu_ids progress_message agent_name iteration_id candidate_id phase "
                 "verification is_baseline published_candidate_id verification_job_id "
-                "source_job_id publication_error",
+                "source_job_id publication_error search_eligible",
             ),
             "progress": public_progress(job.get("progress")),
             "result": _score(job.get("result")),
@@ -352,6 +378,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                 ("",): "index.html",
                 ("app.js",): "app.js",
                 ("dropdown.js",): "dropdown.js",
+                ("research-graph.js",): "research-graph.js",
                 ("style.css",): "style.css",
             }
             asset = assets.get(tuple(parts))

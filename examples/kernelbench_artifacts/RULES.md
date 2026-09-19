@@ -1,10 +1,11 @@
 # KernelBench 八题研究规则
 
-阅读 tasks/<题号>/reference.py 和 baseline.json，编写自包含 model_new.py，定义构造函数与 forward 语义一致的 ModelNew。baseline.json 是历史参考实现的耗时，不是候选成绩；每次正式评测都会重新测量参考和候选。
+阅读 tasks/<题号>/reference.py 和 baseline.json，编写自包含 model_new.py，定义构造函数与 forward 语义一致的 ModelNew。baseline.json 是本次研究开始前校准的固定参考耗时，所有研究员共用。
 
 - 计算使用自定义 Triton/CUDA。允许 torch 分配、视图和复制，禁止用 torch 算术或库计算回退代替实现。
 - 每次 forward 必须根据当前输入和参数计算。禁止缓存答案、在构造时预算答案、利用随机输入分布猜测输出、篡改 RNG 或计时。允许固定形状优化，以及由参考计算图严格推出、对合法输入保持语义的化简。
 - 评分固定为 strict-fp32-v1：FP32 reference，reference TF32 关闭，5 次随机正确性检查、100 次 CUDA event 计时。不得修改评分器、精度或后端全局开关。
+- 探索加速比 speedup = 固定参考耗时 / 本次候选耗时，以此比较方案。measured_ref_ms 和 measured_speedup 是当次原始测量，不是探索成绩。最终复测沿用当次参考耗时/候选耗时，与已有 baseline 的最终评分一致。
 - 探索诊断不得使用专供最终独立复测的随机种子；正式探索由登记评测配置选取种子，额外诊断使用其他探索样本。
 - GPU 提交额度按本研究配置执行；诊断、编译失败和正确性失败都记录。不限次数时允许反复验证、调试和参数比较。禁止 torch.compile 代替自定义实现。
 - 本地主控不承担 GPU 计算。GPU 只通过 evaluate_task/diagnose_task 作业工具，使用 run_job(wait=true) 等待原作业；不能因为慢、超时重试或断线而新提同一个实验。

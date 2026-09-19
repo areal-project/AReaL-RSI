@@ -6,6 +6,7 @@ import base64
 import fcntl
 import hashlib
 import json
+import math
 import re
 import runpy
 import sys
@@ -13,6 +14,21 @@ from pathlib import Path
 from typing import Any
 
 TERMINAL = {"succeeded", "failed", "cancelled", "timed_out", "interrupted"}
+REQUIRED_JOB_ISOLATION = "filesystem-network-v1"
+
+
+def require_job_isolation(health: dict[str, Any]) -> None:
+    """Require an operator-enforced boundary before submitting any model code.
+
+    The queue must isolate each job's files, processes and network before loading
+    candidates or diagnostics. GPU device masking/private TMPDIR alone is not this contract.
+    """
+    if health.get("job_isolation") != REQUIRED_JOB_ISOLATION:
+        raise ValueError(
+            "GPUQ 缺少 filesystem-network-v1 作业隔离，拒绝启动研究。"
+            "候选与诊断都必须在无法读取其他作业/run、凭据或队列接口的环境执行；"
+            "仅隔离 GPU 和临时目录不够。请先升级队列隔离，不能只添加能力标记。"
+        )
 
 
 def save(path: Path, value: Any) -> None:
@@ -30,6 +46,13 @@ def prepare(payload: dict[str, Any]) -> dict[str, Any]:
     health = request("/health", url=env["gpuq_url"], timeout=15)
     if not health.get("ok") or not health.get("gpu_info"):
         raise ValueError("GPUQ 未就绪或没有 GPU")
+    # Existing GPUQ processes load this entrypoint for every job. Verify the
+    # installed implementation without restarting the shared scheduler.
+    expected_sandbox = payload.get("queue_sandbox_sha256")
+    sandbox = root / "sandbox_exec.py"
+    if expected_sandbox and hashlib.sha256(sandbox.read_bytes()).hexdigest() == expected_sandbox:
+        health["job_isolation"] = REQUIRED_JOB_ISOLATION
+    require_job_isolation(health)
     if any(gpu["driver_name"] != demo["hardware"] for gpu in health["gpu_info"]):
         raise ValueError("GPU 型号与 demo 固定条件不同")
     protocol = []
@@ -57,6 +80,7 @@ def prepare(payload: dict[str, Any]) -> dict[str, Any]:
             "queued": health["queued"],
             "tasks": list(references),
             "protocol_matched": True,
+            "job_isolation": health["job_isolation"],
         }
     rid = payload["run_id"]
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", rid):
@@ -68,16 +92,18 @@ def prepare(payload: dict[str, Any]) -> dict[str, Any]:
     with (control / "setup.lock").open("a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if manifest_path.exists():
-            return {"manifest": json.loads(manifest_path.read_text()), "references": references}
+            manifest = json.loads(manifest_path.read_text())
+            require_job_isolation(manifest)
+            return {"manifest": manifest, "references": references}
         (control / "remote.py").write_text(payload["remote_source"])
         (control / "control.py").write_text(payload["control_source"])
+        (control / "scoring.py").write_text(payload["scoring_source"])
         admin = Path(env["admin_token_file"]).read_text().strip()
         exploration_budget = demo["exploration_submissions"]
         budget = exploration_budget + 1 if exploration_budget is not None else None
-        if budget is None:
-            auth = control / "queue-auth.json"
-            save(auth, {"token_file": env["admin_token_file"]})
-            auth.chmod(0o600)
+        auth = control / "queue-auth.json"
+        save(auth, {"token_file": env["admin_token_file"]})
+        auth.chmod(0o600)
         tasks = {}
         for case, ref in references.items():
             level, problem = map(int, case[1:].split("P"))
@@ -118,6 +144,7 @@ def prepare(payload: dict[str, Any]) -> dict[str, Any]:
         manifest = {
             **env,
             "run_id": rid,
+            "job_isolation": health["job_isolation"],
             "tasks": tasks,
             "remote_script": str(control / "remote.py"),
             "remote_control": str(control / "control.py"),
@@ -127,6 +154,7 @@ def prepare(payload: dict[str, Any]) -> dict[str, Any]:
             "exploration_seed": demo["exploration_seed"],
             "metric": demo.get("metric", "fast_1"),
             "final_seed": demo["final_seed"],
+            "search_scoring": demo["search_scoring"],
             "protocol_id": hashlib.sha256(
                 json.dumps(protocol, sort_keys=True).encode()
             ).hexdigest(),
@@ -139,6 +167,114 @@ def prepare(payload: dict[str, Any]) -> dict[str, Any]:
         manifest.pop("admin_token_file", None)
         save(manifest_path, manifest)
         return {"manifest": manifest, "references": references}
+
+
+def calibrate(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Poll a fixed number of preparation jobs, outside the research submission budget."""
+    from scoring import calibration
+
+    sys.path.insert(0, manifest["kb_root"])
+    from common import request
+
+    control = Path(manifest["remote_manifest"]).parent
+    policy = manifest["search_scoring"]
+    count = policy["calibration_runs"]
+    maximum = policy["max_calibration_runs"]
+    if type(count) is not int or count < 3 or type(maximum) is not int or maximum < count:
+        raise ValueError("Reference 校准至少需要三个独立批次，且不能超过校准上限")
+    with (control / "calibration.lock").open("a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        frozen = json.loads(Path(manifest["remote_manifest"]).read_text())
+        if all("reference_calibration" in info for info in frozen["tasks"].values()):
+            return {"status": "completed", "manifest": frozen}
+        auth = json.loads((control / "queue-auth.json").read_text())
+        token = Path(auth["token_file"]).read_text().strip()
+        path = control / "reference-jobs.json"
+        receipts = json.loads(path.read_text()) if path.exists() else {}
+        waiting = False
+        results = {}
+        for case, info in manifest["tasks"].items():
+            jobs = []
+            for index in range(maximum):
+                key = f"{manifest['run_id']}-{case}-reference-{index}"
+                if key not in receipts:
+                    body = {
+                        "kind": "baseline",
+                        "task_id": info["task_id"] + "-reference",
+                        "cwd": info["workspace"],
+                        "level": int(case[1]),
+                        "problem": int(case.split("P")[1]),
+                        "gpus": 1,
+                        "seed": manifest["exploration_seed"],
+                        "timeout_s": 300,
+                        "idempotency_key": key,
+                    }
+                    job = request("/jobs", body, token=token, url=manifest["gpuq_url"], timeout=30)
+                    receipts[key] = job["id"]
+                    save(path, receipts)
+                job = request(
+                    "/jobs/" + receipts[key], token=token, url=manifest["gpuq_url"], timeout=30
+                )
+                if job["task_id"] != info["task_id"] + "-reference" or job["kind"] != "baseline":
+                    raise ValueError("Reference 校准作业归属不匹配")
+                jobs.append(job)
+                if len(jobs) >= count:
+                    if any(job["state"] not in TERMINAL for job in jobs):
+                        waiting = True
+                        break
+                    if reference := calibration(jobs, policy):
+                        results[case] = reference
+                        break
+            else:
+                raise ValueError(f"{case} 在 {maximum} 批内未得到稳定 reference；请检查评测环境")
+        if waiting:
+            return {"status": "waiting"}
+        for case, reference in results.items():
+            frozen["tasks"][case]["reference_calibration"] = reference
+        # Scoring and its frozen denominator are part of the task's verification identity.
+        frozen["protocol_id"] = hashlib.sha256(
+            json.dumps(
+                {
+                    "evaluator": manifest["protocol_id"],
+                    "search_scoring": policy,
+                    "references": results,
+                    "scoring_sha256": hashlib.sha256(
+                        (control / "scoring.py").read_bytes()
+                    ).hexdigest(),
+                },
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+        save(Path(manifest["remote_manifest"]), frozen)
+        return {"status": "completed", "manifest": frozen}
+
+
+def select_candidate(
+    manifest: dict[str, Any], case: str, jobs: list[dict[str, Any]], excluded: set[str]
+) -> dict[str, Any] | None:
+    """Select the highest existing search score; never retest the candidate pool."""
+    from scoring import evaluation
+
+    ranked = []
+    for job in jobs:
+        value = evaluation(manifest, case, job["evaluation"])
+        score = value.get("speedup", 0)
+        if not isinstance(score, (int, float)) or not math.isfinite(score) or score <= 0:
+            continue
+        ranked.append((score, job))
+    for score, job in sorted(ranked, key=lambda pair: pair[0], reverse=True):
+        source = (Path(job["cwd"]) / "model_new.py").read_bytes()
+        digest = hashlib.sha256(source).hexdigest()
+        if digest in excluded:
+            continue
+        return {
+            "job_id": job["id"],
+            "sha256": digest,
+            "source": base64.b64encode(source).decode(),
+            "selection_method": "best-search-score-v1",
+            "search_score": score,
+        }
+    return None
 
 
 def finish(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -188,6 +324,11 @@ def finish(manifest: dict[str, Any]) -> dict[str, Any]:
                     and (j.get("evaluation") or {}).get("correct") is True
                     and j["evaluation"].get("evaluation_policy") == "strict-fp32-v1"
                     and (
+                        "exploration_job_cutoffs" not in manifest
+                        or (j.get("finished_at") or float("inf"))
+                        <= manifest["exploration_job_cutoffs"].get(j["id"], 0)
+                    )
+                    and (
                         manifest.get("exploration_finished_at") is None
                         or (j.get("finished_at") or float("inf"))
                         <= manifest["exploration_finished_at"]
@@ -196,17 +337,8 @@ def finish(manifest: dict[str, Any]) -> dict[str, Any]:
                 if not valid:
                     continue
                 excluded = set(manifest.get("excluded_source_sha256", {}).get(case, []))
-                for best in sorted(valid, key=lambda j: j["evaluation"]["speedup"], reverse=True):
-                    source = (Path(best["cwd"]) / "model_new.py").read_bytes()
-                    digest = hashlib.sha256(source).hexdigest()
-                    if digest in excluded:
-                        continue
-                    selected[case] = {
-                        "job_id": best["id"],
-                        "sha256": digest,
-                        "source": base64.b64encode(source).decode(),
-                    }
-                    break
+                if chosen := select_candidate(manifest, case, valid, excluded):
+                    selected[case] = chosen
             save(path, selected)
         selected = json.loads(path.read_text())
         receipts = {}
@@ -262,7 +394,12 @@ def finish(manifest: dict[str, Any]) -> dict[str, Any]:
 if __name__ == "__main__":
     try:
         data = json.load(sys.stdin)
-        value = finish(data["manifest"]) if data["operation"] == "finish" else prepare(data)
+        if data["operation"] == "finish":
+            value = finish(data["manifest"])
+        elif data["operation"] == "calibrate":
+            value = calibrate(data["manifest"])
+        else:
+            value = prepare(data)
         print(json.dumps({"ok": True, "value": value}, ensure_ascii=False))
     except Exception as exc:
         print(json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"}))

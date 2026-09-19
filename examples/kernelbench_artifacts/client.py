@@ -19,6 +19,10 @@ TERMINAL = {"succeeded", "failed", "cancelled", "timed_out", "interrupted"}
 
 
 def remote(manifest: dict[str, Any], operation: str, **values: Any) -> Any:
+    if operation in {"submit", "submit_diagnostic"} and (
+        manifest.get("job_isolation") != "filesystem-network-v1"
+    ):
+        raise ValueError("研究未登记远端文件和网络隔离；拒绝提交候选或诊断，请重新准备实验。")
     command = [
         "bash",
         manifest["continue_script"],
@@ -49,6 +53,8 @@ def remote(manifest: dict[str, Any], operation: str, **values: Any) -> Any:
     except ValueError:
         raise RuntimeError(f"SSH bridge returned no result (exit {result.returncode})") from None
     if not response["ok"]:
+        if str(response["error"]).startswith("ValueError:"):
+            raise ValueError(response["error"])
         raise RuntimeError(response["error"])
     return response["value"]
 
@@ -209,11 +215,20 @@ def score_bundle(
     metrics: dict[str, float] = {}
     evidence: dict[str, Any] = {}
     for task in manifest["tasks"]:
+        jobs = status[task]["jobs"]
+        if manifest.get("search_scoring"):
+            from scoring import evaluation
+
+            jobs = [
+                {**job, "evaluation": evaluation(manifest, task, job.get("evaluation") or {})}
+                for job in jobs
+            ]
+            jobs = [{**job, "speedup": job["evaluation"].get("speedup", 0)} for job in jobs]
         path = workspace / task / "model_new.py"
         digest = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
         matches = [
             j
-            for j in status[task]["jobs"]
+            for j in jobs
             if j["kind"] == "eval"
             and j["state"] in TERMINAL
             and digest is not None
@@ -250,12 +265,14 @@ def score_bundle(
         metrics[task + "_fast1"] = float(speedup > 1.0)
         metrics[task + "_submissions"] = status[task]["used"]
         if chosen:
-            evaluation = chosen.get("evaluation") or {}
+            measurement = chosen.get("evaluation") or {}
             timings = {
-                "runtime_ms": evaluation.get("runtime_ms"),
-                "ref_ms": evaluation.get("ref_ms"),
-                "runtime_std_ms": (evaluation.get("runtime_stats") or {}).get("std"),
-                "ref_std_ms": (evaluation.get("ref_stats") or {}).get("std"),
+                "runtime_ms": measurement.get("runtime_ms"),
+                "ref_ms": measurement.get("ref_ms"),
+                "runtime_std_ms": (measurement.get("runtime_stats") or {}).get("std"),
+                "ref_std_ms": (measurement.get("ref_stats") or {}).get("std"),
+                "measured_ref_ms": measurement.get("measured_ref_ms"),
+                "measured_speedup": measurement.get("measured_speedup"),
             }
             for name, value in timings.items():
                 if isinstance(value, (int, float)) and math.isfinite(value) and value >= 0:

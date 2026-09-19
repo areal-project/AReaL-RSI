@@ -7,6 +7,13 @@
   "exploration_submissions": 10,
   "exploration_seed": 42,
   "final_seed": 137,
+  "search_scoring": {
+    "method": "fixed-reference-v1",
+    "calibration_runs": 3,
+    "max_calibration_runs": 6,
+    "max_relative_std": 0.05,
+    "max_relative_spread": 0.05
+  },
   "hardware": "NVIDIA L20X",
   "protocol_files": {
     "kb_worker.py": "4a279246695f8827f5347747d86d958a65c057808945e1a9490303ada86b439f",

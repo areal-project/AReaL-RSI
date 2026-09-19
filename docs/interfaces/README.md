@@ -11,6 +11,17 @@ HTTP 路由见[仓库 README](../../README.md#cli-与-api)。
 `ResearchConfig` 包含 TaskBrief、协作模式、模型连接、可选 seed、ApprovedCommand、
 verifier 和 finalizer。只接受当前字段，不支持旧字段自动迁移。
 
+### 需求更新
+
+Interaction 的 `update_brief` 使用结构化的 `objective`、`instructions`、`limits` 和
+`verification` 参数，按当前协作模式生成定义。协作模式提供当前支持的预算字段；pass@k
+隐藏 token 总量、验证次数和累计节点数上限，由后端将这些字段保持为
+`null`。工具仍提供研究员数量、研究时限、并发作业数、GPU 和可修改路径。
+服务端使用同一份 schema 校验，并在写入任何需求记录前验证完整研究配置。
+旧的 `brief_json` 参数不再接受；已完成工具调用的回放记录保留。
+用户要求与所选模式冲突时，Interaction 应说明冲突，让用户选择切换模式或取消对应
+预算，不自行放宽限制。验证 `identity` 由后端保留，接入工具负责其配置。
+
 ## Agent 与原生运行时
 
 `modules/agent_runtime.py` 的 `AgentRuntime` 是研究回合边界：`turn` 接收持久化消息 ID、
@@ -40,6 +51,20 @@ verifier 和 finalizer。只接受当前字段，不支持旧字段自动迁移�
 可信验证器的 `evaluation.json` 必须包含候选 ID/摘要、协议和数据身份、phase、
 指标名、分数及 `simulated=false`。`coordination/verification.py` 再次核对冻结输入。
 需要最终确认的任务不能用探索成绩直接 `finish`。
+
+`ApprovedCommand.parameter_descriptions` 按参数名说明路径、单位或允许值，随
+`get_commands` 返回；内部 `workspace`/`output` 由系统填写，不因此改变参数校验。
+配置 `auto_verify_output` 后，成功作业产出的指定目录会被冻结为候选，再由可信验证器
+验证并关联原作业。未配置或没有产物时不自动验证，普通 stdout 回执不能冒充正式成绩。
+
+没有自动达标目标且只登记实验命令时，可由研究员读取脚本反馈；自动判定达标仍需可信
+verifier。完整执行配置在启动前校验和冻结，不要求 RSI 重复接入环境。
+
+`metadata.time_limit_scope` 默认为 `total`（包含收尾），也可设为 `exploration`（最终验证
+另计）。后者向收尾命令传入 `RSI_EXPLORATION_FINISHED_AT`，适配器按截止时间选择产物。
+收尾通过 `RSI_CANDIDATE_SELECTION` 获取冻结选优清单：`schema_version=1`、`run_id`、
+`withdrawn_candidates`；撤回项含候选 ID、摘要、原因、证据及文件摘要映射。
+核心拒绝已撤回的完整快照；按文件组合的适配器也必须排除相应文件，不能用最终反馈继续优化。
 
 ## Task 执行与 Benchmark
 

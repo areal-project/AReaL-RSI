@@ -7,7 +7,8 @@
 需要 Python 3.11+ 和 uv。默认隔离模式需要 macOS `sandbox-exec`；可信 Linux
 服务器可在 `.env` 中显式设置 `RSI_RUNTIME_ISOLATION=linux-unrestricted`，
 Agent 将以服务用户权限运行，不提供文件或进程隔离，详见[后端说明](docs/agent-backends.md)。
-standard 后端还需要 Node.js 22.19+ 和 pnpm。研究模型接口须支持 Responses API 和工具调用。
+standard 后端还需要 Node.js 22.19+ 和 pnpm。standard/codex 的研究模型接口须支持
+Responses API 和工具调用；其他后端使用对应的协议。
 
 ```bash
 uv sync --locked
@@ -34,9 +35,10 @@ uv run --env-file .env --locked python run.py --type web
 
 打开 **http://127.0.0.1:8197**，新建研究，与 Interaction 讨论任务、环境、资源限制和目标，要求开始后交给 RSI。开始前可选择 Agent 后端，并修改模型地址、密钥、名称和推理强度；开始后任务和协作配置锁定，可查看进展或明确停止。
 
-Agent 后端有 `standard`（默认，AReaL Runtime 的 DSH 适配器）和 `codex`（Codex 原生循环、编程工具与网页搜索）。选择对 Interaction、RSI 和所有 Research Agents 生效。完整研究配置使用 `"backend": "codex"`；旧配置省略此字段时沿用 `standard`。研究开始后后端与模型配置一起锁定。两种后端都使用本研究配置的 API 地址和密钥。
-
-两个后端都通过仓库原有的 `PackageAgentRuntime` 执行，会话、工具和压缩由 AReaL Agent Runtime 管理。RSI 保留编排、权限、作业和正式验证。具体接口和恢复边界见 [Agent 后端说明](docs/agent-backends.md)。
+Agent 后端支持 `standard`（默认，DSH）、`codex` 和 `runtime`（受信 Runtime 配置，
+可选择 Hermes、Claude 等适配器，也可按角色选择后端）。模型连接和后端配置在研究开始前
+固定。所有后端通过 `PackageAgentRuntime` 执行；原生会话、工具和压缩由 Runtime 管理，
+RSI 负责研究编排、权限、作业和验证。配置与隔离边界见[后端说明](docs/agent-backends.md)。
 
 新实验可设置 `"mode": "passk"`：RSI 启动 k 个独立完成整题的 researcher，接收进展并督促持续探索；不提供研究建议、不调整方向，也不在研究员之间分享信息。任一正式结果达标或整组到时即停止。配置与比较方法见 [pass@k](docs/passk.md)。
 
@@ -120,8 +122,24 @@ uv run --env-file .env --locked rsi preflight --backend codex
 
 每次研究的数据集中在 `RSI_DATA_ROOT/runs/<run_id>/`，包含需求、会话、任务、报告、共享证据、冻结候选和验证记录。等待作业、报告或用户时不调用模型；临时 API 故障自动重试。
 
-研究配置中的 `context_window_tokens` 会传入原生后端。省略或设为 `null` 时，Codex 使用自己的模型默认窗口；standard 沿用现有窗口约定：`gpt-6-astra` 为 256,000 token，其他模型为 128,000。压缩时机和摘要由各后端负责。旧的压缩、重试和模型调用上限字段已移除；包含旧字段的配置不再兼容，不自动迁移旧配置或会话，详见 [Agent 后端说明](docs/agent-backends.md)。Codex CLI 固定为 `0.153.4`，与当前 Luna goal baseline 一致。
+上下文窗口、原生重试和会话边界见[后端说明](docs/agent-backends.md)。
+`brief.limits.max_model_calls` 保留可空字段，目前只接受 `null`；已移除的旧压缩/重试字段
+会明确报错，不自动迁移旧配置或会话。
 
 demo 在服务重启后自动恢复尚在执行的研究或收尾；手动暂停的研究保持暂停。完成最终复测后不能继续修改这次候选，需要新建 run。外部凭据失效或集群故障会明确报错或等待处理。
 
-系统职责和数据模型见[设计说明](docs/rsi-research-design.md)。运行和配置见 [Runtime 指南](docs/runtime-quickstart.md)。开发检查：`make check`；前端检查：`npm ci --prefix tests/frontend && npm test --prefix tests/frontend`。
+## 文档导航
+
+启动方式与示例见本 README；按需阅读以下专题：
+
+| 文档 | 内容 |
+| --- | --- |
+| [架构](docs/architecture.md) | 组件职责、消息、候选与数据流 |
+| [接口](docs/interfaces/README.md) | ResearchConfig、领域 API、实验命令与验证契约 |
+| [后端](docs/agent-backends.md) | Runtime 配置、工具桥、隔离、会话与测试 |
+| [pass@k](docs/passk.md) | 独立尝试、预算、停止与实验比较 |
+| [协作](docs/collaboration.md) | guidance 版本、权限、Prompt 来源与复现 |
+| [有效时间](docs/effective-time.md) | API 故障和 GPU 排队的扣时规则 |
+| [GPU 隔离](docs/gpu-queue-isolation.md) | KernelBench 队列部署及隔离边界 |
+
+开发检查：`make check`；前端检查：`npm ci --prefix tests/frontend && npm test --prefix tests/frontend`。

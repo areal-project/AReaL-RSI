@@ -345,6 +345,8 @@ def stop_on_target(c: Coordinator) -> None:
         c.state["passk_target"] = {"result": result, "observed_at": now()}
         c.save()
         c.stop("已有独立尝试通过正式验证并达到目标，停止整组探索")
+        if contract.identity.get("require_final_confirmation"):
+            return  # Search success is provisional until the independent final passes.
         c.state["status"] = "succeeded"
         c.save()
         run = c.store.run()

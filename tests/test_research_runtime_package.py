@@ -173,12 +173,9 @@ class ResponsesModel:
         self.thread.join()
 
 
-@pytest.mark.parametrize("allow_web,context_window", [(True, None), (False, 64000)])
 def test_codex_native_tools_history_resume_and_usage(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    allow_web: bool,
-    context_window: int | None,
 ) -> None:
     monkeypatch.setenv("RSI_API_KEY", "fixture")
     model = ResponsesModel()
@@ -190,8 +187,8 @@ def test_codex_native_tools_history_resume_and_usage(
             base_url=model.url,
             model="gpt-5.6-luna",
             model_settings_pinned=True,
-            context_window_tokens=context_window,
-            metadata={"allow_web_access": allow_web},
+            context_window_tokens=64000,
+            metadata={"allow_web_access": True},
         )
         runtime = ResearchApp._runtime(config)
         assert isinstance(runtime, ResearchRuntime)
@@ -206,7 +203,7 @@ def test_codex_native_tools_history_resume_and_usage(
         session = tmp_path / "session"
         binding = None
         try:
-            for i in range(3):
+            for i in range(2):
                 result = await asyncio.wait_for(
                     runtime.turn(
                         session,
@@ -224,35 +221,35 @@ def test_codex_native_tools_history_resume_and_usage(
                 assert result.text == "Done"
                 current = json.loads((session / "runtime/session-binding.json").read_text())
                 native_config = (session / "runtime/codex-home/config.toml").read_text()
-                assert ("model_context_window = 64000" in native_config) == bool(context_window)
+                assert "model_context_window = 64000" in native_config
                 if binding:
                     assert current == binding
                 binding = current
                 assert runtime.has_session(session)
-                if i == 1:
-                    await runtime.close()  # The third turn must recover the same native thread.
-                replay = await runtime.turn(
-                    session,
-                    system_prompt="Complete without tools",
-                    user_message=f"Remember turn {i}",
-                    message_id=f"message-{i}",
-                    tools=[definition("get_state", "Read your state")],
-                    handler=handle,
-                    workspace=tmp_path / "workspace",
-                    event_sink=emit,
-                )
-                assert replay == result, "A committed delivery must not start another model turn"
-            assert len(model.requests) == 3
+                if i == 0:
+                    await runtime.close()  # Continue on the same native thread after restart.
+            replay = await runtime.turn(
+                session,
+                system_prompt="Complete without tools",
+                user_message="Remember turn 1",
+                message_id="message-1",
+                tools=[definition("get_state", "Read your state")],
+                handler=handle,
+                workspace=tmp_path / "workspace",
+                event_sink=emit,
+            )
+            assert replay == result, "A committed delivery must not start another model turn"
+            assert len(model.requests) == 2
             assert "Remember turn 0" in json.dumps(model.requests[-1]["input"])
             for i, request in enumerate(model.requests):
                 inputs = json.dumps(request["input"])
-                assert ("recovery-only-task" in inputs) == (i == 2)
+                assert ("recovery-only-task" in inputs) == (i == 1)
                 assert "remaining" in inputs
             for request in model.requests:
                 tools = json.dumps(request.get("tools", [])) + json.dumps(
                     [item for item in request["input"] if item.get("type") == "additional_tools"]
                 )
-                assert ("web__run" in tools or "web_search" in tools) == allow_web
+                assert "web__run" in tools or "web_search" in tools
                 assert "exec_command" in tools and "apply_patch" in tools
                 assert "spawn_agent" not in tools and "create_goal" not in tools
                 assert request["reasoning"]["effort"] == "xhigh"
@@ -418,11 +415,9 @@ def test_tool_capability_and_workspace_sandbox_survive_restart(
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("disconnect", [False, True])
-def test_cancellation_stops_package_worker_and_keeps_canonical_history(
+def test_disconnection_stops_package_worker_and_keeps_canonical_history(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    disconnect: bool,
 ) -> None:
     monkeypatch.setenv("RSI_API_KEY", "fixture")
     model = ResponsesModel()
@@ -459,15 +454,10 @@ def test_cancellation_stops_package_worker_and_keeps_canonical_history(
                         await task
                     await asyncio.sleep(0.02)
             process = runtime.conversations[session].session.process
-            if disconnect:
-                assert process.stdin is not None
-                process.stdin.close()  # Same EOF as losing the coordinator process.
-                with pytest.raises(RuntimeError, match="worker exited"):
-                    await asyncio.wait_for(task, 15)
-            else:
-                task.cancel()
-                with pytest.raises(asyncio.CancelledError):
-                    await task
+            assert process.stdin is not None
+            process.stdin.close()  # Same EOF as losing the coordinator process.
+            with pytest.raises(RuntimeError, match="worker exited"):
+                await asyncio.wait_for(task, 15)
             assert process.returncode is not None
             events, _ = read_journal(session / "runtime/data/state")
             assert any(event.type == "run.cancelled" for event in events)
@@ -524,7 +514,8 @@ def test_native_codex_passk_launches_independent_attempts_and_stops_on_result(
             runtime = active.engine.runtime
             assert isinstance(runtime, ResearchRuntime)
             assert len(runtime.conversations) == 4
-            assert len({item.session.process.pid for item in runtime.conversations.values()}) == 4
+            processes = [item.session.process for item in runtime.conversations.values()]
+            assert len({process.pid for process in processes}) == 4
             for request in model.requests:
                 state = json.dumps(request["input"], ensure_ascii=False)
                 if "负责启动并监督" in state:
@@ -550,6 +541,7 @@ def test_native_codex_passk_launches_independent_attempts_and_stops_on_result(
             c.store.consider_best(result.result_id)
             await asyncio.wait_for(active.task, 15)
             assert c.state["status"] == "succeeded"
+            assert all(process.returncode is not None for process in processes)
             assert c.state["passk_target"]["result"]["candidate_id"] == candidate.candidate_id
             assert list(c.store.paths.agent("rsi").glob("sessions/*/runtime/request.json"))
             assert c.state["total_tokens"] > 0

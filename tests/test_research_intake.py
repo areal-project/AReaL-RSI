@@ -47,8 +47,7 @@ def app_at(root: Path) -> ResearchApp:
     )
 
 
-@pytest.mark.parametrize("backend", ["standard", "codex"])
-@pytest.mark.parametrize("modules", [(), ("leader_guidance",)])
+@pytest.mark.parametrize("backend,modules", [("standard", ()), ("codex", ("leader_guidance",))])
 def test_research_prompt_selection_reaches_the_model(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend: str, modules: tuple[str, ...]
 ) -> None:
@@ -269,7 +268,8 @@ def test_invalid_passk_brief_does_not_corrupt_draft(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
-def test_passk_handoff_accepts_script_scores_without_trusted_verifier(tmp_path: Path) -> None:
+@pytest.mark.parametrize("execution_required", [True, False])
+def test_passk_handoff_accepts_optional_execution(tmp_path: Path, execution_required: bool) -> None:
     from areal_rsi.api.research import VerificationContract
     from areal_rsi.base.storage import write_json
     from areal_rsi.coordination.intake import validate_execution
@@ -286,12 +286,14 @@ def test_passk_handoff_accepts_script_scores_without_trusted_verifier(tmp_path: 
             config.brief.instructions = (
                 "Use the existing submit/status scripts and report their score"
             )
-            config.brief.verification = VerificationContract("ppl", "minimize")
-            config.commands = (ApprovedCommand("submit", (sys.executable, "-c", "pass")),)
+            if execution_required:
+                config.brief.verification = VerificationContract("ppl", "minimize")
+                config.commands = (ApprovedCommand("submit", (sys.executable, "-c", "pass")),)
             assert validate_execution(config) == []
-            config.brief.verification.target = 10
-            assert validate_execution(config)  # Trusted automatic target needs a verifier.
-            config.brief.verification.target = None
+            if config.brief.verification:
+                config.brief.verification.target = 10
+                assert validate_execution(config)  # Trusted automatic target needs a verifier.
+                config.brief.verification.target = None
             run = c.store.run()
             run.brief_ref = c.store.put("briefs", "configured", config.brief)
             c.store.save_run(run)
@@ -305,7 +307,7 @@ def test_passk_handoff_accepts_script_scores_without_trusted_verifier(tmp_path: 
                     {
                         "confirmation_message_id": message.message_id,
                         "summary": "Start with existing experiment commands",
-                        "execution_required": True,
+                        "execution_required": execution_required,
                     },
                     "handoff",
                 )

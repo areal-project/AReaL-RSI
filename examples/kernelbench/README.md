@@ -33,4 +33,8 @@ uv run --env-file .env --locked rsi workbench --config /absolute/path/research.j
 
 配置生成器检查各阶段的环境和评测身份，不调用 Task 模型或产生分数。`--target`、研究员数量及其他预算由用户指定。
 
+生成的是纯 pass@k 配置，默认 1 名研究员、4 小时墙钟探索预算，最终复测另计，不限制模型调用、Token 和验证次数。
+可用 `--max-agents`、`--max-wall-seconds` 调整；模型调用、Token 和验证次数上限只接受 `none`，不支持的配置会在环境检查前报错。
+探索达标或到时结束后，系统从已验证结果中选出最佳候选，自动进行一次独立 final 验证。
+
 调度器入口为 `run.py --harness <candidate> --output <new-output> --config <operator.json> --phase diagnostic|search|final`。`diagnostic` 的轨迹从 `public/development/` 发布，仅作研究证据；正式分数从可信 `evaluation.json` 读取，不从 stdout 提取。只有固定题池的完整评测可参与比较，基础设施失败没有有效成绩。当前上游检查器仍在同一 Python 进程加载 kernel，不能视为恶意候选的完整安全沙箱。

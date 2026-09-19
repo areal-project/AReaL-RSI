@@ -862,11 +862,15 @@ class ResearchExecution:
                     receipt = Path(info["output"]) / safe_relative(name)
                     if receipt.is_file():
                         remote = json.loads(receipt.read_text())
+                        end = remote.get("started_at") or remote.get("finished_at")
+                        if record.finished_at is not None:
+                            # A stale queued receipt cannot outlive its local execution.
+                            end = min(end or record.finished_at, record.finished_at)
                         timer.queue(
                             info["agent_id"],
                             "remote:" + record.job_id,
                             remote["created_at"],
-                            remote.get("started_at") or remote.get("finished_at"),
+                            end,
                         )
         for record in records:
             info = self.jobs.get(record.job_id)

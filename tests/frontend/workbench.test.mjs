@@ -193,7 +193,8 @@ test('retired collaboration stays viewable without execution or reuse controls',
   record.model_settings.editable = false;
   const ui = await setup(t, {archived: record});
   assert.equal(ui.$('objective').textContent, '研究 archived');
-  for (const id of ['start', 'pause', 'resume', 'stop', 'reuse-collaboration']) assert.equal(ui.$(id).hidden, true);
+  for (const id of ['start', 'pause', 'resume', 'reuse-collaboration']) assert.equal(ui.$(id).hidden, true);
+  assert.equal(ui.$('stop').hidden, false);
   assert.equal(ui.$('chat-input').disabled, true);
   assert.equal(ui.$('collaboration-mode-trigger').disabled, true);
   assert.match(ui.$('collaboration-summary').textContent, /仅供查看/);

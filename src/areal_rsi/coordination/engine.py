@@ -124,7 +124,10 @@ class ResearchEngine:
         self.coordinator.state = json.loads(self.coordinator.path.read_text())
         if self.coordinator.store.brief().limits.max_effective_seconds is not None:
             self.effective = EffectiveTime(self.coordinator.state)
-            self.effective.open_worker(self.clock())
+            if self.coordinator.state["status"] == "paused":
+                self.effective.close_worker(self.effective.data.get("heartbeat_at", self.clock()))
+            else:
+                self.effective.open_worker(self.clock())
         # Older runs copied per-item provider attribution into every state save.
         # Normalize only after acquiring ownership, without settling usage again.
         for record in self._request_records().values():

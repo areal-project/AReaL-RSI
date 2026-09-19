@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,11 +17,14 @@ from test_research_runtime_package import ResponsesModel
 
 from areal_rsi.api.base import AgentState
 from areal_rsi.api.research import TaskBrief
+from areal_rsi.base.storage import write_json
 from areal_rsi.coordination.config import ResearchConfig
 from areal_rsi.coordination.effective_time import EffectiveTime
 from areal_rsi.coordination.engine import ToolSet
+from areal_rsi.coordination.jobs import ResearchExecution
 from areal_rsi.coordination.passk import PassKEngine
-from areal_rsi.modules.agent_runtime import AgentRuntime, ToolResult, TurnResult
+from areal_rsi.execution import ApprovedCommand
+from areal_rsi.modules.agent_runtime import AgentRuntime, ToolCall, ToolResult, TurnResult
 from areal_rsi.modules.research_runtime import ResearchRuntime
 
 
@@ -71,9 +76,8 @@ def test_native_retry_signal_excludes_context_errors_and_usage_replay() -> None:
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("wall_seconds", [None, 1000])
-def test_each_researcher_stops_at_own_budget_and_leader_waits(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wall_seconds: int | None
+def test_each_researcher_stops_at_own_budget_excluding_pauses_and_leader_waits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     class Runtime:
         def for_interaction(self) -> Runtime:
@@ -92,11 +96,9 @@ def test_each_researcher_stops_at_own_budget_and_leader_waits(
     async def scenario() -> None:
         c, actions, agents = await setup(tmp_path, 2)
         brief = c.store.brief()
-        brief.limits.max_wall_seconds = wall_seconds
+        brief.limits.max_wall_seconds = None
         brief.limits.max_effective_seconds = 60
         # setup's brief reference is authoritative; write through that path.
-        from areal_rsi.base.storage import write_json
-
         write_json(c.store.root / "briefs" / "initial.json", brief)
         clock = [100.0]
         monkeypatch.setattr(
@@ -114,8 +116,13 @@ def test_each_researcher_stops_at_own_budget_and_leader_waits(
             await asyncio.sleep(0.01)
             assert engine.effective is not None
             timer = engine.effective
-            timer.queue(agents[1], "queued", 110, 140)
-            clock[0] = 161
+            clock[0] = 105
+            c.pause()
+            assert timer.budget(agents[0], 205, 60)["effective_seconds"] == 5
+            clock[0] = 205
+            c.resume()
+            timer.queue(agents[1], "queued", 210, 240)
+            clock[0] = 261
             await engine.tick()
             assert c.actor(agents[0]).state == AgentState.STOPPED
             assert c.actor(agents[1]).state != AgentState.STOPPED
@@ -123,12 +130,12 @@ def test_each_researcher_stops_at_own_budget_and_leader_waits(
             leader_budget = actions.state("rsi")["budget"]
             own_budget = actions.state(agents[1])["budget"]
             assert "elapsed_seconds" not in leader_budget and "elapsed_seconds" not in own_budget
-            assert ("remaining_wall_seconds" in own_budget) == (wall_seconds is not None)
+            assert "remaining_wall_seconds" not in own_budget
             assert own_budget["effective_time"]["remaining_effective_seconds"] == 29
             assert "researchers" not in own_budget
             assert leader_budget["researchers"][agents[1]] == own_budget["effective_time"]
             assert "elapsed_seconds" in c.budget(), "Operator view retains total wall time"
-            clock[0] = 191
+            clock[0] = 291
             await engine.tick()
             assert c.state["status"] == "stopped"
             assert all(c.actor(a).state == AgentState.STOPPED for a in ["rsi", *agents])
@@ -190,3 +197,50 @@ def test_real_codex_retry_reports_outage_and_recovery(
         asyncio.run(scenario())
     finally:
         model.close()
+
+
+def test_failed_local_job_closes_stale_remote_queue(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        c, actions, agents = await setup(tmp_path, 1)
+        brief = c.store.brief()
+        brief.limits.max_effective_seconds = 60
+        write_json(c.store.root / "briefs/initial.json", brief)
+        timer = EffectiveTime(c.state)
+        timer.open_worker(time.time() - 20)
+        timer.start_agent(agents[0], time.time() - 20)
+        command = ApprovedCommand(
+            "test",
+            (
+                sys.executable,
+                "-c",
+                "import json,sys,time; from pathlib import Path; "
+                "Path(sys.argv[1], 'queue.json').write_text(json.dumps("
+                "dict(created_at=time.time()-5, started_at=None, finished_at=None))); "
+                "sys.exit(1)",
+                "{output}",
+            ),
+            ("output",),
+            queue_timing_file="queue.json",
+        )
+        execution = ResearchExecution(actions, commands={command.name: command})
+        try:
+            c.begin_turn(agents[0])
+            result = await actions.handler(agents[0])(
+                ToolCall(
+                    "run_job",
+                    {"command_name": "test", "parameters_json": "{}", "wait": True},
+                    "job",
+                )
+            )
+            record = execution.manager.get(result.output["job_id"])
+            assert record.state == "failed" and record.finished_at is not None
+            await execution.poll()
+            spans = timer.data["agents"][agents[0]]["queue_spans"]
+            assert spans["remote:" + record.job_id][1] == record.finished_at
+            before = timer.budget(agents[0], record.finished_at, 60)
+            after = timer.budget(agents[0], record.finished_at + 30, 60)
+            assert after["effective_seconds"] - before["effective_seconds"] == pytest.approx(30)
+        finally:
+            execution.close(cancel=True)
+
+    asyncio.run(scenario())

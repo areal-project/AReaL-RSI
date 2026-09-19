@@ -11,6 +11,7 @@ import pytest
 
 from areal_rsi.base.storage import encode
 from areal_rsi.coordination.brief_tool import PASSK_HIDDEN_LIMITS, brief_tool
+from areal_rsi.coordination.collaboration import DEFAULT_MODULES, build_plan
 from areal_rsi.coordination.config import ResearchConfig
 from areal_rsi.coordination.engine import ResearchEngine
 from areal_rsi.modules.research_runtime import ResearchRuntime
@@ -19,9 +20,8 @@ from areal_rsi.modules.runtime_tools import invoke
 from areal_rsi.research_app import ResearchApp
 
 
-@pytest.mark.parametrize("restart", [False, True])
 def test_mode_changes_preserve_intake_with_fresh_native_sessions(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, restart: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("RSI_API_KEY", "fixture")
     monkeypatch.setenv(
@@ -46,16 +46,17 @@ def test_mode_changes_preserve_intake_with_fresh_native_sessions(
             )
             c = app.coordinator(detail["run_id"])
             sessions: list[Path] = []
-            for index, modules in enumerate(((), ("leader_guidance",), ())):
+            for index, modules in enumerate(((), ("leader_guidance",), DEFAULT_MODULES)):
                 if index:
-                    if restart:
+                    if index == 2:
                         await app.close()
                         app = ResearchApp(tmp_path, runtime_factory=runtime)
                     await app.set_collaboration(c, {"mode": "passk", "modules": list(modules)})
-                    if restart:
+                    if index == 2:
                         await app.close()
                         app = ResearchApp(tmp_path, runtime_factory=runtime)
                 active = await app.attach(app.coordinator(c.store.run_id))
+                assert active.engine.rsi_prompt == build_plan("passk", modules).rsi_prompt
                 c = active.coordinator
                 text = "Keep the dataset fixed" if index == 0 else "Continue the discussion"
                 c.enqueue("user", "interaction", text, key=f"input-{index}")

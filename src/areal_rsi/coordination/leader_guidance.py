@@ -45,7 +45,13 @@ LEADER_TOOLS = {
     "search_web",
     "fetch_url",
 }
-TRACE_EVENTS = {"message.completed", "tool.started", "tool.completed", "execution.failed"}
+TRACE_EVENTS = {
+    "message.completed",
+    "tool.started",
+    "tool.completed",
+    "tool.failed",
+    "execution.failed",
+}
 
 
 class GuidedPassKActions(PassKActions):

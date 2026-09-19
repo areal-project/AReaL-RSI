@@ -146,6 +146,18 @@ class ResearchConfig:
             retry_max_seconds=self.retry_max_seconds,
         )
 
+    def validate_clock(self) -> None:
+        if self.brief.limits.max_effective_seconds is not None and self.backend != "codex":
+            raise ValueError("有效时间目前仅支持 Codex；standard 请使用 max_wall_seconds")
+
+    @property
+    def needs_finalization(self) -> bool:
+        contract = self.brief.verification
+        return bool(
+            self.finalizer
+            or (self.verifier and contract and contract.identity.get("require_final_confirmation"))
+        )
+
     def api_key(self) -> str:
         if self.credential_file:
             return str(json.loads(Path(self.credential_file).read_text())["api_key"])

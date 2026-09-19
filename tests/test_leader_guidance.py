@@ -161,6 +161,18 @@ def test_researchers_can_inspect_same_run_traces_without_leader_permission(tmp_p
             snapshot.model_copy(update={"last_sequence": 0}),
             outbox_sinks=(),
         )
+        await journal.commit_event(
+            event.model_copy(
+                update={
+                    "event_id": "e2",
+                    "sequence": 1,
+                    "type": EventType.TOOL_FAILED,
+                    "data": {"name": "exec_command", "error": "Compiler rejected the experiment"},
+                }
+            ),
+            snapshot.model_copy(update={"last_sequence": 1}),
+            outbox_sinks=(),
+        )
         try:
             page = await actions.handler(target)(
                 ToolCall(
@@ -171,6 +183,7 @@ def test_researchers_can_inspect_same_run_traces_without_leader_permission(tmp_p
             )
             value = page.output
             assert "actual diagnostic: correctness failed" in value["content"]
+            assert "Compiler rejected the experiment" in value["content"]
             assert value["agent_id"] == source and value["next_offset"] is None
             await actions.handler("rsi")(
                 ToolCall(

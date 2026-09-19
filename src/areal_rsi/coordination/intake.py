@@ -376,7 +376,9 @@ class ResearchIntake:
                     raise ValueError("先保存明确的目标、约束和研究说明")
                 if self.c.state["status"] != "planned":
                     raise ValueError("研究已经开始")
-                self.c.state["execution_setup"] = "pending"
+                self.c.state["execution_setup"] = (
+                    "pending" if call.arguments["execution_required"] else "ready"
+                )
                 self.c.state.setdefault("intake", {}).update(
                     status="ready",
                     summary=summary,

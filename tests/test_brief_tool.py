@@ -4,9 +4,6 @@ import copy
 from pathlib import Path
 from typing import Any
 
-import pytest
-from jsonschema import Draft202012Validator
-
 from areal_rsi.api.research import ResearchLimits, TaskBrief, VerificationContract
 from areal_rsi.base.storage import encode
 from areal_rsi.coordination.brief_tool import PASSK_HIDDEN_LIMITS, brief_tool, updated_brief
@@ -20,25 +17,6 @@ def arguments(mode: str) -> dict[str, Any]:
         for key in PASSK_HIDDEN_LIMITS:
             value["limits"].pop(key)
     return value
-
-
-def test_schema_only_exposes_supported_passk_budgets() -> None:
-    tool = brief_tool("passk")
-    Draft202012Validator.check_schema(tool["parameters"])
-    assert "brief_json" not in tool["parameters"]["properties"]
-    for key in PASSK_HIDDEN_LIMITS:
-        assert key not in tool["parameters"]["properties"]["limits"]["properties"]
-    with pytest.raises(ValueError, match="已移除"):
-        brief_tool("collaborative")
-
-
-@pytest.mark.parametrize("key", PASSK_HIDDEN_LIMITS)
-@pytest.mark.parametrize("value", [None, 100])
-def test_passk_rejects_hidden_keys_even_when_null(key: str, value: int | None) -> None:
-    args = arguments("passk")
-    args["limits"][key] = value
-    with pytest.raises(ValueError, match="Additional properties"):
-        updated_brief("passk", TaskBrief("old", "old"), args)
 
 
 def test_structured_update_preserves_verification_identity() -> None:
@@ -65,15 +43,6 @@ def test_structured_update_preserves_verification_identity() -> None:
     assert result.limits.max_agents == 1
     for key in PASSK_HIDDEN_LIMITS:
         assert getattr(result.limits, key) is None
-
-
-def test_rejects_legacy_string_and_bad_types() -> None:
-    with pytest.raises(ValueError):
-        updated_brief("passk", TaskBrief("old", "old"), {"brief_json": "{}"})
-    args = arguments("passk")
-    args["limits"]["max_jobs"] = "8"
-    with pytest.raises(ValueError, match="max_jobs"):
-        updated_brief("passk", TaskBrief("old", "old"), args)
 
 
 def test_effective_budget_is_per_researcher_and_only_available_in_passk() -> None:

@@ -123,6 +123,11 @@ def prepare(
         existing: dict[str, Any] = json.loads(config_path.read_text())
         if existing.get("mode", "collaborative") != mode:
             raise ValueError("此研究已有不同的协作方式；请新建研究")
+        if (
+            selected_modules(mode, existing.get("collaboration_modules", ()))
+            != collaboration_modules
+        ):
+            raise ValueError("此研究已有不同的协作模块；请新建研究，不能复用其他版本的配置")
         previous_demo = json.loads((setup / "demo.json").read_text())
         if existing["metadata"].get("time_limit_scope", "total") != time_limit_scope:
             raise ValueError("此研究已有不同的时间口径；请新建研究")
@@ -146,6 +151,7 @@ def prepare(
             check=True,
             task=task,
             mode=mode,
+            collaboration_modules=collaboration_modules,
             exploration_submissions=exploration_submissions,
         )
         manifest = json.loads((setup / "gpuq-manifest.json").read_text())

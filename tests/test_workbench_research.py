@@ -195,12 +195,21 @@ def test_graph_attributes_explicit_sources_without_mutating_or_reading_other_run
         candidate_ref = c.store.paths.reference(
             c.store.root / "candidates" / f"{candidate.candidate_id}.json"
         )
+        excerpt = c.store.put("materials", "excerpt", {"agent_id": "rsi", "job_id": "experiment"})
+        write_json(
+            c.store.root / "coordination/jobs.json",
+            {"experiment": {"agent_id": source.agent_id, "output": str(tmp_path / "output")}},
+        )
+        write_json(
+            c.store.root / "jobs/experiment/job.json",
+            JobRecord("experiment", JobSpec(), "succeeded", 1, 2),
+        )
         shared = c.enqueue(
             "rsi",
             target.agent_id,
             "Try this independently",
             key="share",
-            references=(ref, candidate_ref),
+            references=(ref, candidate_ref, excerpt),
         )
         # Identical report IDs from another run must not acquire local attribution.
         foreign = RecordRef(ref.uri.replace(f"run://{c.store.run_id}/", "run://another-run/"))
@@ -220,7 +229,9 @@ def test_graph_attributes_explicit_sources_without_mutating_or_reading_other_run
         messages = {m["message_id"]: m for m in detail["communications"]}
         assert len(messages) == 3  # Report and two suggestions, initial assignments excluded.
         assert {s["agent_id"] for s in messages[shared]["sources"]} == {source.agent_id}
-        assert {s["uri"] for s in messages[shared]["sources"]} == {ref.uri, candidate_ref.uri}
+        assert {s["uri"] for s in messages[shared]["sources"]} == {
+            ref.uri, candidate_ref.uri, excerpt.uri
+        }
         assert messages[shared]["delivery_status"] == "delivered"
         assert messages[unknown]["sources"] == []
         assert messages[unknown]["delivery_status"] == "pending"

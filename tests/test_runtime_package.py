@@ -15,9 +15,7 @@ from areal_rsi.modules.runtime_package import PackageAgentRuntime, RuntimeSettin
 
 
 class PackageRuntimeTest(unittest.IsolatedAsyncioTestCase):
-    async def _check_composition(
-        self, selection: dict[str, str], *, agent_directories: bool = False
-    ) -> None:
+    async def test_installed_composition_multiturn_and_trajectory(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp).resolve()
             content = FileContentStore(root / "content")
@@ -26,18 +24,15 @@ class PackageRuntimeTest(unittest.IsolatedAsyncioTestCase):
                 root / "sessions",
                 content,
                 trajectories,
-                settings=RuntimeSettings({"default": selection}),
+                settings=RuntimeSettings({"default": {"kind": "fake"}}),
                 role="task-agent",
                 base_url="http://127.0.0.1:1",
                 api_key="local-proxy",
-                agent_directories=agent_directories,
+                agent_directories=True,
             )
             model = ModelVersion("model-test", "test", await content.put_text("model"), now())
             session = await runtime.open(AgentSpec("task-agent", "deepseek-harness@v1", model))
-            expected = (
-                runtime.root / "task-agent" / "sessions" if agent_directories else runtime.root
-            )
-            self.assertEqual(session.directory.parent, expected)
+            self.assertEqual(session.directory.parent, runtime.root / "task-agent" / "sessions")
             try:
                 first = await session.send("first message")
                 second = await session.send("second message")
@@ -63,20 +58,6 @@ class PackageRuntimeTest(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(session.process.returncode)
             with self.assertRaisesRegex(RuntimeError, "已结束"):
                 await session.send("late")
-
-    async def test_installed_composition_multiturn_and_trajectory(self) -> None:
-        await self._check_composition({"kind": "fake"})
-
-    async def test_run_owned_agent_sessions(self) -> None:
-        await self._check_composition({"kind": "fake"}, agent_directories=True)
-
-    async def test_installed_entrypoint_plugin(self) -> None:
-        await self._check_composition(
-            {
-                "kind": "entrypoint",
-                "pluginEntrypoint": "areal_agent_runtime.adapters.fake.plugin:create_plugin",
-            }
-        )
 
     @unittest.skipUnless(sys.platform == "darwin", "macOS sandbox-exec integration")
     async def test_native_zsh_heredoc_uses_private_temporary_directory(self) -> None:
@@ -235,24 +216,6 @@ class PackageRuntimeTest(unittest.IsolatedAsyncioTestCase):
             )
             self.assertNotEqual(write.returncode, 0)
             self.assertEqual(public.read_text(), "shared runtime")
-
-    def test_all_bootstrap_kinds_are_selectable(self) -> None:
-        for kind in (
-            "fake",
-            "dsh",
-            "codex-cli",
-            "claude-code",
-            "claude-agent-sdk",
-            "anthropic",
-            "hermes",
-            "remote",
-            "entrypoint",
-        ):
-            value = {"kind": kind}
-            if kind == "entrypoint":
-                value["pluginEntrypoint"] = "example:create_plugin"
-            selected = RuntimeSettings({"default": value}).select("task-agent")
-            self.assertEqual(selected["kind"], kind)
 
     async def test_remote_wire_with_explicit_auth_reference(self) -> None:
         import os

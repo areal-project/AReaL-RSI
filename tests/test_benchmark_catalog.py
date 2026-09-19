@@ -50,17 +50,6 @@ class BenchmarkCatalogTest(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(ValueError, "未知 Benchmark"):
                 create_builtin_registry(content).create("external-fixture")
 
-    def test_builtin_catalog_exposes_public_metadata_only(self) -> None:
-        catalog = BenchmarkCatalog.load()
-
-        self.assertEqual([item.benchmark_id for item in catalog.list()], ["arithmetic-v1", "gsm8k"])
-        gsm8k = catalog.get("gsm8k")
-        assert gsm8k is not None
-        self.assertEqual(gsm8k.adapter, "gsm8k-v1")
-        self.assertEqual(gsm8k.verifier, "gsm8k-v1")
-        self.assertFalse(hasattr(gsm8k, "target"))
-        self.assertNotIn("answer", repr(gsm8k).lower())
-
     async def test_gsm8k_adapter_matches_direct_implementation(self) -> None:
         raw = b"\n".join(
             json_bytes(

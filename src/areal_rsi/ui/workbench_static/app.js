@@ -681,7 +681,7 @@ function render() {
     && run.finalization?.status !== "running";
   $("stop").textContent = run.status === "planned" ? "结束对话" : "停止";
   if (run.collaboration?.supported === false) {
-    for (const id of ["start", "pause", "resume", "stop"]) $(id).hidden = true;
+    for (const id of ["start", "pause", "resume"]) $(id).hidden = true;
   }
   $("delete-run").disabled = state.busy || state.sending.has(run.run_id) || !!state.modelSavingRun;
   $("delete-run").title = deletionBlocked(run) ? "请先停止研究再删除" : "删除这项研究的本地记录";

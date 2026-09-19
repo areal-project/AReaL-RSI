@@ -39,7 +39,8 @@ def communications(
         except (ValueError, FileNotFoundError):
             return None
         owner = (
-            record.get("agent_id")
+            job_owners.get(record.get("job_id"))
+            or record.get("agent_id")
             or record.get("source_agent_id")
             or owners.get(record.get("iteration_id"))
             or candidates.get(record.get("candidate_id"))

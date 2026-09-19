@@ -460,6 +460,7 @@ class ResearchApp:
         selected_modules(config.mode, config.collaboration_modules)
         config.brief = c.store.brief()
         config.__post_init__()
+        config.validate_clock()
         write_json(c.store.root / "coordination" / "config.json", config.public())
         pending_setup = c.state.get("execution_setup") == "pending"
         # A complete operator configuration imported during intake needs no
@@ -593,6 +594,8 @@ class ResearchApp:
             existing.execution.close()
             await existing.tools.close()
         config = self.config(c)
+        if c.state.get("started_at"):
+            config.validate_clock()
         plan = build_plan(config.mode, config.collaboration_modules)
         frozen = c.store.root / "coordination/collaboration.json"
         if frozen.exists() and json.loads(frozen.read_text()) != manifest(
@@ -684,7 +687,7 @@ class ResearchApp:
                 execution.close(cancel=True)
                 current = self.active[c.store.run_id].config
                 if (
-                    current.finalizer
+                    current.needs_finalization
                     and c.state["status"] in {"stopped", "succeeded"}
                     and not c.state.get("user_stopped")
                 ):
@@ -981,7 +984,7 @@ class ResearchApp:
                     and (
                         c.state["status"] == "running"
                         or (
-                            config.finalizer
+                            config.needs_finalization
                             and c.state["status"] in {"stopped", "succeeded"}
                             and finalization.get("status") not in {"completed", "failed"}
                         )
@@ -1076,7 +1079,7 @@ class ResearchApp:
             )
         if action == "delete":
             return await self.delete(c)
-        if action != "export":
+        if action not in {"export", "stop"}:
             config = self.config(c)
             selected_modules(config.mode, config.collaboration_modules)
         if action != "export" and self.worker_elsewhere(c):
@@ -1126,7 +1129,7 @@ class ResearchApp:
                     )
                 c.state.pop("user_stopped", None)
                 c.save()
-                if self.config(c).finalizer and c.state.get("finalization"):
+                if self.config(c).needs_finalization and c.state.get("finalization"):
                     if c.state["finalization"]["status"] == "completed":
                         raise ValueError("最终复测已完成；继续探索请新建研究")
                     active = await self.attach(c)

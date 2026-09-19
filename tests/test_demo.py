@@ -117,6 +117,17 @@ def test_single_task_preparation_requires_time_budget_and_unlimited_submissions(
     assert "GPU 提交次数不限" in config["brief"]["instructions"]
     frozen = json.loads((tmp_path / "runs/unlimited/setup/research.json").read_text())
     assert frozen == config
+    with pytest.raises(ValueError, match="协作模块"):
+        prepare(
+            tmp_path,
+            environment,
+            "unlimited",
+            task="L3P10",
+            max_agents=6,
+            max_wall_seconds=limit,
+            check_credentials=False,
+            collaboration_modules=("leader_guidance",),
+        )
     assert (
         json.loads(Path(config["seed_dir"]).joinpath("tasks/L3P10/baseline.json").read_text())
         == reference
@@ -712,3 +723,58 @@ def test_remote_preparation_rejects_device_only_isolation() -> None:
     for operation in ("submit", "submit_diagnostic"):
         with pytest.raises(ValueError, match="拒绝提交"):
             remote({}, operation)
+
+
+def test_harness_config_defaults_and_early_budget_rejection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = runpy.run_path("scripts/configure_research.py")
+    seed, prepared = tmp_path / "seed", tmp_path / "data"
+    seed.mkdir()
+    prepared.mkdir()
+    operator = tmp_path / "operator.json"
+    operator.write_text(
+        json.dumps(
+            {
+                "prepared_data": str(prepared),
+                "baseline_harness": str(seed),
+                "gpu": {"kind": "local", "cuda_visible_devices": "0"},
+            }
+        )
+    )
+    argv = [
+        "--example",
+        "kernelbench",
+        "--operator",
+        str(operator),
+        "--output",
+        str(tmp_path / "research.json"),
+        "--target-model",
+        "fixture",
+    ]
+    args = module["parser"]().parse_args(argv)
+    calls = []
+
+    def describe(*values: Any) -> dict[str, str]:
+        phase = values[4]
+        calls.append(phase)
+        return {
+            "adapter": "kernelbench",
+            "phase": phase,
+            "split": "development" if phase == "diagnostic" else phase,
+            "protocol_id": "a" * 64,
+            "manifest_id": str(len(calls)) * 64,
+            "target_model": "fixture",
+        }
+
+    monkeypatch.setitem(module["build_config"].__globals__, "describe", describe)
+    config = module["build_config"](args)
+    assert config.needs_finalization and config.finalizer is None
+    assert config.brief.limits.max_model_calls is None
+    assert config.brief.limits.max_total_tokens is None
+    assert config.brief.limits.max_verify_calls is None
+    args.max_model_calls = 200
+    calls.clear()
+    with pytest.raises(ValueError, match="不支持"):
+        module["build_config"](args)
+    assert not calls

@@ -1,7 +1,7 @@
-"""Run an operator's closeout command and publish its frozen, verified product.
+"""Confirm the best verified candidate or an operator's prepared final artifact.
 
-No model participates. The command writes candidate/ under its output directory;
-search/final verification uses the existing trusted verifier and CAS identities.
+No model participates. Both paths reuse the trusted verifier and CAS identities;
+an optional closeout command writes candidate/ under its output directory.
 """
 
 from __future__ import annotations
@@ -27,10 +27,12 @@ from areal_rsi.execution import ApprovedCommand, JobManager, JobRecord
 async def finalize(c: Coordinator, config: ResearchConfig) -> None:
     if c.state.get("finalization", {}).get("status") == "completed":
         return
-    assert config.finalizer and config.verifier
+    assert config.verifier
     with c.store.paths.execution_lock.open("a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        with JobManager(c.store.root, max_jobs=None, auto_monitor=False) as manager:
+        with JobManager(
+            c.store.root, gpu_ids=config.brief.limits.gpu_ids, max_jobs=None, auto_monitor=False
+        ) as manager:
             try:
                 cutoff = c.state.get("finalization", {}).get("exploration_finished_at")
                 if cutoff is None:
@@ -92,13 +94,13 @@ async def finalize(c: Coordinator, config: ResearchConfig) -> None:
 
 
 async def _finish(c: Coordinator, config: ResearchConfig, manager: JobManager) -> None:
-    assert config.finalizer and config.verifier
+    assert config.verifier
     folder = c.store.root / "finalization"
     folder.mkdir(exist_ok=True)
     jobs_path = c.store.root / "coordination/jobs.json"
     jobs: dict[str, Any] = json.loads(jobs_path.read_text()) if jobs_path.exists() else {}
     selection_path = folder / "candidate-selection.json"
-    if not selection_path.exists():
+    if config.finalizer and not selection_path.exists():
         withdrawn = []
         for item in c.store.withdrawals():
             candidate = c.store.get("candidates", item["candidate_id"], CandidateSnapshot)
@@ -213,26 +215,44 @@ async def _finish(c: Coordinator, config: ResearchConfig, manager: JobManager) -
         write_json(jobs_path, jobs)
         return record
 
-    await execute(config.finalizer, "prepare")
-    # An adapter may choose a lower-scoring eligible artifact, but cannot ignore
-    # a withdrawal and publish the same complete artifact under a new identifier.
-    content = await c.store.content.snapshot(folder / "output/candidate")
-    if any(item["content_digest"] == content.digest for item in c.store.withdrawals()):
-        raise ValueError("Finalizer returned a withdrawn candidate; honor RSI_CANDIDATE_SELECTION")
-    candidate_id = "candidate-closeout"
-    path = c.store.root / "candidates" / f"{candidate_id}.json"
-    candidate = (
-        c.store.get("candidates", candidate_id, CandidateSnapshot)
-        if path.exists()
-        else await c.store.snapshot(
-            folder / "output/candidate",
-            agent_id="operator",
-            description="探索结束后冻结并独立复测的最终版本",
-            candidate_id=candidate_id,
+    phases: tuple[str, ...]
+    if config.finalizer:
+        await execute(config.finalizer, "prepare")
+        # An adapter may choose a lower-scoring eligible artifact, but cannot ignore
+        # a withdrawal and publish the same complete artifact under a new identifier.
+        content = await c.store.content.snapshot(folder / "output/candidate")
+        if any(item["content_digest"] == content.digest for item in c.store.withdrawals()):
+            raise ValueError(
+                "Finalizer returned a withdrawn candidate; honor RSI_CANDIDATE_SELECTION"
+            )
+        candidate_id = "candidate-closeout"
+        path = c.store.root / "candidates" / f"{candidate_id}.json"
+        candidate = (
+            c.store.get("candidates", candidate_id, CandidateSnapshot)
+            if path.exists()
+            else await c.store.snapshot(
+                folder / "output/candidate",
+                agent_id="operator",
+                description="探索结束后冻结并独立复测的最终版本",
+                candidate_id=candidate_id,
+            )
         )
-    )
+        phases = ("search", "final")
+    else:
+        candidate_id = c.state.get("selected_candidate_id") or ""
+        if not candidate_id:
+            best = c.store.run().best_result_ref
+            if best is None:
+                raise ValueError("没有通过正式验证的候选，无法进行最终确认")
+            candidate_id = c.store.public_record(best)["candidate_id"]
+            c.state["selected_candidate_id"] = candidate_id
+            c.save()
+        candidate = c.store.get("candidates", candidate_id, CandidateSnapshot)
+        if c.store.is_withdrawn(candidate_id):
+            raise ValueError("最终候选已撤回，不能发布")
+        phases = ("final",)
     final: VerifiedResult | None = None
-    for phase in ("search", "final"):
+    for phase in phases:
         job = await execute(config.verifier, phase, candidate)
         path = c.store.root / "verifications" / f"{job.job_id}.json"
         result = (

@@ -1,6 +1,8 @@
 """The advertised intake schema and executable contract change together with mode."""
 
 import copy
+from pathlib import Path
+from typing import Any
 
 import pytest
 from jsonschema import Draft202012Validator
@@ -10,8 +12,10 @@ from areal_rsi.base.storage import encode
 from areal_rsi.coordination.brief_tool import PASSK_HIDDEN_LIMITS, brief_tool, updated_brief
 
 
-def arguments(mode: str) -> dict:
-    value = encode(TaskBrief("Improve benchmark", "Keep protocol", ResearchLimits()))
+def arguments(mode: str) -> dict[str, Any]:
+    value: dict[str, Any] = encode(
+        TaskBrief("Improve benchmark", "Keep protocol", ResearchLimits())
+    )
     if mode == "passk":
         for key in PASSK_HIDDEN_LIMITS:
             value["limits"].pop(key)
@@ -58,6 +62,7 @@ def test_structured_update_preserves_verification_identity(mode: str) -> None:
     original = copy.deepcopy(args)
     result = updated_brief(mode, current, args)
     assert args == original
+    assert result.verification is not None and current.verification is not None
     assert result.verification.identity == current.verification.identity
     assert result.limits.max_agents == 1
     for key in PASSK_HIDDEN_LIMITS:
@@ -73,7 +78,19 @@ def test_rejects_legacy_string_and_bad_types() -> None:
         updated_brief("collaborative", TaskBrief("old", "old"), args)
 
 
-def test_action_catalog_follows_current_mode(tmp_path) -> None:
+def test_effective_budget_is_per_researcher_and_only_available_in_passk() -> None:
+    args = arguments("passk")
+    args["limits"].update(max_effective_seconds=1800, max_wall_seconds=None)
+    result = updated_brief("passk", TaskBrief("old", "old"), args)
+    assert result.limits.max_effective_seconds == 1800
+    assert result.limits.max_wall_seconds is None
+    args = arguments("collaborative")
+    args["limits"]["max_effective_seconds"] = 1800
+    with pytest.raises(ValueError, match="max_effective_seconds"):
+        updated_brief("collaborative", TaskBrief("old", "old"), args)
+
+
+def test_action_catalog_follows_current_mode(tmp_path: Path) -> None:
     from areal_rsi.coordination.actions import ResearchActions
     from areal_rsi.coordination.coordinator import Coordinator
 

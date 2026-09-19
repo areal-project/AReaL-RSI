@@ -90,7 +90,7 @@ runs/<run_id>/
 
 ## 代码位置
 
-- `agents/*/prompt.py`：中文角色职责；`modules/responses.py`：会话、重试和 compact。
+- `agents/{rsi,research}/*_prompt.py`：现行协作角色职责，旧版在各自的 `deprecated/` 中；`agents/interaction/prompt.py`：需求交互。`modules/responses.py`：会话、重试和 compact。
 - `api/research.py`、`base/runs.py`、`coordination/store.py`：数据记录与 run 归属。
 - `coordination/`：需求交接、任务与消息、调度、工具和验证；`execution/`：后台作业。
 - `research_app.py`、`ui/workbench*`：应用入口与本地工作台。

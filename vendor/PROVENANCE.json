@@ -6,6 +6,15 @@
   "source_repository": "git@code.alipay.com:AReaL/ARealAgentRuntime.git",
   "artifacts": {
     "vendor/areal_agent_runtime-0.4.0.dev1-py3-none-any.whl": "0e17a071768286d0cbe4f37f6bef44c8bd5e1e1c2413ab2c107a5d94531ede54",
-    "src/areal_rsi/resources/runtime/areal-agent-runtime-dsh-0.3.0.tgz": "5d9ac270e9c0de9ec1b52ef0fe03edae69db0279ee346565f2fca0bc3e8d257f"
+    "src/areal_rsi/resources/runtime/areal-agent-runtime-dsh-0.3.0.tgz": "5d9ac270e9c0de9ec1b52ef0fe03edae69db0279ee346565f2fca0bc3e8d257f",
+    "vendor/areal_agent_runtime-0.4.0.dev1+rsi1-py3-none-any.whl": "8c16f5e1908c8af0712e5fd1c67cbf86e8869472a1cf2bb743b835a2a2e13437"
+  },
+  "local_patches": {
+    "vendor/areal_agent_runtime-0.4.0.dev1+rsi1-py3-none-any.whl": {
+      "base": "vendor/areal_agent_runtime-0.4.0.dev1-py3-none-any.whl",
+      "patch": "vendor/codex-availability.patch",
+      "rebuild": "python vendor/build_timing_wheel.py",
+      "purpose": "Emit Codex API availability events for baseline active-time accounting; native execution and retry policy unchanged."
+    }
   }
 }

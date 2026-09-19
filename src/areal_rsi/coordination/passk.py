@@ -6,7 +6,6 @@ import json
 from typing import Any
 from urllib.parse import urlsplit
 
-from areal_rsi.agents.communication import INTEGRITY_PROMPT
 from areal_rsi.api.base import AgentState, RecordRef, RunState
 from areal_rsi.api.research import CandidateSnapshot, ResearchReport, VerifiedResult
 from areal_rsi.base.storage import encode, now
@@ -14,40 +13,6 @@ from areal_rsi.coordination.actions import REFERENCES, STRING, ResearchActions, 
 from areal_rsi.coordination.coordinator import Coordinator, effect_id
 from areal_rsi.coordination.engine import ResearchEngine
 from areal_rsi.modules.agent_runtime import ToolCall, ToolHandler, ToolResult
-
-PROMPT = """你是 Research Agent，独立负责完成整个研究任务。
-
-先理解任务、起始代码和评测方法。开始时主动联网调研相关方法和资料，后续按需要继续调研。
-自行提出方案、实现、验证并持续改进。你可以自由更换方向；每次都以实际验证结果为依据。
-保存有价值的版本，使用正式验证工具检查正确性和目标指标。
-
-可以向 RSI Agent 简要报告进展、结果和困难，但不等待它提供研究建议。
-提交一个版本或完成一次报告不代表任务结束；研究方向由你自行决定。
-你的工作区、会话和实验反馈只属于你。不要访问其他尝试的代码、记录或结果。
-在系统通知停止前持续研究；暂时遇到困难或给出一次总结，不代表任务结束。
-
-{{tool_instructions}}
-
-""" + INTEGRITY_PROMPT.replace("如实报告并撤回", "如实记录并撤回")
-
-RSI_PROMPT = """你是 RSI Agent，负责启动并监督 {{max_agents}} 个 Research Agent，
-让他们各自独立、持续地完成整个研究任务。
-
-将同一份完整任务和起始材料交给每个研究员，不拆分任务，不指定研究方向。
-
-关注他们的进展和报告。只要尚未达到任务目标，且仍有时间和资源，
-就提醒已经停下来的研究员继续独立探索。不要打断正在进行的研究。
-
-你只负责督促继续，不提供技术建议、不调整研究方向，
-不在研究员之间传递信息或分享产物，也不提前淘汰任何尝试。
-
-是否达标以正式验证结果为准。遵守系统的停止条件，
-不修改任务目标、评测规则或预算。
-
-{{tool_instructions}}
-
-不获取或提供题目的现成答案，不作弊，不伪造或隐瞒结果。
-"""
 
 SUPERVISOR_TOOLS = [
     definition("start_researchers", "一次启动固定数量的独立研究员，每人获得相同的完整任务。"),
@@ -94,6 +59,8 @@ ALLOWED_TOOLS = {
 
 
 class PassKActions(ResearchActions):
+    team_read = False
+
     def definitions(self, agent_id: str, *, include_hidden: bool = False) -> list[dict[str, Any]]:
         if self.c.state["status"] == "planned" and agent_id == "interaction":
             return super().definitions(agent_id, include_hidden=include_hidden)
@@ -144,9 +111,16 @@ class PassKActions(ResearchActions):
         async def handle(call: ToolCall) -> ToolResult:
             try:
                 if agent_id not in {"rsi", "interaction"}:
-                    if candidate_id := call.arguments.get("candidate_id"):
+                    team_read = self.team_read and call.name in {
+                        "read_candidate_file",
+                        "import_candidate",
+                        "job_status",
+                        "read_job_log",
+                        "read_job_output_file",
+                    }
+                    if not team_read and (candidate_id := call.arguments.get("candidate_id")):
                         self.candidate(agent_id, candidate_id, seed=call.name != "verify_candidate")
-                    if job_id := call.arguments.get("job_id"):
+                    if not team_read and (job_id := call.arguments.get("job_id")):
                         jobs = json.loads(
                             (self.c.store.root / "coordination/jobs.json").read_text()
                         )
@@ -165,6 +139,14 @@ class PassKActions(ResearchActions):
 
     def state(self, agent_id: str) -> dict[str, Any]:
         c = self.c
+        budget = c.budget()
+        if "clock" in budget:
+            # Run setup is not part of a researcher's personal budget. Keep
+            # the wall-clock duration in the operator view, not this countdown.
+            budget.pop("elapsed_seconds")
+            if c.store.brief().limits.max_wall_seconds is None:
+                for name in ("remaining_wall_seconds", "deadline_at"):
+                    budget.pop(name)
         if agent_id == "rsi":
             return {
                 "run_id": c.store.run_id,
@@ -172,7 +154,8 @@ class PassKActions(ResearchActions):
                 "status": c.state["status"],
                 "brief": encode(c.store.brief()),
                 "started_researchers": bool(c.state.get("passk_ready")),
-                "budget": c.budget(),
+                "plan": c.state.get("plan", ""),
+                "budget": budget,
                 "researchers": [
                     {
                         "agent_id": actor.agent_id,
@@ -186,7 +169,7 @@ class PassKActions(ResearchActions):
                 ],
             }
         actor = c.actor(agent_id)
-        budget = c.budget()
+        effective = budget.get("researchers", {}).get(agent_id)
         results = [
             result
             for result in c.store.records("verifications", VerifiedResult)
@@ -219,10 +202,18 @@ class PassKActions(ResearchActions):
                 name: budget[name]
                 for name in (
                     "observed_at",
+                    "clock",
                     "elapsed_seconds",
                     "remaining_wall_seconds",
                     "deadline_at",
                 )
+                if name in budget
+            }
+            | ({"effective_time": effective} if effective else {}),
+            "execution_limits": {
+                "max_concurrent_jobs": c.store.brief().limits.max_jobs,
+                "submission_limit": None,
+                "note": "max_jobs 是同时运行的作业数量，不是累计提交次数；本次提交次数不限。",
             },
         }
 
@@ -362,9 +353,41 @@ def stop_on_target(c: Coordinator) -> None:
 
 
 class PassKEngine(ResearchEngine):
+    def _check_effective_time(self) -> None:
+        if self.effective is None:
+            return
+        c = self.coordinator
+        at = self.clock()
+        if at - self.effective.data["heartbeat_at"] < 1:
+            return
+        self.effective.data["heartbeat_at"] = at
+        limit = c.store.brief().limits.max_effective_seconds
+        assert limit is not None
+        for actor in c.store.run().research_agents:
+            if actor.state == AgentState.STOPPED:
+                self.effective.finish_agent(actor.agent_id, at)
+                continue
+            budget = self.effective.budget(actor.agent_id, at, limit)
+            if budget["effective_seconds"] >= limit:
+                self.effective.finish_agent(actor.agent_id, at)
+                c.stop_agent(actor.agent_id, "个人有效研究时间已用完")
+                c.enqueue(
+                    "system",
+                    "rsi",
+                    f"{actor.agent_id} 的有效研究时间已用完，已停止；其他研究员继续。",
+                    key="effective-stop:" + actor.agent_id,
+                )
+                c.store.event("researcher_time_exhausted", agent_id=actor.agent_id, budget=budget)
+        c.save()
+        agents = c.store.run().research_agents
+        if agents and all(actor.state == AgentState.STOPPED for actor in agents):
+            c.stop("所有研究员的有效时间已用完，停止探索并统一复测")
+
     async def tick(self) -> int:
         c = self.coordinator
         self._acquire()
+        if c.state["status"] == "running":
+            self._check_effective_time()
         if c.state["status"] == "running" and self._wall_reason() is None:
             retries = c.state.setdefault("passk_retries", {})
             for actor in (c.actor("rsi"), *c.store.run().research_agents):
@@ -380,22 +403,26 @@ class PassKEngine(ResearchEngine):
                     c.retry_agent(actor.agent_id)
                     entry.update(count=entry["count"] + 1, at=None)
                     c.save()
+            for actor in c.store.run().research_agents:
+                if needs_continue(c, actor.agent_id):
+                    report = c.state["passk_reports"][actor.agent_id]
+                    c.enqueue(
+                        "system",
+                        actor.agent_id,
+                        CONTINUE_MESSAGE,
+                        key="passk-continue:" + report["uri"],
+                    )
             if (
                 "rsi" not in c.state["active"]
                 and not c.state["inboxes"].get("rsi")
-                and (
-                    not c.state.get("passk_ready")
-                    or any(
-                        needs_continue(c, actor.agent_id) for actor in c.store.run().research_agents
-                    )
-                )
+                and not c.state.get("passk_ready")
                 and self.clock() >= c.state.get("passk_supervision_at", 0) + 30
             ):
                 c.state["passk_supervision_at"] = self.clock()
                 c.enqueue(
                     "system",
                     "rsi",
-                    "请检查研究状态：尚未启动时启动研究员，已停下来的研究员则提醒继续独立探索。",
+                    "请检查研究状态，启动研究员。",
                     key=f"passk-supervision:{self.clock()}",
                 )
         return await super().tick()

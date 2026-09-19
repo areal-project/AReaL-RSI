@@ -34,6 +34,7 @@ def brief_tool(mode: str) -> dict[str, Any]:
         "max_model_calls": "整个研究的模型调用次数上限；null 表示不限。",
         "max_total_tokens": "整个研究的模型 token 总量上限；null 表示不限。",
         "max_wall_seconds": "研究总时限，单位秒，例如 3 小时为 10800；null 表示不限。",
+        "max_effective_seconds": "pass@k 每名研究员的有效时间上限，单位秒；null 表示不限。",
         "max_verify_calls": "正式验证次数上限；0 表示不允许，null 表示不限。",
         "max_jobs": "并发实验作业上限，与 AI 研究员数量独立；null 表示不限。",
     }
@@ -43,10 +44,18 @@ def brief_tool(mode: str) -> dict[str, Any]:
         limits[name] = {
             "type": "integer"
             if name == "max_agents"
-            else ["number" if name == "max_wall_seconds" else "integer", "null"],
+            else [
+                "number" if name in {"max_wall_seconds", "max_effective_seconds"} else "integer",
+                "null",
+            ],
             "description": description,
             **({"minimum": 0} if name == "max_verify_calls" else {"exclusiveMinimum": 0}),
         }
+        if name == "max_effective_seconds" and mode != "passk":
+            limits[name] = {
+                "type": "null",
+                "description": "有效时间预算仅支持 pass@k；此处填 null。",
+            }
     for name, description in {
         "gpu_ids": "允许使用的 GPU 标识，保留当前约定。",
         "allowed_paths": "允许修改的相对路径模式，保留当前约定；* 表示全部。",

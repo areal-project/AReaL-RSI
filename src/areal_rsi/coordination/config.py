@@ -85,6 +85,8 @@ class ResearchConfig:
             raise ValueError("Agent 后端支持 standard 或 codex")
         if self.research_prompt_variant not in {"simple", "detailed"}:
             raise ValueError("Research Prompt 支持 simple 或 detailed")
+        if self.brief.limits.max_effective_seconds is not None and self.mode != "passk":
+            raise ValueError("Per-researcher effective time requires passk")
         if self.mode == "passk":
             limits = self.brief.limits
             if self.max_model_calls_per_turn is not None:
@@ -104,10 +106,14 @@ class ResearchConfig:
             if limits.max_nodes is not None and limits.max_nodes < limits.max_agents:
                 raise ValueError("passk max_nodes must accommodate all k researchers")
             contract = self.brief.verification
-            if limits.max_wall_seconds is None and not (
-                contract and contract.target is not None and self.verifier
+            if (
+                limits.max_wall_seconds is None
+                and limits.max_effective_seconds is None
+                and not (contract and contract.target is not None and self.verifier)
             ):
-                raise ValueError("passk needs a wall-time limit or a trusted verification target")
+                raise ValueError(
+                    "passk needs a wall-time/effective-time limit or a trusted verification target"
+                )
 
     def model_settings(self) -> dict[str, str]:
         return {

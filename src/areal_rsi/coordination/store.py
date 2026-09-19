@@ -204,6 +204,7 @@ class ResearchStore:
             or uri.netloc != self.run_id
             or uri.query
             or uri.fragment
+            or len(path.parts) != 2
             or path.parts[0] not in allowed
         ):
             raise ValueError("Reference is outside this run's public research records")

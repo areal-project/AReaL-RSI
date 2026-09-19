@@ -42,7 +42,7 @@ MODES = {
     "passk": {
         "id": "passk",
         "label": "纯 pass@k",
-        "version": "1",
+        "version": "2",
         "description": "每人独立完成整题；RSI 只启动和督促继续，不指导、不共享。"
         "使用时间或目标停止，不限制模型调用、Token 和验证次数。",
     },
@@ -66,8 +66,8 @@ MODULES: dict[str, CollaborationModule] = {
     "leader_guidance": CollaborationModule(
         "leader_guidance",
         "RSI 协调",
-        "RSI 查看原始证据，定向共享并提供非阻塞建议；研究员仍独立完成整题，自行判断和验证。",
-        "1",
+        "RSI 综合进展并定向指导；同一 run 按需查阅研究资料，各自完成整题并验证。",
+        "3",
         apply_leader_guidance,
     ),
 }
@@ -119,16 +119,17 @@ def selected_modules(mode: str, modules: tuple[str, ...]) -> tuple[str, ...]:
 def build_plan(
     mode: str, modules: tuple[str, ...] = (), research_prompt_variant: str = "simple"
 ) -> CollaborationPlan:
-    from areal_rsi.agents.research.prompt import PROMPT_VARIANTS
-    from areal_rsi.agents.rsi.prompt import PROMPT as RSI_PROMPT
+    from areal_rsi.agents.research.deprecated.prompt import PROMPT_VARIANTS
+    from areal_rsi.agents.research.passk_prompt import PROMPT as PASSK_RESEARCH_PROMPT
+    from areal_rsi.agents.rsi.deprecated.prompt import PROMPT as RSI_PROMPT
+    from areal_rsi.agents.rsi.passk_prompt import PROMPT as PASSK_RSI_PROMPT
     from areal_rsi.coordination.actions import ResearchActions
     from areal_rsi.coordination.engine import ResearchEngine
-    from areal_rsi.coordination.passk import PROMPT, PassKActions, PassKEngine
-    from areal_rsi.coordination.passk import RSI_PROMPT as PASSK_RSI_PROMPT
+    from areal_rsi.coordination.passk import PassKActions, PassKEngine
 
     ordered = selected_modules(mode, modules)
     plan = (
-        CollaborationPlan(PassKActions, PassKEngine, PROMPT, PASSK_RSI_PROMPT, True)
+        CollaborationPlan(PassKActions, PassKEngine, PASSK_RESEARCH_PROMPT, PASSK_RSI_PROMPT, True)
         if mode == "passk"
         else CollaborationPlan(
             ResearchActions, ResearchEngine, PROMPT_VARIANTS[research_prompt_variant], RSI_PROMPT

@@ -1,6 +1,6 @@
 """Research role variants; backend instructions are supplied when a turn starts."""
 
-from areal_rsi.agents.research.detailed_prompt import PROMPT as DETAILED_PROMPT
+from areal_rsi.agents.research.deprecated.detailed_prompt import PROMPT as DETAILED_PROMPT
 
 PROMPT = """你是 Research Agent，是团队中的一名研究员。
 你在 RSI Agent 的指导下开展研究，与其他研究员协作完成团队目标。

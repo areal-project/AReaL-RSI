@@ -119,6 +119,21 @@ async def _finish(c: Coordinator, config: ResearchConfig, manager: JobManager) -
                 "schema_version": 1,
                 "run_id": c.store.run_id,
                 "withdrawn_candidates": withdrawn,
+                **(
+                    {
+                        "execution_cutoffs": {
+                            job_id: c.state["effective_time"]["agents"][info["agent_id"]][
+                                "finished_at"
+                            ]
+                            or c.state["finalization"]["exploration_finished_at"]
+                            for job_id, info in jobs.items()
+                            if info["agent_id"] in c.state["effective_time"]["agents"]
+                            and not info["verification"]
+                        }
+                    }
+                    if config.brief.limits.max_effective_seconds is not None
+                    else {}
+                ),
             },
             immutable=True,
         )

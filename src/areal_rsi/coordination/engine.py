@@ -21,12 +21,13 @@ from typing import IO, Any
 
 from areal_rsi.agents.communication import INTEGRITY_PROMPT
 from areal_rsi.agents.interaction.prompt import PROMPT as INTERACTION_PROMPT
-from areal_rsi.agents.research.prompt import PROMPT as RESEARCH_PROMPT
-from areal_rsi.agents.rsi.prompt import PROMPT as RSI_PROMPT
+from areal_rsi.agents.research.deprecated.prompt import PROMPT as RESEARCH_PROMPT
+from areal_rsi.agents.rsi.deprecated.prompt import PROMPT as RSI_PROMPT
 from areal_rsi.api.base import AgentState
 from areal_rsi.api.research import ResearchMessage
 from areal_rsi.base.storage import encode, now, write_json
 from areal_rsi.coordination.coordinator import Coordinator
+from areal_rsi.coordination.effective_time import EffectiveTime
 from areal_rsi.coordination.sources import archive_codex_source
 from areal_rsi.modules.agent_runtime import AgentRuntime, ToolHandler
 from areal_rsi.modules.responses import ResponsesError
@@ -97,6 +98,7 @@ class ResearchEngine:
         self._tick_lock = asyncio.Lock()
         self._wake = asyncio.Event()
         self._jobs_pending = False
+        self.effective: EffectiveTime | None = None
 
     @property
     def active_agents(self) -> tuple[str, ...]:
@@ -120,6 +122,9 @@ class ResearchEngine:
         self._lock_file = handle
         # A previous owner may have advanced state since this object was created.
         self.coordinator.state = json.loads(self.coordinator.path.read_text())
+        if self.coordinator.store.brief().limits.max_effective_seconds is not None:
+            self.effective = EffectiveTime(self.coordinator.state)
+            self.effective.open_worker(self.clock())
         # Older runs copied per-item provider attribution into every state save.
         # Normalize only after acquiring ownership, without settling usage again.
         for record in self._request_records().values():
@@ -198,6 +203,11 @@ class ResearchEngine:
 
     async def _event(self, agent_id: str, session: Path, event: Json) -> None:
         kind = event["type"]
+        if kind == "api_availability":
+            if self.effective is not None:
+                self.effective.availability(agent_id, event["available"], event["timestamp"])
+                self.coordinator.save()
+            return
         if kind == "runtime_usage":
             settled = self.coordinator.state.setdefault("runtime_usage", {})
             if event["event_id"] not in settled:
@@ -445,6 +455,9 @@ class ResearchEngine:
             return
         try:
             message, resumed = c.begin_turn(agent_id)
+            if self.effective is not None and agent_id not in {"rsi", "interaction"}:
+                self.effective.start_agent(agent_id, self.clock())
+                c.save()
             actor = c.actor(agent_id)
             iteration_id = actor.current_iteration_id
             session = c.store.paths.agent(agent_id) / "sessions" / (actor.session_id or agent_id)
@@ -685,6 +698,9 @@ class ResearchEngine:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._tasks.clear()
+        if self.effective is not None:
+            self.effective.close_worker(self.clock())
+            self.coordinator.save()
         if self._lock_file is not None:
             fcntl.flock(self._lock_file, fcntl.LOCK_UN)
             self._lock_file.close()

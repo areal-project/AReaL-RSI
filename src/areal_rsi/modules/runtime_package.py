@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
+import ipaddress
 import json
 import os
 import shutil
@@ -19,9 +20,13 @@ from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
+
+import certifi
 
 from areal_rsi.api.base import AgentSpec, Trajectory, TrajectoryRef
 from areal_rsi.base.storage import FileContentStore, FileTrajectoryStore, new_id, now, safe_name
+from areal_rsi.modules.runtime_network import HttpsTunnel
 
 
 class RuntimeSettings:
@@ -148,6 +153,8 @@ def sandbox_command(
     workspace: Path,
     readable: tuple[Path, ...],
     executable_aliases: tuple[Path, ...] = (),
+    local_ports: tuple[int, ...] = (),
+    service_ports: tuple[int, ...] = (),
     *,
     isolation: str = "sandbox",
 ) -> list[str]:
@@ -175,14 +182,40 @@ def sandbox_command(
         Path(sys.base_prefix).resolve(),
         Path(sys.executable).resolve().parent,
         *readable,
+        *(
+            Path(p)
+            for p in (
+                "/System",
+                "/usr",
+                "/bin",
+                "/sbin",
+                "/Library",
+                "/opt/homebrew",
+                "/private/etc",
+                "/private/var/db/timezone",
+                "/dev",
+            )
+        ),
     }
     profile = [
         "(version 1)",
         "(allow default)",
-        '(deny file-read* (subpath "/Users") (subpath "/private/tmp") '
-        '(subpath "/private/var/folders"))',
+        "(deny file-read*)",
+        '(allow file-read* (literal "/"))',
+        '(allow file-read-metadata (literal "/etc") (literal "/var") (literal "/tmp"))',
         "(deny file-write*)",
+        "(deny network-outbound)",
+        '(allow network-outbound (remote ip "*:80") (remote ip "*:443"))',
+        # Native shell tools must not bypass run-scoped tools through the
+        # workbench, another agent's bridge, or a local filesystem service.
+        '(allow network-outbound (literal "/private/var/run/mDNSResponder"))',
+        '(deny mach-lookup (global-name "com.apple.SystemConfiguration.configd"))',
     ]
+    for port in service_ports:
+        profile.append(f'(allow network-outbound (remote ip "*:{port}"))')
+    profile.append('(deny network-outbound (remote ip "localhost:*"))')
+    for port in local_ports:
+        profile.append(f'(allow network-outbound (remote ip "localhost:{port}"))')
     for path in sorted(roots):
         profile.append(f"(allow file-read* (subpath {json.dumps(str(path))}))")
     # The installed RSI package includes benchmark/verifier code and hidden
@@ -303,7 +336,9 @@ class PackageSession:
             bindings = self.directory / "run-bindings.json"
             if bindings.exists():
                 self.run_ids = json.loads(bindings.read_text())
-            events, _snapshots = read_journal(self.directory / "data/state")
+            events, _snapshots = read_journal(
+                self.directory / "data/state", boundary=self.directory
+            )
             self.events = [
                 event.model_dump(mode="json", by_alias=True)
                 for run_id in self.run_ids
@@ -368,6 +403,7 @@ class PackageAgentRuntime:
         self.agent_directories = agent_directories
         self.mcp_registry: dict[str, dict[str, Any]] = {}
         self.sessions: set[PackageSession] = set()
+        self.https_tunnel = HttpsTunnel(base_url)
 
     async def open(
         self,
@@ -530,12 +566,42 @@ class PackageAgentRuntime:
             RSI_RUNTIME_KEY=self.api_key,
             DSH_TELEMETRY_DISABLED="1",
         )
+        if self.settings.isolation == "sandbox":
+            # A desktop/system proxy could relay requests into other run services.
+            env.update(HTTP_PROXY="", HTTPS_PROXY="", ALL_PROXY="", NO_PROXY="*")
         interpreter = selection.get("config", {}).get("python")
+        local_ports = [research_tools["port"]] if research_tools is not None else []
+        if selection["kind"] == "codex-cli" and self.settings.isolation == "sandbox":
+            # Native TLS/DNS cannot rely on macOS user services inside this
+            # file sandbox. Keep TLS verification and the network boundary.
+            port = await self.https_tunnel.start()
+            local_ports.append(port)
+            env.pop("HTTP_PROXY", None)
+            env.pop("ALL_PROXY", None)
+            env["HTTPS_PROXY"] = f"http://127.0.0.1:{port}"
+            env["NO_PROXY"] = "localhost,127.0.0.1,::1"
+            env.setdefault("SSL_CERT_FILE", certifi.where())
+        service_ports: list[int] = []
+        endpoint = urlsplit(self.base_url)
+        services = [
+            (endpoint.hostname, endpoint.port or (443 if endpoint.scheme == "https" else 80))
+        ]
+        if selection["kind"] == "remote":
+            remote = selection["config"]
+            services.append((remote["host"], remote["port"]))
+        for host, port in services:
+            try:
+                local = ipaddress.ip_address(host or "").is_loopback
+            except ValueError:
+                local = host == "localhost"
+            (local_ports if local else service_ports).append(port)
         command = sandbox_command(
             directory,
             workspace,
             tuple(readable),
             (Path(interpreter),) if interpreter else (),
+            tuple(local_ports),
+            tuple(service_ports),
             isolation=self.settings.isolation,
         )
         if research_tools is not None:
@@ -581,3 +647,4 @@ class PackageAgentRuntime:
 
     async def close(self) -> None:
         await asyncio.gather(*(session.finish() for session in tuple(self.sessions)))
+        await self.https_tunnel.close()

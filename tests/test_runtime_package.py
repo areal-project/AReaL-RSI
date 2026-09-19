@@ -351,3 +351,61 @@ class PackageRuntimeTest(unittest.IsolatedAsyncioTestCase):
                     if server.returncode is None:
                         server.terminate()
                     await server.wait()
+
+
+@unittest.skipUnless(sys.platform == "darwin", "macOS sandbox-exec integration")
+def test_native_tools_cannot_reach_other_runs_through_files_or_local_http(tmp_path: Path) -> None:
+    import socket
+
+    directory, workspace = tmp_path / "session", tmp_path / "workspace"
+    directory.mkdir()
+    workspace.mkdir()
+    secret = tmp_path / "other-run.txt"
+    secret.write_text("foreign-run-sentinel")
+    (workspace / "alias.txt").symlink_to(secret)
+    # A second bridge/workbench port must remain inaccessible even though this
+    # agent can connect to its own authenticated bridge.
+    with socket.socket() as own, socket.socket() as foreign:
+        own.bind(("127.0.0.1", 0))
+        own.listen()
+        foreign.bind(("127.0.0.1", 0))
+        foreign.listen()
+        prefix = sandbox_command(directory, workspace, (), local_ports=(own.getsockname()[1],))[:3]
+        script = """import socket, pathlib, sys
+for path in sys.argv[1:3]:
+    try:
+        pathlib.Path(path).read_text()
+    except PermissionError:
+        pass
+    else:
+        raise AssertionError("foreign run was readable")
+with socket.create_connection(("127.0.0.1", int(sys.argv[3])), timeout=2):
+    pass
+for host in ["127.0.0.1", "127.0.0.2", "::1", "::ffff:127.0.0.1"]:
+    try:
+        socket.create_connection((host, int(sys.argv[4])), timeout=2)
+    except PermissionError:
+        pass
+    else:
+        raise AssertionError("foreign endpoint was reachable: " + host)
+print("isolated")
+"""
+        result = subprocess.run(
+            [
+                *prefix,
+                sys.executable,
+                "-I",
+                "-c",
+                script,
+                str(secret),
+                str(workspace / "alias.txt"),
+                str(own.getsockname()[1]),
+                str(foreign.getsockname()[1]),
+            ],
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "isolated"

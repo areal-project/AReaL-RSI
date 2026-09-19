@@ -119,9 +119,7 @@ def test_continuous_wait_is_cancellable(tmp_path: Path) -> None:
                     "submit",
                 )
             )
-            wait = asyncio.create_task(
-                execution.wait_for_result(agent, submitted.output["job_id"])
-            )
+            wait = asyncio.create_task(execution.wait_for_result(agent, submitted.output["job_id"]))
             await asyncio.sleep(0.1)
             assert not wait.done()
             wait.cancel()
@@ -232,9 +230,10 @@ def test_independent_records_jobs_and_identical_snapshots(tmp_path: Path) -> Non
 class ScriptedRuntime:
     backend = "standard"
 
-    def __init__(self) -> None:
+    def __init__(self, leader_busy: bool = False) -> None:
         self.calls: list[str] = []
         self.cancelled: set[str] = set()
+        self.leader_busy = leader_busy
 
     def for_interaction(self) -> ScriptedRuntime:
         return self
@@ -256,6 +255,8 @@ class ScriptedRuntime:
         self.calls.append(agent)
         assert agent != "interaction"
         if agent == "rsi":
+            if self.leader_busy:
+                await asyncio.Event().wait()
             handler = kwargs["handler"]
             state = await handler(ToolCall("get_state", {}, f"state-{len(self.calls)}"))
             if not state.output["started_researchers"]:
@@ -280,13 +281,16 @@ class ScriptedRuntime:
         raise AssertionError("unreachable")
 
 
-def test_all_attempts_continue_and_cancel_at_original_deadline(tmp_path: Path) -> None:
+@pytest.mark.parametrize("leader_busy", [False, True])
+def test_all_attempts_continue_and_cancel_at_original_deadline(
+    tmp_path: Path, leader_busy: bool
+) -> None:
     async def scenario() -> None:
         c, actions, agents = await setup(tmp_path)
         original = c.state["started_at"]
         await launch(c, actions)
         assert len(c.store.run().research_agents) == 3
-        runtime = ScriptedRuntime()
+        runtime = ScriptedRuntime(leader_busy)
         clock = datetime.fromisoformat(original).timestamp()
         engine = PassKEngine(
             c,

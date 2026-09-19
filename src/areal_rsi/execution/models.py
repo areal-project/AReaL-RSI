@@ -105,6 +105,8 @@ class ApprovedCommand:
     auto_verify_output: str | None = None
     # Optional agent-facing help for data arguments; does not change binding or validation.
     parameter_descriptions: dict[str, str] = field(default_factory=dict)
+    # Trusted adapter receipt with created_at/started_at/finished_at queue timestamps.
+    queue_timing_file: str | None = None
 
     def __post_init__(self) -> None:
         if self.final_candidate_policy not in {"single", "multiple"}:

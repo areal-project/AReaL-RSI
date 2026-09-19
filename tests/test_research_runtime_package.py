@@ -29,6 +29,7 @@ class ResponsesModel:
         self.force_tool = False
         self.tool_name = "rsi_mcp_probe"
         self.tool_arguments = {"expression": "6 * 7"}
+        self.fail_requests = 0
         self.entered = threading.Event()
         self.release = threading.Event()
         self.release.set()
@@ -38,6 +39,13 @@ class ResponsesModel:
             def do_POST(self) -> None:
                 request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 owner.requests.append(request)
+                if owner.fail_requests:
+                    owner.fail_requests -= 1
+                    self.send_response(503)
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    self.wfile.write(b'{"error":{"message":"temporarily unavailable"}}')
+                    return
                 owner.entered.set()
                 owner.release.wait(20)
                 message: dict[str, Any] = {

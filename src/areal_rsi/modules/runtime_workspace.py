@@ -19,6 +19,21 @@ from areal_agent_runtime.plugin_sdk import (
 from pydantic import JsonValue
 
 
+def _absolute_result_paths(value: JsonValue) -> JsonValue:
+    """Restore host paths from the provider's root-relative file records."""
+    if not isinstance(value, dict):
+        return value
+    result = dict(value)
+    path = result.get("path")
+    if isinstance(path, str):
+        result["path"] = str(Path("/") / path)
+    for key in ("entries", "matches"):
+        records = result.get(key)
+        if isinstance(records, list):
+            result[key] = [_absolute_result_paths(record) for record in records]
+    return result
+
+
 class LinuxWorkspaceTools:
     """Adapt public bounded tools while preserving each agent's relative working directory."""
 
@@ -99,6 +114,8 @@ class LinuxWorkspaceTools:
                 result = result.model_copy(
                     update={"value": {**result.value, "argv": original_argv}}
                 )
+            else:
+                result = result.model_copy(update={"value": _absolute_result_paths(result.value)})
             return result
         except (ValueError, OSError) as exc:
             return ToolResult(

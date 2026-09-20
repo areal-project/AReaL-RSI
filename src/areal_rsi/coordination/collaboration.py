@@ -12,6 +12,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
+from areal_rsi.prompts import load_prompt
+
 if TYPE_CHECKING:
     from areal_rsi.coordination.actions import ResearchActions
     from areal_rsi.coordination.engine import ResearchEngine
@@ -56,12 +58,48 @@ def apply_leader_guidance(plan: CollaborationPlan) -> CollaborationPlan:
 
 
 def apply_leader_guidance_v022(plan: CollaborationPlan) -> CollaborationPlan:
-    from areal_rsi.agents.rsi.leader_guidance_v022_prompt import PROMPT
-
-    return replace(plan, rsi_prompt=PROMPT)
+    return replace(plan, rsi_prompt=load_prompt("agents/rsi/leader_guidance_v0.2.2.md"))
 
 
-DEFAULT_MODULES = ("leader_guidance", "leader_guidance_v022")
+def apply_problem_sharing(plan: CollaborationPlan) -> CollaborationPlan:
+    from areal_rsi.coordination.problem_sharing import apply
+
+    return apply(plan)
+
+
+def apply_leader_guidance_v023(plan: CollaborationPlan) -> CollaborationPlan:
+    return replace(
+        plan,
+        rsi_prompt=load_prompt("agents/rsi/leader_guidance_v0.2.3.md"),
+        research_prompt=load_prompt("agents/research/leader_guidance_v0.2.3.md"),
+    )
+
+
+def apply_leader_guidance_v024(plan: CollaborationPlan) -> CollaborationPlan:
+    from areal_rsi.coordination.continuous_guidance import apply
+
+    return apply(plan)
+
+
+def apply_sharing_quota(plan: CollaborationPlan) -> CollaborationPlan:
+    from areal_rsi.coordination.sharing_quota import apply
+
+    return apply(plan)
+
+
+def apply_intervention_review(plan: CollaborationPlan) -> CollaborationPlan:
+    from areal_rsi.coordination.intervention_review import apply
+
+    return apply(plan)
+
+
+def apply_researcher_restart(plan: CollaborationPlan) -> CollaborationPlan:
+    from areal_rsi.coordination.researcher_restart import apply
+
+    return apply(plan)
+
+
+DEFAULT_MODULES = ("leader_guidance", "leader_guidance_v024")
 
 
 MODULES: dict[str, CollaborationModule] = {
@@ -79,6 +117,57 @@ MODULES: dict[str, CollaborationModule] = {
         "1",
         apply_leader_guidance_v022,
         requires=("leader_guidance",),
+    ),
+    "problem_sharing": CollaborationModule(
+        "problem_sharing",
+        "v0.2.1.1 · 区分问题与成果分享",
+        "未解决的问题只增加一名接收者；已验证成果可定向分享给多人，研究员自主判断建议。",
+        "1",
+        apply_problem_sharing,
+        requires=("leader_guidance",),
+        conflicts=("leader_guidance_v022", "leader_guidance_v023", "leader_guidance_v024"),
+    ),
+    "leader_guidance_v023": CollaborationModule(
+        "leader_guidance_v023",
+        "v0.2.3 精简 Prompt",
+        "精简 leader 与 researcher 提示，保留定向共享、自主判断和持续探索。",
+        "1",
+        apply_leader_guidance_v023,
+        requires=("leader_guidance",),
+        conflicts=("leader_guidance_v022",),
+    ),
+    "leader_guidance_v024": CollaborationModule(
+        "leader_guidance_v024",
+        "v0.2.4 持续协调",
+        "RSI 持续观察研究进展和实验，定向指导并跟进；不依赖研究员主动报告才继续工作。",
+        "1",
+        apply_leader_guidance_v024,
+        requires=("leader_guidance",),
+        conflicts=("leader_guidance_v022", "leader_guidance_v023"),
+    ),
+    "sharing_quota": CollaborationModule(
+        "sharing_quota",
+        "限制经验传播",
+        "同一经验在整个研究中只增加一名接收者；保留纠正与按需读取原始资料。",
+        "1",
+        apply_sharing_quota,
+        requires=("leader_guidance_v024",),
+    ),
+    "researcher_restart": CollaborationModule(
+        "researcher_restart",
+        "回滚并重新探索",
+        "保留最好结果，让少数停滞研究员从自己的历史候选开启新会话，沿用原预算。",
+        "1",
+        apply_researcher_restart,
+        requires=("leader_guidance_v024",),
+    ),
+    "intervention_review": CollaborationModule(
+        "intervention_review",
+        "跟进指导结果",
+        "根据连续证据选择介入对象和建议粒度，记录并跟进上次建议的实际结果。",
+        "1",
+        apply_intervention_review,
+        requires=("leader_guidance_v024",),
     ),
 }
 
@@ -100,8 +189,62 @@ def presets() -> list[dict[str, Any]]:
             "id": "passk_guided_v022",
             "label": "v0.2.2 · pass@k + RSI 协调",
             "mode": "passk",
-            "modules": list(DEFAULT_MODULES),
+            "modules": ["leader_guidance", "leader_guidance_v022"],
             "description": MODULES["leader_guidance_v022"].description,
+        }
+    )
+    choices.append(
+        {
+            "id": "passk_guided_v023",
+            "label": "v0.2.3 · pass@k + RSI 协调",
+            "mode": "passk",
+            "modules": ["leader_guidance", "leader_guidance_v023"],
+            "description": MODULES["leader_guidance_v023"].description,
+        }
+    )
+    choices.append(
+        {
+            "id": "passk_guided_v024",
+            "label": "v0.2.4 · pass@k + RSI 持续协调",
+            "mode": "passk",
+            "modules": list(DEFAULT_MODULES),
+            "description": MODULES["leader_guidance_v024"].description,
+        }
+    )
+    choices.append(
+        {
+            "id": "passk_guided_v025",
+            "label": "v0.2.5 · 限制经验传播",
+            "mode": "passk",
+            "modules": ["leader_guidance", "leader_guidance_v024", "sharing_quota"],
+            "description": MODULES["sharing_quota"].description,
+        }
+    )
+    choices.append(
+        {
+            "id": "passk_guided_v026",
+            "label": "v0.2.6 · 跟进指导结果",
+            "mode": "passk",
+            "modules": ["leader_guidance", "leader_guidance_v024", "intervention_review"],
+            "description": MODULES["intervention_review"].description,
+        }
+    )
+    choices.append(
+        {
+            "id": "passk_guided_v027",
+            "label": "v0.2.7 · 回滚并重新探索",
+            "mode": "passk",
+            "modules": ["leader_guidance", "leader_guidance_v024", "researcher_restart"],
+            "description": MODULES["researcher_restart"].description,
+        }
+    )
+    choices.append(
+        {
+            "id": "passk_guided_v0211",
+            "label": "v0.2.1.1 · 区分问题与成果分享",
+            "mode": "passk",
+            "modules": ["leader_guidance", "problem_sharing"],
+            "description": MODULES["problem_sharing"].description,
         }
     )
     return choices
@@ -136,13 +279,15 @@ def selected_modules(mode: str, modules: tuple[str, ...]) -> tuple[str, ...]:
 
 
 def build_plan(mode: str, modules: tuple[str, ...] = ()) -> CollaborationPlan:
-    from areal_rsi.agents.research.passk_prompt import PROMPT as PASSK_RESEARCH_PROMPT
-    from areal_rsi.agents.rsi.passk_prompt import PROMPT as PASSK_RSI_PROMPT
     from areal_rsi.coordination.passk import PassKActions, PassKEngine
 
     ordered = selected_modules(mode, modules)
     plan = CollaborationPlan(
-        PassKActions, PassKEngine, PASSK_RESEARCH_PROMPT, PASSK_RSI_PROMPT, True
+        PassKActions,
+        PassKEngine,
+        load_prompt("agents/research/passk.md"),
+        load_prompt("agents/rsi/passk.md"),
+        True,
     )
     for name in ordered:
         plan = MODULES[name].apply(plan)

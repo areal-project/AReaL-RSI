@@ -2,11 +2,12 @@
 
 import asyncio
 import socket
+import threading
 from typing import Any
 
 import pytest
 
-from areal_rsi.modules.runtime_network import HttpsTunnel
+from areal_rsi.modules.runtime_network import HttpsTunnel, _TunnelServer
 
 
 def test_https_tunnel_rejects_private_destinations() -> None:
@@ -50,7 +51,7 @@ def test_https_tunnel_pins_public_address_and_preserves_bytes(
 
         monkeypatch.setattr(asyncio.get_running_loop(), "getaddrinfo", resolve)
         monkeypatch.setattr(asyncio, "open_connection", pinned)
-        tunnel = HttpsTunnel()
+        tunnel = _TunnelServer()
         port = await tunnel.start()
         try:
             reader, writer = await connect("127.0.0.1", port)
@@ -68,3 +69,40 @@ def test_https_tunnel_pins_public_address_and_preserves_bytes(
             await server.wait_closed()
 
     asyncio.run(scenario())
+
+
+def test_https_relay_keeps_flowing_when_owner_loop_is_blocked() -> None:
+    with socket.create_server(("127.0.0.1", 0)) as origin:
+        origin.settimeout(5)
+        target = f"127.0.0.1:{origin.getsockname()[1]}"
+        done = threading.Event()
+        received = []
+
+        def exchange(port: int) -> None:
+            with socket.create_connection(("127.0.0.1", port), timeout=3) as client:
+                client.sendall(f"CONNECT {target} HTTP/1.1\r\n\r\n".encode())
+                upstream, _ = origin.accept()
+                with upstream:
+                    assert b"200" in client.recv(1024)
+                    client.sendall(b"request")
+                    assert upstream.recv(7) == b"request"
+                    upstream.sendall(b"response")
+                    received.append(client.recv(8))
+            done.set()
+
+        async def scenario() -> None:
+            tunnel = HttpsTunnel("https://" + target)
+            port = await tunnel.start()
+            process = tunnel.process
+            thread = threading.Thread(target=exchange, args=(port,), daemon=True)
+            thread.start()
+            try:
+                # Deliberately block the owning event loop, as file/UI work did.
+                assert done.wait(4), "Relay stalled with its owner's event loop"
+                assert received == [b"response"]
+            finally:
+                await tunnel.close()
+                thread.join(1)
+            assert process is not None and process.returncode == 0
+
+        asyncio.run(scenario())

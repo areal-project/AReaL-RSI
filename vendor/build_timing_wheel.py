@@ -11,7 +11,7 @@ from pathlib import Path
 
 root = Path(__file__).resolve().parent
 old = "0.4.0.dev1"
-new = old + "+rsi1"
+new = old + "+rsi2"
 upstream = root / f"areal_agent_runtime-{old}-py3-none-any.whl"
 target = root / f"areal_agent_runtime-{new}-py3-none-any.whl"
 with tempfile.TemporaryDirectory() as tmp:

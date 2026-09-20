@@ -24,9 +24,10 @@ from areal_rsi.modules.responses import ToolCall, ToolHandler, ToolResult
 VerificationReader = Callable[[JobRecord, CandidateSnapshot, str], VerifiedResult]
 INLINE_INSTRUCTIONS_CHARS = 8000
 FEEDBACK_CHARS = 12000
+INLINE_FEEDBACK_CHARS = 3000
 WAIT = {
     "type": "boolean",
-    "description": "通常为 true：完成后带回反馈；有独立工作要并行做时为 false。",
+    "description": "true 时短暂等待并返回当前状态；false 时提交后立即返回。",
 }
 
 
@@ -58,8 +59,9 @@ class ResearchExecution:
         self.inline_wait_seconds = 1.0
         # Independent attempts keep their native turn while GPU work runs.
         # A bounded wait may return a running job, but never ends that turn.
-        self.continuous_wait_seconds = 240.0
+        self.continuous_wait_seconds = 1.0
         self._poll_lock = asyncio.Lock()
+        self._timed_jobs: set[str] = set()
         limits = self.c.store.brief().limits
         self.manager = JobManager(
             self.c.store.root,
@@ -75,7 +77,7 @@ class ResearchExecution:
                 "run_job",
                 "按已配置命令运行固定输入。candidate_id 为空时使用当前工作区。"
                 + (
-                    "wait=true 在当前回合等待结果；若仍在运行，继续 wait_for_job 等原作业。"
+                    "wait=true 短暂等待结果；未结束时可继续独立工作，再用 wait_for_job 取结果。"
                     if self.c.state.get("mode") == "passk"
                     else "wait=true 时短作业直接返回，长作业停止推理、完成后带回公开反馈。"
                 )
@@ -105,6 +107,8 @@ class ResearchExecution:
             definition(
                 "job_status",
                 "查看作业的命令、原始任务参数、公开状态、进度与已发布结果。"
+                "JSON 反馈在 feedback.data，文本反馈在 feedback.content；"
+                "完整反馈可按 feedback.uri 或 path 读取。"
                 "普通作业失败且无公开反馈时，附上有界日志末尾帮助排错。"
                 "任务归属以 parameters 和实际反馈为准，不凭 Job ID 猜测。",
                 job_id=STRING,
@@ -133,7 +137,7 @@ class ResearchExecution:
             definition(
                 "wait_for_job",
                 (
-                    "在当前回合等待原作业并返回反馈；仍在运行时继续等待，不重复提交。"
+                    "短暂等待原作业并返回当前状态；未结束时可继续独立工作，不重复提交。"
                     if self.c.state.get("mode") == "passk"
                     else "结束本回合，等作业完成后在同一任务中继续。作业已经完成时直接返回结果。"
                 ),
@@ -148,6 +152,13 @@ class ResearchExecution:
                 wait=WAIT,
             ),
         ):
+            if tool["name"] == "wait_for_job":
+                # Optional for CLI background waits; archived/default calls
+                # retain the short native-tool wait.
+                tool["parameters"]["properties"]["seconds"] = {
+                    "type": "number", "minimum": 0, "maximum": 240,
+                    "description": "CLI 后台进程可指定等待秒数；省略时使用短暂等待。",
+                }
             actions.register(tool, self.handler, roles={"rsi", "research"})
 
     def save(self) -> None:
@@ -342,7 +353,9 @@ class ResearchExecution:
                     raise ValueError("请指定收集目录或 as_candidate=true")
                 return ToolResult(collected)
             if call.name == "wait_for_job" and not record.terminal:
-                return await self.wait_for_result(agent_id, job_id, inline=False)
+                return await self.wait_for_result(
+                    agent_id, job_id, inline=False, seconds=args.get("seconds")
+                )
             await self.poll()
             record = self.manager.get(job_id)
             assert record is not None
@@ -351,11 +364,11 @@ class ResearchExecution:
         return handle
 
     async def wait_for_result(
-        self, agent_id: str, job_id: str, *, inline: bool = True
+        self, agent_id: str, job_id: str, *, inline: bool = True, seconds: float | None = None
     ) -> ToolResult:
         continuous = self.c.state.get("mode") == "passk"
         wait_seconds = (
-            self.continuous_wait_seconds
+            (self.continuous_wait_seconds if seconds is None else seconds)
             if continuous
             else self.inline_wait_seconds
             if inline
@@ -370,12 +383,14 @@ class ResearchExecution:
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
                 break
-            await asyncio.sleep(min(0.25 if continuous else 0.05, remaining))
+            interval = 1.0 if seconds is not None and continuous else 0.25 if continuous else 0.05
+            await asyncio.sleep(min(interval, remaining))
         if continuous:
             return ToolResult(
                 {
                     **self.for_agent(record, agent_id),
-                    "instruction": "作业仍在运行，用 wait_for_job 等待原作业；不要重复提交。",
+                    "instruction": "作业仍在运行。可以继续不依赖结果的分析或工作，"
+                    "再用 wait_for_job 查看原作业；不要重复提交。",
                 }
             )
         info = self.jobs[job_id]
@@ -637,7 +652,7 @@ class ResearchExecution:
         }
 
     def for_agent(self, record: JobRecord, agent_id: str) -> dict[str, Any]:
-        result = self.public(record)
+        result = {key: value for key, value in self.public(record).items() if value is not None}
         info = self.jobs[record.job_id]
         # Run-wide status access does not grant access to another branch's files.
         if not info["verification"] and agent_id in {"rsi", info["agent_id"]}:
@@ -663,6 +678,19 @@ class ResearchExecution:
                 **info["feedback"],
                 "record_id": effect_id("feedback", record.job_id),
             }
+            text = result["feedback"].get("content", "")
+            try:
+                data = json.loads(text)
+            except ValueError:
+                data = None
+            if data is not None and not result["feedback"].get("truncated"):
+                # Preserve valid JSON as structured data, not an escaped JSON
+                # string cut in the middle. Adapters own its level of detail.
+                result["feedback"].pop("content", None)
+                result["feedback"]["data"] = data
+            elif len(text) > INLINE_FEEDBACK_CHARS:
+                result["feedback"]["content"] = text[:INLINE_FEEDBACK_CHARS]
+                result["feedback"]["truncated"] = True
         return result
 
     def publish_feedback(self, record: JobRecord) -> None:
@@ -834,6 +862,8 @@ class ResearchExecution:
         # each job's owner separately reloads every archived research node per job.
         actors = {actor.agent_id: actor for actor in self.c.actors()} if self.jobs else {}
         for key, info in self.jobs.items():
+            if info["processed"]:
+                continue
             actor_stopped = actors[info["agent_id"]].state == AgentState.STOPPED
             if self.find_job(key) is None:
                 self.manager.submit(decode(JobSpec, info["spec"]), job_id=key)
@@ -850,7 +880,7 @@ class ResearchExecution:
             timer = EffectiveTime(self.c.state)
             for record in records:
                 info = self.jobs.get(record.job_id)
-                if info is None or info["verification"]:
+                if info is None or info["verification"] or record.job_id in self._timed_jobs:
                     continue
                 timer.queue(
                     info["agent_id"],
@@ -872,6 +902,10 @@ class ResearchExecution:
                             remote["created_at"],
                             end,
                         )
+                if record.terminal:
+                    # Completed receipts are immutable. Re-read them once after
+                    # recovery, not on every tick for the rest of the study.
+                    self._timed_jobs.add(record.job_id)
         for record in records:
             info = self.jobs.get(record.job_id)
             if info is None or not record.terminal:

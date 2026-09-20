@@ -37,6 +37,8 @@ def test_baseline_union_and_worker_restart_do_not_double_subtract() -> None:
     timer.queue("a", "gpu2", 20, 50)
     timer.availability("a", False, 30)
     timer.availability("a", True, 60)
+    timer.retry("a", "native-retry", 25, None)
+    timer.retry("a", "native-retry", 25, 55)
     timer.close_worker(70)
     # Maintenance gap 70..100 is not worker time.
     timer = EffectiveTime(state)
@@ -47,7 +49,7 @@ def test_baseline_union_and_worker_restart_do_not_double_subtract() -> None:
     result = timer.budget("a", 220, 100)
     assert result["worker_wall_seconds"] == 100
     assert result["gpu_queue_seconds"] == 40
-    assert result["api_wait_seconds"] == 30
+    assert result["api_wait_seconds"] == 35
     assert result["excluded_union_seconds"] == 50
     assert result["effective_seconds"] == 50
 
@@ -147,12 +149,14 @@ def test_each_researcher_stops_at_own_budget_excluding_pauses_and_leader_waits(
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("failed_requests", [1, 5])
 def test_real_codex_retry_reports_outage_and_recovery(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_requests: int
 ) -> None:
     monkeypatch.setenv("RSI_API_KEY", "fixture")
     model = ResponsesModel()
-    model.fail_requests = 5
+    model.fail_requests = failed_requests
+    model.failure_delay = 0.2
 
     async def scenario() -> None:
         runtime = ResearchRuntime(
@@ -188,8 +192,15 @@ def test_real_codex_retry_reports_outage_and_recovery(
             )
             assert result.text == "Done"
             availability = [e for e in events if e["type"] == "api_availability"]
-            assert [e["available"] for e in availability] == [False, True]
-            assert availability[1]["timestamp"] > availability[0]["timestamp"]
+            if failed_requests == 5:
+                assert [e["available"] for e in availability] == [False, True]
+                assert availability[1]["timestamp"] > availability[0]["timestamp"]
+            retries = [e for e in events if e["type"] == "api_retry"]
+            assert len(retries) == 2
+            assert retries[0]["id"] == retries[1]["id"]
+            assert retries[0]["end"] is None
+            assert retries[0]["start"] <= model.request_times[0]
+            assert retries[1]["end"] > retries[0]["start"]
         finally:
             await runtime.close()
 

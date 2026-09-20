@@ -13,6 +13,7 @@ import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from enum import Enum
+from functools import cache
 from pathlib import Path, PurePosixPath
 from typing import Any, TypeVar, get_args, get_origin, get_type_hints
 
@@ -34,6 +35,7 @@ from areal_rsi.api.base import (
 
 T = TypeVar("T")
 DIRECTORY_TYPE = "application/vnd.areal-rsi.directory+json"
+_type_hints = cache(get_type_hints)
 
 
 def now() -> str:
@@ -76,7 +78,7 @@ def decode(kind: Any, value: Any) -> Any:
     if isinstance(kind, type) and issubclass(kind, Enum):
         return kind(value)
     if isinstance(kind, type) and dataclasses.is_dataclass(kind):
-        hints = get_type_hints(kind)
+        hints = _type_hints(kind)
         return kind(**{k: decode(hints[k], v) for k, v in value.items()})
     return value
 

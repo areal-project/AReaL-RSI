@@ -87,6 +87,7 @@ class JobManager:
         self._stopping = threading.Event()
         self._thread: threading.Thread | None = None
         self._processes: dict[str, subprocess.Popen[bytes]] = {}
+        self._record_cache: dict[str, tuple[tuple[int, int, int], JobRecord]] = {}
         self._closed = False
         descriptor = os.open(self.root / "manager.lock", os.O_CREAT | os.O_RDWR, 0o600)
         self._lock_file = os.fdopen(descriptor, "r+")
@@ -135,18 +136,27 @@ class JobManager:
         return self.root / job_id
 
     def get(self, job_id: str) -> JobRecord:
-        value = read_json(self._directory(job_id) / "job.json")
+        path = self._directory(job_id) / "job.json"
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            raise KeyError(job_id) from None
+        stamp = (stat.st_mtime_ns, stat.st_size, stat.st_ino)
+        cached = self._record_cache.get(job_id)
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
+        value = read_json(path)
         if value is None:
             raise KeyError(job_id)
-        return _decode_record(value)
+        record = _decode_record(value)
+        self._record_cache[job_id] = stamp, record
+        return record
 
     def records(self) -> tuple[JobRecord, ...]:
         with self._mutex:
             records = []
             for path in self.root.glob("job-*/job.json"):
-                value = read_json(path)
-                if value is not None:
-                    records.append(_decode_record(value))
+                records.append(self.get(path.parent.name))
             return tuple(sorted(records, key=lambda record: (record.created_at, record.job_id)))
 
     def submit(

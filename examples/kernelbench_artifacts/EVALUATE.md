@@ -39,7 +39,12 @@ cp /你的路径/model_new.py "$KB_DIR/candidate/model_new.py"
 
 - `correct`：是否通过正确性检查。
 - `speedup`：参考实现耗时 / 候选耗时，大于 1 才是加速。
-- `evaluation`、`stderr_tail`：详细指标和错误信息。
+- `runtime_ms`、`ref_ms`、`runtime_stats`：耗时与测量波动；`error`：错误摘要。
+
+完整评测回执在同目录的 `remote-job.json`，诊断输出在 `stdout.log` 和 `stderr.log`。
+Agent 作业工具将 JSON 反馈放在 `feedback.data`，避免把 JSON 作为字符串截断。
+`run_job(wait=true)` 最多短暂等待 1 秒；返回运行中状态后可以继续工作，
+再对同一个作业使用 `wait_for_job`，不需要重新提交。
 
 当前正式评测使用 `strict-fp32-v1`：FP32、关闭 TF32，5 次正确性检查、100 次计时。失败和 GPU 调试都计入探索额度；本指南只运行单次代码评测，不自动启动研究或最终复测。
 

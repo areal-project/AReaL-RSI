@@ -222,6 +222,16 @@ def test_independent_records_jobs_and_identical_snapshots(tmp_path: Path) -> Non
         assert result.output["withdrawn"]
         assert c.store.is_withdrawn(first.candidate_id)
         assert not c.store.is_withdrawn(second.candidate_id), "One attempt must not prune another"
+        # A fresh leader view must see both the withdrawal and a later peer
+        # result, even when the two attempts saved identical source bytes.
+        peer_result = VerifiedResult(
+            "peer-result", second.candidate_id, c.store.contract_digest(), now(),
+            "succeeded", passed=True, score=0.7, phase="search",
+        )
+        c.store.record_verification(peer_result)
+        roster = {row["agent_id"]: row["best"] for row in actions.state("rsi")["researchers"]}
+        assert roster[agents[0]] is None
+        assert roster[agents[1]]["result_id"] == "peer-result"
         assert len(c.state["inboxes"]["rsi"]) == 1  # Initial launch request only.
 
     asyncio.run(scenario())
@@ -248,6 +258,9 @@ class ScriptedRuntime:
         pass
 
     async def close(self) -> None:
+        pass
+
+    async def close_session(self, session_dir: Path) -> None:
         pass
 
     async def turn(self, session_dir: Path, **kwargs: Any) -> TurnResult:

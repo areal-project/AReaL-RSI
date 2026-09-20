@@ -629,6 +629,7 @@ class ResearchApp:
             instructions=config.metadata.get("agent_tool_instructions"),
             backend=config.backend,
             supervisor_only=plan.supervisor_only,
+            execution_interface=config.metadata.get("execution_interface", "tools"),
         )
         execution = ResearchExecution(
             actions,
@@ -712,7 +713,13 @@ class ResearchApp:
     async def detail(
         self, run_id: str, after: int = 0, *, event_limit: int | None = None
     ) -> dict[str, Any]:
-        c = self.coordinator(run_id)
+        return await asyncio.to_thread(self._detail, run_id, after, event_limit=event_limit)
+
+    def _detail(
+        self, run_id: str, after: int = 0, *, event_limit: int | None = None
+    ) -> dict[str, Any]:
+        # Read an independent persisted view; UI work never mutates the live coordinator.
+        c = Coordinator(ResearchStore(self.root, run_id))
         summary = c.summary()
         summary["finalization"] = c.state.get("finalization")
         run = c.store.run()
@@ -965,6 +972,56 @@ class ResearchApp:
             await asyncio.to_thread(shutil.rmtree, destination)
         return {"run_id": c.store.run_id, "status": "deleted"}
 
+    def _list_runs(self) -> dict[str, Any]:
+        runs = FileRunStore(self.root).list(ExperimentRun)
+        # Workbench organization is independent of frozen experiment records.
+        group_file = self.root / "workbench-groups.json"
+        groups = json.loads(group_file.read_text())["groups"] if group_file.exists() else []
+        run_groups = {
+            run_id: {key: group[key] for key in ("id", "name", "created_at")}
+            for group in groups
+            for run_id in group["run_ids"]
+        }
+
+        coordinators = {
+            r.run_id: Coordinator(ResearchStore(self.root, r.run_id))
+            for r in runs
+            if r.plan.workflow == "research"
+        }
+
+        def created_at(run: ExperimentRun) -> str:
+            c = coordinators[run.run_id]
+            if c.state.get("created_at"):
+                return str(c.state["created_at"])
+            # Older runs predate the timestamp field. Their first immutable
+            # event records creation, unlike file modification time.
+            event = c.store.root / "events" / "000000000001.json"
+            return (
+                str(json.loads(event.read_text())["created_at"])
+                if event.exists()
+                else (run.started_at or "")
+            )
+
+        return {
+            "runs": sorted(
+                [
+                    {
+                        "run_id": r.run_id,
+                        "objective": r.plan.goal,
+                        "status": coordinators[r.run_id].state["status"],
+                        "simulated": coordinators[r.run_id].state["simulated"],
+                        "created_at": created_at(r),
+                        "group": run_groups.get(r.run_id),
+                    }
+                    for r in runs
+                    if r.plan.workflow == "research"
+                    and (self.allow_simulation or not coordinators[r.run_id].state["simulated"])
+                ],
+                key=lambda r: (r["created_at"], r["run_id"]),
+                reverse=True,
+            )
+        }
+
     async def call(self, action: str, params: dict[str, Any]) -> Any:
         if action == "recover":
             for run in FileRunStore(self.root).list(ExperimentRun):
@@ -1023,51 +1080,7 @@ class ResearchApp:
                 ],
             }
         if action == "list":
-            runs = FileRunStore(self.root).list(ExperimentRun)
-            # Workbench organization is independent of frozen experiment records.
-            group_file = self.root / "workbench-groups.json"
-            groups = json.loads(group_file.read_text())["groups"] if group_file.exists() else []
-            run_groups = {
-                run_id: {key: group[key] for key in ("id", "name", "created_at")}
-                for group in groups
-                for run_id in group["run_ids"]
-            }
-
-            def created_at(run: ExperimentRun) -> str:
-                c = self.coordinator(run.run_id)
-                if c.state.get("created_at"):
-                    return str(c.state["created_at"])
-                # Older runs predate the timestamp field. Their first immutable
-                # event records creation, unlike file modification time.
-                event = c.store.root / "events" / "000000000001.json"
-                return (
-                    str(json.loads(event.read_text())["created_at"])
-                    if event.exists()
-                    else (run.started_at or "")
-                )
-
-            return {
-                "runs": sorted(
-                    [
-                        {
-                            "run_id": r.run_id,
-                            "objective": r.plan.goal,
-                            "status": self.coordinator(r.run_id).state["status"],
-                            "simulated": self.coordinator(r.run_id).state["simulated"],
-                            "created_at": created_at(r),
-                            "group": run_groups.get(r.run_id),
-                        }
-                        for r in runs
-                        if r.plan.workflow == "research"
-                        and (
-                            self.allow_simulation
-                            or not self.coordinator(r.run_id).state["simulated"]
-                        )
-                    ],
-                    key=lambda r: (r["created_at"], r["run_id"]),
-                    reverse=True,
-                )
-            }
+            return await asyncio.to_thread(self._list_runs)
         if action == "create":
             return await self.create(params)
         c = self.coordinator(params["run_id"])

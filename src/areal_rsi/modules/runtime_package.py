@@ -432,6 +432,8 @@ class PackageAgentRuntime:
         modules.mkdir(parents=True, exist_ok=True)
         (modules.parent / "__init__.py").write_text("")
         (modules / "__init__.py").write_text("")
+        shutil.copyfile(Path(__file__).parents[1] / "prompts.py", modules.parent / "prompts.py")
+        shutil.copytree(Path(__file__).parent / "prompts", modules / "prompts", dirs_exist_ok=True)
         for name in (
             "runtime_worker.py",
             "runtime_mcp.py",
@@ -439,6 +441,8 @@ class PackageAgentRuntime:
             "runtime_storage.py",
             "runtime_storage.schema.json",
             "runtime_tools.py",
+            "runtime_tool_rpc.py",
+            "runtime_research_mcp.py",
             "runtime_tools.schema.json",
             "runtime_workspace.py",
             "runtime_workspace.schema.json",
@@ -501,7 +505,7 @@ class PackageAgentRuntime:
             bin_dir = directory / "bin"
             bin_dir.mkdir(exist_ok=True)
             helper = bin_dir / "rsi-tools"
-            module = str(modules / "runtime_tools.py")
+            module = str(modules / "runtime_tool_rpc.py")
             manifest = str(directory / "research-tools.json")
             helper.write_text(
                 f"#!{sys.executable} -I\n"
@@ -513,6 +517,20 @@ class PackageAgentRuntime:
             tool_manifest = directory / "research-tools.json"
             tool_manifest.write_text(json.dumps(research_tools))
             tool_manifest.chmod(0o600)
+            # Task-owned CLIs use the same scoped bridge as MCP tools. Copy
+            # their code into the sandbox; never grant the source checkout.
+            for name, source in research_tools.get("shell_commands", {}).items():
+                name = safe_name(name)
+                program = bin_dir / (name + ".py")
+                program.write_bytes(Path(source).read_bytes())
+                launcher = bin_dir / name
+                launcher.write_text(
+                    f"#!{sys.executable} -I\n"
+                    "import os, runpy\n"
+                    f"os.environ['RSI_WORKSPACE'] = {str(workspace)!r}\n"
+                    f"runpy.run_path({str(program)!r}, run_name='__main__')\n"
+                )
+                launcher.chmod(0o700)
         if codex_config is not None:
             config["codex_config"] = codex_config
         if context_window_tokens is not None:

@@ -62,15 +62,15 @@ wheels = [
 
 [[package]]
 name = "areal-agent-runtime"
-version = "0.4.0.dev1+rsi1"
-source = { path = "vendor/areal_agent_runtime-0.4.0.dev1+rsi1-py3-none-any.whl" }
+version = "0.4.0.dev1+rsi2"
+source = { path = "vendor/areal_agent_runtime-0.4.0.dev1+rsi2-py3-none-any.whl" }
 dependencies = [
     { name = "jsonschema" },
     { name = "pydantic" },
     { name = "pyyaml" },
 ]
 wheels = [
-    { filename = "areal_agent_runtime-0.4.0.dev1+rsi1-py3-none-any.whl", hash = "sha256:8c16f5e1908c8af0712e5fd1c67cbf86e8869472a1cf2bb743b835a2a2e13437" },
+    { filename = "areal_agent_runtime-0.4.0.dev1+rsi2-py3-none-any.whl", hash = "sha256:bfa22ff338affab9ac7205d366f960fa807e4be4efabaa9f872e9f62849d639e" },
 ]
 
 [package.optional-dependencies]
@@ -155,10 +155,10 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "areal-agent-runtime", extras = ["anthropic"], marker = "extra == 'anthropic'", path = "vendor/areal_agent_runtime-0.4.0.dev1+rsi1-py3-none-any.whl" },
-    { name = "areal-agent-runtime", extras = ["api", "dsh"], path = "vendor/areal_agent_runtime-0.4.0.dev1+rsi1-py3-none-any.whl" },
-    { name = "areal-agent-runtime", extras = ["claude"], marker = "extra == 'claude'", path = "vendor/areal_agent_runtime-0.4.0.dev1+rsi1-py3-none-any.whl" },
-    { name = "areal-agent-runtime", extras = ["codex"], marker = "extra == 'codex'", path = "vendor/areal_agent_runtime-0.4.0.dev1+rsi1-py3-none-any.whl" },
+    { name = "areal-agent-runtime", extras = ["anthropic"], marker = "extra == 'anthropic'", path = "vendor/areal_agent_runtime-0.4.0.dev1+rsi2-py3-none-any.whl" },
+    { name = "areal-agent-runtime", extras = ["api", "dsh"], path = "vendor/areal_agent_runtime-0.4.0.dev1+rsi2-py3-none-any.whl" },
+    { name = "areal-agent-runtime", extras = ["claude"], marker = "extra == 'claude'", path = "vendor/areal_agent_runtime-0.4.0.dev1+rsi2-py3-none-any.whl" },
+    { name = "areal-agent-runtime", extras = ["codex"], marker = "extra == 'codex'", path = "vendor/areal_agent_runtime-0.4.0.dev1+rsi2-py3-none-any.whl" },
     { name = "certifi", specifier = ">=2024.2.2" },
     { name = "deepseek-harness-sdk", specifier = "==0.1.2rc1" },
     { name = "httpx", extras = ["socks"], specifier = ">=0.28,<1" },

@@ -14,6 +14,8 @@ from typing import Any
 from areal_agent_runtime import BootstrapConfig, build_composition
 from areal_agent_runtime.contracts import CancelRunCommand, StartRunCommand
 
+from areal_rsi.prompts import load_prompt
+
 
 def compile_config(request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     directory, workspace = Path(request["directory"]), Path(request["workspace"])
@@ -96,7 +98,7 @@ def compile_config(request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
         vendor.setdefault("stateDirectory", str(directory / "codex-state"))
         vendor.setdefault("approvalPolicy", "never")
         vendor.setdefault("sandbox", "danger-full-access")
-        if request.get("codex_config") is not None:
+        if request.get("codex_config") is not None or request.get("research_tools"):
             # Native configuration belongs to the isolated Codex home. The
             # package owns App Server, provider wiring, threads and compaction.
             home = Path(vendor["codexHome"])
@@ -104,7 +106,7 @@ def compile_config(request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
             (home / "config.toml").write_text(
                 "\n".join(
                     f"{name} = {json.dumps(value)}"
-                    for name, value in request["codex_config"].items()
+                    for name, value in (request.get("codex_config") or {}).items()
                 )
                 + "\n"
             )
@@ -145,13 +147,33 @@ def compile_config(request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
             manifest = directory / "research-tools.json"
             manifest.write_text(json.dumps(bridge))
             manifest.chmod(0o600)
-            prompts.append(
-                "RSI 任务工具通过以下命令调用，使用你的原生命令工具执行。\n"
-                "查看工具及参数：rsi-tools list\n"
-                "调用：rsi-tools call TOOL 'JSON_ARGUMENTS' CALL_ID\n"
-                "每次新操作使用新的 CALL_ID；重试同一操作时沿用原 ID。\n"
-                "常用工具：" + ", ".join(tool["name"] for tool in bridge["tools"])
-            )
+            if kind == "codex-cli":
+                # Keep the native tool call open until the scoped handler returns.
+                # A shell session may yield before submission has even frozen its inputs.
+                entrypoint = (
+                    "import runpy,sys; "
+                    f"sys.path.insert(0, {str(Path(__file__).parents[2])!r}); "
+                    "runpy.run_module('areal_rsi.modules.runtime_research_mcp',run_name='__main__')"
+                )
+                with (Path(vendor["codexHome"]) / "config.toml").open("a") as file:
+                    file.write(
+                        "\n[mcp_servers.rsi]\n"
+                        f"command = {json.dumps(sys.executable)}\n"
+                        f"args = {json.dumps(['-I', '-c', entrypoint, str(manifest)])}\n"
+                        "startup_timeout_sec = 60\ntool_timeout_sec = 600\nrequired = true\n"
+                    )
+                prompts.append(load_prompt(
+                    "modules/prompts/research_tools_codex_cli.md"
+                    if bridge.get("shell_commands")
+                    else "modules/prompts/research_tools_codex.md"
+                ))
+            else:
+                prompts.append(
+                    load_prompt(
+                        "modules/prompts/research_tools_cli.md",
+                        tools=", ".join(tool["name"] for tool in bridge["tools"]),
+                    )
+                )
         else:
             plugins.append(
                 {
@@ -160,16 +182,19 @@ def compile_config(request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
                 }
             )
             tools.extend(tool["name"] for tool in bridge["tools"])
+        prompts.append(load_prompt("modules/prompts/message_ack.md"))
     if request["mcp"] and native:
         # Native-only adapters cannot accept Application ToolSpecs. The installed
         # RSI CLI gives their shell tools access to the same bounded MCP servers.
         manifest = directory / "mcp.json"
         manifest.write_text(json.dumps(request["mcp"]))
         prompts.append(
-            "MCP tools are available through the installed RSI MCP client. "
-            f"Run {sys.executable} -I {Path(__file__).with_name('runtime_mcp.py')} {manifest} list "
-            "to inspect tool schemas; replace list with call SERVER TOOL JSON_ARGUMENTS to invoke. "
-            "Use your shell tool (or workspace.run with argv)."
+            load_prompt(
+                "modules/prompts/mcp_cli.md",
+                python=str(sys.executable),
+                client=str(Path(__file__).with_name("runtime_mcp.py")),
+                manifest=str(manifest),
+            )
         )
     configuration = {
         "dataRoot": str(directory / "data"),

@@ -18,6 +18,7 @@ from deepseek_harness import DeepSeekHarness  # type: ignore[import-untyped]
 from areal_rsi.api.base import AgentSpec, Trajectory, TrajectoryRef
 from areal_rsi.base.storage import FileContentStore, FileTrajectoryStore, new_id, now, safe_name
 from areal_rsi.modules.dsh import ensure_cli
+from areal_rsi.prompts import load_prompt
 
 
 def _runtime_symlinks(paths: Collection[Path]) -> set[str]:
@@ -237,7 +238,7 @@ class DshAgentRuntime:
             path.parent.mkdir(exist_ok=True)
             path.write_text(skill)
             prompt_parts.append(f"Skill {i}:\n{skill}")
-        prompt = "\n\n".join(prompt_parts) or "You are a helpful assistant."
+        prompt = "\n\n".join(prompt_parts) or load_prompt("modules/prompts/default.md")
         patch: list[dict[str, Any]] = [
             {
                 "id": "agent-spine",

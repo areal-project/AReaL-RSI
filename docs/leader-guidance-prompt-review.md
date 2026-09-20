@@ -5,8 +5,8 @@
 本轮调整全局计划、方向判断与持续探索。leader 应先判断问题出在思路还是实现，
 再决定如何帮助不同研究员；领先方案的经验可以共享，但不自动成为全队的默认路线。
 
-运行时角色模板：[Leader](../src/areal_rsi/agents/rsi/leader_guidance_prompt.py)、
-[Researcher](../src/areal_rsi/agents/research/leader_guidance_prompt.py)。
+运行时角色模板：[Leader](../src/areal_rsi/agents/rsi/leader_guidance_v0.2.1.md)、
+[Researcher](../src/areal_rsi/agents/research/leader_guidance_v0.2.1.md)。
 `{{max_agents}}` 替换为人数；`{{tool_instructions}}` 填入本 run 边界、任务工具说明、
 后端工具说明与工作区。任务材料和 Runtime 调用方法另外提供，不增加角色版本。
 

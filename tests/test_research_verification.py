@@ -372,6 +372,14 @@ def test_running_job_can_be_shared_and_reported_before_completion_after_recovery
                 assert "failure_log" not in runner.for_agent(runner.manager.get(job_id), owner)
             else:
                 assert "failure_log" not in status.output
+            feedback = {"correct": False, "error": 'Compiler failed: "missing symbol"\nline 7'}
+            runner.jobs[job_id]["feedback"] = {
+                "content": json.dumps(feedback), "path": "feedback.json", "truncated": False,
+            }
+            public = runner.for_agent(runner.manager.get(job_id), owner)["feedback"]
+            assert public["data"] == feedback and "content" not in public
+            assert public["path"] == "feedback.json"
+            assert "feedback" not in runner.for_agent(runner.manager.get(job_id), peer)
         finally:
             runner.close(cancel=True)
 

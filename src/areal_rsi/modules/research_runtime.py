@@ -24,10 +24,20 @@ from jsonschema import ValidationError, validate
 from areal_rsi.api.base import AgentSpec, ModelVersion
 from areal_rsi.base.storage import FileContentStore, FileTrajectoryStore, decode, now, write_json
 from areal_rsi.coordination.config import ResearchConfig
-from areal_rsi.modules.agent_runtime import EventSink, ToolCall, ToolHandler, TurnResult
+from areal_rsi.modules.agent_runtime import EventSink, ToolCall, ToolHandler, ToolResult, TurnResult
 from areal_rsi.modules.runtime_package import PackageAgentRuntime, PackageSession, RuntimeSettings
 
 Json = dict[str, Any]
+ACKNOWLEDGE_MESSAGES = {
+    "name": "acknowledge_messages",
+    "description": "确认已读 incoming_messages 中的消息；不代表同意或采纳。未确认的消息会保留。",
+    "parameters": {
+        "type": "object",
+        "properties": {"message_ids": {"type": "array", "items": {"type": "string"}}},
+        "required": ["message_ids"],
+        "additionalProperties": False,
+    },
+}
 
 
 def usage_event(event: Json) -> Json:
@@ -59,6 +69,8 @@ class Conversation:
     stop_reason: str | None = None
     calls: set[asyncio.Task[Any]] = field(default_factory=set)
     call_namespace: str = ""
+    offered_messages: set[str] = field(default_factory=set)
+    closing: bool = False
 
 
 class ResearchRuntime:
@@ -126,7 +138,7 @@ class ResearchRuntime:
         saved = json.loads(request_path.read_text()) if request_path.exists() else {}
         previous_bridge = saved.get("research_tools", {})
         token = previous_bridge.get("token") or secrets.token_hex(32)
-        catalog = {tool["name"]: tool for tool in definitions}
+        catalog = {tool["name"]: tool for tool in (*definitions, ACKNOWLEDGE_MESSAGES)}
         connection: Conversation | None = None
 
         async def serve(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -138,9 +150,9 @@ class ResearchRuntime:
                     request = json.loads(await reader.readline())
                 if not hmac.compare_digest(str(request.get("token", "")), token):
                     raise ValueError("Invalid tool capability")
-                if connection is None or connection.session.closed:
+                if connection is None or connection.session.closed or connection.closing:
                     raise ValueError("Runtime session is closed")
-                if connection.stop_reason:
+                if connection.stop_reason and request["name"] != "acknowledge_messages":
                     raise ValueError("本回合已经结束，请停止调用工具并给出简短回复")
                 name = request["name"]
                 if name not in catalog:
@@ -157,7 +169,17 @@ class ResearchRuntime:
                     await connection.sink(
                         {"type": "tool_started", "name": name, "call_id": call.call_id}
                     )
-                result = await connection.handler(call)
+                if name == "acknowledge_messages":
+                    acknowledged = []
+                    for identifier in request["arguments"]["message_ids"]:
+                        if identifier in connection.offered_messages and connection.sink:
+                            await connection.sink(
+                                {"type": "message_injected", "message_id": identifier}
+                            )
+                            acknowledged.append(identifier)
+                    result = ToolResult({"acknowledged": acknowledged})
+                else:
+                    result = await connection.handler(call)
                 output: Any = result.output
                 if result.stop:
                     connection.stop_reason = result.reason
@@ -171,13 +193,10 @@ class ResearchRuntime:
                 updates = connection.incoming() if connection.incoming and not result.stop else []
                 if updates:
                     output = {"result": output, "incoming_messages": updates}
+                    connection.offered_messages.update(update["message_id"] for update in updates)
                 writer.write((json.dumps({"output": output}, ensure_ascii=False) + "\n").encode())
                 await writer.drain()
                 if connection.sink:
-                    for update in updates:
-                        await connection.sink(
-                            {"type": "message_injected", "message_id": update["message_id"]}
-                        )
                     await connection.sink(
                         {"type": "tool_completed", "name": name, "call_id": call.call_id}
                     )
@@ -235,9 +254,20 @@ class ResearchRuntime:
                     "description": tool.get("description", ""),
                     "inputSchema": tool["parameters"],
                 }
-                for tool in definitions
+                for tool in catalog.values()
             ],
         }
+        if (
+            self.backend == "codex"
+            and self.config.metadata.get("execution_interface") == "cli"
+            and agent_id not in {"rsi", "interaction"}
+        ):
+            bridge["shell_commands"] = self.config.metadata["shell_commands"]
+            # The CLI retains the same scoped capabilities. Hide the duplicate
+            # submission/wait interface from the model's MCP catalog.
+            bridge["shell_only_tools"] = [
+                "run_job", "rerun_job", "wait_for_job", "verify_candidate", "collect_job_output",
+            ]
         from areal_rsi.coordination.collaboration import build_plan
 
         plan = build_plan(self.config.mode, self.config.collaboration_modules)
@@ -342,6 +372,8 @@ class ResearchRuntime:
                     usage[name] = usage.get(name, 0) + value
             if event_sink is None:
                 return
+            if kind == "runtime.status" and "apiRetry" in data:
+                await event_sink({"type": "api_retry", **data["apiRetry"]})
             if kind == "runtime.status" and "apiAvailable" in data:
                 await event_sink(
                     {
@@ -406,13 +438,20 @@ class ResearchRuntime:
         return result
 
     async def _close(self, connection: Conversation) -> None:
+        connection.closing = True
         connection.server.close()
-        await connection.server.wait_closed()
-        for task in tuple(connection.calls):
+        calls = tuple(connection.calls)
+        for task in calls:
             task.cancel()
-        await asyncio.gather(*connection.calls, return_exceptions=True)
+        await asyncio.gather(*calls, return_exceptions=True)
+        await connection.server.wait_closed()
         await connection.runtime.close()
 
     async def close(self) -> None:
         await asyncio.gather(*(self._close(c) for c in self.conversations.values()))
         self.conversations.clear()
+
+    async def close_session(self, session_dir: Path) -> None:
+        """Caller first cancels the turn; then retire its bridge and native worker."""
+        if connection := self.conversations.pop(session_dir, None):
+            await self._close(connection)

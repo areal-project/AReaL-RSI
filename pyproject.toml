@@ -58,7 +58,7 @@ claude = ["areal-agent-runtime[claude]==0.4.0.dev1"]
 anthropic = ["areal-agent-runtime[anthropic]==0.4.0.dev1"]
 
 [tool.uv.sources]
-areal-agent-runtime = { path = "vendor/areal_agent_runtime-0.4.0.dev1+rsi1-py3-none-any.whl" }
+areal-agent-runtime = { path = "vendor/areal_agent_runtime-0.4.0.dev1+rsi2-py3-none-any.whl" }
 openai-codex-cli-bin = { index = "codex-cli" }
 
 [[tool.uv.index]]

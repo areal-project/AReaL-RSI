@@ -2,17 +2,49 @@
 
 只评测已有 kernel 代码，见 [代码评测最短指南](EVALUATE.md)。
 
+复现 v0.2.1.1 的 Astra L1P63 单题实验，见 [v0.2.1.1 单题示例](v0.2.1.1/README.md)。
+
 运行 Astra L3P10 + Luna L1P63/L1P77 三题并行、每题四名研究员各 30 分钟有效时间，
 见 [v0.2.1 实验](v0.2.1/README.md)。该入口固定本次协作、Prompt、模型和评测设置。
 
 默认运行 L3P10，固定四名研究员独立完成整题，探索限时一小时、GPU 提交不限次数。
-默认模型为 Luna / xhigh，使用 v0.2.2 RSI 协调，分享原始证据并发送非阻塞建议。
+默认模型为 Luna / xhigh，使用 v0.2.4 RSI 持续协调，观察进展、分享原始证据并发送非阻塞建议。
 纯 pass@k 和 v0.2.1 仍可显式选择，见[协作方式](../../docs/collaboration.md)。
 
 允许联网调研通用方法、官方文档和论文，禁止搜索现成答案或读取其他 run 的内容。
 不联网对照可加 `--no-web-research`；恢复已有研究始终沿用原设置。
 
+新建 Codex 研究默认使用 `execution_interface="cli"`：研究员通过原生 `exec_command` 执行
+`kb eval` / `gpuq run`，命令在后台运行时用 `write_stdin` 取回结果，与 goal baseline 的使用方式一致。
+见 [Agent CLI 指南](CLI.md)。报告、指导和证据查阅仍通过 RSI 工具，作业隔离和有效时间仍由 RSI 管理。
+若需对照旧执行入口，调用 `prepare(..., execution_interface="tools")`；没有该配置的旧研究也沿用旧入口。
+执行入口独立于协作模式，不改变 v0.1、v0.2.1 或后续版本的角色 Prompt。
+
 ## 快速启动
+
+已有工作台时，批量实验使用统一入口。例如，重跑 exp-2 的组合，将两项协作研究升级为
+v0.2.1.1，同时保留一项纯 pass@4 对照：
+
+```bash
+uv run --locked python examples/kernelbench_artifacts/batch.py \
+  examples/kernelbench_artifacts/batches/v0.2.1.1.json --port 8198
+```
+
+三项均为 Astra / xhigh、4 名研究员各 1 小时有效时间：v0.2.1.1 的 L2P71、L1P63，
+以及纯 pass@4 的 L2P71。默认使用原生 CLI 评测入口，沿用工作台的 API 和凭据。
+脚本并行准备独立任务、校准 reference，然后在同一分组内并行启动；研究与最终复测期间
+自动防止 macOS 闲置睡眠。运行前须确保工作台已部署所需代码。
+
+以后只需复制并修改 JSON 中的题目、模型、协作方式和预算；`--group` 可覆盖组名。
+每次执行会创建新批次。若只是恢复中断的启动，使用输出的批次文件：
+
+```bash
+uv run --locked python examples/kernelbench_artifacts/batch.py --resume /path/to/batch.json
+```
+
+重试沿用已保存的研究 ID、环境和配置，只启动尚未开始的研究，不重启已停止的研究，
+也不重置预算。配置、角色 Prompt 和启动回执保存在工作台的 `operator/<batch_id>/`。
+不需要每轮编写临时启动脚本或重启已经部署好的工作台。
 
 先按[仓库启动指南](../../README.md#准备)安装依赖并填写 `.env`，确保 `ssh et15` 可用。[et15.json](et15.json) 提供当前集群入口；如果 Slurm 作业、队列地址或账号路径变化，复制一份修改并传入 `--environment /path/to/et15.json`。
 

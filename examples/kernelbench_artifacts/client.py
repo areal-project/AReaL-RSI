@@ -18,6 +18,29 @@ from areal_rsi.base.storage import write_json
 TERMINAL = {"succeeded", "failed", "cancelled", "timed_out", "interrupted"}
 
 
+def feedback_summary(job: dict[str, Any], task: str) -> dict[str, Any]:
+    """Small public result; the complete receipt remains in remote-job.json."""
+    evaluation = job.get("evaluation") or {}
+    result = {"task": task, "state": job["state"], "details_file": "remote-job.json"}
+    for key in (
+        "compiled", "numerical_correct", "correct", "speedup", "runtime_ms", "ref_ms",
+        "runtime_stats", "scoring_method", "measured_ref_ms", "measured_speedup",
+        "seed", "num_correct_trials", "num_perf_trials",
+    ):
+        if key in evaluation:
+            result[key] = evaluation[key]
+    error = evaluation.get("error") or job.get("error") or job.get("stderr_tail")
+    if error:
+        text = str(error)
+        # Tracebacks put the diagnosis at the end; keep both ends for context.
+        result["error"] = text if len(text) <= 1400 else text[:500] + "\n…\n" + text[-900:]
+        if len(text) > 1400:
+            result["error_truncated"] = True
+    if job.get("kind") == "run":
+        result["log_files"] = ["stdout.log", "stderr.log"]
+    return result
+
+
 def remote(manifest: dict[str, Any], operation: str, **values: Any) -> Any:
     if operation in {"submit", "submit_diagnostic"} and (
         manifest.get("job_isolation") != "filesystem-network-v1"
@@ -89,10 +112,18 @@ def diagnose(
     task: str,
     script: str,
     candidate: str = "",
+    arguments: list[str] | None = None,
 ) -> None:
     script_source = input_source(workspace, script)
     script_bytes = base64.b64decode(script_source)
     compile(script_bytes, "_rsi_diagnostic.py", "exec")
+    if arguments is not None:
+        script_bytes = (
+            "import sys\n"
+            f"sys.argv = {['_rsi_diagnostic.py', *arguments]!r}\n"
+            f"exec(compile({script_bytes!r}, '_rsi_diagnostic.py', 'exec'))\n"
+        ).encode()
+        script_source = base64.b64encode(script_bytes).decode()
     if manifest.get("diagnostic_precision") == "strict-fp32-v1":
         # Run the unmodified script with the formal reference precision. This
         # wrapper is only for diagnostics, never for submitted candidates.
@@ -155,7 +186,8 @@ def submit_and_wait(
                 },
             )
             if job["state"] in TERMINAL:
-                write_json(output / "feedback.json", {**job, "task": task})
+                feedback = feedback_summary(job, task)
+                write_json(output / "feedback.json", feedback)
                 if operation == "submit_diagnostic":
                     logs = remote(manifest, "logs", task=task, job_id=job["id"])
                     for stream in ("stdout", "stderr"):
@@ -167,7 +199,7 @@ def submit_and_wait(
                             for s, data in logs.items()
                         },
                     )
-                print(json.dumps({"task": task, **job}, ensure_ascii=False))
+                print(json.dumps(feedback, ensure_ascii=False))
                 return  # A measured incorrect candidate is feedback, not an infrastructure failure.
         except (subprocess.TimeoutExpired, RuntimeError) as exc:
             if "budget exhausted" in str(exc):
@@ -189,7 +221,9 @@ def submit_and_wait(
             ):
                 raise
             write_json(output / "progress.json", {"stage": "连接重试", "message": str(exc)[:400]})
-        time.sleep(5)
+            time.sleep(5)
+            continue
+        time.sleep(1)
 
 
 def attempt_status(status: dict[str, Any], run_root: Path, agent_id: str) -> dict[str, Any]:
@@ -327,6 +361,7 @@ def main() -> None:
     parser.add_argument("--task")
     parser.add_argument("--candidate")
     parser.add_argument("--script")
+    parser.add_argument("--script-args", help="JSON list of diagnostic script arguments")
     parser.add_argument("--phase", default="search", choices=("search", "final"))
     parser.add_argument("--exclude-sha256", action="append", default=[])
     args = parser.parse_args()
@@ -340,7 +375,8 @@ def main() -> None:
         if not args.script:
             parser.error("diagnose requires --script")
         diagnose(
-            manifest, args.workspace, args.output, args.task, args.script, args.candidate or ""
+            manifest, args.workspace, args.output, args.task, args.script, args.candidate or "",
+            json.loads(args.script_args) if args.script_args is not None else None,
         )
         return
     if args.operation == "collect" and not (args.output or args.workspace):

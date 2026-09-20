@@ -1,12 +1,30 @@
 --- areal_agent_runtime/adapters/codex_cli/runtime.py
 +++ areal_agent_runtime/adapters/codex_cli/runtime.py
-@@ -149,0 +150 @@
+@@ -12,0 +13 @@
++import time
+@@ -149,0 +151,3 @@
 +        self._api_available: bool | None = None
-@@ -246,0 +248 @@
++        self._request_started: float | None = None
++        self._http_retry: dict[str, Any] | None = None
+@@ -205,0 +210,3 @@
++                    self._state.rpc.transport = lambda kind, at: self.notification(
++                        "rsi/httpTiming", {"threadId": self._state.ref.runtime_session_id, "kind": kind, "at": at},
++                    )
+@@ -246,0 +254 @@
 +            await self._availability(False)
-@@ -253,0 +256 @@
+@@ -253,0 +262 @@
 +            await self._availability(False)
-@@ -307,0 +311,7 @@
+@@ -256,0 +266,2 @@
++            self._state.rpc.transport = lambda _kind, _at: None
++            await self._retry_recovered(time.time())
+@@ -307,0 +319,14 @@
++    async def _retry_recovered(self, at: float) -> None:
++        if self._http_retry is not None:
++            await self._emit(EventType.RUNTIME_STATUS, {
++                "vendor": "codex-cli", "apiRetry": {**self._http_retry, "end": at},
++            })
++            self._http_retry = None
++
 +    async def _availability(self, available: bool) -> None:
 +        if available != self._api_available:
 +            self._api_available = available
@@ -14,7 +32,22 @@
 +                "vendor": "codex-cli", "apiAvailable": available,
 +            })
 +
-@@ -308,0 +319,16 @@
+@@ -308,0 +334,31 @@
++        if method == "rsi/httpTiming":
++            kind, at = params["kind"], params["at"]
++            if kind == "start":
++                self._request_started = at
++            elif kind == "failed" and self._http_retry is None:
++                self._http_retry = {
++                    "id": f"{self._request.execution_id}:{at}",
++                    "start": self._request_started if self._request_started is not None else at,
++                    "end": None,
++                }
++                await self._emit(EventType.RUNTIME_STATUS, {"vendor": "codex-cli", "apiRetry": dict(self._http_retry)})
++            elif kind == "recovered":
++                await self._retry_recovered(at)
++                self._request_started = None
++            return
 +        # Observe native retry events without changing Codex's loop or policy.
 +        if method == "error":
 +            error = json.dumps(params).lower()
@@ -31,3 +64,64 @@
 +            total = params.get("tokenUsage", {}).get("total", {}).get("totalTokens", 0)
 +            if total > self._state.token_total.get("totalTokens", 0):
 +                await self._availability(True)
+@@ -628,0 +685,5 @@
++        # Only transport metadata goes to the observer; request bodies stay unlogged.
++        environment["LOG_FORMAT"] = "text"
++        environment["RUST_LOG"] = environment.get("RUST_LOG", "warn") + (
++            ",codex_http_client::client=debug,codex_http_client::custom_ca=info,codex_core::client=info"
++        )
+--- areal_agent_runtime/adapters/codex_cli/process.py
++++ areal_agent_runtime/adapters/codex_cli/process.py
+@@ -8,0 +9,2 @@
++
++from areal_agent_runtime.adapters.codex_cli.transport_timing import transport_event
+@@ -15,0 +18 @@
++        self.transport: Callable[[str, float], None] = lambda _kind, _at: None
+@@ -100,2 +103,11 @@
+-        while await self.process.stderr.read(16384):
+-            pass
++        pending = b""
++        while chunk := await self.process.stderr.read(16384):
++            pending += chunk
++            while b"\n" in pending:
++                line, pending = pending.split(b"\n", 1)
++                event = transport_event(line.decode(errors="replace"))
++                if event is not None:
++                    self.transport(*event)
++            # Do not retain an arbitrarily large native error line.
++            if len(pending) > 65536:
++                pending = b""
+--- /dev/null
++++ areal_agent_runtime/adapters/codex_cli/transport_timing.py
+@@ -0,0 +1,31 @@
++"""Extract transport timestamps without retaining native log contents."""
++
++from __future__ import annotations
++
++import re
++from datetime import datetime
++
++_ANSI = re.compile(r"\x1b\[[0-9;]*m")
++_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z")
++_RESPONSE = re.compile(r"url=\S*/responses(?:\?\S*)?(?:\s|$)")
++
++
++def transport_event(line: str) -> tuple[str, float] | None:
++    line = _ANSI.sub("", line)
++    kind = None
++    if "codex_http_client::custom_ca" in line and "model_client.stream_responses_api" in line:
++        if "building HTTP client" in line or "using system root certificates" in line:
++            kind = "start"
++    elif "codex_http_client::client" in line and _RESPONSE.search(line):
++        if "Request failed method=POST" in line:
++            kind = "failed"
++        elif "Request completed method=POST" in line:
++            status = re.search(r"\bstatus=(\d+)", line)
++            if status and (int(status[1]) >= 500 or int(status[1]) in {408, 429}):
++                kind = "failed"
++            elif status and 200 <= int(status[1]) < 300:
++                kind = "recovered"
++    stamp = _TIMESTAMP.search(line) if kind else None
++    if stamp is None:
++        return None
++    return kind, datetime.fromisoformat(stamp[0].replace("Z", "+00:00")).timestamp()

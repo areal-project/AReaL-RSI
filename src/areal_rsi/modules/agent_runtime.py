@@ -49,6 +49,10 @@ class AgentRuntime(Protocol):
 
     async def reconfigure_session(self, session_dir: Path, revision: str) -> None: ...
 
+    async def close_session(self, session_dir: Path) -> None:
+        """Release one cancelled conversation without affecting other agents."""
+        ...
+
     async def close(self) -> None: ...
 
     async def turn(

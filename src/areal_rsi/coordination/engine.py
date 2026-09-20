@@ -19,10 +19,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import IO, Any
 
-from areal_rsi.agents.communication import INTEGRITY_PROMPT
-from areal_rsi.agents.interaction.prompt import PROMPT as INTERACTION_PROMPT
-from areal_rsi.agents.research.passk_prompt import PROMPT as RESEARCH_PROMPT
-from areal_rsi.agents.rsi.passk_prompt import PROMPT as RSI_PROMPT
 from areal_rsi.api.base import AgentState
 from areal_rsi.api.research import ResearchMessage
 from areal_rsi.base.storage import encode, now, write_json
@@ -31,6 +27,14 @@ from areal_rsi.coordination.effective_time import EffectiveTime
 from areal_rsi.coordination.sources import archive_codex_source
 from areal_rsi.modules.agent_runtime import AgentRuntime, ToolHandler
 from areal_rsi.modules.responses import ResponsesError
+from areal_rsi.prompts import load_prompt
+
+INTEGRITY_PROMPT = load_prompt("agents/shared/integrity.md")
+INTERACTION_PROMPT = load_prompt("agents/interaction/prompt.md") + load_prompt(
+    "agents/shared/communication.md"
+)
+RESEARCH_PROMPT = load_prompt("agents/research/passk.md")
+RSI_PROMPT = load_prompt("agents/rsi/passk.md")
 
 Json = dict[str, Any]
 TickHook = Callable[[], Awaitable[bool | None]]
@@ -206,6 +210,11 @@ class ResearchEngine:
 
     async def _event(self, agent_id: str, session: Path, event: Json) -> None:
         kind = event["type"]
+        if kind == "api_retry":
+            if self.effective is not None:
+                self.effective.retry(agent_id, event["id"], event["start"], event["end"])
+                self.coordinator.save()
+            return
         if kind == "api_availability":
             if self.effective is not None:
                 self.effective.availability(agent_id, event["available"], event["timestamp"])

@@ -1,0 +1,1 @@
+Read report and verification files before relevant outputs or trajectories. Read small excerpts separately; continue when tool output is truncated.

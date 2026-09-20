@@ -13,6 +13,7 @@ from areal_rsi.coordination.actions import REFERENCES, STRING, ResearchActions, 
 from areal_rsi.coordination.coordinator import Coordinator, effect_id
 from areal_rsi.coordination.engine import ResearchEngine
 from areal_rsi.modules.agent_runtime import ToolCall, ToolHandler, ToolResult
+from areal_rsi.prompts import load_prompt
 
 SUPERVISOR_TOOLS = [
     definition("start_researchers", "一次启动固定数量的独立研究员，每人获得相同的完整任务。"),
@@ -30,7 +31,7 @@ PROGRESS_TOOL = definition(
     message=STRING,
     references=REFERENCES,
 )
-CONTINUE_MESSAGE = "研究尚未结束，还有时间和资源。请继续独立探索并验证你的方案。"
+CONTINUE_MESSAGE = load_prompt("agents/research/continue.md")
 
 ALLOWED_TOOLS = {
     "get_state",
@@ -139,12 +140,14 @@ class PassKActions(ResearchActions):
 
     def state(self, agent_id: str) -> dict[str, Any]:
         c = self.c
+        brief = c.store.brief()
         budget = c.budget()
+        best = self._best_results()
         if "clock" in budget:
             # Run setup is not part of a researcher's personal budget. Keep
             # the wall-clock duration in the operator view, not this countdown.
             budget.pop("elapsed_seconds")
-            if c.store.brief().limits.max_wall_seconds is None:
+            if brief.limits.max_wall_seconds is None:
                 for name in ("remaining_wall_seconds", "deadline_at"):
                     budget.pop(name)
         if agent_id == "rsi":
@@ -152,7 +155,7 @@ class PassKActions(ResearchActions):
                 "run_id": c.store.run_id,
                 "agent_id": "rsi",
                 "status": c.state["status"],
-                "brief": encode(c.store.brief()),
+                "brief": encode(brief),
                 "started_researchers": bool(c.state.get("passk_ready")),
                 "plan": c.state.get("plan", ""),
                 "budget": budget,
@@ -162,7 +165,7 @@ class PassKActions(ResearchActions):
                         "state": actor.state,
                         "wait_reason": actor.wait_reason,
                         "needs_continue": needs_continue(c, actor.agent_id),
-                        "best": self.state(actor.agent_id)["best"],
+                        "best": encode(best[actor.agent_id]) if actor.agent_id in best else None,
                         "latest_report": c.state.get("passk_reports", {}).get(actor.agent_id),
                     }
                     for actor in c.store.run().research_agents
@@ -170,34 +173,16 @@ class PassKActions(ResearchActions):
             }
         actor = c.actor(agent_id)
         effective = budget.get("researchers", {}).get(agent_id)
-        results = [
-            result
-            for result in c.store.records("verifications", VerifiedResult)
-            if c.store.get("candidates", result.candidate_id, CandidateSnapshot).source_agent_id
-            == agent_id
-            and result.status == "succeeded"
-            and result.passed
-            and result.phase == "search"
-            and result.contract_digest == c.store.contract_digest()
-            and result.simulated == c.state["simulated"]
-            and result.score is not None
-            and not c.store.is_withdrawn(result.candidate_id)
-        ]
-        contract = c.store.brief().verification
-        results.sort(
-            key=lambda result: float(result.score or 0),
-            reverse=bool(contract and contract.direction == "maximize"),
-        )
         return {
             "run_id": c.store.run_id,
             "agent_id": agent_id,
             "status": c.state["status"],
-            "brief": encode(c.store.brief()),
+            "brief": encode(brief),
             "simulated": c.state["simulated"],
             "current_node": encode(actor.iterations[-1]) if actor.iterations else None,
             "seed_candidate_id": c.state["seed_candidate_id"],
             "workspace_candidate_id": self.workspace_candidate(agent_id),
-            "best": encode(results[0]) if results else None,
+            "best": encode(best[agent_id]) if agent_id in best else None,
             "budget": {
                 name: budget[name]
                 for name in (
@@ -211,11 +196,57 @@ class PassKActions(ResearchActions):
             }
             | ({"effective_time": effective} if effective else {}),
             "execution_limits": {
-                "max_concurrent_jobs": c.store.brief().limits.max_jobs,
+                "max_concurrent_jobs": brief.limits.max_jobs,
                 "submission_limit": None,
                 "note": "max_jobs 是同时运行的作业数量，不是累计提交次数；本次提交次数不限。",
             },
         }
+
+    def _best_results(self) -> dict[str, VerifiedResult]:
+        """One scan per view, shared by the leader's entire roster.
+
+        Keep this local to the read: new results and withdrawals must be visible
+        on the next request, including those written by another coordinator.
+        """
+        c = self.c
+        contract = c.store.brief().verification
+        if contract is None:
+            return {}
+        digest = c.store.contract_digest()
+        withdrawn = {
+            (item["content_digest"], item.get("scope_agent_id") or None)
+            for item in c.store.withdrawals()
+        }
+        candidates: dict[str, CandidateSnapshot] = {}
+        best: dict[str, VerifiedResult] = {}
+        for result in c.store.records("verifications", VerifiedResult):
+            if (
+                result.status != "succeeded"
+                or not result.passed
+                or result.phase != "search"
+                or result.contract_digest != digest
+                or result.simulated != c.state["simulated"]
+                or result.score is None
+            ):
+                continue
+            if result.candidate_id not in candidates:
+                candidates[result.candidate_id] = c.store.get(
+                    "candidates", result.candidate_id, CandidateSnapshot
+                )
+            candidate = candidates[result.candidate_id]
+            owner = candidate.source_agent_id
+            if (candidate.content.digest, None) in withdrawn or (
+                candidate.content.digest, owner
+            ) in withdrawn:
+                continue
+            previous = best.get(owner)
+            if previous is None or (
+                result.score > float(previous.score or 0)
+                if contract.direction == "maximize"
+                else result.score < float(previous.score or 0)
+            ):
+                best[owner] = result
+        return best
 
     async def _apply(self, agent_id: str, key: str, name: str, args: dict[str, Any]) -> ToolResult:
         if name == "start_researchers":

@@ -2,6 +2,6 @@
 !.gitignore
 !PROVENANCE.json
 !areal_agent_runtime-0.4.0.dev1-py3-none-any.whl
-!areal_agent_runtime-0.4.0.dev1+rsi1-py3-none-any.whl
+!areal_agent_runtime-0.4.0.dev1+rsi2-py3-none-any.whl
 !codex-availability.patch
 !build_timing_wheel.py

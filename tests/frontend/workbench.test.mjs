@@ -156,20 +156,24 @@ test('creation sends the selected recipe and registered modules appear without f
   assert.deepEqual(submitted.collaboration, {mode: 'passk', modules: ['test_evidence']});
 });
 
-test('new studies default to v0.2.2 and can select v0.2.1 with its original modules', async (t) => {
+test('new studies default to v0.2.4 and preserve older prompt choices', async (t) => {
   const base = {id: 'leader_guidance', label: 'RSI 协调', version: '3', modes: ['passk'], requires: []};
   const prompt = {id: 'leader_guidance_v022', label: 'v0.2.2 Leader Prompt', version: '1', modes: ['passk'], requires: [base.id]};
+  const previous = {id: 'leader_guidance_v023', label: 'v0.2.3 精简 Prompt', version: '1', modes: ['passk'], requires: [base.id], conflicts: [prompt.id]};
+  const latest = {id: 'leader_guidance_v024', label: 'v0.2.4 持续协调', version: '1', modes: ['passk'], requires: [base.id], conflicts: [prompt.id, previous.id]};
   const presets = [
     {id: 'passk', label: '纯 pass@k', mode: 'passk', modules: []},
     {id: 'passk_guided', label: 'v0.2.1 · pass@k + RSI 协调', mode: 'passk', modules: [base.id]},
     {id: 'passk_guided_v022', label: 'v0.2.2 · pass@k + RSI 协调', mode: 'passk', modules: [base.id, prompt.id]},
+    {id: 'passk_guided_v023', label: 'v0.2.3 · pass@k + RSI 协调', mode: 'passk', modules: [base.id, previous.id]},
+    {id: 'passk_guided_v024', label: 'v0.2.4 · pass@k + RSI 持续协调', mode: 'passk', modules: [base.id, latest.id]},
   ];
   const records = {a: run('a')};
   const ui = await setup(t, records, (path, options) => {
     if (path === '/api/bootstrap') return Promise.resolve(response({
       csrf_token: 'test', default_model_settings: defaults, models: [],
-      collaboration_catalog: {modes: [collaborationCatalog.modes[0]], modules: [base, prompt], presets},
-      default_collaboration: {mode: 'passk', modules: [base.id, prompt.id]},
+      collaboration_catalog: {modes: [collaborationCatalog.modes[0]], modules: [base, prompt, previous, latest], presets},
+      default_collaboration: {mode: 'passk', modules: [base.id, latest.id]},
     }));
     if (path === '/api/runs' && options.method === 'POST') {
       records.new = run('new');
@@ -177,7 +181,7 @@ test('new studies default to v0.2.2 and can select v0.2.1 with its original modu
     }
   });
   ui.$('new-run').click();
-  assert.match(ui.$('create-collaboration-mode-trigger').textContent, /v0\.2\.2/);
+  assert.match(ui.$('create-collaboration-mode-trigger').textContent, /v0\.2\.4/);
   assert.equal(ui.$('create-collaboration-modules').querySelector('input').disabled, true);
   ui.$('create-collaboration-mode-trigger').click();
   ui.$('create-collaboration-mode-options').querySelectorAll('[role="option"]')[1].click();

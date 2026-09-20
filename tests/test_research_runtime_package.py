@@ -6,15 +6,19 @@ import asyncio
 import json
 import os
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
 import pytest
+from test_passk import setup
 
 from areal_rsi.api.research import TaskBrief
 from areal_rsi.coordination.actions import definition
 from areal_rsi.coordination.config import ResearchConfig
+from areal_rsi.coordination.jobs import ResearchExecution
+from areal_rsi.execution import ApprovedCommand
 from areal_rsi.modules.agent_runtime import ToolCall, ToolResult
 from areal_rsi.modules.research_runtime import ResearchRuntime
 from areal_rsi.modules.runtime_package import RuntimeSettings
@@ -29,7 +33,10 @@ class ResponsesModel:
         self.force_tool = False
         self.tool_name = "rsi_mcp_probe"
         self.tool_arguments = {"expression": "6 * 7"}
+        self.code_tool_input: str | None = None
         self.fail_requests = 0
+        self.failure_delay = 0.0
+        self.request_times: list[float] = []
         self.entered = threading.Event()
         self.release = threading.Event()
         self.release.set()
@@ -39,8 +46,10 @@ class ResponsesModel:
             def do_POST(self) -> None:
                 request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 owner.requests.append(request)
+                owner.request_times.append(time.time())
                 if owner.fail_requests:
                     owner.fail_requests -= 1
+                    time.sleep(owner.failure_delay)
                     self.send_response(503)
                     self.send_header("Connection", "close")
                     self.end_headers()
@@ -58,21 +67,33 @@ class ResponsesModel:
                 }
                 output = message
                 if owner.force_tool and not any(
-                    x.get("type") == "function_call_output" for x in request["input"]
+                    x.get("type") in {"function_call_output", "custom_tool_call_output"}
+                    for x in request["input"]
                 ):
-                    tool = next(
-                        t
-                        for t in request["tools"]
-                        if owner.tool_name in t["name"].replace(".", "_")
-                    )
-                    output = {
-                        "id": "fc_probe",
-                        "type": "function_call",
-                        "call_id": "probe",
-                        "name": tool["name"],
-                        "arguments": json.dumps(owner.tool_arguments),
-                        "status": "completed",
-                    }
+                    if owner.code_tool_input is not None:
+                        output = {
+                            "id": "fc_probe",
+                            "type": "custom_tool_call",
+                            "call_id": "probe",
+                            "name": "exec",
+                            "namespace": "functions",
+                            "input": owner.code_tool_input,
+                            "status": "completed",
+                        }
+                    else:
+                        tool = next(
+                            t
+                            for t in request["tools"]
+                            if owner.tool_name in t.get("name", "").replace(".", "_")
+                        )
+                        output = {
+                            "id": "fc_probe",
+                            "type": "function_call",
+                            "call_id": "probe",
+                            "name": tool["name"],
+                            "arguments": json.dumps(owner.tool_arguments),
+                            "status": "completed",
+                        }
                 events: list[dict[str, Any]] = [
                     {
                         "type": "response.created",
@@ -84,24 +105,27 @@ class ResponsesModel:
                         },
                     }
                 ]
-                if output["type"] == "function_call":
+                if output["type"] in {"function_call", "custom_tool_call"}:
+                    custom = output["type"] == "custom_tool_call"
+                    field = "input" if custom else "arguments"
+                    event_name = "custom_tool_call_input" if custom else "function_call_arguments"
                     events += [
                         {
                             "type": "response.output_item.added",
                             "output_index": 0,
-                            "item": {**output, "arguments": ""},
+                            "item": {**output, field: ""},
                         },
                         {
-                            "type": "response.function_call_arguments.delta",
+                            "type": f"response.{event_name}.delta",
                             "output_index": 0,
                             "item_id": "fc_probe",
-                            "delta": output["arguments"],
+                            "delta": output[field],
                         },
                         {
-                            "type": "response.function_call_arguments.done",
+                            "type": f"response.{event_name}.done",
                             "output_index": 0,
                             "item_id": "fc_probe",
-                            "arguments": output["arguments"],
+                            field: output[field],
                         },
                     ]
                 else:
@@ -264,6 +288,81 @@ def test_codex_native_tools_history_resume_and_usage(
         model.close()
 
 
+def test_codex_calls_scoped_tools_natively_without_shell_sessions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RSI_API_KEY", "fixture")
+    model = ResponsesModel()
+    model.force_tool = True
+    model.code_tool_input = (
+        'text(await tools.mcp__rsi__run_job({command_name:"probe",candidate_id:"",'
+        'parameters_json:"{}",wait:false}));'
+        'text(await tools.mcp__rsi__write_file({path:"source.py",content:"changed"}));'
+    )
+
+    async def scenario() -> None:
+        coordinator, actions, agents = await setup(tmp_path / "study", 1)
+        agent = agents[0]
+        coordinator.begin_turn(agent)
+        execution = ResearchExecution(
+            actions, commands={"probe": ApprovedCommand("probe", ("echo", "ok"))}, simulated=True
+        )
+        workspace = actions.workspace(agent)
+        (workspace / "source.py").write_text("original")
+        runtime = ResearchRuntime(
+            ResearchConfig(
+                TaskBrief("test", "test"),
+                backend="codex",
+                base_url=model.url,
+                model_settings_pinned=True,
+            )
+        )
+        calls = []
+
+        async def handle(call: ToolCall) -> ToolResult:
+            calls.append(call)
+            # Longer than the one-second shell wait that lost real-run outputs.
+            if call.name == "run_job":
+                await asyncio.sleep(1.1)
+            return await actions.handler(agent)(call)
+
+        try:
+            await asyncio.wait_for(
+                runtime.turn(
+                    tmp_path / "session",
+                    system_prompt="Submit this version, then edit the next version",
+                    user_message="Submit and edit",
+                    tools=[
+                        tool
+                        for tool in actions.definitions(agent)
+                        if tool["name"] in {"run_job", "write_file"}
+                    ],
+                    handler=handle,
+                    workspace=workspace,
+                ),
+                90,
+            )
+            assert [call.name for call in calls] == ["run_job", "write_file"]
+            assert len(execution.jobs) == 1
+            job_id = next(iter(execution.jobs))
+            assert job_id in json.dumps(model.requests[-1]["input"])
+            frozen = Path(execution.manager.get(job_id).spec.cwd)
+            assert (frozen / "source.py").read_text() == "original"
+            assert (workspace / "source.py").read_text() == "changed"
+            events, _ = read_journal(tmp_path / "session/runtime/data/state")
+            native = [str(e.data.get("name", "")) for e in events if e.type == "tool.started"]
+            assert any("mcp__rsi__run_job" in name for name in native)
+            assert not any("exec_command" in name for name in native)
+        finally:
+            await runtime.close()
+            execution.close(cancel=True)
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        model.close()
+
+
 @pytest.mark.skipif(
     os.environ.get("RSI_TEST_NATIVE_HARNESSES") != "1", reason="Opt in to native DSH installation"
 )
@@ -395,6 +494,28 @@ def test_tool_capability_and_workspace_sandbox_survive_restart(
             output = await invoke(bridge, {"name": "get_state", "arguments": {}, "call_id": "wait"})
             assert output["turn_finished"] and "incoming_messages" not in output
             assert not any(e["type"] == "message_injected" for e in delivered)
+            connection.stop_reason = None
+            connection.handler = handle
+            # A discarded tool output must not consume the message. Only an
+            # explicit read acknowledgment may do so, including after restart.
+            for call_id in ("discarded-output", "read-output"):
+                output = await invoke(
+                    bridge, {"name": "get_state", "arguments": {}, "call_id": call_id}
+                )
+                assert output["incoming_messages"] == pending
+            assert not any(e["type"] == "message_injected" for e in delivered)
+            acknowledgment = await invoke(
+                bridge,
+                {
+                    "name": "acknowledge_messages",
+                    "arguments": {"message_ids": ["job-completed", "another-agent-message"]},
+                    "call_id": "read",
+                },
+            )
+            assert acknowledgment["result"]["acknowledged"] == ["job-completed"]
+            assert [e["message_id"] for e in delivered if e["type"] == "message_injected"] == [
+                "job-completed"
+            ]
             await runtime.close()
             await runtime.turn(
                 session,

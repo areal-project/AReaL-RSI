@@ -67,6 +67,11 @@ class EffectiveTime:
         if agent is not None and agent["finished_at"] is None:
             agent["queue_spans"][key] = [start, end]
 
+    def retry(self, agent_id: str, key: str, start: float, end: float | None) -> None:
+        agent = self.data["agents"].get(agent_id)
+        if agent is not None:
+            agent.setdefault("retry_spans", {})[key] = [start, end]
+
     def finish_agent(self, agent_id: str, at: float) -> None:
         agent = self.data["agents"].get(agent_id)
         if agent is not None and agent["finished_at"] is None:
@@ -78,12 +83,13 @@ class EffectiveTime:
         if agent is not None:
             end = min(at, agent["finished_at"] or at)
             queues = list(agent["queue_spans"].values())
+            outages = agent["api_spans"] + list(agent.get("retry_spans", {}).values())
             for lo, hi in self.data["periods"]:
                 start, stop = max(lo, agent["started_at"]), min(hi or end, end)
                 worker += max(0.0, stop - start)
                 queue += union_seconds(queues, start, stop)
-                api += union_seconds(agent["api_spans"], start, stop)
-                excluded += union_seconds(queues + agent["api_spans"], start, stop)
+                api += union_seconds(outages, start, stop)
+                excluded += union_seconds(queues + outages, start, stop)
         active = max(0.0, worker - excluded)
         return {
             "clock": PROTOCOL,

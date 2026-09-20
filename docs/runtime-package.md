@@ -41,7 +41,7 @@ uv sync --locked --extra claude
 ```
 
 Runtime wheel 固定在 `vendor/`，上游版本为 `0.4.0.dev1`，来自 Runtime 提交 `223af018a1e1e3d1cd3ed8303da47553f16e929e`。
-当前使用 `0.4.0.dev1+rsi1`，仅补充 Codex API 故障/恢复事件，用于[有效时间计时](effective-time.md)。
+当前使用 `0.4.0.dev1+rsi2`，补充 Codex API 故障/恢复事件与内部 HTTP 重试区间，用于[有效时间计时](effective-time.md)。
 补丁为 `vendor/codex-availability.patch`，运行 `python vendor/build_timing_wheel.py` 可从保留的原始 wheel 重建。
 `vendor/PROVENANCE.json` 记录 wheel 与 DSH npm bundle 的摘要。它是从确定源码构建的制品，不表示已发布到 PyPI。
 DSH npm bundle 仍使用原来的 `0.3.0` 制品，其来源提交单独记录在 `artifact_source_commits` 中。
@@ -136,6 +136,8 @@ portable ToolSpec 的精确授权。远端执行的隔离需要在远端部署�
   worker 从已安装的 RSI 包中提取执行所需的模块文件到会话目录，并禁止读取完整 RSI 包，
   避免工具从评测模块读取隐藏答案；没有复制 Runtime 内核。
   `readable_paths` 只用于可信部署明确指定的 Harness 安装/依赖目录，不要指向整个数据目录。
+- 原生 HTTPS 转发运行在独立子进程中，避免工作台文件查询与研究调度阻塞 TLS。
+  连接仍执行原有公开地址检查与地址固定，TLS 保持端到端；父进程退出后通过 stdin EOF 关闭转发。
 - Codex 在默认模式下使用外层 RSI 沙箱；其内层配置默认 `danger-full-access`，用于避免 macOS 拒绝嵌套 sandbox-exec。
   实际进程仍受 RSI 外层文件权限限制，该字段不意味着拥有宿主文件访问权限。
 - 子进程从最小环境构建，不继承桌面 Agent 的会话、工具或宿主密钥。模型密钥保留在父进程代理。

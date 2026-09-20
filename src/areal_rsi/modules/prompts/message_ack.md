@@ -1,0 +1,1 @@
+工具结果中的 incoming_messages 是团队发来的新消息。读完后调用 acknowledge_messages 确认 message_ids；确认只表示已读，不要求采纳建议。

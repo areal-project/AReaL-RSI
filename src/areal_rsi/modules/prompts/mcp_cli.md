@@ -1,0 +1,1 @@
+MCP tools are available through the installed RSI MCP client. Run {{python}} -I {{client}} {{manifest}} list to inspect tool schemas; replace list with call SERVER TOOL JSON_ARGUMENTS to invoke. Use your shell tool (or workspace.run with argv).

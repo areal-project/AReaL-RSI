@@ -85,6 +85,7 @@ def prepare(
     mode: str = "passk",
     collaboration_modules: tuple[str, ...] = DEFAULT_MODULES,
     max_effective_seconds: int | None = None,
+    execution_interface: str | None = None,
 ) -> dict[str, Any]:
     safe_name(run_id)
     collaboration_modules = selected_modules(mode, collaboration_modules)
@@ -115,12 +116,19 @@ def prepare(
         base_url=demo["base_url"],
     )
     config.pin_model_settings()
+    interface = execution_interface or ("cli" if config.backend == "codex" else "tools")
+    if interface not in {"cli", "tools"} or (interface == "cli" and config.backend != "codex"):
+        raise ValueError("execution_interface 支持 tools 或 codex 后端的 cli")
     if not check and check_credentials:
         config.runtime()  # Check local credentials before registering any remote tasks.
     setup = root / "runs" / run_id / "setup"
     config_path = setup / "research.json"
     if not check and config_path.exists():
         existing: dict[str, Any] = json.loads(config_path.read_text())
+        if execution_interface is not None and (
+            existing["metadata"].get("execution_interface", "tools") != interface
+        ):
+            raise ValueError("此研究已有不同的执行入口；请新建研究")
         if existing.get("mode", "collaborative") != mode:
             raise ValueError("此研究已有不同的协作方式；请新建研究")
         if (
@@ -203,6 +211,16 @@ def prepare(
         demo["tasks"][case]["sha256"] = manifest["tasks"][case]["reference_sha256"]
     write_json(setup / "demo.json", demo, immutable=True)
     rules = (HERE / "PASSK_RULES.md").read_text()
+    if interface == "cli":
+        (seed / "reference.py").write_bytes((seed / "tasks" / task / "reference.py").read_bytes())
+        (seed / "baseline.json").write_bytes((seed / "tasks" / task / "baseline.json").read_bytes())
+        (setup / "agent-cli.py").write_bytes((HERE / "agent_cli.py").read_bytes())
+        rules = rules.replace("tasks/<题号>/reference.py", "reference.py").replace(
+            "GPU 仅通过 evaluate_task / diagnose_task 作业使用；提交次数不限。"
+            "用 run_job(wait=true) 等待，",
+            "GPU 仅通过 kb eval / gpuq run 使用；提交次数不限。通过原生 exec_command 执行，"
+            "可以用 yield_time_ms=1000 取得后台进程，再用 write_stdin 或 kb wait 读取结果。",
+        )
     if guided:
         rules = rules.replace(
             "可以向 RSI 报告进展，但不等待技术指导，不与其他研究员交换信息。",
@@ -277,13 +295,17 @@ def prepare(
                 "{script}",
                 "--candidate",
                 "{candidate}",
+                *(("--script-args", "{arguments}") if interface == "cli" else ()),
             ),
-            ("workspace", "output", "task", "script", "candidate"),
+            ("workspace", "output", "task", "script", "candidate")
+            + (("arguments",) if interface == "cli" else ()),
             queue_timing_file="remote-job.json",
             parameter_descriptions={
                 "task": "题目标识，可选值：" + "、".join(demo["tasks"]) + "；不是文件路径。",
                 "script": "自包含诊断脚本，相对自己工作区的文件路径。",
                 "candidate": "供诊断导入的产物文件，相对自己工作区的路径；无需产物时填空字符串。",
+                **({"arguments": "诊断脚本命令行参数的 JSON 字符串数组，例如 []。"}
+                   if interface == "cli" else {}),
             },
         ),
         ApprovedCommand(
@@ -377,7 +399,13 @@ def prepare(
         f"公开题目在 tasks/{task}/reference.py，评测要求见 RULES.md。"
         "每个研究员从相同材料开始，独立完成调研、实现、实验和改进，自行决定研究方向。"
         "开始时主动联网调研，后续按需要继续查阅允许范围内的资料。\n\n"
-        f"{time_policy}{budget_policy}固定启动 {max_agents} 名研究员，不替换或追加尝试。"
+        f"{time_policy}{budget_policy}"
+        + (
+            f"固定启动 {max_agents} 名研究员。允许 RSI 为停滞的研究员回滚并开启新会话，"
+            "仍占原名额并沿用原剩余预算，不追加研究员。"
+            if "researcher_restart" in collaboration_modules
+            else f"固定启动 {max_agents} 名研究员，不替换或追加尝试。"
+        )
         + (
             "向 RSI 报告关键进展和困难，报告后继续研究。"
             "RSI 综合团队进展、核查原始证据并提出明确的非阻塞指导；"
@@ -417,6 +445,20 @@ def prepare(
         "budget_clock": config.metadata["budget_clock"],
         "final_confirmation_outside_exploration": True,
     }
+    config.metadata["execution_interface"] = interface
+    if interface == "cli":
+        config.metadata["shell_commands"] = {
+            name: str((setup / "agent-cli.py").resolve()) for name in ("kb", "gpuq")
+        }
+        instructions = (HERE / "CLI.md").read_text()
+        (seed / "EVALUATE.md").write_text(instructions)
+        config.metadata["execution_instructions"] = instructions
+        config.metadata["agent_tool_instructions"] = (
+            "先阅读自己的 RULES.md、reference.py 和 baseline.json。\n"
+            + instructions + "\n" + web_policy
+            + ("\n本 run 团队产物通过研究工具查阅和复用，仍需自行验证。" if guided else "")
+        )
+        config.metadata["comparison_protocol"]["execution_interface"] = "native-cli-v1"
     config.__post_init__()
     write_json(config_path, config.public(), immutable=True)
     return config.public()

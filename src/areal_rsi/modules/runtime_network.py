@@ -1,7 +1,7 @@
 """Public HTTPS tunnelling for native clients inside the macOS file sandbox.
 
 TLS remains end-to-end. Resolve and pin public destination addresses in the
-parent so this listener cannot become a route into another run's local services.
+relay so this listener cannot become a route into another run's local services.
 """
 
 from __future__ import annotations
@@ -9,11 +9,13 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import socket
+import sys
 from contextlib import suppress
+from pathlib import Path
 from urllib.parse import urlsplit
 
 
-class HttpsTunnel:
+class _TunnelServer:
     def __init__(self, base_url: str = "") -> None:
         provider = urlsplit(base_url)
         self.provider = (provider.hostname, provider.port or 443)
@@ -89,3 +91,65 @@ class HttpsTunnel:
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+
+
+class HttpsTunnel:
+    """Own a relay process so synchronous research/UI work cannot stall TLS."""
+
+    def __init__(self, base_url: str = "") -> None:
+        self.base_url = base_url
+        self.process: asyncio.subprocess.Process | None = None
+        self.port: int | None = None
+        self._lock = asyncio.Lock()
+
+    async def start(self) -> int:
+        async with self._lock:
+            if self.process is None:
+                self.process = await asyncio.create_subprocess_exec(
+                    sys.executable,
+                    "-I",
+                    str(Path(__file__).resolve()),
+                    self.base_url,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                assert self.process.stdout is not None
+                try:
+                    self.port = int(await asyncio.wait_for(self.process.stdout.readline(), 10))
+                except BaseException:
+                    await self.close()
+                    raise
+            assert self.port is not None
+            return self.port
+
+    async def close(self) -> None:
+        process, self.process = self.process, None
+        self.port = None
+        if process is None:
+            return
+        assert process.stdin is not None
+        process.stdin.close()
+        try:
+            await asyncio.wait_for(process.wait(), 5)
+        except TimeoutError:
+            process.kill()
+            await process.wait()
+
+
+async def _main() -> None:
+    server = _TunnelServer(sys.argv[1])
+    try:
+        print(await server.start(), flush=True)
+        # EOF also closes the relay if its owner exits unexpectedly.
+        reader = asyncio.StreamReader()
+        await asyncio.get_running_loop().connect_read_pipe(
+            lambda: asyncio.StreamReaderProtocol(reader), sys.stdin
+        )
+        await reader.read()
+    finally:
+        await server.close()
+
+
+if __name__ == "__main__":
+    asyncio.run(_main())

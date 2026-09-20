@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 from areal_rsi.api.modules import AgentSession
+from areal_rsi.prompts import load_prompt
 
 
 def parse_object(text: str) -> dict[str, Any]:
@@ -25,6 +26,4 @@ async def ask_json(session: AgentSession, prompt: str) -> dict[str, Any]:
         return parse_object(reply)
     except (ValueError, json.JSONDecodeError):
         # 格式重试不补充答案、修改建议或评测数据。
-        return parse_object(
-            await session.send("请只返回前述要求的合法 JSON 对象，无代码块或额外文本。")
-        )
+        return parse_object(await session.send(load_prompt("agents/shared/json_reply.md")))

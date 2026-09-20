@@ -166,7 +166,16 @@ def test_http_selection_and_historical_read_only_projection(tmp_path: Path) -> N
         assert [m["id"] for m in bootstrap["collaboration_catalog"]["modes"]] == ["passk"]
         assert "leader_guidance" in {m["id"] for m in bootstrap["collaboration_catalog"]["modules"]}
         assert bootstrap["collaboration_catalog"]["presets"][1]["modules"] == ["leader_guidance"]
-        assert bootstrap["collaboration_catalog"]["presets"][2]["modules"] == list(DEFAULT_MODULES)
+        assert bootstrap["collaboration_catalog"]["presets"][2]["modules"] == [
+            "leader_guidance",
+            "leader_guidance_v022",
+        ]
+        default_preset = next(
+            preset
+            for preset in bootstrap["collaboration_catalog"]["presets"]
+            if preset["id"] == "passk_guided_v024"
+        )
+        assert default_preset["modules"] == list(DEFAULT_MODULES)
         detail = client.request(
             "/api/runs",
             {

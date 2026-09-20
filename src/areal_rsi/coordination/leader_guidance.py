@@ -6,14 +6,13 @@ import json
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
-from areal_rsi.agents.research.leader_guidance_prompt import PROMPT as RESEARCH_PROMPT
-from areal_rsi.agents.rsi.leader_guidance_prompt import PROMPT as RSI_PROMPT
-from areal_rsi.api.base import RecordRef
+from areal_rsi.api.base import AgentState, RecordRef
 from areal_rsi.base.storage import now
 from areal_rsi.coordination.actions import REFERENCES, STRING, ResearchActions, definition
 from areal_rsi.coordination.passk import SUPERVISOR_TOOLS, PassKActions
 from areal_rsi.modules.agent_runtime import ToolResult
 from areal_rsi.modules.runtime_storage import read_journal
+from areal_rsi.prompts import load_prompt
 
 if TYPE_CHECKING:
     from areal_rsi.coordination.collaboration import CollaborationPlan
@@ -103,6 +102,8 @@ class GuidedPassKActions(PassKActions):
             if target not in {actor.agent_id for actor in self.c.store.run().research_agents}:
                 raise ValueError("Unknown researcher")
             if name == "advise_researcher":
+                if self.c.actor(target).state == AgentState.STOPPED:
+                    raise ValueError("这名研究员已经停止，不能再发送指导；请查看其他成员的剩余预算")
                 refs = self.handoff_refs(args["message"], args["references"])
                 message_id = self.c.enqueue(
                     "rsi",
@@ -121,10 +122,12 @@ class GuidedPassKActions(PassKActions):
             return self.trace(target, key, args["offset"])
         return await super()._apply(agent_id, key, name, args)
 
-    def trace(self, agent_id: str, key: str, offset: int) -> ToolResult:
+    def trace(
+        self, agent_id: str, key: str, offset: int, *, session_id: str | None = None
+    ) -> ToolResult:
         store = self.c.store
         actor = self.c.actor(agent_id)
-        session = actor.session_id or agent_id
+        session = session_id or actor.session_id or agent_id
         root = store.paths.agent(agent_id) / "sessions" / session / "runtime/data/state"
         events, _ = read_journal(root, boundary=store.root)
         text = "\n".join(
@@ -151,7 +154,7 @@ def apply(plan: CollaborationPlan) -> CollaborationPlan:
     return replace(
         plan,
         actions=GuidedPassKActions,
-        rsi_prompt=RSI_PROMPT,
-        research_prompt=RESEARCH_PROMPT,
+        rsi_prompt=load_prompt("agents/rsi/leader_guidance_v0.2.1.md"),
+        research_prompt=load_prompt("agents/research/leader_guidance_v0.2.1.md"),
         supervisor_only=False,
     )

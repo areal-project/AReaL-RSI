@@ -1,0 +1,15 @@
+{
+  "group_name": "v0.2.1.1-L1P63",
+  "max_agents": 4,
+  "max_effective_seconds": 3600,
+  "reasoning_effort": "xhigh",
+  "execution_interface": "cli",
+  "runs": [
+    {
+      "task": "L1P63",
+      "model": "gpt-6-astra",
+      "collaboration": "passk_guided_v0211",
+      "label": "v0.2.1.1"
+    }
+  ]
+}

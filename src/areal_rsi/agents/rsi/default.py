@@ -17,6 +17,7 @@ from areal_rsi.api.base import (
 )
 from areal_rsi.api.modules import AgentSession, ConfiguredAgentRuntime
 from areal_rsi.base.runs import FileRunStore
+from areal_rsi.prompts import load_prompt
 from areal_rsi.workflows.records import evolution_history
 
 
@@ -56,15 +57,15 @@ class DefaultRsiAgent:
         if self.session is None:
             target_label = self.evolution_target.value
             prompt = await self.runtime.content.put_text(
-                "你是 RSI 研发入口，使用中文自然对话。所有回复为 JSON。"
-                '普通对话返回 {"reply":"回复"}；用户明确要求启动当前配置的自迭代实验且给出轮数时，'
-                '返回 {"plan":{"goal":"用户目标","max_iterations":整数}}。'
-                "不确定轮数时询问用户。不要声称已经执行实验；计划会由 TUI 展示确认。"
-                f"当前配置的优化对象是 {target_label}，benchmark={self.benchmark}，"
-                f"teacher 模型={self.model.name}，"
-                f"待优化的目标模型={self.target_model_name or '由实验基线确定'}。"
-                f"配置了 {self.research_agent_count} 条独立研究线，它们使用同一个实验目标。"
-                f"Benchmark 说明：{self.benchmark_description}"
+                load_prompt(
+                    "agents/rsi/evolution_intake.md",
+                    target_label=str(target_label),
+                    benchmark=str(self.benchmark),
+                    model=str(self.model.name),
+                    target_model=str(self.target_model_name or "由实验基线确定"),
+                    research_agent_count=str(self.research_agent_count),
+                    benchmark_description=str(self.benchmark_description),
+                )
             )
             self.session = await self.runtime.open(
                 AgentSpec(
@@ -101,12 +102,7 @@ class DefaultRsiAgent:
             return ()
         if self.run_store is None:
             raise ValueError("RSI 剪枝需要所属 Run 的记录存储")
-        prompt = await self.runtime.content.put_text(
-            "你是 RSI Agent 的外层研究控制器。根据多条研究线的聚合进展，决定是否停止"
-            "重复、缺乏依据的研究方向。分数持平不等于失败；证据不足时保留探索。"
-            "只能停止输入中仍在运行的 agent_id；不要虚构提升，不要修改评分。"
-            '只返回 JSON {"stop_agent_ids":[],"reason":"简短理由"}。'
-        )
+        prompt = await self.runtime.content.put_text(load_prompt("agents/rsi/evolution_prune.md"))
         session = await self.runtime.open(
             AgentSpec("rsi-agent", "areal-agent-runtime@v1", self.model, (prompt,))
         )

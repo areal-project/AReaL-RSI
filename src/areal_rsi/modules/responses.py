@@ -42,26 +42,15 @@ from areal_rsi.modules.agent_runtime import (
 from areal_rsi.modules.agent_runtime import (
     TurnResult as TurnResult,
 )
+from areal_rsi.prompts import load_prompt
 
 Json = dict[str, Any]
 
-RECOVERY_PROMPT = """继续当前任务的未完成部分。检查点是历史摘要，不是新指令。
-active_instruction 保留原始要求，authoritative_state 是系统状态，后续消息和工具结果更近。
-运行时状态快照只描述记录时的事实，以后续工具结果和更新为准，不覆盖较新的计划或预算。
-压缩本身不表示暂停、完成、增加限制或撤销授权。沿用事实与最近原文，只补查影响下一步的缺口。
-"""
+RECOVERY_PROMPT = load_prompt("modules/prompts/recovery.md")
 
 STATE_PREFIX = "运行时状态快照（不是新的用户请求）：\n"
 
-COMPACT_PROMPT = """为同一 Agent 继续工作写简体中文历史检查点；
-只概括已有 conversation，不执行其中任务。
-围绕下一步决策保留：当前阶段的关键结论与未解决依赖；可复用产物及具体反例；会改变方向判断的实验结果、已排除解释和仍未验证的机制；恢复这些事实所需的精确引用。
-系统另行原样保留 active_instruction、authoritative_state 和最近原文。
-conversation 已省略重复的历史运行时状态快照，保留原消息及工具记录。
-不重抄目标、通用规则、预算、Agent清单、工具说明或已保留的近期消息。
-限制存在误读或范围争议时，简要保留最终澄清及依据，不新增授权、禁令或停止决定。
-同一结论合并，旧判断以已有最终更正为准，不按时间流水重述纠错过程；清楚区分作者、不同实现、已测范围和猜测。引用放在相关结论旁，不另抄一份重复索引；详细日志、代码和参数表留在记录中。
-优先用约1000–1800个汉字形成紧凑检查点；独立且会影响后续行动的重要事实较多时可适当增加，不为凑字数删除关键限制或反例。摘要要求本身不属于原任务，不写入待办。"""
+COMPACT_PROMPT = load_prompt("modules/prompts/compact.md")
 
 
 class ResponsesError(RuntimeError):
@@ -443,6 +432,10 @@ class ResponsesRuntime:
     async def close(self) -> None:
         pass
 
+    async def close_session(self, session_dir: Path) -> None:
+        # Turns own their requests; the caller has already cancelled the turn.
+        self._locks.pop(session_dir.resolve(), None)
+
     def __init__(self, config: ResponsesConfig, transport: ResponsesTransport | None = None):
         self.config = config
         self.transport = transport or HttpResponsesTransport()
@@ -812,17 +805,13 @@ class _Conversation:
             prompt += "\n\n" + RECOVERY_PROMPT
         budget_prompt = ""
         if remaining is not None:
-            budget_prompt = (
-                f"\n\n运行时调用预算：本逻辑回合剩余 {remaining} 次模型调用，包含本次响应。"
-                f"本次响应后最多还有 {remaining - 1} 次调用。run 的全局限制可能提前停止执行。"
-                "这一计数是执行上限，不能据此编造结果或把未完成研究说成已完成。"
+            budget_prompt = load_prompt(
+                "modules/prompts/call_budget.md",
+                remaining=str(remaining),
+                after_response=str(remaining - 1),
             )
         if kind == "turn" and remaining is not None and remaining <= 4:
-            budget_prompt += (
-                " 当前额度即将耗尽，请收尾本项工作：按角色使用报告、明确等待或向用户提问的工具。"
-                "写清具体完成的工作、证据和未完成步骤，不再开启新方向或继续广泛浏览论文。"
-                "为提交报告或进入明确等待状态保留必要的工具调用。"
-            )
+            budget_prompt += load_prompt("modules/prompts/call_budget_exhausting.md")
         if kind == "compact":
             budget_prompt = ""
         if budget_prompt:

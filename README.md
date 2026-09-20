@@ -7,7 +7,8 @@
 需要 Python 3.11+ 和 uv。默认隔离模式需要 macOS `sandbox-exec`；可信 Linux
 服务器可在 `.env` 中显式设置 `RSI_RUNTIME_ISOLATION=linux-unrestricted`，
 Agent 将以服务用户权限运行，不提供文件或进程隔离，详见[后端说明](docs/agent-backends.md)。
-standard 后端还需要 Node.js 22.19+ 和 pnpm。研究模型接口须支持 Responses API 和工具调用。
+standard 后端还需要 Node.js 22.19+ 和 pnpm。standard/codex 的研究模型接口须支持
+Responses API 和工具调用；其他后端使用对应的协议。
 
 ```bash
 uv sync --locked
@@ -34,9 +35,10 @@ uv run --env-file .env --locked python run.py --type web
 
 打开 **http://127.0.0.1:8197**，新建研究，与 Interaction 讨论任务、环境、资源限制和目标，要求开始后交给 RSI。开始前可选择 Agent 后端，并修改模型地址、密钥、名称和推理强度；开始后任务和协作配置锁定，可查看进展或明确停止。
 
-Agent 后端有 `standard`（默认，AReaL Runtime 的 DSH 适配器）和 `codex`（Codex 原生循环、编程工具与网页搜索）。选择对 Interaction、RSI 和所有 Research Agents 生效。完整研究配置使用 `"backend": "codex"`；旧配置省略此字段时沿用 `standard`。研究开始后后端与模型配置一起锁定。两种后端都使用本研究配置的 API 地址和密钥。
-
-两个后端都通过仓库原有的 `PackageAgentRuntime` 执行，会话、工具和压缩由 AReaL Agent Runtime 管理。RSI 保留编排、权限、作业和正式验证。具体接口和恢复边界见 [Agent 后端说明](docs/agent-backends.md)。
+Agent 后端支持 `standard`（默认，DSH）、`codex` 和 `runtime`（受信 Runtime 配置，
+可选择 Hermes、Claude 等适配器，也可按角色选择后端）。模型连接和后端配置在研究开始前
+固定。所有后端通过 `PackageAgentRuntime` 执行；原生会话、工具和压缩由 Runtime 管理，
+RSI 负责研究编排、权限、作业和验证。配置与隔离边界见[后端说明](docs/agent-backends.md)。
 
 新实验可设置 `"mode": "passk"`：RSI 启动 k 个独立完成整题的 researcher，接收进展并督促持续探索；不提供研究建议、不调整方向，也不在研究员之间分享信息。任一正式结果达标或整组到时即停止。配置与比较方法见 [pass@k](docs/passk.md)。
 
@@ -44,7 +46,14 @@ Agent 后端有 `standard`（默认，AReaL Runtime 的 DSH 适配器）和 `cod
 
 研究图中每个 Agent 占一列，进展按实际发生时间向下展开，空白时段压缩；个人有效时间单独显示在研究员卡片中。默认展示成绩突破、汇报、建议和待完成作业，也可切换“只看协作”或展开全部作业。虚线根据建议附带的同一研究内的引用标明信息来源；点击事件可查看原文和送达状态。送达不代表已被采纳，没有明确同伴来源的消息显示为 RSI 的建议。此视图只读取历史记录，不改变 agent 协作或补写实验数据。
 
-入口自动在后台启动服务；已有兼容的 RSI 工作台则复用，其他进程占用端口则报错，不关闭或覆盖它。用 `--port 8200` 指定端口，用 `--data-root /path/to/data` 指定数据目录。旧版 RSI 服务需要先重启到当前版本。
+`rsi`、`rsi web` 和 `rsi workbench` 均以前台方式启动同一个新工作台；
+`python run.py --type web` 负责后台启动或复用服务。新工作台、`rsi research` 和
+`rsi preflight` 的数据目录统一按 `--data-root`、`RSI_DATA_ROOT`、`.rsi/research-lab`
+的顺序选择。以前直接运行 CLI 保存在 `.rsi` 的研究，可用 `--data-root .rsi` 打开。
+研究入口统一为 ResearchApp；旧 `tui/run/resume/status/local-app`、TUI/MCP 控制器和
+固定轮次调度器已移除。旧计划与检查点不迁移，请使用当前配置新建研究。
+
+仓库入口自动在后台启动服务；已有兼容的 RSI 工作台则复用，其他进程占用端口则报错，不关闭或覆盖它。用 `--port 8200` 指定端口，用 `--data-root /path/to/data` 指定数据目录。旧版 RSI 服务需要先重启到当前版本。
 
 服务日志和 PID 位于 `<数据目录>/runtime/workbench-<端口>.log / .pid`。若希望前台运行、用 Ctrl+C 停止服务：
 
@@ -88,12 +97,49 @@ CLI 持续输出进度；Ctrl+C 保存状态供恢复。用同一数据目录打
 | `POST /api/runs/<id>/chat`，body 为 `{"text":"补充要求"}` | 发送消息 |
 | `POST /api/runs/<id>/pause`、`resume`、`stop` | 控制执行，body 为 `{}` |
 
+## 数学与 LCB
+
+数学和 LCB 均使用 ResearchApp。操作员适配器准备固定的题目、目标模型和评分身份，
+研究模型自主调用候选与验证工具：
+
+- [数学示例](examples/local/README.md)：3 道 TRAIN / 3 道 VALIDATE 原创算术题。
+- [LCB 示例](examples/remote/README.md)：EnvArena 固定题目与 Reward，研究员修改通用 system prompt。
+
+## 检查研究运行时
+
+```bash
+uv run --env-file .env --locked rsi preflight --backend standard
+uv run --env-file .env --locked rsi preflight --backend codex
+# 也可传入实际研究配置：rsi preflight --config /absolute/path/research.json
+```
+
+预检使用生产工作台的 Runtime 工厂，实际调用配置的模型与任务工具，并检查进程重启后
+的会话记忆、会话标识和重复消息回执。默认总超时 180 秒，可用 `--timeout` 调整。
+记录写入数据目录下的 `preflight/`，不会创建正式研究或提交 GPU 作业。
+旧 `scripts/preflight_responses.py` 命令转发到同一个预检。
+
 ## 记录与恢复
 
 每次研究的数据集中在 `RSI_DATA_ROOT/runs/<run_id>/`，包含需求、会话、任务、报告、共享证据、冻结候选和验证记录。等待作业、报告或用户时不调用模型；临时 API 故障自动重试。
 
-研究配置中的 `context_window_tokens` 会传入原生后端。省略或设为 `null` 时，Codex 使用自己的模型默认窗口；standard 沿用现有窗口约定：`gpt-6-astra` 为 256,000 token，其他模型为 128,000。压缩时机和摘要由各后端负责；`compact_keep_recent_tokens` 仅保留配置兼容，不控制原生压缩。Codex CLI 固定为 `0.153.4`，与当前 Luna goal baseline 一致。
+上下文窗口、原生重试和会话边界见[后端说明](docs/agent-backends.md)。
+`brief.limits.max_model_calls` 保留可空字段，目前只接受 `null`；已移除的旧压缩/重试字段
+会明确报错，不自动迁移旧配置或会话。
 
 demo 在服务重启后自动恢复尚在执行的研究或收尾；手动暂停的研究保持暂停。完成最终复测后不能继续修改这次候选，需要新建 run。外部凭据失效或集群故障会明确报错或等待处理。
 
-系统职责和数据模型见[设计说明](docs/rsi-research-design.md)。旧固定流程和可选运行后端见 [Runtime 指南](docs/runtime-quickstart.md)。开发检查：`make check`；前端检查：`npm ci --prefix tests/frontend && npm test --prefix tests/frontend`。
+## 文档导航
+
+启动方式与示例见本 README；按需阅读以下专题：
+
+| 文档 | 内容 |
+| --- | --- |
+| [架构](docs/architecture.md) | 组件职责、消息、候选与数据流 |
+| [接口](docs/interfaces/README.md) | ResearchConfig、领域 API、实验命令与验证契约 |
+| [后端](docs/agent-backends.md) | Runtime 配置、工具桥、隔离、会话与测试 |
+| [pass@k](docs/passk.md) | 独立尝试、预算、停止与实验比较 |
+| [协作](docs/collaboration.md) | guidance 版本、权限、Prompt 来源与复现 |
+| [有效时间](docs/effective-time.md) | API 故障和 GPU 排队的扣时规则 |
+| [GPU 隔离](docs/gpu-queue-isolation.md) | KernelBench 队列部署及隔离边界 |
+
+开发检查：`make check`；前端检查：`npm ci --prefix tests/frontend && npm test --prefix tests/frontend`。

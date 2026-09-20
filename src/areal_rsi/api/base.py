@@ -447,24 +447,17 @@ class ResearchAgentState:
 
 
 @dataclass(slots=True)
-class ExperimentPlan:
+class ResearchPlan:
     goal: str
-    workflow: str
-    benchmark: str
-    baseline_solution_id: str | None
-    target: EvolutionTarget | None
     max_iterations: int | None
     research_agent_count: int = 1
-    stop_when_goal_reached: bool = True
-    config: JsonObject = field(default_factory=dict)
 
 
 @dataclass(slots=True)
-class ExperimentRun:
+class ResearchRun:
     run_id: str
-    plan: ExperimentPlan
+    plan: ResearchPlan
     state: RunState
-    best_solution_id: str | None = None
     research_agents: tuple[ResearchAgentState, ...] = ()
     started_at: str | None = None
     finished_at: str | None = None

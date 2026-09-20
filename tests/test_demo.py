@@ -17,11 +17,12 @@ from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
+from runtime_fakes import ActionRuntime
 
 from areal_rsi.api.research import TaskBrief, VerificationContract
+from areal_rsi.base.storage import encode
 from areal_rsi.coordination.config import ResearchConfig
 from areal_rsi.execution import ApprovedCommand
-from areal_rsi.modules.responses import ResponsesConfig, ResponsesRuntime
 from areal_rsi.research_app import ResearchApp
 from areal_rsi.ui.launch import ensure_workbench
 from areal_rsi.ui.workbench import WorkbenchServer
@@ -30,26 +31,6 @@ from areal_rsi.ui.workbench import WorkbenchServer
 @pytest.fixture(autouse=True)
 def adapter_imports(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.syspath_prepend(str(Path("examples/kernelbench_artifacts").resolve()))
-
-
-class StopTransport:
-    def __init__(self, action: str = "stop_run"):
-        self.action = action
-
-    async def request(self, config: Any, payload: Any, sink: Any) -> dict[str, Any]:
-        return {
-            "id": "stop",
-            "status": "completed",
-            "output": [
-                {
-                    "type": "function_call",
-                    "name": self.action,
-                    "call_id": "finished",
-                    "arguments": '{"reason":"探索结束"}',
-                }
-            ],
-            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
-        }
 
 
 @pytest.mark.parametrize("limit", [None, 1800])
@@ -235,10 +216,7 @@ else:
     config.metadata["time_limit_scope"] = "exploration"
     app = ResearchApp(
         tmp_path,
-        runtime_factory=lambda _: ResponsesRuntime(
-            ResponsesConfig(base_url="https://example.test", api_key="test"),
-            StopTransport("wait"),
-        ),
+        runtime_factory=lambda _: ActionRuntime("wait"),
     )
     server = WorkbenchServer(app, port=0)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -770,10 +748,10 @@ def test_harness_config_defaults_and_early_budget_rejection(
     monkeypatch.setitem(module["build_config"].__globals__, "describe", describe)
     config = module["build_config"](args)
     assert config.needs_finalization and config.finalizer is None
-    assert config.brief.limits.max_model_calls is None
+    assert encode(config.brief.limits)["max_model_calls"] is None
     assert config.brief.limits.max_total_tokens is None
     assert config.brief.limits.max_verify_calls is None
-    args.max_model_calls = 200
+    args.max_total_tokens = 200
     calls.clear()
     with pytest.raises(ValueError, match="不支持"):
         module["build_config"](args)

@@ -1,4 +1,4 @@
-"""Minimal module interfaces used by RSI workflows."""
+"""Reusable storage, training, construction and evaluation contracts."""
 
 from __future__ import annotations
 

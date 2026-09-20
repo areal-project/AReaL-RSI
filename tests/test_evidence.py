@@ -1,7 +1,6 @@
 """Generic file grants, content integrity and runtime access isolation."""
 
 import json
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -11,7 +10,7 @@ from pathlib import Path
 from areal_rsi.api.base import ContentRef, EvidenceBundle, EvidenceFile
 from areal_rsi.base.evidence import FileEvidenceStore
 from areal_rsi.base.storage import DIRECTORY_TYPE, FileContentStore, encode
-from areal_rsi.modules.runtime import sandbox_wrapper
+from areal_rsi.modules.runtime_package import sandbox_command
 
 
 class EvidenceTest(unittest.IsolatedAsyncioTestCase):
@@ -133,9 +132,6 @@ class EvidenceTest(unittest.IsolatedAsyncioTestCase):
 
     @unittest.skipUnless(sys.platform == "darwin", "macOS sandbox-exec integration")
     async def test_runtime_cannot_read_ungranted_backing_content_or_sibling_view(self) -> None:
-        node = shutil.which("node")
-        if node is None:
-            self.skipTest("Node.js unavailable")
         workspace = self.root / "workspace"
         workspace.mkdir()
         await self.store.materialize(self.bundle, workspace / "evidence", paths=["case/output.bin"])
@@ -143,9 +139,7 @@ class EvidenceTest(unittest.IsolatedAsyncioTestCase):
         await self.store.materialize(self.bundle, sibling, paths=["hidden.txt"])
         session = self.root / "session"
         session.mkdir()
-        cli = self.root / "installation/node_modules/.bin/dsh"
-        cli.parent.mkdir(parents=True)
-        sandbox_wrapper(session, workspace, cli)
+        sandbox_command(session, workspace, ())
         command = ["/usr/bin/sandbox-exec", "-f", str(session / "sandbox.sb"), "/bin/cat"]
         public = subprocess.run(
             [*command, str(workspace / "evidence/case/output.bin")], capture_output=True

@@ -49,7 +49,6 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument("--max-agents", type=int, help="Default: 1")
     result.add_argument("--max-nodes", type=integer_limit, default=None)
-    result.add_argument("--max-model-calls", type=integer_limit, default=None)
     result.add_argument("--max-total-tokens", type=integer_limit, default=None)
     result.add_argument("--max-verify-calls", type=integer_limit, default=None)
     result.add_argument("--max-jobs", type=integer_limit, default=1)
@@ -141,7 +140,7 @@ def describe(
 def build_config(args: argparse.Namespace) -> ResearchConfig:
     if any(
         getattr(args, field) is not None
-        for field in ("max_model_calls", "max_total_tokens", "max_verify_calls")
+        for field in ("max_total_tokens", "max_verify_calls")
     ):
         raise ValueError("pass@k 不支持调用次数、Token 或验证次数上限；请使用 --max-wall-seconds")
     if args.max_wall_seconds is None and args.target is None:
@@ -191,7 +190,6 @@ def build_config(args: argparse.Namespace) -> ResearchConfig:
     limits = ResearchLimits(
         max_agents=args.max_agents if args.max_agents is not None else 1,
         max_nodes=args.max_nodes,
-        max_model_calls=args.max_model_calls,
         max_total_tokens=args.max_total_tokens,
         max_verify_calls=args.max_verify_calls,
         max_jobs=args.max_jobs,

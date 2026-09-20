@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
+from runtime_fakes import ActionRuntime
+from test_research_runtime_package import ResponsesModel
 
 from areal_rsi.api.research import TaskBrief
 from areal_rsi.base.storage import encode
@@ -17,58 +20,25 @@ from areal_rsi.coordination.config import config_from_dict
 from areal_rsi.coordination.engine import ResearchEngine
 from areal_rsi.coordination.passk import PassKActions, launch
 from areal_rsi.execution import ApprovedCommand
-from areal_rsi.modules.responses import ResponsesConfig, ResponsesRuntime, ToolCall
+from areal_rsi.modules.agent_runtime import ToolCall
 from areal_rsi.research_app import ResearchApp
 
 
-class IdleTransport:
-    async def request(self, config: Any, payload: Any, sink: Any) -> dict[str, Any]:
-        return {
-            "id": "idle",
-            "status": "completed",
-            "output": [
-                {
-                    "type": "function_call",
-                    "name": "wait",
-                    "call_id": "wait",
-                    "arguments": '{"reason":"等待外部研究输入"}',
-                }
-            ],
-            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
-        }
-
-
 def app_at(root: Path) -> ResearchApp:
-    return ResearchApp(
-        root,
-        runtime_factory=lambda _: ResponsesRuntime(
-            ResponsesConfig(base_url="https://example.test", api_key="test"), IdleTransport()
-        ),
-    )
+    return ResearchApp(root, runtime_factory=lambda _: ActionRuntime("wait"))
 
 
-@pytest.mark.parametrize("backend,modules", [("standard", ()), ("codex", ("leader_guidance",))])
+@pytest.mark.parametrize("backend,modules", [
+    ("codex", ("leader_guidance",)),
+    pytest.param("standard", (), marks=pytest.mark.skipif(
+        os.environ.get("RSI_TEST_NATIVE_HARNESSES") != "1", reason="Opt in to native DSH"
+    )),
+])
 def test_research_prompt_selection_reaches_the_model(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend: str, modules: tuple[str, ...]
 ) -> None:
     monkeypatch.setenv("RSI_API_KEY", "fixture")
-    payloads: list[dict[str, Any]] = []
-
-    class RecordingTransport:
-        async def request(self, config: Any, payload: Any, sink: Any) -> dict[str, Any]:
-            payloads.append(payload)
-            return {
-                "id": "report",
-                "status": "completed",
-                "output": [
-                    {
-                        "type": "message",
-                        "role": "assistant",
-                        "content": [{"type": "output_text", "text": "已完成本阶段的资料整理。"}],
-                    }
-                ],
-                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
-            }
+    model = ResponsesModel()
 
     async def idle(self: ResearchEngine) -> None:
         await asyncio.Event().wait()
@@ -76,17 +46,13 @@ def test_research_prompt_selection_reaches_the_model(
     monkeypatch.setattr(ResearchEngine, "serve", idle)
 
     async def scenario() -> None:
-        app = ResearchApp(
-            tmp_path,
-            runtime_factory=lambda _: ResponsesRuntime(
-                ResponsesConfig(base_url="https://example.test", api_key="fixture"),
-                RecordingTransport(),
-            ),
-        )
+        app = ResearchApp(tmp_path)
         try:
             config: dict[str, Any] = {
                 "brief": {"objective": "检查研究说明", "instructions": "整理已有资料"},
                 "backend": backend,
+                "base_url": model.url,
+                "model_settings_pinned": True,
             }
             config["collaboration_modules"] = list(modules)
             detail = await app.create({"config": config})
@@ -100,9 +66,10 @@ def test_research_prompt_selection_reaches_the_model(
             researcher = c.store.run().research_agents[0]
             c.end_turn("rsi")
             await active.engine._drive(researcher.agent_id)
-            assert len(payloads) == 1
-            prompt = payloads[0]["instructions"]
-            assert prompt.startswith("你是 Research Agent")
+            assert len(model.requests) == 1
+            request = model.requests[0]
+            prompt = json.dumps(request, ensure_ascii=False)
+            assert "你是 Research Agent" in prompt
             assert "{{tool_instructions}}" not in prompt
             assert ("read_researcher_trace" in prompt) == bool(modules)
             assert ("Codex 原生网页工具" in prompt) == (backend == "codex")
@@ -112,7 +79,10 @@ def test_research_prompt_selection_reaches_the_model(
         finally:
             await app.close()
 
-    asyncio.run(scenario())
+    try:
+        asyncio.run(scenario())
+    finally:
+        model.close()
 
 
 def test_unknown_research_prompt_variant_is_rejected() -> None:

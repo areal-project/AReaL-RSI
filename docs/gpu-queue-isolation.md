@@ -19,9 +19,5 @@ Agent 本身的原生网页调研运行在主控端，不受 GPU 作业断网影
 部署方应确认所有节点均实际启用该入口；KernelBench `prepare(check=True)` 校验安装脚本
 与仓库 SHA256 一致，并继续核对评分协议。不要通过伪造健康检查字段跳过安装与验证。
 
-当前 et15 的两个节点已用于隔离与 Triton 探针。安装前的脚本备份和操作回执位于远端
-`dsh-kernelbench/runtime/isolation-check/`；本地操作记录位于
-`.rsi/passk-workbench/operator/queue-isolation-0918/`。原研究保持停止，未重启工作台。
-
 该脚本适配现有 KernelBench 容器布局。更换镜像或安装目录时，需要重新验证只读依赖，
 而不是开放整个共享目录。它解决跨 run 数据访问，不代替评分器自身的正确性与计分保护。

@@ -1,9 +1,10 @@
-"""Runnable workflow simulations; real operators provide execution configuration."""
+"""Runnable research simulations; real operators provide execution configuration."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
+from areal_rsi.api.base import EvolutionTarget
 from areal_rsi.api.research import ResearchLimits, TaskBrief, VerificationContract
 from areal_rsi.coordination.config import ResearchConfig
 from areal_rsi.execution import ApprovedCommand
@@ -41,6 +42,7 @@ def example_config(name: str, *, repository: Path) -> ResearchConfig:
         raise ValueError("Unknown example template")
     return ResearchConfig(
         brief=brief,
+        evolution_target=EvolutionTarget.HARNESS,
         seed_dir=str(seed),
         verifier=ApprovedCommand(
             "verify", ("simulated-verification", "{workspace}", "{output}"), ("workspace", "output")

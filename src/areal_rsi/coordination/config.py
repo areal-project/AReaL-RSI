@@ -6,13 +6,17 @@ import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from areal_rsi.api.base import EvolutionTarget
 from areal_rsi.api.research import TaskBrief
 from areal_rsi.base.storage import decode, encode
 from areal_rsi.coordination.collaboration import selected_modules
 from areal_rsi.execution import ApprovedCommand
-from areal_rsi.modules.responses import ResponsesConfig
+from areal_rsi.modules.research_settings import ResearchConnection, validate_base_url
+
+if TYPE_CHECKING:
+    from areal_rsi.modules.runtime_package import RuntimeSettings
 
 MODEL_EFFORTS = {
     "gpt-5.6-luna": ("none", "low", "medium", "high", "xhigh", "max"),
@@ -30,24 +34,15 @@ def validate_model_settings(value: dict[str, Any]) -> dict[str, str]:
     ):
         raise ValueError("请填写 API 地址、模型和推理强度")
     settings = {key: value[key].strip() for key in MODEL_FIELDS}
-    if settings["backend"] not in {"standard", "codex"}:
-        raise ValueError("Agent 后端支持 standard 或 codex")
+    if settings["backend"] not in {"standard", "codex", "runtime"}:
+        raise ValueError("Agent 后端支持 standard、codex 或 runtime")
     if len(settings["model"]) > 200 or any(c.isspace() for c in settings["model"]):
         raise ValueError("模型名称不能包含空格，且不能超过 200 字")
     if settings["reasoning_effort"] not in MODEL_EFFORTS.get(
         settings["model"], ("none", "low", "medium", "high", "xhigh", "max")
     ):
         raise ValueError("该模型不支持所选推理强度")
-    # Reuse the actual transport's URL validation; no request or credential is needed.
-    try:
-        ResponsesConfig(
-            api_key="validation-only", **{k: v for k, v in settings.items() if k != "backend"}
-        )
-        if any(char.isspace() for char in settings["base_url"]):
-            raise ValueError
-    except ValueError as exc:
-        raise ValueError("API 地址须为不含密钥、查询参数或空格的 HTTP(S) 地址") from exc
-    settings["base_url"] = settings["base_url"].rstrip("/")
+    settings["base_url"] = validate_base_url(settings["base_url"])
     return settings
 
 
@@ -58,6 +53,7 @@ class ResearchConfig:
     collaboration_modules: tuple[str, ...] = ()
     seed_dir: str | None = None
     backend: str = "standard"
+    runtime_config: dict[str, Any] | None = None
     model: str = "gpt-5.6-luna"
     reasoning_effort: str = "xhigh"
     base_url: str = "https://api.openai.com"
@@ -67,39 +63,41 @@ class ResearchConfig:
     credential_file: str | None = None
     max_output_tokens: int = 16384
     context_window_tokens: int | None = None
-    compact_keep_recent_tokens: int = 8_000
-    max_model_calls_per_turn: int | None = None
-    retry_initial_seconds: float = 2
-    retry_max_seconds: float = 60
     commands: tuple[ApprovedCommand, ...] = ()
     verifier: ApprovedCommand | None = None
     finalizer: ApprovedCommand | None = None
     execution_env: dict[str, str] = field(default_factory=dict)
     simulation_scores: tuple[float, ...] = (0.3, 0.5, 0.7)
     metadata: dict[str, Any] = field(default_factory=dict)
+    evolution_target: EvolutionTarget | None = None
 
     def __post_init__(self) -> None:
+        if self.evolution_target is not None:
+            self.evolution_target = EvolutionTarget(self.evolution_target)
+        if self.brief.limits.max_model_calls is not None:
+            raise ValueError("max_model_calls is not supported by native runtimes; use null")
         # Old configurations remain decodable for viewing; executable entry points reject them.
         if self.mode != "collaborative":
             self.collaboration_modules = selected_modules(self.mode, self.collaboration_modules)
-        if self.backend not in {"standard", "codex"}:
-            raise ValueError("Agent 后端支持 standard 或 codex")
+        if self.backend not in {"standard", "codex", "runtime"}:
+            raise ValueError("Agent 后端支持 standard、codex 或 runtime")
         if self.brief.limits.max_effective_seconds is not None and self.mode != "passk":
             raise ValueError("Per-researcher effective time requires passk")
+        ResearchConnection(
+            self.base_url, self.model, self.reasoning_effort,
+            self.max_output_tokens, self.context_window_tokens, self.backend,
+        )
         if self.mode == "passk":
             limits = self.brief.limits
-            if self.max_model_calls_per_turn is not None:
-                raise ValueError("passk requires max_model_calls_per_turn to be null")
             if any(
                 getattr(limits, name) is not None
                 for name in (
-                    "max_model_calls",
                     "max_total_tokens",
                     "max_verify_calls",
                 )
             ):
                 raise ValueError(
-                    "passk requires unlimited model/token/verification counts (null); "
+                    "passk requires unlimited token/verification counts (null); "
                     "use a wall-time limit"
                 )
             if limits.max_nodes is not None and limits.max_nodes < limits.max_agents:
@@ -115,39 +113,73 @@ class ResearchConfig:
                 )
 
     def model_settings(self) -> dict[str, str]:
-        return {
+        settings = {
             key: str(getattr(self, key))
             if self.model_settings_pinned
             else os.environ.get("RSI_" + key.upper(), str(getattr(self, key)))
             for key in MODEL_FIELDS
         }
 
+        if not self.model_settings_pinned and "RSI_BACKEND" not in os.environ and (
+            self.runtime_config is not None or os.environ.get("RSI_RUNTIME_CONFIG")
+        ):
+            settings["backend"] = "runtime"
+        return settings
+
+    def runtime_settings(self) -> RuntimeSettings:
+        from areal_rsi.modules.runtime_package import RuntimeSettings
+
+        if self.backend != "runtime":
+            return RuntimeSettings({"default": {
+                "kind": "codex-cli" if self.backend == "codex" else "dsh",
+                "config": {"modelProtocol": "responses", "timeoutSeconds": 86400}
+                if self.backend == "codex" else {"reasoningEffort": self.reasoning_effort},
+            }})
+        if self.runtime_config is None:
+            path = os.environ.get("RSI_RUNTIME_CONFIG")
+            if not path:
+                raise ValueError("runtime backend requires runtime_config or RSI_RUNTIME_CONFIG")
+            self.runtime_config = json.loads(Path(path).expanduser().read_text())
+        settings = RuntimeSettings(self.runtime_config)
+        for role in ("research-agent", "rsi-agent", "interaction-agent"):
+            kind = settings.select(role)["kind"]
+            ResearchConnection(
+                self.base_url, self.model, self.reasoning_effort,
+                self.max_output_tokens, self.context_window_tokens,
+                "codex" if kind == "codex-cli" else "standard",
+            )
+        return settings
+
     def pin_model_settings(self) -> None:
         for key, value in self.model_settings().items():
             setattr(self, key, value)
+        self.runtime_settings()
         self.model_settings_pinned = True
         self.__post_init__()
 
-    def runtime(self) -> ResponsesConfig:
-        key = self.api_key()
-        if not key:
+    def runtime(self) -> ResearchConnection:
+        connection = self.connection_settings()
+        if not self.api_key():
             raise ValueError(f"Set {self.api_key_env} before starting model agents")
-        settings = self.model_settings()
-        return ResponsesConfig(
-            api_key=key,
+        return connection
+
+    def connection_settings(self) -> ResearchConnection:
+        """Validate effective native settings without requiring credentials for a draft."""
+        settings = validate_model_settings(self.model_settings())
+        return ResearchConnection(
             base_url=settings["base_url"],
             model=settings["model"],
             reasoning_effort=settings["reasoning_effort"],
             max_output_tokens=self.max_output_tokens,
             context_window_tokens=self.context_window_tokens,
-            compact_keep_recent_tokens=self.compact_keep_recent_tokens,
-            max_model_calls_per_turn=self.max_model_calls_per_turn,
-            retry_initial_seconds=self.retry_initial_seconds,
-            retry_max_seconds=self.retry_max_seconds,
+            backend=settings["backend"],
         )
 
     def validate_clock(self) -> None:
-        if self.brief.limits.max_effective_seconds is not None and self.backend != "codex":
+        if (
+            self.brief.limits.max_effective_seconds is not None
+            and self.runtime_settings().select("research-agent")["kind"] != "codex-cli"
+        ):
             raise ValueError("有效时间目前仅支持 Codex；standard 请使用 max_wall_seconds")
 
     @property
@@ -175,7 +207,13 @@ def config_from_dict(value: dict[str, Any]) -> ResearchConfig:
     selected_modules(value.get("mode", "passk"), value.get("collaboration_modules", ()))
     if "research_prompt_variant" in value:
         raise ValueError("research_prompt_variant 已移除；Prompt 由协作配置选择")
-    config: ResearchConfig = decode(ResearchConfig, value)
+    unknown = set(value) - ResearchConfig.__dataclass_fields__.keys()
+    if unknown:
+        raise ValueError("Unknown research configuration fields: " + ", ".join(sorted(unknown)))
+    try:
+        config: ResearchConfig = decode(ResearchConfig, value)
+    except KeyError as exc:
+        raise ValueError(f"Unknown research configuration field: {exc.args[0]}") from None
     if config.metadata.get("time_limit_scope", "total") not in {"total", "exploration"}:
         raise ValueError("time_limit_scope must be total or exploration")
     names = [command.name for command in config.commands]

@@ -348,69 +348,6 @@ class RealPackageExecutionTest(unittest.IsolatedAsyncioTestCase):
             "codex-cli", {"modelProtocol": "anthropic", "codexBin": shutil.which("codex")}
         )
 
-    async def test_complete_rsi_experiment(self) -> None:
-        from unittest.mock import patch
-
-        from areal_rsi.api.base import ExperimentPlan, RunState
-        from areal_rsi.app import LocalApp
-
-        model_server = ScriptedModel()
-
-        def answer(request: dict[str, Any]) -> str:
-            system = json.dumps(request.get("system", []), ensure_ascii=False)
-            if "ResearchAgent improving" in system:
-                return json.dumps(
-                    {
-                        "reason": "local integration fixture",
-                        "files": {
-                            "prompt.md": (
-                                "Solve the task carefully. Verify your reasoning. "
-                                "End with #### followed by the numeric answer.\n"
-                            )
-                        },
-                    }
-                )
-            if "Choose the next version" in system:
-                return '{"candidate_index":0}'
-            if "外层研究控制器" in system:
-                return '{"stop_agent_ids":[],"reason":"continue fixture"}'
-            if "RSI 研发入口" in system:
-                return '{"plan":{"goal":"local integration proof","max_iterations":1}}'
-            return "#### 0"
-
-        model_server.final_text = answer
-        try:
-            with tempfile.TemporaryDirectory() as temp:
-                root = Path(temp).resolve()
-                config = root / "runtime.json"
-                config.write_text('{"default":{"kind":"anthropic"}}')
-                with patch.dict(
-                    "os.environ",
-                    {
-                        "RSI_RUNTIME_CONFIG": str(config),
-                        "RSI_RESEARCH_AGENT_COUNT": "2",
-                        "RSI_TEACHER_MODEL": "fixture",
-                        "RSI_TEACHER_BASE_URL": model_server.url,
-                        "RSI_TARGET_MODEL": "fixture",
-                        "RSI_TARGET_BASE_URL": model_server.url,
-                        "RSI_TEACHER_API_KEY": "",
-                        "RSI_TARGET_API_KEY": "",
-                    },
-                    clear=True,
-                ):
-                    app = await LocalApp.create(root / "experiment", lambda _: None)
-                    try:
-                        plan = await app.rsi.chat("Run one iteration")
-                        assert isinstance(plan, ExperimentPlan)
-                        run = await app.service.start(plan)
-                        result = await asyncio.wait_for(app.service.tasks[run.run_id], 120)
-                        self.assertEqual(result.state, RunState.SUCCEEDED, result.error)
-                        self.assertEqual(len(result.research_agents), 2)
-                        self.assertTrue(list((app.root / "trajectories").glob("*.json")))
-                    finally:
-                        await app.close()
-        finally:
-            await asyncio.to_thread(model_server.close)
 
     async def test_cancel_commits_terminal_and_reaps_worker(self) -> None:
         from areal_rsi.modules.runtime_storage import read_journal

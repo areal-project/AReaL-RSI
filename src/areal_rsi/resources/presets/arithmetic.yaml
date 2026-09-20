@@ -1,7 +1,0 @@
-# The benchmark binds the built-in ArithmeticVerifier (3 TRAIN / 3 VALIDATE).
-mode: local
-benchmark: arithmetic-v1
-harness: default
-# Reference the RSI_TARGET_* connection; alternatively set an explicit model name.
-model: target
-research_harness: dsh

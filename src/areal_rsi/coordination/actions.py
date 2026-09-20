@@ -14,10 +14,10 @@ from areal_rsi.api.base import AgentState, RecordRef, RunState
 from areal_rsi.api.research import CandidateSnapshot, EvidenceRecord, VerifiedResult
 from areal_rsi.base.storage import decode, encode, now, safe_name, safe_relative, write_json
 from areal_rsi.coordination.brief_tool import brief_tool, updated_brief
-from areal_rsi.coordination.config import archived_config
+from areal_rsi.coordination.config import config_from_dict
 from areal_rsi.coordination.coordinator import Coordinator, effect_id
 from areal_rsi.coordination.views import model_state, record_preview
-from areal_rsi.modules.responses import ToolCall, ToolHandler, ToolResult
+from areal_rsi.modules.agent_runtime import ToolCall, ToolHandler, ToolResult
 
 STRING = {"type": "string"}
 RECORD_CATEGORIES = (
@@ -731,7 +731,7 @@ class ResearchActions:
                 config = json.loads(config_path.read_text())
                 config["brief"] = encode(brief)
                 # Validate the combined configuration before changing any durable record.
-                archived_config(config)
+                config_from_dict(config)
             run = c.store.run()
             run.brief_ref = c.store.put("briefs", key, brief)
             run.plan.goal = brief.objective

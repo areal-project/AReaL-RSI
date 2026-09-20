@@ -68,7 +68,7 @@ class RuntimeSettings:
         validate_isolation(self.isolation)
         self.default = value.get("default", {"kind": "dsh", "config": {}})
         self.roles = value.get("roles", {})
-        if set(self.roles) - {"rsi-agent", "research-agent", "task-agent"}:
+        if set(self.roles) - {"rsi-agent", "research-agent", "task-agent", "interaction-agent"}:
             raise ValueError("Unknown Runtime role")
         self.readable_paths = tuple(
             Path(p).expanduser().resolve() for p in value.get("readable_paths", [])
@@ -87,33 +87,6 @@ class RuntimeSettings:
             + provenance.read_bytes()
         ).hexdigest()
 
-    @classmethod
-    def from_environment(cls) -> RuntimeSettings:
-        from areal_rsi.experiment_config import configured_research_harness
-
-        path = os.environ.get("RSI_RUNTIME_CONFIG")
-        value = json.loads(Path(path).expanduser().read_text()) if path else {}
-        harness = configured_research_harness()
-        if harness:
-            if not isinstance(value, dict):
-                raise ValueError("Runtime config must be an object")
-            roles = value.setdefault("roles", {})
-            if not isinstance(roles, dict):
-                raise ValueError("Runtime roles must be an object")
-            for role in ("rsi-agent", "research-agent"):
-                selected = roles.get(role, value.get("default", {}))
-                # Preserve backend-specific settings only when the selected kind matches.
-                if isinstance(selected, dict) and selected.get("kind") == harness:
-                    selected = copy.deepcopy(selected)
-                else:
-                    selected = {"kind": harness, "config": {}}
-                config = selected.setdefault("config", {})
-                if not isinstance(config, dict):
-                    raise ValueError("Runtime backend config must be an object")
-                if harness == "codex-cli":
-                    config.setdefault("modelProtocol", "responses")
-                roles[role] = selected
-        return cls(value)
 
     def select(self, role: str) -> dict[str, Any]:
         role = "research-agent" if role.startswith("research-agent-") else role
@@ -153,7 +126,7 @@ def sandbox_command(
     workspace: Path,
     readable: tuple[Path, ...],
     executable_aliases: tuple[Path, ...] = (),
-    local_ports: tuple[int, ...] = (),
+    local_ports: tuple[int, ...] | None = (),
     service_ports: tuple[int, ...] = (),
     *,
     isolation: str = "sandbox",
@@ -214,7 +187,9 @@ def sandbox_command(
     for port in service_ports:
         profile.append(f'(allow network-outbound (remote ip "*:{port}"))')
     profile.append('(deny network-outbound (remote ip "localhost:*"))')
-    for port in local_ports:
+    if local_ports is None:
+        profile.append('(allow network-outbound (remote ip "localhost:*"))')
+    for port in local_ports or ():
         profile.append(f'(allow network-outbound (remote ip "localhost:{port}"))')
     for path in sorted(roots):
         profile.append(f"(allow file-read* (subpath {json.dumps(str(path))}))")
@@ -414,6 +389,7 @@ class PackageAgentRuntime:
         research_tools: dict[str, Any] | None = None,
         codex_config: dict[str, Any] | None = None,
         context_window_tokens: int | None = None,
+        reasoning_effort: str | None = None,
     ) -> PackageSession:
         if agent.runtime not in {"areal-agent-runtime@v1", "deepseek-harness@v1"}:
             raise ValueError(f"Unknown RSI Runtime binding: {agent.runtime}")
@@ -513,6 +489,8 @@ class PackageAgentRuntime:
             tool_manifest = directory / "research-tools.json"
             tool_manifest.write_text(json.dumps(research_tools))
             tool_manifest.chmod(0o600)
+        if reasoning_effort is not None:
+            config["reasoning_effort"] = reasoning_effort
         if codex_config is not None:
             config["codex_config"] = codex_config
         if context_window_tokens is not None:
@@ -570,6 +548,16 @@ class PackageAgentRuntime:
             # A desktop/system proxy could relay requests into other run services.
             env.update(HTTP_PROXY="", HTTPS_PROXY="", ALL_PROXY="", NO_PROXY="*")
         interpreter = selection.get("config", {}).get("python")
+        if interpreter:
+            # A trusted backend may use a different Python installation. Its
+            # stdlib/shared library must be readable as well as its venv.
+            prefixes = json.loads(await asyncio.to_thread(
+                subprocess.check_output,
+                [interpreter, "-I", "-c",
+                 "import sys,json;print(json.dumps([sys.prefix,sys.base_prefix]))"],
+                text=True, timeout=10,
+            ))
+            readable.extend(Path(prefix).resolve() for prefix in prefixes)
         local_ports = [research_tools["port"]] if research_tools is not None else []
         if selection["kind"] == "codex-cli" and self.settings.isolation == "sandbox":
             # Native TLS/DNS cannot rely on macOS user services inside this
@@ -600,7 +588,8 @@ class PackageAgentRuntime:
             workspace,
             tuple(readable),
             (Path(interpreter),) if interpreter else (),
-            tuple(local_ports),
+            None if selection["kind"] in {"dsh", "claude-code", "claude-agent-sdk"}
+            else tuple(local_ports),
             tuple(service_ports),
             isolation=self.settings.isolation,
         )

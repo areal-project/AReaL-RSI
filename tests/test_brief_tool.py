@@ -4,6 +4,8 @@ import copy
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from areal_rsi.api.research import ResearchLimits, TaskBrief, VerificationContract
 from areal_rsi.base.storage import encode
 from areal_rsi.coordination.brief_tool import PASSK_HIDDEN_LIMITS, brief_tool, updated_brief
@@ -51,6 +53,16 @@ def test_effective_budget_is_per_researcher_and_only_available_in_passk() -> Non
     result = updated_brief("passk", TaskBrief("old", "old"), args)
     assert result.limits.max_effective_seconds == 1800
     assert result.limits.max_wall_seconds is None
+
+
+@pytest.mark.parametrize("mode", ["passk"])
+def test_removed_model_call_limit_is_not_advertised_or_accepted(mode: str) -> None:
+    tool = brief_tool(mode)
+    assert "max_model_calls" not in tool["parameters"]["properties"]["limits"]["properties"]
+    args = arguments(mode)
+    args["limits"]["max_model_calls"] = 200
+    with pytest.raises(ValueError, match="Additional properties"):
+        updated_brief(mode, TaskBrief("old", "old"), args)
 
 
 def test_action_catalog_follows_current_mode(tmp_path: Path) -> None:

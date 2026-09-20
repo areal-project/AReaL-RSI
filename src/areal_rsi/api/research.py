@@ -16,6 +16,7 @@ class ResearchLimits:
         1  # Simultaneously live researchers, including waiting; not lifetime creations.
     )
     max_nodes: int | None = None
+    # Retained for configuration compatibility; execution rejects non-null caps.
     max_model_calls: int | None = None
     max_total_tokens: int | None = None
     max_wall_seconds: float | None = 14400

@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 import threading
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -30,6 +32,8 @@ class ResponsesModel:
         self.tool_name = "rsi_mcp_probe"
         self.tool_arguments = {"expression": "6 * 7"}
         self.fail_requests = 0
+        self.fail_after_tool = 0
+        self.output: Callable[[dict[str, Any]], dict[str, Any]] | None = None
         self.entered = threading.Event()
         self.release = threading.Event()
         self.release.set()
@@ -48,6 +52,12 @@ class ResponsesModel:
                     return
                 owner.entered.set()
                 owner.release.wait(20)
+                if owner.fail_after_tool and any(
+                    item.get("type") == "function_call_output" for item in request["input"]
+                ):
+                    owner.fail_after_tool -= 1
+                    self.send_error(503, "Temporary fixture outage")
+                    return
                 message: dict[str, Any] = {
                     "id": "msg_fixture",
                     "type": "message",
@@ -73,6 +83,8 @@ class ResponsesModel:
                         "arguments": json.dumps(owner.tool_arguments),
                         "status": "completed",
                     }
+                if owner.output is not None:
+                    output = owner.output(request)
                 events: list[dict[str, Any]] = [
                     {
                         "type": "response.created",
@@ -94,13 +106,13 @@ class ResponsesModel:
                         {
                             "type": "response.function_call_arguments.delta",
                             "output_index": 0,
-                            "item_id": "fc_probe",
+                            "item_id": output["id"],
                             "delta": output["arguments"],
                         },
                         {
                             "type": "response.function_call_arguments.done",
                             "output_index": 0,
-                            "item_id": "fc_probe",
+                            "item_id": output["id"],
                             "arguments": output["arguments"],
                         },
                     ]
@@ -109,7 +121,7 @@ class ResponsesModel:
                         {
                             "type": "response.output_item.added",
                             "output_index": 0,
-                            "item": {**message, "content": []},
+                            "item": {**output, "content": []},
                         },
                         {
                             "type": "response.content_part.added",
@@ -123,14 +135,14 @@ class ResponsesModel:
                             "output_index": 0,
                             "content_index": 0,
                             "item_id": "msg_fixture",
-                            "delta": "Done",
+                            "delta": output["content"][0]["text"],
                         },
                         {
                             "type": "response.output_text.done",
                             "output_index": 0,
                             "content_index": 0,
                             "item_id": "msg_fixture",
-                            "text": "Done",
+                            "text": output["content"][0]["text"],
                         },
                     ]
                 events += [
@@ -309,6 +321,10 @@ def test_standard_uses_package_dsh_and_scoped_application_tools(
             assert "42" in json.dumps(model.requests[-1]["input"])
             assert model.requests[0]["reasoning"]["effort"] == "xhigh"
             assert runtime.configuration()["harness"] == "dsh"
+            if sys.platform == "darwin":
+                profile = tmp_path / "session/runtime/sandbox.sb"
+                assert '(allow network-outbound (remote ip "localhost:*"))' in profile.read_text()
+                assert '(deny file-write*)' in profile.read_text()
             patch = json.loads((tmp_path / "session/runtime/research-model.patch.json").read_text())
             assert (
                 patch[0]["config"]["providers"]["rsi-responses"]["models"][0]["contextWindow"]
@@ -389,9 +405,26 @@ def test_tool_capability_and_workspace_sandbox_survive_restart(
 
             async def sink(event: dict[str, Any]) -> None:
                 delivered.append(event)
+                if event["type"] == "message_injected":
+                    pending[:] = [x for x in pending if x["message_id"] != event["message_id"]]
 
-            connection.handler, connection.sink = wait_handler, sink
+            connection.sink = sink
             connection.incoming = lambda: pending
+            output = await invoke(
+                bridge, {"name": "get_state", "arguments": {}, "call_id": "receive"}
+            )
+            assert output["incoming_messages"] == [
+                {"message_id": "job-completed", "text": "job result"}
+            ]
+            async with asyncio.timeout(2):
+                while pending:
+                    await asyncio.sleep(0.01)
+            again = await invoke(bridge, {"name": "get_state", "arguments": {}, "call_id": "again"})
+            assert again == "own-state"
+            assert sum(e["type"] == "message_injected" for e in delivered) == 1
+            pending.append({"message_id": "late-job", "text": "late result"})
+            delivered.clear()
+            connection.handler = wait_handler
             output = await invoke(bridge, {"name": "get_state", "arguments": {}, "call_id": "wait"})
             assert output["turn_finished"] and "incoming_messages" not in output
             assert not any(e["type"] == "message_injected" for e in delivered)

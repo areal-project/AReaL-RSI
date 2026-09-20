@@ -45,7 +45,7 @@ def compile_config(request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
             # Configure the installed DSH provider, rather than implementing a
             # separate Responses loop. Hand-declared model names need explicit
             # reasoning capabilities (e.g. Astra/Luna on the existing gateway).
-            requested = vendor.get("reasoningEffort", "high")
+            requested = request.get("reasoning_effort", vendor.get("reasoningEffort", "high"))
             effort = {"none": "off", "max": "xhigh"}.get(requested, requested)
             route = "rsi-responses"
             patch = directory / "research-model.patch.json"
@@ -114,7 +114,12 @@ def compile_config(request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
         (home / "config.yaml").write_text(
             json.dumps(
                 {
-                    "model": {"default": model, "provider": "custom:rsi"},
+                    "model": {
+                        "default": model, "provider": "custom:rsi",
+                        **({"context_length": request["context_window_tokens"]}
+                           if request.get("context_window_tokens") else {}),
+                    },
+                    "agent": {"reasoning_effort": request.get("reasoning_effort", "medium")},
                     "providers": {
                         "rsi": {"base_url": base, "api_key": key, "api_mode": "chat_completions"}
                     },

@@ -28,27 +28,10 @@ from areal_rsi.api.research import ResearchMessage
 from areal_rsi.base.storage import encode, now, write_json
 from areal_rsi.coordination.coordinator import Coordinator
 from areal_rsi.coordination.effective_time import EffectiveTime
-from areal_rsi.coordination.sources import archive_codex_source
-from areal_rsi.modules.agent_runtime import AgentRuntime, ToolHandler
-from areal_rsi.modules.responses import ResponsesError
+from areal_rsi.modules.agent_runtime import AgentRuntime, AgentRuntimeError, ToolHandler
 
 Json = dict[str, Any]
 TickHook = Callable[[], Awaitable[bool | None]]
-
-
-def _budget_usage(usage: Json) -> Json:
-    """Keep aggregate accounting here; full provider usage lives in response archives."""
-    return {
-        name: usage[name]
-        for name in (
-            "input_tokens",
-            "output_tokens",
-            "total_tokens",
-            "input_tokens_details",
-            "output_tokens_details",
-        )
-        if name in usage
-    }
 
 
 @dataclass(frozen=True)
@@ -59,10 +42,6 @@ class ToolSet:
     advertised: list[Json] | None = None
     workspace: Path | None = None
     environment: dict[str, str] | None = None
-
-
-class BudgetExceeded(ResponsesError):
-    """A durable run budget refused further model execution."""
 
 
 class ResearchEngine:
@@ -119,23 +98,12 @@ class ResearchEngine:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             handle.close()
-            raise ResponsesError("Another live worker owns this run's execution lock") from None
+            raise AgentRuntimeError("Another live worker owns this run's execution lock") from None
         self._lock_file = handle
         # A previous owner may have advanced state since this object was created.
         self.coordinator.state = json.loads(self.coordinator.path.read_text())
         self.effective = None
         self._initialize_effective_time()
-        # Older runs copied per-item provider attribution into every state save.
-        # Normalize only after acquiring ownership, without settling usage again.
-        for record in self._request_records().values():
-            path = self.coordinator.store.root / record["response_path"]
-            if isinstance(record.get("usage"), dict) and path.is_file():
-                record["usage"] = _budget_usage(record["usage"])
-            for attempt, usage in record.get("retry_usage", {}).items():
-                if path.with_name(f"{path.stem}.attempt-{attempt}.json").is_file():
-                    record["retry_usage"][attempt] = _budget_usage(usage)
-        self.coordinator.save()
-        self._reconcile_usage()
         self.coordinator.store.event("worker_started", pid=os.getpid())
 
     def _initialize_effective_time(self) -> None:
@@ -152,49 +120,6 @@ class ResearchEngine:
         else:
             self.effective.open_worker(self.clock())
         c.save()
-
-    def _request_records(self) -> Json:
-        records: Json = self.coordinator.state.setdefault("model_requests", {})
-        return records
-
-    def _reconcile_usage(self) -> None:
-        """Recover response usage persisted just before a worker/event-sink crash."""
-        for record in self._request_records().values():
-            path = self.coordinator.store.root / record["response_path"]
-            for failed_path in path.parent.glob(path.stem + ".attempt-*.json"):
-                attempt = failed_path.stem.rsplit("-", 1)[-1]
-                response = json.loads(failed_path.read_text())
-                self._settle_retry(record, attempt, response.get("usage") or {})
-            if not record.get("settled") and path.exists():
-                response = json.loads(path.read_text())
-                usage = response.get("usage")
-                if isinstance(usage, dict):
-                    self._settle(record, usage)
-
-    def _settle_retry(self, record: Json, attempt: str, usage: Json) -> None:
-        attempts = record.setdefault("retry_usage", {})
-        if attempt in attempts:
-            return
-        tokens = usage.get("total_tokens")
-        if isinstance(tokens, (int, float)) and not isinstance(tokens, bool) and tokens >= 0:
-            attempts[attempt] = _budget_usage(usage)
-            self.coordinator.state["total_tokens"] += tokens
-            self.coordinator.save()
-
-    def _settle(self, record: Json, usage: Json) -> None:
-        if record.get("settled"):
-            return
-        tokens = usage.get("total_tokens")
-        if not isinstance(tokens, (int, float)) or isinstance(tokens, bool) or tokens < 0:
-            # Without reliable usage retain the reservation; never silently count it as zero.
-            return
-        record.update(
-            settled=True,
-            usage=_budget_usage(usage),
-            reserved_tokens=record.get("unresolved_tokens", 0),
-        )
-        self.coordinator.state["total_tokens"] += tokens
-        self.coordinator.save()
 
     def _wall_reason(self) -> str | None:
         started = self.coordinator.state.get("started_at")
@@ -216,7 +141,7 @@ class ResearchEngine:
         self.coordinator.store.event("budget_exhausted", reason=reason)
         self.wake()
 
-    async def _event(self, agent_id: str, session: Path, event: Json) -> None:
+    async def _event(self, agent_id: str, event: Json) -> None:
         kind = event["type"]
         if kind == "api_availability":
             if self.effective is not None:
@@ -239,149 +164,19 @@ class ResearchEngine:
                 self.coordinator.state.get("runtime_turns", 0) + 1
             )
             self.coordinator.save()
-        if kind in {
-            "model_request",
-            "model_attempt",
-            "model_retry",
-            "model_recovered",
-            "tool_started",
-            "tool_completed",
-        }:
-            activity: Json = {
-                "type": kind,
-                "tool": event.get("name"),
-                "updated_at": now(),
-                **{
-                    name: event[name]
-                    for name in ("attempt", "error_code", "delay_seconds", "next_retry_at")
-                    if name in event
-                },
+        if kind in {"runtime_turn_started", "tool_started", "tool_completed"}:
+            self.coordinator.state.setdefault("agent_activity", {})[agent_id] = {
+                "type": kind, "tool": event.get("name"), "updated_at": now(),
             }
-            self.coordinator.state.setdefault("agent_activity", {})[agent_id] = activity
             self.coordinator.save()
         if kind == "message_injected":
             self.coordinator.receive_during_turn(agent_id, event["message_id"])
-        if kind == "web_search_response":
-            archive_codex_source(self.coordinator, agent_id, session, event["request_id"])
-        if kind == "model_stream":
-            # Full provider events remain in the private session archive. Public
-            # output is published only after a successful terminal response, so
-            # abandoned retry fragments cannot masquerade as completed work.
-            return
         if kind == "model_output":
             self.coordinator.store.event(
                 "assistant_output", agent_id=agent_id, text=event.get("text", "")
             )
             self.wake()
             return
-        if kind == "model_attempt":
-            actor = self.coordinator.actor(agent_id)
-            if not self._actor_allowed(agent_id) or actor.state in {
-                AgentState.STOPPED,
-                AgentState.PAUSED,
-            }:
-                raise asyncio.CancelledError
-            record = self._request_records()[event["request_id"]]
-            previous = record.get("api_attempts", 0)
-            if (
-                event["attempt"] > previous
-                and previous
-                and not record.get("known_failed_attempts", {}).get(str(previous))
-            ):
-                # A cancelled/broken stream may still incur provider usage. Keep
-                # its reservation even when a later attempt succeeds.
-                reserve = record.get("reservation_per_attempt", record["reserved_tokens"])
-                record["unresolved_tokens"] = record.get("unresolved_tokens", 0) + reserve
-                record["reserved_tokens"] += reserve
-            record["api_attempts"] = max(previous, event["attempt"])
-            self.coordinator.save()
-            reason = self._wall_reason()
-            reserved = sum(r["reserved_tokens"] for r in self._request_records().values())
-            max_tokens = self.coordinator.store.brief().limits.max_total_tokens
-            if (
-                max_tokens is not None
-                and self.coordinator.state["total_tokens"] + reserved > max_tokens
-            ):
-                reason = "Run token budget exhausted during API retries"
-            if reason is not None:
-                self._pause_for_budget(reason)
-                raise BudgetExceeded(reason)
-        if kind == "model_retry":
-            record = self._request_records().get(event["request_id"])
-            if record is not None:
-                ambiguous = event["error_code"] in {
-                    "ReadError",
-                    "ReadTimeout",
-                    "WriteError",
-                    "WriteTimeout",
-                    "RemoteProtocolError",
-                    "stream_interrupted",
-                    "invalid_json",
-                }
-                record.setdefault("known_failed_attempts", {})[
-                    str(event["attempt"])
-                ] = not ambiguous
-                self.coordinator.save()
-        if kind == "response_retry_usage":
-            record = self._request_records().get(event["request_id"])
-            if record is not None:
-                self._settle_retry(record, str(event["attempt"]), event["usage"])
-        if kind == "model_request":
-            if not self._actor_allowed(agent_id):
-                raise asyncio.CancelledError
-            actor = self.coordinator.actor(agent_id)
-            if actor.state in {AgentState.STOPPED, AgentState.PAUSED}:
-                raise asyncio.CancelledError
-            request_id = event["request_id"]
-            records = self._request_records()
-            if request_id not in records:
-                reason = self._wall_reason()
-                limits = self.coordinator.store.brief().limits
-                if (
-                    limits.max_model_calls is not None
-                    and self.coordinator.state["model_calls"] >= limits.max_model_calls
-                ):
-                    reason = "Run model-call budget exhausted"
-                payload = json.loads((session / "requests" / f"{request_id}.json").read_text())
-                # UTF-8 bytes conservatively estimate ordinary BPE input tokens;
-                # include message framing overhead and maximum possible output.
-                reserve = (
-                    len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
-                    + 64 * (len(payload.get("input", [])) + len(payload.get("tools", [])) + 1)
-                    + payload["max_output_tokens"]
-                )
-                reserved = sum(record["reserved_tokens"] for record in records.values())
-                if (
-                    limits.max_total_tokens is not None
-                    and self.coordinator.state["total_tokens"] + reserved + reserve
-                    > limits.max_total_tokens
-                ):
-                    reason = "Insufficient token budget for the next request and its maximum output"
-                if reason is not None:
-                    self._pause_for_budget(reason)
-                    raise BudgetExceeded(reason)
-                records[request_id] = {
-                    "agent_id": agent_id,
-                    "reserved_tokens": reserve,
-                    "reservation_per_attempt": reserve,
-                    "settled": False,
-                    "response_path": str(
-                        (session / "responses" / f"{request_id}.json").relative_to(
-                            self.coordinator.store.root
-                        )
-                    ),
-                }
-                self.coordinator.state["model_calls"] += 1
-                self.coordinator.save()
-        elif kind == "response_usage":
-            record = self._request_records().get(event["request_id"])
-            if record is not None:
-                self._settle(record, event["usage"])
-                max_tokens = self.coordinator.store.brief().limits.max_total_tokens
-                if max_tokens is not None and self.coordinator.state["total_tokens"] > max_tokens:
-                    self._pause_for_budget(
-                        "Provider-reported usage exceeded the reserved token limit"
-                    )
         data = {
             key: value for key, value in event.items() if key not in {"type", "agent_id", "kind"}
         }
@@ -494,14 +289,21 @@ class ResearchEngine:
             prompt_id = hashlib.sha256(prompt.encode()).hexdigest()
             write_json(session / "prompts" / f"{prompt_id}.json", {"prompt": prompt})
             runtime = self.interaction_runtime if agent_id == "interaction" else self.runtime
+            configuration = (
+                runtime.configuration_for(agent_id)
+                if hasattr(runtime, "configuration_for") else runtime.configuration()
+            )
             write_json(
                 session / "configuration.json",
-                {**runtime.configuration(), "prompt_id": prompt_id},
+                {**configuration, "prompt_id": prompt_id},
             )
 
             async def event_sink(event: Json) -> None:
-                await self._event(agent_id, session, event)
-                if event["type"] in {"tool_completed", "response_usage", "message_injected"}:
+                await self._event(agent_id, event)
+                # Usage is accounted for above, including deduplicated journal replay.
+                # Rebuilding the full view for each usage blocks the shared event loop;
+                # refresh at tool/message boundaries, as on the original native path.
+                if event["type"] in {"tool_completed", "message_injected"}:
                     # Keep the object passed to runtime current throughout a long
                     # turn; checkpoint creation takes its own immutable copy.
                     latest = self._recovery_state(agent_id)
@@ -565,25 +367,12 @@ class ResearchEngine:
                     key=agent_id + "-response:" + message.message_id,
                     reply_to=(user_messages or c.current_message_ids(agent_id))[-1],
                 )
-            if result.stop_reason == "budget_exhausted":
-                c.end_turn(
-                    agent_id, error="Per-turn model-call budget exhausted; explicit review required"
-                )
-            elif result.stop_reason == "completed" and agent_id not in {"rsi", "interaction"}:
+            if result.stop_reason == "completed" and agent_id not in {"rsi", "interaction"}:
                 self._complete_research_turn(
                     agent_id, iteration_id, message.message_id, result.text
                 )
             else:
                 c.end_turn(agent_id)
-        except BudgetExceeded as exc:
-            self._pause_for_budget(str(exc))
-            if c.state["status"] == "planned":
-                c.end_turn(agent_id, error=str(exc))
-                return
-            actor = c.actor(agent_id)
-            if actor.state != AgentState.STOPPED:
-                actor.state, actor.wait_reason = AgentState.PAUSED, "run_paused"
-                c.save_actor(actor)
         except asyncio.CancelledError:
             actor = c.actor(agent_id)
             if actor.state not in {AgentState.STOPPED, AgentState.FAILED}:

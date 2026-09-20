@@ -1,7 +1,7 @@
 # Isolated pass@k
 
 设置 `ResearchConfig.mode = "passk"`，`brief.limits.max_agents` 即固定的 k。
-省略 mode 时默认使用 `passk`。后端仍可选 `standard` 或 `codex`，都使用
+省略 mode 时默认使用 `passk`。后端可选 `standard`、`codex` 或 `runtime`，都使用
 AReaL Agent Runtime。这个模式只实现独立尝试，不包含信息共享或 evidence 审核。
 
 工作台支持在创建研究或启动前选择协作方式，并冻结模块版本；通过“用此配置新建研究”
@@ -39,6 +39,7 @@ submit_report 记录进展并通知 RSI，不结束当前研究回合。研究�
 
 - 任一候选在当前契约的 search 正式验证中通过正确性检查，并达到目标指标。
 - 从研究启动算起达到 `max_wall_seconds`。启动开销、暂停和进程停机时间都计入；恢复不续杯。
+- 有效时间模式下，所有研究员达到各自预算，口径见[有效时间](effective-time.md)。
 - 操作员明确停止。
 
 模拟结果只属于模拟实验。诊断成绩、错误契约、失败验证和模型自报成绩不会触发达标。
@@ -63,7 +64,6 @@ submit_report 记录进展并通知 RSI，不结束当前研究回合。研究�
     "limits": {
       "max_agents": 4,
       "max_nodes": null,
-      "max_model_calls": null,
       "max_total_tokens": null,
       "max_verify_calls": null,
       "max_wall_seconds": 3600,
@@ -73,7 +73,7 @@ submit_report 记录进展并通知 RSI，不结束当前研究回合。研究�
 }
 ```
 
-模型、token 和验证次数必须显式不设整组共享上限，防止一个尝试耗尽其他尝试的预算。
+模型调用、token 和验证次数不得设置整组共享上限，防止一个尝试耗尽其他尝试的预算。
 `max_jobs` 是执行并发容量，不是累计提交数，应匹配实际 GPU/运行器资源。
 所有执行条件必须在启动前准备好；本模式不会等待 leader 配置环境。
 运行器在调用模型前检查沙箱中的 shell、临时目录和 `rsi-tools`。任务工具可用
@@ -104,9 +104,7 @@ RSI_DATA_ROOT=.rsi/passk uv run --env-file .env --locked rsi research --config /
 调参循环；每次根据反馈决定下一项实验。正式结果除 speedup 外还记录候选/参考耗时和
 标准差，用于检查参考计时异常。原始评分、历史最佳选择和 seed 137 最终复测规则不变。
 
-`metadata.budget_clock = "wall"` 明确标记当前停止口径。这不等于 baseline 的有效时间预算：
-后者扣除了本地提交到 GPU 开始的等待，以及已记录的 API 故障等待。对照时必须将各尝试
-与 baseline 截到相同有效时间，再比较探索期正式结果；不能把最终独立复测混进搜索曲线，
-也不能将首次正确后的结果倒算到提交时刻。会话启动、正常思考、工具执行、编译和 compact
-均计入主要比较口径。Luna baseline 的 L3P10 是 2 小时有效预算，其他题是 1 小时。
-这次修复不改变停止时钟，也不新增扣时规则；完成工程修复后先跑 k=1 对照，再跑 k=4。
+对照实验须固定墙钟或[有效时间](effective-time.md)口径：墙钟包含停机和队列等待，
+有效时间扣除已记录的 API 故障与 GPU 排队。不要把不同预算直接当作等价实验。
+最终独立复测不能混入搜索曲线，也不能将首次正确后的成绩倒算到提交时刻。
+具体 baseline 的任务与预算以对应实验配置为准。

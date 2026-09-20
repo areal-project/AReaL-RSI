@@ -23,7 +23,7 @@ from jsonschema import ValidationError, validate
 
 from areal_rsi.api.base import AgentSpec, ModelVersion
 from areal_rsi.base.storage import FileContentStore, FileTrajectoryStore, decode, now, write_json
-from areal_rsi.coordination.config import ResearchConfig
+from areal_rsi.coordination.config import ResearchConfig, config_from_dict
 from areal_rsi.modules.agent_runtime import EventSink, ToolCall, ToolHandler, TurnResult
 from areal_rsi.modules.runtime_package import PackageAgentRuntime, PackageSession, RuntimeSettings
 
@@ -58,37 +58,38 @@ class Conversation:
     incoming: Callable[[], list[Json]] | None = None
     stop_reason: str | None = None
     calls: set[asyncio.Task[Any]] = field(default_factory=set)
-    call_namespace: str = ""
+    call_namespace: str | None = None
 
 
 class ResearchRuntime:
     def __init__(self, config: ResearchConfig, *, settings: RuntimeSettings | None = None):
+        config = config_from_dict(config.public())
+        config.pin_model_settings()
         self.config = config
-        # Retain the existing connection validation and model-window policy;
-        # ResponsesConfig is configuration only, never an execution backend.
         self.connection = config.runtime()
         self.backend = config.backend
         self.allow_web_access = config.metadata.get("allow_web_access", True)
-        self.settings = settings or RuntimeSettings(
-            {
-                "default": {
-                    "kind": "codex-cli" if self.backend == "codex" else "dsh",
-                    "config": {"modelProtocol": "responses", "timeoutSeconds": 86400}
-                    if self.backend == "codex"
-                    else {"reasoningEffort": self.connection.reasoning_effort},
-                }
-            }
-        )
+        self.settings = settings or config.runtime_settings()
         self.conversations: dict[Path, Conversation] = {}
 
     def for_interaction(self) -> ResearchRuntime:
         return ResearchRuntime(self.config, settings=self.settings)
 
     def configuration(self) -> Json:
+        return self.configuration_for("research-agent")
+
+    @staticmethod
+    def role_for(agent_id: str) -> str:
+        return {"interaction": "interaction-agent", "rsi": "rsi-agent"}.get(
+            agent_id, "research-agent"
+        )
+
+    def configuration_for(self, agent_id: str) -> Json:
         return {
             **self.config.model_settings(),
             "runtime": "areal-agent-runtime",
-            "harness": self.settings.select("research-agent")["kind"],
+            "evolution_target": self.config.evolution_target,
+            "harness": self.settings.select(self.role_for(agent_id))["kind"],
             "allow_web_access": self.allow_web_access,
         }
 
@@ -116,6 +117,8 @@ class ResearchRuntime:
         handler: ToolHandler,
         agent_id: str,
     ) -> Conversation:
+        role = self.role_for(agent_id)
+        kind = self.settings.select(role)["kind"]
         request_path = directory / "runtime/request.json"
         if not request_path.exists() and any(
             (directory / name).exists() for name in ("session.json", "codex-session.json")
@@ -146,9 +149,12 @@ class ResearchRuntime:
                 if name not in catalog:
                     raise ValueError("Tool is not available to this agent")
                 validate(request["arguments"], catalog[name]["parameters"])
+                if connection.call_namespace is None:
+                    raise ValueError("Runtime has no active delivery")
                 # Native adapters may restart their call sequence each delivery.
                 # Scope durable receipts to the session and delivery, retaining
-                # stable identities when the same delivery resumes after a crash.
+                # existing identities across crashes and explicit retries. Native
+                # Run IDs change on recovery and would replay committed effects.
                 identity = json.dumps([connection.call_namespace, request["call_id"]])
                 call = ToolCall(
                     name, request["arguments"], hashlib.sha256(identity.encode()).hexdigest()
@@ -199,8 +205,8 @@ class ResearchRuntime:
             content,
             FileTrajectoryStore(directory / "trajectories", content),
             settings=self.settings,
-            role="research-agent",
-            base_url=self.connection.endpoint.removesuffix("/responses"),
+            role=role,
+            base_url=self.connection.runtime_base_url,
             api_key=self.config.api_key(),
             timeout=86400,
             max_tokens=self.config.max_output_tokens,
@@ -259,12 +265,13 @@ class ResearchRuntime:
                 workspace_root=str(workspace),
                 session_id="runtime",
                 research_tools=bridge,
+                reasoning_effort=self.connection.reasoning_effort,
                 context_window_tokens=(
                     self.config.context_window_tokens
-                    if self.backend == "codex"
+                    if kind == "codex-cli"
                     else self.connection.effective_context_window_tokens
                 ),
-                codex_config=codex_config if self.backend == "codex" else None,
+                codex_config=codex_config if kind == "codex-cli" else None,
             )
         except BaseException:
             server.close()

@@ -1,7 +1,7 @@
 # 每名研究员的有效时间
 
-pass@k 及其附加模块支持 `brief.limits.max_effective_seconds`。这次 v0.2 使用
-3600 秒，并将 `max_wall_seconds` 设为 null。每名研究员独立计时、到时停止；
+pass@k 及其附加模块支持 `brief.limits.max_effective_seconds`。例如每人一小时有效时间可设为
+3600，并将 `max_wall_seconds` 设为 null。每名研究员独立计时、到时停止；
 RSI 随最后一名研究员结束，随后统一冻结选优并独立复测。
 
 当前有效时间仅支持 Codex。standard 尚未提供 API 故障时间事件，请使用

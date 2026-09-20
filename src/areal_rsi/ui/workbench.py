@@ -118,7 +118,7 @@ def _brief(value: Any) -> Json:
     result = _fields(value, "objective instructions")
     result["limits"] = _fields(
         value.get("limits"),
-        "max_agents max_nodes max_model_calls max_total_tokens "
+        "max_agents max_nodes max_total_tokens "
         "max_wall_seconds max_effective_seconds "
         "max_verify_calls max_jobs gpu_ids allowed_paths",
     )
@@ -168,7 +168,8 @@ def public_detail(value: Json) -> Json:
         result[name] = _score(value.get(name))
     result["budget"] = _fields(
         value.get("budget"),
-        "model_calls api_attempts total_tokens verify_calls reserved_tokens elapsed_seconds clock",
+        "model_calls runtime_turns api_attempts total_tokens verify_calls "
+        "reserved_tokens elapsed_seconds clock",
     )
     if isinstance(value.get("budget", {}).get("researchers"), dict):
         result["budget"]["researchers"] = {

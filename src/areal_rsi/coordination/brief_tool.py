@@ -11,8 +11,8 @@ from areal_rsi.base.storage import decode, encode
 from areal_rsi.coordination.collaboration import selected_modules
 
 PASSK_HIDDEN_LIMITS = (
-    "max_nodes",
     "max_model_calls",
+    "max_nodes",
     "max_total_tokens",
     "max_verify_calls",
 )
@@ -63,10 +63,11 @@ def brief_tool(mode: str) -> dict[str, Any]:
     description = (
         "启动前更新需求。先读取 get_state，填写结构化参数并保留未修改字段。"
         "验证 identity 由后端保留，不在此工具修改。"
+        "不支持模型调用次数上限；若用户要求此限制，请说明并确认可用的预算约束。"
     )
     description += (
         "当前为 pass@k：仅提供研究时限、研究员数量和执行资源限制；"
-        "调用次数、token 总量、验证次数及累计节点数由系统保持不限。"
+        "token 总量、验证次数及累计节点数由系统保持不限。"
         "若用户要求这些上限，先说明当前不支持并明确预算；"
         "不要擅自忽略用户要求，也不要把冲突上限写进 instructions。"
     )

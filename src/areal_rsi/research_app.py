@@ -13,7 +13,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from areal_rsi.api.base import ExperimentRun
+from areal_rsi.api.base import ResearchRun
 from areal_rsi.api.research import (
     CandidateSnapshot,
     EvidenceRecord,
@@ -104,15 +104,13 @@ class ResearchApp:
 
     @staticmethod
     def _runtime(config: ResearchConfig) -> AgentRuntime:
-        if not config.api_key():
-            raise ValueError(f"Set {config.api_key_env} before starting model agents")
         return ResearchRuntime(config)
 
     @staticmethod
     def _configure_agent_tools(active: ActiveResearch, config: ResearchConfig) -> None:
         active.tools.configure(config.metadata.get("agent_tool_instructions"))
         allow_web = config.metadata.get("allow_web_access", True)
-        register_sources(active.actions, enabled=config.backend == "standard" and allow_web)
+        register_sources(active.actions, enabled=config.backend != "codex" and allow_web)
         for runtime in (active.engine.runtime, active.engine.interaction_runtime):
             if isinstance(runtime, ResearchRuntime):
                 runtime.allow_web_access = allow_web
@@ -243,7 +241,7 @@ class ResearchApp:
                 self._reset_interaction_session(c)
             for field, value in settings.items():
                 setattr(config, field, value)
-            config.model_settings_pinned = True
+            config.pin_model_settings()
             config.model_settings_revision = new_id("model")
             if key:
                 self.save_credentials(c, config, key)
@@ -353,7 +351,7 @@ class ResearchApp:
             config.brief.limits.__post_init__()
         if config.metadata.get("simulation_only") and not simulated:
             raise ValueError(
-                "This template is for workflow simulation; configure real runners first"
+                "This template is for research simulation; configure real runners first"
             )
         if "collaboration" in params:
             self.select_collaboration(config, params["collaboration"])
@@ -365,6 +363,8 @@ class ResearchApp:
                 setattr(config, field, value)
         else:
             key = ""
+        config.pin_model_settings()
+        config.connection_settings()
         key = key or config.api_key()
         if not conversation and config.seed_dir and not Path(config.seed_dir).is_dir():
             raise FileNotFoundError(f"Seed directory does not exist: {config.seed_dir}")
@@ -399,7 +399,7 @@ class ResearchApp:
                     "agent_id": "rsi",
                     "simulated": True,
                     "shared": True,
-                    "description": "Synthetic development trajectory for workflow testing",
+                    "description": "Synthetic development trajectory for research testing",
                     "attempts": [
                         {
                             "failure": "Tail tile writes past output bounds",
@@ -461,6 +461,8 @@ class ResearchApp:
         config.brief = c.store.brief()
         config.__post_init__()
         config.validate_clock()
+        config.pin_model_settings()
+        config.connection_settings()
         write_json(c.store.root / "coordination" / "config.json", config.public())
         pending_setup = c.state.get("execution_setup") == "pending"
         # A complete operator configuration imported during intake needs no
@@ -619,7 +621,7 @@ class ResearchApp:
         await actions.initialize_workspace("rsi")
         register_sources(
             actions,
-            enabled=config.backend == "standard" and config.metadata.get("allow_web_access", True),
+            enabled=config.backend != "codex" and config.metadata.get("allow_web_access", True),
         )
         agent_tools = AgentTools(
             actions,
@@ -960,16 +962,13 @@ class ResearchApp:
                 manager.close(preserve_running=False)
                 destination = self.root / ".deleting" / new_id("research")
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                c.store.paths.legacy_state.unlink(missing_ok=True)
                 c.store.root.rename(destination)
             await asyncio.to_thread(shutil.rmtree, destination)
         return {"run_id": c.store.run_id, "status": "deleted"}
 
     async def call(self, action: str, params: dict[str, Any]) -> Any:
         if action == "recover":
-            for run in FileRunStore(self.root).list(ExperimentRun):
-                if run.plan.workflow != "research":
-                    continue
+            for run in FileRunStore(self.root).list(ResearchRun):
                 try:
                     c = self.coordinator(run.run_id)
                     config = self.config(c)
@@ -1023,7 +1022,7 @@ class ResearchApp:
                 ],
             }
         if action == "list":
-            runs = FileRunStore(self.root).list(ExperimentRun)
+            runs = FileRunStore(self.root).list(ResearchRun)
             # Workbench organization is independent of frozen experiment records.
             group_file = self.root / "workbench-groups.json"
             groups = json.loads(group_file.read_text())["groups"] if group_file.exists() else []
@@ -1033,7 +1032,7 @@ class ResearchApp:
                 for run_id in group["run_ids"]
             }
 
-            def created_at(run: ExperimentRun) -> str:
+            def created_at(run: ResearchRun) -> str:
                 c = self.coordinator(run.run_id)
                 if c.state.get("created_at"):
                     return str(c.state["created_at"])
@@ -1058,8 +1057,7 @@ class ResearchApp:
                             "group": run_groups.get(r.run_id),
                         }
                         for r in runs
-                        if r.plan.workflow == "research"
-                        and (
+                        if (
                             self.allow_simulation
                             or not self.coordinator(r.run_id).state["simulated"]
                         )

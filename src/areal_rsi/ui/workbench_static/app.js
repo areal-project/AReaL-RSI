@@ -81,7 +81,7 @@ const effortDropdown = new WorkbenchDropdown($("reasoning-effort"), {
   label: "推理强度",
   onChange: (value) => { modelDraft().reasoning_effort = value; renderModelSettings(); },
 });
-const backendOptions = [{value: "standard", text: "standard"}, {value: "codex", text: "codex"}];
+const backendOptions = [{value: "standard", text: "standard"}, {value: "codex", text: "codex"}, {value: "runtime", text: "Runtime 配置"}];
 const backendDropdown = new WorkbenchDropdown($("agent-backend"), {
   label: "Agent 后端", onChange: (value) => { modelDraft().backend = value; renderModelSettings(); },
 });
@@ -689,8 +689,7 @@ function render() {
   $("final-score").textContent = score(run.final?.score);
   const researchers = ResearchGraph.researchers(run);
   $("node-count").textContent = integer(researchers.length);
-  $("model-count").textContent =
-    `${integer(run.budget?.model_calls ?? 0)} / ${budgetLimit(run.brief?.limits?.max_model_calls)}`;
+  $("runtime-turn-count").textContent = integer(run.budget?.runtime_turns ?? 0);
   $("plan").textContent =
     run.plan || "研究开始后，RSI 会在这里说明当前方向和下一步。";
   $("plan").classList.toggle("muted", !run.plan);
@@ -1416,7 +1415,6 @@ function renderBrief(run) {
   const rows = [
     ["同时存活研究员上限", limits.max_agents],
     ["节点上限", budgetLimit(limits.max_nodes)],
-    ["模型调用上限", budgetLimit(limits.max_model_calls)],
     ["Token 上限", budgetLimit(limits.max_total_tokens)],
     ["验证次数上限", budgetLimit(limits.max_verify_calls)],
     ["研究时长上限", limits.max_wall_seconds === null ? "不限" : `${budgetLimit(limits.max_wall_seconds)} 秒`],

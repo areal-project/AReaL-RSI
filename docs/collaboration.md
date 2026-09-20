@@ -1,9 +1,9 @@
 # 协作配置与消融实验
 
 新研究默认采用 **v0.2.2**，并可选择 v0.2.1 或纯 pass@k 做对照。
-版本配置与 Prompt 差异见 [v0.2.2 说明](leader-guidance-v0.2.2.md)。
+版本配置与 Prompt 差异见下文。
 
-模型后端（standard / codex）和协作方式是两项独立配置。工作台的新建研究窗口可以选择
+模型后端（standard / codex / runtime）和协作方式是两项独立配置。工作台的新建研究窗口可以选择
 协作方式，研究页面的“协作方式”区域允许启动前修改，并支持“用此配置新建研究”。
 这个按钮只复制协作选择；新研究的模型、任务和资源仍需单独确认。
 
@@ -20,6 +20,25 @@
 
 完整 JSON 配置省略 `mode` 时为 `passk`，省略 `collaboration_modules` 时仍为空，
 不会给显式导入的配置自动增加模块。旧研究保留启动时冻结的配置，不会被改成新版本。
+
+## guidance 版本差异
+
+v0.2.2 仅修改 leader Prompt；researcher Prompt、工具权限、非阻塞消息、调度、计时和评测
+沿用 v0.2.1。新工作台研究和通用 KernelBench `prepare()` 默认选择 v0.2.2。
+
+- 已保存最好候选后继续研究，不让多人反复确认同一版本或提前等待收尾。
+- 分享能解决具体困难的经验及适用条件，不把领先实现作为全员默认路线。
+- 计划关注未解决的问题，帮助研究员设计能区分不同解释的实验。
+- 区分观察和解释，引用原始记录；收到有依据的反证后修正建议。
+
+```python
+prepare(..., mode="passk", collaboration_modules=())                    # 纯 pass@k
+prepare(..., mode="passk", collaboration_modules=("leader_guidance",))  # v0.2.1
+prepare(...)                                                            # v0.2.2
+```
+
+[固定 v0.2.1 批次示例](../examples/kernelbench_artifacts/v0.2.1/README.md) 每名研究员使用
+半小时有效时间。角色源码与模块版本见下方表格；严格复现还须固定代码、模型和评测条件。
 
 ## RSI 协调的边界
 
@@ -59,8 +78,10 @@ KernelBench 的 `prepare(..., mode="passk", collaboration_modules=("leader_guida
 
 记录工具只解析当前 run 的公开记录，拒绝其他 run URI、路径穿越和越界符号链接。
 原生工具在进程沙箱中只获得自己的会话/工作区、已安装运行库和受信任公共依赖的读取权限；
-本地工作台和其他 agent 工具端口不能直接访问，只放行本 actor 的工具桥接和配置的模型服务。
-普通网页端口保持可用。运行时 `readable_paths` 与服务端点属于部署者的信任配置，
+网络隔离取决于后端：DSH/Claude 为动态 MCP 桥允许 localhost 通信，不能依赖端口规则
+阻止其连接其他本地服务；RSI 工具仍检查会话令牌和角色权限。Codex/Hermes 按配置开放
+工具桥和模型端口。普通网页端口保持可用，详细边界见[后端说明](agent-backends.md#隔离边界)。
+运行时 `readable_paths` 与服务端点属于部署者的信任配置，
 不能指向历史研究数据或不受约束的数据代理。
 
 GPU 计算也使用同一边界。`examples/kernelbench_artifacts/queue_sandbox.py` 在队列现有
@@ -78,7 +99,7 @@ mount/PID namespace 内增加私有根目录、网络隔离和权限收缩；只
 
 启动研究时，`build_plan(mode, modules)` 一次性选定 Actions（工具权限）、Engine
 （调度/生命周期）和两个角色 Prompt。工作台的选项是这一配置的快捷入口。
-`standard` / `codex` 只影响 Runtime 和原生工具说明，不另复制一套协作角色 Prompt。
+`standard` / `codex` / `runtime` 只影响 Runtime 和原生工具说明，不另复制一套协作角色 Prompt。
 
 | 配置 | 流程与权限 | 角色正文来源 |
 | --- | --- | --- |
@@ -97,7 +118,7 @@ mount/PID namespace 内增加私有根目录、网络隔离和权限收缩；只
 `leader_guidance` 复用 pass@k 调度器，但替换两份角色正文及 Actions；
 `leader_guidance_v022` 依赖它，只替换 RSI 正文。以后增加 evidence pool/审核时，优先增加简短的
 模块说明和权限，避免为每个模块组合再复制一整套 Prompt。
-v0.2.1 完整正文见 [Prompt 审阅](leader-guidance-prompt-review.md)，新版见 [v0.2.2](leader-guidance-v0.2.2.md)。
+Prompt 正文以上表链接的源码为准，文档不再复制正文。
 基础 pass@k 版本为 2，`leader_guidance` 模块版本为 3，新增 Prompt 模块版本为 1。
 两种协调方式都可在当前代码中选择；更早实验若版本不匹配，仍须用原版本恢复。
 

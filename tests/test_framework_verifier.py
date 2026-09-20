@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import unittest
 
-from areal_rsi.api.base import (
+from areal_rsi.api.records import (
     ContentRef,
     HarnessVersion,
     ModelVersion,
@@ -18,7 +18,7 @@ from areal_rsi.api.base import (
     VerificationStatus,
     VerifierSpec,
 )
-from areal_rsi.framework.verifier import VerifierExecutor, VerifierLoader
+from areal_rsi.infra.tasks.verifier import VerifierExecutor, VerifierLoader
 
 
 class _PassingVerifier:

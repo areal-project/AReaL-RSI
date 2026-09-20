@@ -15,9 +15,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from areal_rsi.api.base import AgentSpec, ModelVersion
-from areal_rsi.base.storage import FileContentStore, FileTrajectoryStore, now
-from areal_rsi.modules.runtime_package import PackageAgentRuntime, RuntimeSettings
+from areal_rsi.api.records import AgentSpec, ModelVersion
+from areal_rsi.infra.runtime.runtime_package import PackageAgentRuntime, RuntimeSettings
+from areal_rsi.infra.storage.files import FileContentStore, FileTrajectoryStore, now
 
 
 class ScriptedModel:
@@ -350,7 +350,7 @@ class RealPackageExecutionTest(unittest.IsolatedAsyncioTestCase):
 
 
     async def test_cancel_commits_terminal_and_reaps_worker(self) -> None:
-        from areal_rsi.modules.runtime_storage import read_journal
+        from areal_rsi.infra.runtime.runtime_storage import read_journal
 
         model_server = ScriptedModel()
         release = threading.Event()

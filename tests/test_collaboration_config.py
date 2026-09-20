@@ -12,23 +12,23 @@ import pytest
 from runtime_fakes import ActionRuntime
 
 from areal_rsi.api.research import TaskBrief
-from areal_rsi.base.storage import write_json
-from areal_rsi.coordination.collaboration import (
+from areal_rsi.infra.coordination.config import ResearchConfig, config_from_dict
+from areal_rsi.infra.coordination.intake import ResearchIntake
+from areal_rsi.infra.coordination.policies.collaboration import (
     DEFAULT_MODULES,
     MODULES,
     build_plan,
     selected_modules,
 )
-from areal_rsi.coordination.config import ResearchConfig, config_from_dict
-from areal_rsi.coordination.intake import ResearchIntake
-from areal_rsi.coordination.passk import PassKActions, PassKEngine
-from areal_rsi.research_app import ResearchApp
+from areal_rsi.infra.coordination.policies.passk import PassKActions, PassKEngine
+from areal_rsi.infra.research import ResearchSystem
+from areal_rsi.infra.storage.files import write_json
 from areal_rsi.ui.launch import WorkbenchClient
 from areal_rsi.ui.workbench import WorkbenchServer
 
 
-def app_at(root: Path) -> ResearchApp:
-    return ResearchApp(root, runtime_factory=lambda _: ActionRuntime())
+def system_at(root: Path) -> ResearchSystem:
+    return ResearchSystem(root, runtime_factory=lambda _: ActionRuntime())
 
 
 def test_default_config_and_unimplemented_modules() -> None:
@@ -38,7 +38,7 @@ def test_default_config_and_unimplemented_modules() -> None:
     assert config_from_dict(legacy).mode == "passk"
     with pytest.raises(ValueError, match="已移除"):
         config_from_dict({**legacy, "mode": "collaborative"})
-    ResearchApp.select_collaboration(config, {"mode": "passk", "modules": []})
+    ResearchSystem.select_collaboration(config, {"mode": "passk", "modules": []})
     restored = config_from_dict(config.public())
     plan = build_plan(restored.mode, restored.collaboration_modules)
     assert plan.actions is PassKActions and plan.engine is PassKEngine
@@ -64,28 +64,30 @@ def test_selection_rebuilds_runtime_and_freezes_versions(
     plan = build_plan("passk", (module.id,))
 
     async def scenario() -> None:
-        app = app_at(tmp_path)
+        system = system_at(tmp_path)
         try:
-            detail = await app.create(
+            detail = await system.create(
                 {"conversation": True, "collaboration": {"mode": "passk", "modules": []}}
             )
-            c = app.coordinator(detail["run_id"])
-            original = await app.attach(c)
-            await app.set_collaboration(c, {"mode": "passk", "modules": [module.id]})
-            active = app.active[c.store.run_id]
+            c = system.coordinator(detail["run_id"])
+            original = await system.attach(c)
+            await system.set_collaboration(
+                c.store.run_id, {"mode": "passk", "modules": [module.id]}
+            )
+            active = system.active[c.store.run_id]
             assert active is not original
             assert isinstance(active.actions, plan.actions)
             assert isinstance(active.engine, plan.engine)
             assert active.engine.rsi_prompt == plan.rsi_prompt
             assert active.engine.research_prompt == plan.research_prompt
-            assert not active.tools.supervisor_only
+            assert "你的默认工作区" in active.engine.tools_factory("rsi").instructions
             # Starting directly here avoids invoking a real Interaction agent.
             c.state["intake"]["status"] = "ready"
             c.save()
-            await app.start(c)
+            await system.start(c.store.run_id)
             path = c.store.root / "coordination/collaboration.json"
             frozen = path.read_bytes()
-            detail = await app.detail(c.store.run_id)
+            detail = await system.detail(c.store.run_id)
             assert not detail["collaboration"]["editable"]
             assert detail["collaboration"]["manifest"]["modules"] == [
                 {"id": module.id, "version": module.version}
@@ -94,10 +96,10 @@ def test_selection_rebuilds_runtime_and_freezes_versions(
                 c.state["status"] = state
                 c.save()
                 with pytest.raises(ValueError, match="已锁定"):
-                    await app.set_collaboration(c, {"mode": "passk", "modules": []})
+                    await system.set_collaboration(c.store.run_id, {"mode": "passk", "modules": []})
             assert path.read_bytes() == frozen
-            await app.close()
-            restored = app_at(tmp_path)
+            await system.close()
+            restored = system_at(tmp_path)
             try:
                 recovered = await restored.attach(restored.coordinator(c.store.run_id))
                 assert isinstance(recovered.actions, plan.actions)
@@ -109,39 +111,40 @@ def test_selection_rebuilds_runtime_and_freezes_versions(
             finally:
                 await restored.close()
         finally:
-            await app.close()
+            await system.close()
 
     asyncio.run(scenario())
 
 
 def test_environment_import_preserves_selected_collaboration(tmp_path: Path) -> None:
     async def scenario() -> None:
-        app = app_at(tmp_path)
+        system = system_at(tmp_path)
         try:
-            detail = await app.create(
+            detail = await system.create(
                 {
                     "conversation": True,
                     "collaboration": {"mode": "passk", "modules": []},
                 }
             )
-            c = app.coordinator(detail["run_id"])
-            active = await app.attach(c)
+            c = system.coordinator(detail["run_id"])
+            active = await system.attach(c)
             intake = ResearchIntake(
-                active.actions, repository=app.repository, start=lambda message: app.start(c)
+                active.actions, repository=system.repository,
+                start=lambda message: system.start(c.store.run_id)
             )
             incoming = ResearchConfig(TaskBrief("environment", "adapter instructions"))
             intake.import_config(incoming, "loaded adapter")
-            assert app.config(c).mode == "passk"
-            assert app.config(c).collaboration_modules == ()
+            assert system.config(c).mode == "passk"
+            assert system.config(c).collaboration_modules == ()
         finally:
-            await app.close()
+            await system.close()
 
     asyncio.run(scenario())
 
 
 def test_http_selection_and_historical_read_only_projection(tmp_path: Path) -> None:
-    app = app_at(tmp_path)
-    server = WorkbenchServer(app, port=0)
+    system = system_at(tmp_path)
+    server = WorkbenchServer(system, port=0)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -177,7 +180,7 @@ def test_http_selection_and_historical_read_only_projection(tmp_path: Path) -> N
         assert updated["collaboration"]["modules"] == ["leader_guidance"]
         # A pre-feature stopped run has no manifest. Reading it never rewrites
         # frozen config to pretend its implementation version was recorded.
-        c = app.coordinator(run_id)
+        c = system.coordinator(run_id)
         c.state.update(status="stopped", started_at="2026-09-16T10:00:00Z")
         c.save()
         path = c.store.root / "coordination/config.json"
@@ -194,7 +197,9 @@ def test_http_selection_and_historical_read_only_projection(tmp_path: Path) -> N
         assert not archived["model_settings"]["editable"]
         for action in ("start", "resume", "chat"):
             with pytest.raises(ValueError, match="已移除"):
-                client.request(f"/api/runs/{run_id}/{action}", {"text": "continue"})
+                client.request(
+                    f"/api/runs/{run_id}/{action}", {"text": "continue"} if action == "chat" else {}
+                )
 
         assert archived["collaboration"]["manifest"] is None
         assert path.read_bytes() == before
@@ -207,10 +212,10 @@ def test_http_selection_and_historical_read_only_projection(tmp_path: Path) -> N
 
 def test_recovery_skips_retired_mode_without_writing_history(tmp_path: Path) -> None:
     async def scenario() -> None:
-        app = app_at(tmp_path)
+        system = system_at(tmp_path)
         try:
-            detail = await app.create({"conversation": True})
-            c = app.coordinator(detail["run_id"])
+            detail = await system.create({"conversation": True})
+            c = system.coordinator(detail["run_id"])
             c.state.update(status="running", started_at="2026-09-16T10:00:00Z")
             c.save()
             path = c.store.root / "coordination/config.json"
@@ -221,17 +226,17 @@ def test_recovery_skips_retired_mode_without_writing_history(tmp_path: Path) -> 
             config["metadata"]["auto_resume"] = True
             write_json(path, config)
             before = {p: p.read_bytes() for p in c.store.root.rglob("*") if p.is_file()}
-            await app.call("recover", {})
-            assert not app.active
-            assert not (await app.detail(c.store.run_id))["collaboration"]["supported"]
+            await system.call("recover", {})
+            assert not system.active
+            assert not (await system.detail(c.store.run_id))["collaboration"]["supported"]
             assert before == {p: p.read_bytes() for p in c.store.root.rglob("*") if p.is_file()}
             # Historical workers cannot resume, but operators can still clean them up.
-            await app.call("stop", {"run_id": c.store.run_id})
-            assert app.coordinator(c.store.run_id).state["status"] == "stopped"
+            await system.call("stop", {"run_id": c.store.run_id})
+            assert system.coordinator(c.store.run_id).state["status"] == "stopped"
             assert json.loads(path.read_text()) == config
-            await app.call("delete", {"run_id": c.store.run_id})
+            await system.call("delete", {"run_id": c.store.run_id})
             assert not c.store.root.exists()
         finally:
-            await app.close()
+            await system.close()
 
     asyncio.run(scenario())

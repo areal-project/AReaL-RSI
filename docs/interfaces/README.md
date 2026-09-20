@@ -1,12 +1,43 @@
-# ResearchApp 接口
+# ResearchSystem 接口
 
-研究应用只使用 `ResearchApp`。任务执行、评分与存储的可复用接口不负责研究编排。
+研究系统通过 `ResearchSystem`。任务执行、评分与存储的可复用接口不负责研究编排。
 
-## 应用
+Python 入口为 `from areal_rsi.infra.research import ResearchSystem`。
+公共定义位于 `api.records`、`api.research`、`api.execution`、`api.interfaces`、`api.control`；
+`api` 不导入 `infra`，系统核心不导入 `ui`。旧 Python 导入路径不再保留转发层。
 
-`ResearchApp.create` 接受需求或完整 `ResearchConfig`；`start`、`call("chat", ...)`、
-`pause`、`resume`、`stop` 控制研究。Web 与 CLI 使用相同应用和数据目录。
+## 系统控制
+
+`ResearchSystem.create` 接受需求或完整 `ResearchConfig` 字典；公开运行控制方法统一接收
+`run_id`，不要求调用方持有可变 `Coordinator`。Web 与 CLI 使用同一系统和数据目录。
 HTTP 路由见[仓库 README](../../README.md#cli-与-api)。
+
+| Python 接口 | 结果 |
+| --- | --- |
+| `create(params)` | 创建后的详情 |
+| `start(run_id)` | 启动；返回 `None`，可再查询 `detail` |
+| `send_message(run_id, text, *, message_id, reply_to, recipient)` | 消息回执；可选参数均默认为 `None` |
+| `pause(run_id)` / `resume(run_id)` / `retry_agent(run_id, agent_id)` | 更新后的详情 |
+| `stop(run_id, *, reason="Stopped by user")` | 更新后的详情，保留指定原因 |
+| `set_model_settings(run_id, values)` / `set_collaboration(run_id, values)` | 更新设置；返回 `None` |
+| `detail(run_id, after=0, *, event_limit=None)` / `list_runs()` | 只读查询 |
+| `delete(run_id)` | 删除回执 |
+| `export(run_id, *, candidate_id=None)` | `api.control.ArtifactDownload` |
+| `recover()` / `close()` | 恢复可自动续跑任务 / 释放本地执行资源 |
+
+`call(action, params)` 是保留的 RPC 分发入口；`api/control.py` 定义操作及字段，
+同文件在查询或副作用前校验。未知操作、未知字段、类型错误、缺少
+必填字段与越界分页参数都会报错，不再静默截掉参数或把字符串当布尔值。
+校验错误只包含字段位置和规则，不回显原始请求或凭证。
+
+HTTP 使用同一契约，并额外限制创建请求只能包含需求、模型/协作设置、配置及幂等 ID；
+模拟模式与模板选择仍属于操作员入口。URL 中的 `run_id` 不允许被 JSON 请求体覆盖。
+`POST /api/runs/<id>/export` 返回归档下载。
+
+迁移说明：原先直接调用 `start(coordinator)`、`delete(coordinator)`、
+`set_model_settings(coordinator, ...)`、`set_collaboration(coordinator, ...)` 的 Python
+集成应改传 `coordinator.store.run_id`。HTTP 路径、操作名和有效请求的响应结构不变；
+曾依赖丢弃多余字段的请求须删除这些字段。
 
 `ResearchConfig` 包含 TaskBrief、协作模式、模型连接、可选 seed、ApprovedCommand、
 verifier 和 finalizer。只接受当前字段，不支持旧字段自动迁移。
@@ -24,9 +55,11 @@ Interaction 的 `update_brief` 使用结构化的 `objective`、`instructions`�
 
 ## Agent 与原生运行时
 
-`modules/agent_runtime.py` 的 `AgentRuntime` 是研究回合边界：`turn` 接收持久化消息 ID、
+`api/interfaces.py` 的 `ResearchAgentRuntime` 是研究回合边界：`turn` 接收持久化消息 ID、
 角色 prompt、已授权工具、工作区和事件回调，返回 `TurnResult`。
-`ResearchRuntime` 将其映射到 AReaL Agent Runtime；原生会话与工具能力不由应用重写。
+`infra/runtime/research_runtime.py` 的 `ResearchRuntime` 将其映射到 AReaL Agent Runtime；
+原生会话与工具能力不由系统重写。角色配置扩展通过 `RoleConfiguredRuntime` 协议声明。
+独立 Task 会话使用 `api/interfaces.py` 的 `TaskAgentRuntime.open`，两种协议不再同名。
 
 `ToolCall.call_id` 在会话与逻辑消息内稳定。不同回合可以使用相同的供应商工具 ID；
 同一回合的重试不能用同一个 ID 执行不同参数。
@@ -39,7 +72,7 @@ Interaction 的 `update_brief` 使用结构化的 `objective`、`instructions`�
 - `CandidateSnapshot`：不可变目录摘要与来源。
 - `VerifiedResult`：绑定研究契约和候选摘要的 search/final/diagnostic 结果；基础设施错误不产生有效数值分数。
 
-完整记录保存在 `base/runs.py` 管理的 `runs/<id>/` 下。应用给模型的视图经过权限检查和
+完整记录保存在 `infra/storage/runs.py` 管理的 `runs/<id>/` 下。系统给模型的视图经过权限检查和
 裁剪，历史资料通过明确的记录引用读取。
 
 ## 实验命令与评分
@@ -49,7 +82,7 @@ Interaction 的 `update_brief` 使用结构化的 `objective`、`instructions`�
 关联到研究员、节点和候选，并在终态后发布获准的反馈目录。
 
 可信验证器的 `evaluation.json` 必须包含候选 ID/摘要、协议和数据身份、phase、
-指标名、分数及 `simulated=false`。`coordination/verification.py` 再次核对冻结输入。
+指标名、分数及 `simulated=false`。`infra/coordination/evaluation/verification.py` 再次核对冻结输入。
 需要最终确认的任务不能用探索成绩直接 `finish`。
 
 `ApprovedCommand.parameter_descriptions` 按参数名说明路径、单位或允许值，随
@@ -68,7 +101,7 @@ verifier。完整执行配置在启动前校验和冻结，不要求 RSI 重复�
 
 ## Task 执行与 Benchmark
 
-可选的 harness 研究需要独立 Task 模型。这层复用 `api/modules.py` 的接口：
+可选的 harness 研究需要独立 Task 模型。这层复用以下规范接口：
 
 - `Benchmark.list_tasks` 只返回公开 Task，不包含答案。
 - `HarnessRuntime.run` / `BatchHarnessRuntime.run_many` 执行固定模型和能力快照。
@@ -76,7 +109,10 @@ verifier。完整执行配置在启动前校验和冻结，不要求 RSI 重复�
 - `Evaluation.evaluate` 按固定规则汇总已完成的验证；执行失败不伪装成有效的零分样本。
 - `ContentStore`、`VersionManager`、`TrajectoryStore` 保存不可变内容、版本和完整轨迹。
 
-数学与 LCB 通过 ResearchApp 登记的验证命令调用上述组件。EnvArena 发布版本不可变，
+存储、任务运行、评测和构建/训练协议统一位于 `api/interfaces.py`。
+不再保留 `api/storage.py` 等拆分文件和 `modules/agent_runtime.py` 的转发入口。
+
+数学与 LCB 通过 ResearchSystem 登记的验证命令调用上述组件。EnvArena 发布版本不可变，
 候选只修改允许的能力字段，模型、运行底座、题目和 Reward 始终固定。
 
 ## 优化对象与可复用领域接口
@@ -99,10 +135,10 @@ verifier。完整执行配置在启动前校验和冻结，不要求 RSI 重复�
 | `LocalModelCatalog` | 按内容复用模型及基线版本 |
 | `BenchmarkCatalog / BenchmarkRegistry / BenchmarkAdapter / BenchmarkBundle` | 评测元数据、适配器注册和装配，不负责研究编排 |
 
-这些接口可以由集成方独立使用，不表示 ResearchApp 自动调用了所有组件。
+这些接口可以由集成方独立使用，不表示 ResearchSystem 自动调用了所有组件。
 `ResearchLimits.max_model_calls` 保留可空字段，当前仅接受 `null`；非空值明确报错，
 不会静默忽略模型调用次数上限。工作台与需求工具不展示无法执行的限制。
 
 旧 `api.workflow`、`WorkflowContext`、`RsiWorkflow`、`ExperimentService`、
 绑定 Workflow 的 `ExperimentPlan / ExperimentRun` 和 `ResearchAgent.propose/select`、
-`RsiAgent.chat/prune` 协议不恢复；当前应用使用 ResearchApp 和原生回合接口。
+`RsiAgent.chat/prune` 协议不恢复；当前系统使用 ResearchSystem 和原生回合接口。

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from areal_rsi.coordination.collaboration import (
+from areal_rsi.infra.coordination.policies.collaboration import (
     DEFAULT_MODULES,
     build_plan,
     manifest,

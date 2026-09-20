@@ -8,12 +8,12 @@ from typing import Any, Literal
 import pytest
 
 from areal_rsi.api.research import ResearchLimits, TaskBrief, VerificationContract, VerifiedResult
-from areal_rsi.base.storage import encode, write_json
-from areal_rsi.coordination.config import ResearchConfig
-from areal_rsi.coordination.coordinator import Coordinator
-from areal_rsi.coordination.passk import PassKActions
-from areal_rsi.execution import JobRecord, JobSpec
-from areal_rsi.research_app import ResearchApp
+from areal_rsi.infra.coordination.config import ResearchConfig
+from areal_rsi.infra.coordination.coordinator import Coordinator
+from areal_rsi.infra.coordination.policies.passk import PassKActions
+from areal_rsi.infra.execution import JobRecord, JobSpec
+from areal_rsi.infra.research import ResearchSystem
+from areal_rsi.infra.storage.files import encode, write_json
 from areal_rsi.ui.workbench import public_detail
 
 
@@ -100,14 +100,14 @@ def test_node_score_is_valid_search_best_regardless_of_job_order(
             )
         c.store.withdraw_candidate(candidates[2].candidate_id, "Counterexample", ())
         write_json(c.store.root / "coordination/jobs.json", jobs)
-        detail = public_detail(await ResearchApp(tmp_path).detail(c.store.run_id))
+        detail = public_detail(await ResearchSystem(tmp_path).detail(c.store.run_id))
         assert detail["nodes"][0]["verification"]["result_id"] == "job-a-best"
         # Withdrawal changes the displayed best while retaining all job history.
         c.store.withdraw_candidate(candidates[0].candidate_id, "Another counterexample", ())
-        detail = public_detail(await ResearchApp(tmp_path).detail(c.store.run_id))
+        detail = public_detail(await ResearchSystem(tmp_path).detail(c.store.run_id))
         assert detail["nodes"][0]["verification"]["result_id"] == "job-z-latest"
         c.store.withdraw_candidate(candidates[1].candidate_id, "No valid candidate remains", ())
-        detail = public_detail(await ResearchApp(tmp_path).detail(c.store.run_id))
+        detail = public_detail(await ResearchSystem(tmp_path).detail(c.store.run_id))
         assert detail["nodes"][0]["verification"] is None
         assert len(detail["jobs"]) == 8
 
@@ -143,8 +143,8 @@ def test_reports_have_history_delivery_status_and_paginated_events_without_mutat
                 )
         c.stop("Deadline")
         before = {p: p.read_bytes() for p in c.store.root.rglob("*.json")}
-        app = ResearchApp(tmp_path)
-        detail = public_detail(await app.detail(c.store.run_id))
+        system = ResearchSystem(tmp_path)
+        detail = public_detail(await system.detail(c.store.run_id))
         node = detail["nodes"][0]
         assert node["state"] == "cancelled"
         assert [r["message"] for r in node["reports"]] == ["progress first", "progress second"]
@@ -154,7 +154,7 @@ def test_reports_have_history_delivery_status_and_paginated_events_without_mutat
         last_sequence = c.store.events()[-1].sequence
         for event in report_events:
             page = public_detail(
-                await app.detail(
+                await system.detail(
                     c.store.run_id,
                     after=event.sequence - 1,
                     event_limit=last_sequence - event.sequence + 1,
@@ -176,7 +176,7 @@ def test_graph_attributes_explicit_sources_without_mutating_or_reading_other_run
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
-        from areal_rsi.api.base import RecordRef
+        from areal_rsi.api.records import RecordRef
 
         c = fixture(tmp_path)
         source = c.store.run().research_agents[0]
@@ -224,7 +224,7 @@ def test_graph_attributes_explicit_sources_without_mutating_or_reading_other_run
         c.save()
         before = {p: p.read_bytes() for p in c.store.root.rglob("*.json")}
         detail = public_detail(
-            await ResearchApp(tmp_path).detail(c.store.run_id, after=999999, event_limit=1)
+            await ResearchSystem(tmp_path).detail(c.store.run_id, after=999999, event_limit=1)
         )
         messages = {m["message_id"]: m for m in detail["communications"]}
         assert len(messages) == 3  # Report and two suggestions, initial assignments excluded.

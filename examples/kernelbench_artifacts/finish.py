@@ -13,7 +13,7 @@ from pathlib import Path
 
 from demo import control_request
 
-from areal_rsi.base.storage import write_json
+from areal_rsi.infra.storage.files import write_json
 
 
 def finish(manifest: dict, output: Path) -> None:

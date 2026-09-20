@@ -8,7 +8,8 @@ import unittest
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from areal_rsi.api.base import (
+from areal_rsi.api.interfaces import TrajectoryStore
+from areal_rsi.api.records import (
     TRAJECTORY_BUNDLE_MEDIA_TYPE,
     ContentRef,
     Trajectory,
@@ -16,8 +17,7 @@ from areal_rsi.api.base import (
     TrajectoryStorageType,
     TrajectoryStoreSpec,
 )
-from areal_rsi.api.modules import TrajectoryStore
-from areal_rsi.framework.trajectory import TrajectoryStoreLoader
+from areal_rsi.infra.storage.trajectory import TrajectoryStoreLoader
 
 
 class FileTrajectoryStoreTest(unittest.IsolatedAsyncioTestCase):

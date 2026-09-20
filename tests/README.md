@@ -13,3 +13,6 @@
 ```
 
 跨模块修改或合入前再运行完整的 `.venv/bin/pytest`。
+
+跨模块交付运行 `make check`，包含 Python 行为/依赖测试、Ruff、Mypy 与前端测试。
+前端依赖首次安装：`npm ci --prefix tests/frontend --ignore-scripts`。

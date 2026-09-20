@@ -7,10 +7,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from areal_rsi.api.base import ContentRef, EvidenceBundle, EvidenceFile
-from areal_rsi.base.evidence import FileEvidenceStore
-from areal_rsi.base.storage import DIRECTORY_TYPE, FileContentStore, encode
-from areal_rsi.modules.runtime_package import sandbox_command
+from areal_rsi.api.records import ContentRef, EvidenceBundle, EvidenceFile
+from areal_rsi.infra.runtime.runtime_package import sandbox_command
+from areal_rsi.infra.storage.evidence import FileEvidenceStore
+from areal_rsi.infra.storage.files import DIRECTORY_TYPE, FileContentStore, encode
 
 
 class EvidenceTest(unittest.IsolatedAsyncioTestCase):

@@ -1,4 +1,4 @@
-"""CLI entry points for the ResearchApp workbench, research runs and preflight."""
+"""CLI entry points for the ResearchSystem workbench, research runs and preflight."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from pathlib import Path
 from types import FrameType
 from typing import Any
 
-from areal_rsi.base.paths import data_root
+from areal_rsi.infra.storage.paths import data_root
 
 
 def _workbench_command(root: Path, *, simulated: bool) -> str:
@@ -84,9 +84,9 @@ async def run_research(
     root: Path | None = None,
 ) -> int:
     """Run real research models; poll only stored state and preserve work on interruption."""
-    from areal_rsi.coordination.config import load_config
-    from areal_rsi.coordination.presets import example_config
-    from areal_rsi.research_app import ResearchApp
+    from areal_rsi.infra.coordination.config import load_config
+    from areal_rsi.infra.coordination.presets import example_config
+    from areal_rsi.infra.research import ResearchSystem
 
     if sum(value is not None for value in (config_file, example, resume)) != 1:
         raise ValueError("Choose exactly one of --config, --example or --resume")
@@ -102,7 +102,7 @@ async def run_research(
         config = example_config(example, repository=Path(__file__).resolve().parents[3])
     if config is not None:
         config.runtime()  # Validate the exact model endpoint/key before creating a new run.
-    app = ResearchApp(root, config=config, allow_simulation=simulate_gpu)
+    system = ResearchSystem(root, config=config, allow_simulation=simulate_gpu)
     loop = asyncio.get_running_loop()
     stopped = asyncio.Event()
     received_signal: list[int] = []
@@ -125,11 +125,11 @@ async def run_research(
     detail: dict[str, Any] | None = None
     try:
         if resume:
-            detail = await app.call("resume", {"run_id": resume})
+            detail = await system.call("resume", {"run_id": resume})
         else:
-            detail = await app.call("create", {"simulated": simulate_gpu})
+            detail = await system.call("create", {"simulated": simulate_gpu})
             if not stopped.is_set():
-                detail = await app.call("start", {"run_id": detail["run_id"]})
+                detail = await system.call("start", {"run_id": detail["run_id"]})
         run_id = detail["run_id"]
         while True:
             summary = _research_summary(detail)
@@ -187,10 +187,10 @@ async def run_research(
                 wait = max(0, min(wait, timeout - (loop.time() - began)))
             with suppress(TimeoutError):
                 await asyncio.wait_for(stopped.wait(), wait)
-            detail = await app.call("detail", {"run_id": run_id})
+            detail = await system.call("detail", {"run_id": run_id})
     finally:
         try:
-            await app.close()
+            await system.close()
         finally:
             for sig, previous in previous_handlers.items():
                 loop.remove_signal_handler(sig)
@@ -200,13 +200,13 @@ async def run_research(
 def serve_workbench(
     *, port: int, config_file: Path | None, simulate_gpu: bool, root: Path | None = None
 ) -> int:
-    from areal_rsi.coordination.config import load_config
-    from areal_rsi.research_app import ResearchApp
+    from areal_rsi.infra.coordination.config import load_config
+    from areal_rsi.infra.research import ResearchSystem
     from areal_rsi.ui.workbench import WorkbenchServer
 
     config = load_config(config_file) if config_file else None
-    app = ResearchApp(data_root(root), config=config, allow_simulation=simulate_gpu)
-    server = WorkbenchServer(app, port=port)
+    system = ResearchSystem(data_root(root), config=config, allow_simulation=simulate_gpu)
+    server = WorkbenchServer(system, port=port)
     server.invoke("recover", {})
     previous = signal.getsignal(signal.SIGTERM)
     terminated = False
@@ -227,7 +227,7 @@ def serve_workbench(
     finally:
         signal.signal(signal.SIGTERM, previous)
         try:
-            asyncio.run_coroutine_threadsafe(app.close(), server.loop).result(timeout=30)
+            asyncio.run_coroutine_threadsafe(system.close(), server.loop).result(timeout=30)
         finally:
             server.server_close()
 
@@ -256,6 +256,12 @@ def main() -> None:
     )
     research.add_argument("--timeout", type=float, help="本次前台运行秒数；到时保留状态供恢复")
     research.add_argument("--poll-interval", type=float, default=2, help="读取本地进展的间隔秒数")
+    setup = commands.add_parser("prepare", help="准备 harness 优化示例，不启动研究")
+    setup.add_argument("benchmark", choices=("arithmetic", "livecodebench"))
+    setup.add_argument("--directory", type=Path, required=True)
+    setup.add_argument("--arena-config", type=Path)
+    setup.add_argument("--time-limit", type=float, default=1200)
+    setup.add_argument("--backend", choices=("standard", "codex", "runtime"), default="standard")
     preflight_parser = commands.add_parser("preflight", help="检查实际研究后端、工具和会话重启")
     preflight_parser.add_argument("--config", type=Path, help="使用与研究相同的配置")
     preflight_parser.add_argument("--backend", choices=("standard", "codex", "runtime"))
@@ -268,9 +274,19 @@ def main() -> None:
                 port=args.port, config_file=args.config,
                 simulate_gpu=args.simulate_gpu, root=args.root,
             )
+        elif args.command == "prepare":
+            from areal_rsi.infra.adapters.benchmark_research import prepare
+
+            path = asyncio.run(prepare(
+                {"arithmetic": "math", "livecodebench": "lcb"}[args.benchmark], args.directory,
+                arena_config=args.arena_config, max_wall_seconds=args.time_limit,
+                backend=args.backend,
+            ))
+            print(path)
+            code = 0
         elif args.command == "preflight":
             from areal_rsi.api.research import TaskBrief
-            from areal_rsi.coordination.config import ResearchConfig, load_config
+            from areal_rsi.infra.coordination.config import ResearchConfig, load_config
             from areal_rsi.ui.preflight import preflight
 
             config = load_config(args.config) if args.config else ResearchConfig(

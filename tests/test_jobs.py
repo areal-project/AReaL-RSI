@@ -3,9 +3,12 @@ from __future__ import annotations
 import json
 import sys
 import time
+from dataclasses import asdict
 from pathlib import Path
 
-from areal_rsi.execution import JobManager, JobRecord, JobSpec
+import pytest
+
+from areal_rsi.infra.execution import JobManager, JobRecord, JobSpec, _runner
 
 
 def wait_for(manager: JobManager, job_id: str, *, timeout: float = 8) -> JobRecord:
@@ -68,3 +71,35 @@ def test_restart_reattaches_running_job_without_duplicate_execution(tmp_path: Pa
         assert same.pid == job.pid
         assert wait_for(restarted, job.job_id).state == "succeeded"
         assert marker.read_text() == "x"
+
+
+@pytest.mark.parametrize("descendants_alive", [False, True])
+def test_supervisor_retains_claim_until_entire_group_stops(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, descendants_alive: bool
+) -> None:
+    class ExitedCommand:
+        pid = 12345
+
+        def poll(self) -> int:
+            return 0
+
+        def wait(self, *, timeout: float) -> int:
+            return 0
+
+    monkeypatch.setattr("areal_rsi.infra.execution._runner.signal.signal", lambda *args: None)
+    monkeypatch.setattr(_runner, "process_identity", lambda pid: "fixture")
+    monkeypatch.setattr(
+        "areal_rsi.infra.execution._runner.subprocess.Popen",
+        lambda *args, **kwargs: ExitedCommand()
+    )
+    monkeypatch.setattr(_runner, "terminate_group", lambda pid: None)
+    monkeypatch.setattr(_runner, "group_exists", lambda pid: descendants_alive)
+    _runner.write_json(tmp_path / "launch.json", {
+        "token": "launch", "spec": asdict(JobSpec(command=("fixture",))),
+        "assigned_gpu_ids": ["0"],
+    })
+    assert _runner.run(tmp_path, "launch") == 0
+    result = _runner.read_json(tmp_path / "result.json")
+    assert result is not None
+    assert result["resources_released"] is not descendants_alive
+    assert result["state"] == ("lost" if descendants_alive else "succeeded")

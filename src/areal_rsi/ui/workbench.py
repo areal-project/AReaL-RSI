@@ -15,11 +15,17 @@ import re
 import secrets
 import subprocess
 import threading
-from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlsplit
+
+from areal_rsi.api.control import (
+    HTTP_ACTIONS,
+    ArtifactDownload,
+    ResearchBackend,
+    http_command,
+)
 
 Json = dict[str, Any]
 STATIC_ROOT = Path(__file__).with_name("workbench_static")
@@ -39,17 +45,6 @@ def branch_name() -> str:
         ).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         return ""
-
-
-@dataclass(frozen=True)
-class WorkbenchDownload:
-    path: Path
-    filename: str
-    media_type: str = "application/zip"
-
-
-class WorkbenchBackend(Protocol):
-    async def call(self, action: str, params: Json) -> Json | WorkbenchDownload: ...
 
 
 def _fields(value: Any, names: str) -> Json:
@@ -234,7 +229,7 @@ def public_detail(value: Json) -> Json:
         for message in value.get("communications", [])
         if isinstance(message, dict)
     ]
-    from areal_rsi.execution.progress import public_progress
+    from areal_rsi.infra.execution.progress import public_progress
 
     result["jobs"] = [
         {
@@ -272,7 +267,7 @@ class WorkbenchServer(ThreadingHTTPServer):
 
     def __init__(
         self,
-        backend: WorkbenchBackend,
+        backend: ResearchBackend,
         *,
         port: int = 8197,
         loop: asyncio.AbstractEventLoop | None = None,
@@ -294,7 +289,7 @@ class WorkbenchServer(ThreadingHTTPServer):
     def url(self) -> str:
         return f"http://127.0.0.1:{self.server_port}"
 
-    def invoke(self, action: str, params: Json) -> Json | WorkbenchDownload:
+    def invoke(self, action: str, params: Json) -> Json | ArtifactDownload:
         future = asyncio.run_coroutine_threadsafe(self.backend.call(action, params), self.loop)
         try:
             return future.result(timeout=self.backend_timeout)
@@ -501,45 +496,20 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             parts, _ = self._path()
             if parts == ["api", "runs"]:
                 action = "create"
-                if set(params) - {
-                    "message",
-                    "message_id",
-                    "model_settings",
-                    "collaboration",
-                    "config",
-                    "run_id",
-                }:
-                    raise ValueError("请发送研究需求，或提供完整的 config")
-                params = {
-                    **_fields(
-                        params, "message message_id model_settings collaboration config run_id"
-                    ),
-                    "conversation": "config" not in params,
-                }
+                params = http_command(action, params)
             elif (
                 len(parts) == 4 and parts[:2] == ["api", "runs"] and IDENTIFIER.fullmatch(parts[2])
             ):
                 action = parts[3]
-                allowed = {
-                    "chat": "text message_id reply_to recipient",
-                    "start": "",
-                    "pause": "",
-                    "resume": "",
-                    "stop": "reason",
-                    "delete": "",
-                    "retry": "agent_id",
-                    "model-settings": "base_url model reasoning_effort backend api_key",
-                    "collaboration": "mode modules",
-                }
-                if action not in allowed:
+                if action not in HTTP_ACTIONS or action == "create":
                     self._json(404, {"error": "操作不存在"})
                     return
-                params = {**_fields(params, allowed[action]), "run_id": parts[2]}
+                params = http_command(action, params, run_id=parts[2])
             else:
                 self._json(404, {"error": "操作不存在"})
                 return
             result = self.server.invoke(action, params)
-            if isinstance(result, WorkbenchDownload):
+            if isinstance(result, ArtifactDownload):
                 if action != "export":
                     raise TypeError("Downloads are only supported for explicit export")
                 self._download(result)
@@ -559,7 +529,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         except Exception:
             self._json(500, {"error": "操作未完成，请刷新确认当前状态"})
 
-    def _download(self, download: WorkbenchDownload) -> None:
+    def _download(self, download: ArtifactDownload) -> None:
         filename = Path(download.filename).name.replace("\r", "").replace("\n", "")
         with download.path.open("rb") as handle:
             self._headers(200, download.media_type, download.path.stat().st_size)

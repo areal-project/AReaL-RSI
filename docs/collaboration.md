@@ -103,9 +103,9 @@ mount/PID namespace 内增加私有根目录、网络隔离和权限收缩；只
 
 | 配置 | 流程与权限 | 角色正文来源 |
 | --- | --- | --- |
-| `passk` | `PassKEngine` + `PassKActions` | [RSI](../src/areal_rsi/agents/rsi/passk_prompt.py)、[researcher](../src/areal_rsi/agents/research/passk_prompt.py) |
-| `passk` + `leader_guidance` | 同一个 `PassKEngine` + `GuidedPassKActions` | [RSI](../src/areal_rsi/agents/rsi/leader_guidance_prompt.py)、[researcher](../src/areal_rsi/agents/research/leader_guidance_prompt.py) |
-| `passk` + `leader_guidance` + `leader_guidance_v022` | 与 v0.2.1 相同 | [RSI v0.2.2](../src/areal_rsi/agents/rsi/leader_guidance_v022_prompt.py)，researcher 复用上一行 |
+| `passk` | `PassKEngine` + `PassKActions` | [RSI](../src/areal_rsi/infra/agents/rsi/passk_prompt.py)、[researcher](../src/areal_rsi/infra/agents/research/passk_prompt.py) |
+| `passk` + `leader_guidance` | 同一个 `PassKEngine` + `GuidedPassKActions` | [RSI](../src/areal_rsi/infra/agents/rsi/leader_guidance_prompt.py)、[researcher](../src/areal_rsi/infra/agents/research/leader_guidance_prompt.py) |
+| `passk` + `leader_guidance` + `leader_guidance_v022` | 与 v0.2.1 相同 | [RSI v0.2.2](../src/areal_rsi/infra/agents/rsi/leader_guidance_v022_prompt.py)，researcher 复用上一行 |
 
 角色正文集中放在 `agents/rsi/` 和 `agents/research/`。
 `coordination/` 负责选择和加载模板，不内嵌角色正文。
@@ -164,7 +164,7 @@ Prompt 正文以上表链接的源码为准，文档不再复制正文。
 
 ## 增加附加模块
 
-实现入口在 `src/areal_rsi/coordination/collaboration.py`。每个 `CollaborationModule`
+实现入口在 `src/areal_rsi/infra/coordination/policies/collaboration.py`。每个 `CollaborationModule`
 提供稳定 ID、版本、描述、支持的基础流程、依赖/冲突，以及 `apply(plan)`。
 `CollaborationPlan` 包含 Actions 类、Engine 类、RSI/Research Prompt，以及 RSI 是否只做
 监督。模块可用 `dataclasses.replace` 返回修改后的 plan，并尽量复用已有组件。
@@ -173,7 +173,7 @@ Prompt 正文以上表链接的源码为准，文档不再复制正文。
 运行时按稳定依赖顺序组合。缺失依赖、不支持的基础流程、冲突、重复和循环依赖都会被拒绝。
 不从用户 JSON 动态导入代码，也不会在浏览器单独维护一份可选模块清单。
 
-当前 `coordination/leader_guidance.py` 增加协调 Actions，并从角色目录加载 Prompt，直接复用 PassKEngine。
+当前 `infra/coordination/policies/leader_guidance.py` 增加协调 Actions，并从角色目录加载 Prompt，直接复用 PassKEngine。
 实现 `evidence_pool` 时，还需明确哪些资料可见、哪些工具可用以及写入权限；
 不能开放跨 run 访问，也不能解除独立工作区和候选验证的边界。
 `mode` 保留基础流程的预算、生命周期和恢复语义，模块不能悄悄改变它们。

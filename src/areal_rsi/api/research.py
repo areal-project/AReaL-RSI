@@ -6,8 +6,8 @@ import math
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from areal_rsi.api.base import ContentRef, JsonObject, RecordRef
-from areal_rsi.api.base import JsonValue as JsonValue  # Recursive JsonObject type resolution.
+from areal_rsi.api.records import ContentRef, JsonObject, RecordRef
+from areal_rsi.api.records import JsonValue as JsonValue  # Recursive JsonObject type resolution.
 
 
 @dataclass(slots=True)

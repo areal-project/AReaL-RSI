@@ -2,6 +2,9 @@
 
 一个支持持续研究的多 Agent 系统：Interaction 与用户确定需求，RSI 制定计划并协调 Research Agents，Research Agents 执行实验、汇报结果并在原会话中继续研究。工作台按 Agent 展示纵向研究时间线、信息共享、作业进度、耗时与验证成绩。
 
+核心实现统一位于 `src/areal_rsi/infra/`，公共契约位于 `api/`。
+`ResearchSystem` 可由 Python、CLI 或工作台调用；Web 只是可选操作界面。
+
 ## 准备
 
 需要 Python 3.11+ 和 uv。默认隔离模式需要 macOS `sandbox-exec`；可信 Linux
@@ -50,7 +53,7 @@ RSI 负责研究编排、权限、作业和验证。配置与隔离边界见[后
 `python run.py --type web` 负责后台启动或复用服务。新工作台、`rsi research` 和
 `rsi preflight` 的数据目录统一按 `--data-root`、`RSI_DATA_ROOT`、`.rsi/research-lab`
 的顺序选择。以前直接运行 CLI 保存在 `.rsi` 的研究，可用 `--data-root .rsi` 打开。
-研究入口统一为 ResearchApp；旧 `tui/run/resume/status/local-app`、TUI/MCP 控制器和
+研究入口统一为 ResearchSystem；旧 `tui/run/resume/status/local-app`、TUI/MCP 控制器和
 固定轮次调度器已移除。旧计划与检查点不迁移，请使用当前配置新建研究。
 
 仓库入口自动在后台启动服务；已有兼容的 RSI 工作台则复用，其他进程占用端口则报错，不关闭或覆盖它。用 `--port 8200` 指定端口，用 `--data-root /path/to/data` 指定数据目录。旧版 RSI 服务需要先重启到当前版本。
@@ -73,7 +76,7 @@ uv run --env-file .env --locked python run.py --type demo
 
 三题并行、每名研究员半小时有效时间的固定实验，见 [v0.2.1 示例](examples/kernelbench_artifacts/v0.2.1/README.md)。
 
-题目、提交预算、环境检查、恢复命令和历史结果见 [KernelBench demo 快速指南](examples/kernelbench_artifacts/README.md)。这条入口优化具体 kernel，不需要额外 Task Agent；[通用 harness 优化](examples/kernelbench/README.md)是另一种任务。
+题目、提交预算、环境检查、恢复命令和历史结果见 [KernelBench demo 快速指南](examples/kernelbench_artifacts/README.md)。这条入口优化具体 kernel，不需要额外 Task Agent；[通用 harness 优化](examples/harness/kernelbench/README.md)是另一种任务。
 
 ## CLI 与 API
 
@@ -97,13 +100,19 @@ CLI 持续输出进度；Ctrl+C 保存状态供恢复。用同一数据目录打
 | `POST /api/runs/<id>/chat`，body 为 `{"text":"补充要求"}` | 发送消息 |
 | `POST /api/runs/<id>/pause`、`resume`、`stop` | 控制执行，body 为 `{}` |
 
-## 数学与 LCB
+## Harness 优化示例
 
-数学和 LCB 均使用 ResearchApp。操作员适配器准备固定的题目、目标模型和评分身份，
-研究模型自主调用候选与验证工具：
+[examples/harness](examples/harness/README.md) 收纳算术、LiveCodeBench 和 KernelBench
+的通用 harness 优化。它们修改 prompt/skill，再由固定 Task 模型完成题目；
+与主 demo 直接优化 kernel 源码是不同任务。
 
-- [数学示例](examples/local/README.md)：3 道 TRAIN / 3 道 VALIDATE 原创算术题。
-- [LCB 示例](examples/remote/README.md)：EnvArena 固定题目与 Reward，研究员修改通用 system prompt。
+```bash
+uv run --env-file .env --locked rsi prepare arithmetic --directory .rsi/math/setup
+uv run --env-file .env --locked rsi research --config .rsi/math/setup/research.json
+```
+
+准备 LiveCodeBench 使用 `rsi prepare livecodebench --arena-config ... --directory ...`。
+高级 KernelBench harness 接入见其独立说明；直接优化 kernel 继续使用上面的 demo。
 
 ## 检查研究运行时
 
@@ -142,4 +151,7 @@ demo 在服务重启后自动恢复尚在执行的研究或收尾；手动暂停
 | [有效时间](docs/effective-time.md) | API 故障和 GPU 排队的扣时规则 |
 | [GPU 隔离](docs/gpu-queue-isolation.md) | KernelBench 队列部署及隔离边界 |
 
-开发检查：`make check`；前端检查：`npm ci --prefix tests/frontend && npm test --prefix tests/frontend`。
+开发约束见 [AGENTS.md](AGENTS.md)。首次安装前端测试依赖：
+`npm ci --prefix tests/frontend --ignore-scripts`。
+`make check` 统一执行架构边界、Python 测试、Ruff、Mypy 与前端测试；
+只检查模块依赖可运行 `make architecture`。

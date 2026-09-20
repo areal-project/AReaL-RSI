@@ -1,5 +1,5 @@
-"""Research and task evaluation contracts."""
+"""Public records, research contracts and component interfaces."""
 
-from areal_rsi.api import base, modules, research
+from areal_rsi.api import interfaces, records, research
 
-__all__ = ["base", "modules", "research"]
+__all__ = ["interfaces", "records", "research"]

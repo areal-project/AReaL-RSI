@@ -10,12 +10,12 @@ from unittest.mock import patch
 
 import pytest
 
+from areal_rsi.api.interfaces import ToolCall, ToolResult
 from areal_rsi.api.research import TaskBrief
-from areal_rsi.coordination.actions import definition
-from areal_rsi.coordination.config import ResearchConfig
-from areal_rsi.modules.agent_runtime import ToolCall, ToolResult
-from areal_rsi.modules.research_runtime import ResearchRuntime
-from areal_rsi.modules.runtime_package import RuntimeSettings, sandbox_command
+from areal_rsi.infra.coordination.config import ResearchConfig
+from areal_rsi.infra.coordination.tools.actions import definition
+from areal_rsi.infra.runtime.research_runtime import ResearchRuntime
+from areal_rsi.infra.runtime.runtime_package import RuntimeSettings, sandbox_command
 
 
 def test_isolation_requires_explicit_supported_mode(

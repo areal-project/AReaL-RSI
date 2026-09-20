@@ -15,8 +15,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from areal_rsi.base.paths import data_root
-from areal_rsi.base.storage import new_id, safe_name, write_json
+from areal_rsi.infra.storage.files import new_id, safe_name, write_json
+from areal_rsi.infra.storage.paths import data_root
 
 REPOSITORY = Path(__file__).resolve().parents[3]
 SERVICE = "areal-rsi"

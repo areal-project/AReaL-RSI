@@ -6,11 +6,11 @@ from typing import Any
 
 import pytest
 
+from areal_rsi.api.interfaces import ToolCall
 from areal_rsi.api.research import EvidenceRecord, ResearchLimits, ResearchMessage, TaskBrief
-from areal_rsi.base.storage import now
-from areal_rsi.coordination.actions import ResearchActions
-from areal_rsi.coordination.coordinator import Coordinator
-from areal_rsi.modules.agent_runtime import ToolCall
+from areal_rsi.infra.coordination.coordinator import Coordinator
+from areal_rsi.infra.coordination.tools.actions import ResearchActions
+from areal_rsi.infra.storage.files import now
 
 
 def test_rsi_handoff_grants_prose_and_message_references_after_recovery(tmp_path: Path) -> None:

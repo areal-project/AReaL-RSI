@@ -130,8 +130,8 @@ uv run --locked --env-file .env python examples/kernelbench_artifacts/v0.2.1/run
 
 Prompt 仍由仓库内的一套实现生成，不维护另一份副本：
 
-- [RSI Prompt](../../../src/areal_rsi/agents/rsi/leader_guidance_prompt.py)
-- [Researcher Prompt](../../../src/areal_rsi/agents/research/leader_guidance_prompt.py)
+- [RSI Prompt](../../../src/areal_rsi/infra/agents/rsi/leader_guidance_prompt.py)
+- [Researcher Prompt](../../../src/areal_rsi/infra/agents/research/leader_guidance_prompt.py)
 - [任务、工具说明与规则生成](../demo.py)、[基础任务规则](../PASSK_RULES.md)
 - [协作与非阻塞通信](../../../docs/collaboration.md)、[有效时间](../../../docs/effective-time.md)
 

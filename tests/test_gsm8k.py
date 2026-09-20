@@ -6,15 +6,15 @@ import unittest
 from decimal import Decimal
 from pathlib import Path
 
-from areal_rsi.api.base import (
+from areal_rsi.api.records import (
     BenchmarkSplit,
     TaskResult,
     TrajectoryRef,
     VerificationRequest,
     VerifierSpec,
 )
-from areal_rsi.base.storage import FileContentStore, FileVersionManager, json_bytes
-from areal_rsi.modules.gsm8k import Gsm8kBenchmark, Gsm8kVerifier, final_answer, prepare_dataset
+from areal_rsi.infra.storage.files import FileContentStore, FileVersionManager, json_bytes
+from areal_rsi.infra.tasks.gsm8k import Gsm8kBenchmark, Gsm8kVerifier, final_answer, prepare_dataset
 
 
 class Gsm8kTest(unittest.IsolatedAsyncioTestCase):

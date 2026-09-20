@@ -9,7 +9,7 @@ from pathlib import Path
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from areal_rsi.modules import file_reader
+from areal_rsi.infra.runtime import file_reader
 
 
 class FileReaderTest(unittest.IsolatedAsyncioTestCase):

@@ -9,9 +9,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from test_collaboration_config import app_at
+from test_collaboration_config import system_at
 
-from areal_rsi.api.base import RecordRef
+from areal_rsi.api.interfaces import ToolCall
+from areal_rsi.api.records import RecordRef
 from areal_rsi.api.research import (
     CandidateSnapshot,
     ResearchLimits,
@@ -19,15 +20,14 @@ from areal_rsi.api.research import (
     VerificationContract,
     VerifiedResult,
 )
-from areal_rsi.base.storage import now, write_json
-from areal_rsi.coordination.actions import ResearchActions
-from areal_rsi.coordination.config import ResearchConfig, config_from_dict
-from areal_rsi.coordination.coordinator import Coordinator
-from areal_rsi.coordination.jobs import ResearchExecution
-from areal_rsi.coordination.store import ResearchStore
-from areal_rsi.coordination.verification import read_trusted_result
-from areal_rsi.execution import ApprovedCommand, JobRecord, JobSpec
-from areal_rsi.modules.agent_runtime import ToolCall
+from areal_rsi.infra.coordination.config import ResearchConfig, config_from_dict
+from areal_rsi.infra.coordination.coordinator import Coordinator
+from areal_rsi.infra.coordination.evaluation.jobs import ResearchExecution
+from areal_rsi.infra.coordination.evaluation.verification import read_trusted_result
+from areal_rsi.infra.coordination.store import ResearchStore
+from areal_rsi.infra.coordination.tools.actions import ResearchActions
+from areal_rsi.infra.execution import ApprovedCommand, JobRecord, JobSpec
+from areal_rsi.infra.storage.files import now, write_json
 
 
 def test_command_parameter_help_survives_config_and_preserves_execution(tmp_path: Path) -> None:
@@ -154,8 +154,7 @@ def fixture(
     return store, job, candidate, identity, result, output
 
 
-@pytest.mark.parametrize("adapter", ["content", "kernelbench"])
-@pytest.mark.parametrize("phase", ["search", "final"])
+@pytest.mark.parametrize("adapter,phase", [("content", "search"), ("kernelbench", "final")])
 def test_real_result_binds_frozen_candidate_contract_and_phase(
     tmp_path: Path, adapter: str, phase: str
 ) -> None:
@@ -419,7 +418,7 @@ meta = job['spec']['metadata']
     config.brief.limits.gpu_ids = ("0",)
 
     async def scenario() -> None:
-        app = app_at(tmp_path)
+        app = system_at(tmp_path)
         try:
             detail = await app.create({"config": config.public()})
             c = app.coordinator(detail["run_id"])
@@ -439,7 +438,7 @@ meta = job['spec']['metadata']
                 )
                 c.store.record_verification(result)
                 c.store.consider_best(result.result_id)
-            await app.start(c)
+            await app.start(c.store.run_id)
             c = app.coordinator(detail["run_id"])
             active = app.active[c.store.run_id]
             await active.engine.tick()

@@ -5,9 +5,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from areal_rsi.api.base import ArtifactChange
-from areal_rsi.base.storage import FileContentStore, FileVersionManager
-from areal_rsi.modules.artifact import LocalArtifactBuilder
+from areal_rsi.api.records import ArtifactChange
+from areal_rsi.infra.storage.files import FileContentStore, FileVersionManager
+from areal_rsi.infra.tasks.artifact import LocalArtifactBuilder
 
 
 class ArtifactBuilderTest(unittest.IsolatedAsyncioTestCase):

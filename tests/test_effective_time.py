@@ -15,17 +15,17 @@ from areal_agent_runtime.adapters.codex_cli.runtime import CodexCliExecutionChan
 from test_passk import setup
 from test_research_runtime_package import ResponsesModel
 
-from areal_rsi.api.base import AgentState
+from areal_rsi.api.interfaces import ResearchAgentRuntime, ToolCall, ToolResult, TurnResult
+from areal_rsi.api.records import AgentState
 from areal_rsi.api.research import TaskBrief
-from areal_rsi.base.storage import write_json
-from areal_rsi.coordination.config import ResearchConfig
-from areal_rsi.coordination.effective_time import EffectiveTime
-from areal_rsi.coordination.engine import ToolSet
-from areal_rsi.coordination.jobs import ResearchExecution
-from areal_rsi.coordination.passk import PassKEngine
-from areal_rsi.execution import ApprovedCommand
-from areal_rsi.modules.agent_runtime import AgentRuntime, ToolCall, ToolResult, TurnResult
-from areal_rsi.modules.research_runtime import ResearchRuntime
+from areal_rsi.infra.coordination.config import ResearchConfig
+from areal_rsi.infra.coordination.effective_time import EffectiveTime
+from areal_rsi.infra.coordination.engine import ToolSet
+from areal_rsi.infra.coordination.evaluation.jobs import ResearchExecution
+from areal_rsi.infra.coordination.policies.passk import PassKEngine
+from areal_rsi.infra.execution import ApprovedCommand
+from areal_rsi.infra.runtime.research_runtime import ResearchRuntime
+from areal_rsi.infra.storage.files import write_json
 
 
 def test_baseline_union_and_worker_restart_do_not_double_subtract() -> None:
@@ -102,12 +102,12 @@ def test_each_researcher_stops_at_own_budget_excluding_pauses_and_leader_waits(
         write_json(c.store.root / "briefs" / "initial.json", brief)
         clock = [100.0]
         monkeypatch.setattr(
-            "areal_rsi.coordination.coordinator.now",
+            "areal_rsi.infra.coordination.coordinator.now",
             lambda: datetime.fromtimestamp(clock[0], UTC).isoformat(),
         )
         engine = PassKEngine(
             c,
-            cast(AgentRuntime, Runtime()),
+            cast(ResearchAgentRuntime, Runtime()),
             lambda a: ToolSet([], actions.handler(a)),
             clock=lambda: clock[0],
         )

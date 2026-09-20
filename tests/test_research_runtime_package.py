@@ -14,15 +14,15 @@ from typing import Any
 
 import pytest
 
+from areal_rsi.api.interfaces import ToolCall, ToolResult
 from areal_rsi.api.research import TaskBrief
-from areal_rsi.coordination.actions import definition
-from areal_rsi.coordination.config import ResearchConfig
-from areal_rsi.modules.agent_runtime import ToolCall, ToolResult
-from areal_rsi.modules.research_runtime import ResearchRuntime
-from areal_rsi.modules.runtime_package import RuntimeSettings
-from areal_rsi.modules.runtime_storage import read_journal
-from areal_rsi.modules.runtime_tools import invoke
-from areal_rsi.research_app import ResearchApp
+from areal_rsi.infra.coordination.config import ResearchConfig
+from areal_rsi.infra.coordination.tools.actions import definition
+from areal_rsi.infra.research import ResearchSystem
+from areal_rsi.infra.runtime.research_runtime import ResearchRuntime
+from areal_rsi.infra.runtime.runtime_package import RuntimeSettings
+from areal_rsi.infra.runtime.runtime_storage import read_journal
+from areal_rsi.infra.runtime.runtime_tools import invoke
 
 
 class ResponsesModel:
@@ -202,8 +202,7 @@ def test_codex_native_tools_history_resume_and_usage(
             context_window_tokens=64000,
             metadata={"allow_web_access": True},
         )
-        runtime = ResearchApp._runtime(config)
-        assert isinstance(runtime, ResearchRuntime)
+        runtime = ResearchRuntime(config)
         events: list[dict[str, Any]] = []
 
         async def emit(event: dict[str, Any]) -> None:
@@ -295,8 +294,7 @@ def test_standard_uses_package_dsh_and_scoped_application_tools(
             model_settings_pinned=True,
             context_window_tokens=96000,
         )
-        runtime = ResearchApp._runtime(config)
-        assert isinstance(runtime, ResearchRuntime)
+        runtime = ResearchRuntime(config)
         calls = []
 
         async def handle(call: ToolCall) -> ToolResult:
@@ -513,7 +511,7 @@ def test_native_codex_passk_launches_independent_attempts_and_stops_on_result(
     from test_passk import configuration
 
     from areal_rsi.api.research import VerifiedResult
-    from areal_rsi.base.storage import now
+    from areal_rsi.infra.storage.files import now
 
     monkeypatch.setenv("RSI_API_KEY", "fixture")
     model = ResponsesModel()
@@ -521,12 +519,12 @@ def test_native_codex_passk_launches_independent_attempts_and_stops_on_result(
     async def scenario() -> None:
         config = configuration(k=3, seconds=30)
         config.backend, config.base_url = "codex", model.url
-        app = ResearchApp(tmp_path, config=config)
+        system = ResearchSystem(tmp_path, config=config)
         try:
-            created = await app.create({})
-            await app.start(app.coordinator(created["run_id"]))
-            c = app.coordinator(created["run_id"])
-            active = app.active[c.store.run_id]
+            created = await system.create({})
+            await system.start(created["run_id"])
+            c = system.coordinator(created["run_id"])
+            active = system.active[c.store.run_id]
             # Model tool behavior is covered by the supervisor scheduler test;
             # this fixture answers text only, while all four native processes run.
             await active.actions.handler("rsi")(ToolCall("start_researchers", {}, "launch"))
@@ -543,7 +541,7 @@ def test_native_codex_passk_launches_independent_attempts_and_stops_on_result(
                     if len(seen) == 3:
                         break
                     await asyncio.sleep(0.05)
-            active = app.active[c.store.run_id]
+            active = system.active[c.store.run_id]
             runtime = active.engine.runtime
             assert isinstance(runtime, ResearchRuntime)
             assert len(runtime.conversations) == 4
@@ -579,7 +577,7 @@ def test_native_codex_passk_launches_independent_attempts_and_stops_on_result(
             assert list(c.store.paths.agent("rsi").glob("sessions/*/runtime/request.json"))
             assert c.state["total_tokens"] > 0
         finally:
-            await app.close()
+            await system.close()
 
     try:
         asyncio.run(scenario())

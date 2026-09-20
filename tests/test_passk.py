@@ -10,17 +10,22 @@ from typing import Any
 
 import pytest
 
-from areal_rsi.api.base import AgentState
+from areal_rsi.api.interfaces import ToolCall, TurnResult
+from areal_rsi.api.records import AgentState
 from areal_rsi.api.research import ResearchLimits, TaskBrief, VerificationContract, VerifiedResult
-from areal_rsi.base.storage import encode, now
-from areal_rsi.coordination.config import ResearchConfig
-from areal_rsi.coordination.coordinator import Coordinator, effect_id
-from areal_rsi.coordination.engine import ToolSet
-from areal_rsi.coordination.jobs import ResearchExecution
-from areal_rsi.coordination.passk import PassKActions, PassKEngine, launch, stop_on_target
-from areal_rsi.execution import ApprovedCommand
-from areal_rsi.modules.agent_runtime import ToolCall, TurnResult
-from areal_rsi.research_app import ResearchApp
+from areal_rsi.infra.coordination.config import ResearchConfig
+from areal_rsi.infra.coordination.coordinator import Coordinator, effect_id
+from areal_rsi.infra.coordination.engine import ToolSet
+from areal_rsi.infra.coordination.evaluation.jobs import ResearchExecution
+from areal_rsi.infra.coordination.policies.passk import (
+    PassKActions,
+    PassKEngine,
+    launch,
+    stop_on_target,
+)
+from areal_rsi.infra.execution import ApprovedCommand
+from areal_rsi.infra.research import ResearchSystem
+from areal_rsi.infra.storage.files import encode, now
 
 
 def configuration(k: int = 3, seconds: float = 60) -> ResearchConfig:
@@ -360,20 +365,20 @@ def test_only_trusted_passing_search_result_stops_group(tmp_path: Path) -> None:
 def test_workbench_mode_stops_and_rejects_intervention(tmp_path: Path) -> None:
     async def scenario() -> None:
         runtime = ScriptedRuntime()
-        app = ResearchApp(
+        system = ResearchSystem(
             tmp_path,
             config=configuration(seconds=0.25),
             runtime_factory=lambda _: runtime,
             allow_simulation=True,
         )
         try:
-            detail = await app.create({"simulated": True})
-            c = app.coordinator(detail["run_id"])
-            await app.start(c)
-            c = app.coordinator(detail["run_id"])
+            detail = await system.create({"simulated": True})
+            c = system.coordinator(detail["run_id"])
+            await system.start(c.store.run_id)
+            c = system.coordinator(detail["run_id"])
             with pytest.raises(ValueError, match="intervention"):
-                await app.call("chat", {"run_id": c.store.run_id, "text": "change direction"})
-            await asyncio.wait_for(app.active[c.store.run_id].task, 3)
+                await system.call("chat", {"run_id": c.store.run_id, "text": "change direction"})
+            await asyncio.wait_for(system.active[c.store.run_id].task, 3)
             assert c.state["status"] == "stopped"
             assert len(set(runtime.calls)) == 4  # RSI plus the fixed three attempts.
             assert len(c.store.run().research_agents) == 3
@@ -382,7 +387,7 @@ def test_workbench_mode_stops_and_rejects_intervention(tmp_path: Path) -> None:
                 == "passk"
             )
         finally:
-            await app.close()
+            await system.close()
 
     asyncio.run(scenario())
 
@@ -418,7 +423,7 @@ def test_cli_does_not_end_experiment_during_backoff() -> None:
 
 def test_supervisor_reports_do_not_block_or_share_research(tmp_path: Path) -> None:
     async def scenario() -> None:
-        from areal_rsi.coordination.passk import CONTINUE_MESSAGE, needs_continue
+        from areal_rsi.infra.coordination.policies.passk import CONTINUE_MESSAGE, needs_continue
 
         c, actions, agents = await setup(tmp_path, 2)
         actor_id = agents[0]

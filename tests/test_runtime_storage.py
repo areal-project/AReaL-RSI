@@ -11,7 +11,7 @@ import pytest
 from areal_agent_runtime.contracts.events import EventType, RunEvent
 from areal_agent_runtime.contracts.product import RunSnapshot, RunStatus
 
-from areal_rsi.modules.runtime_storage import JournalStateStore, read_journal
+from areal_rsi.infra.runtime.runtime_storage import JournalStateStore, read_journal
 
 
 def initial() -> RunSnapshot:
@@ -75,7 +75,9 @@ def test_failed_fsync_is_not_published_and_writer_fails_closed(tmp_path: Path) -
             waiting = asyncio.ensure_future(anext(reader))
             await asyncio.sleep(0)
             with (
-                patch("areal_rsi.modules.runtime_storage.os.fsync", side_effect=OSError("disk")),
+                patch(
+                    "areal_rsi.infra.runtime.runtime_storage.os.fsync", side_effect=OSError("disk")
+                ),
                 pytest.raises(OSError, match="disk"),
             ):
                 await state.commit_event(event(0, EventType.RUN_QUEUED), queued, outbox_sinks=())

@@ -9,7 +9,7 @@ import pytest
 from areal_agent_runtime.adapters.workspace import LocalWorkspaceToolProvider
 from areal_agent_runtime.contracts import ToolCall, ToolResult
 
-from areal_rsi.modules.runtime_workspace import LinuxWorkspaceTools
+from areal_rsi.infra.runtime.runtime_workspace import LinuxWorkspaceTools
 
 
 def tool_call(workspace: Path, name: str, arguments: dict[str, Any]) -> ToolCall:

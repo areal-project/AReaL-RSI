@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from areal_rsi.base.storage import new_id, safe_name, write_json
+from areal_rsi.infra.storage.files import new_id, safe_name, write_json
 from areal_rsi.ui.launch import WorkbenchClient, ensure_workbench
 
 HERE = Path(__file__).resolve().parent

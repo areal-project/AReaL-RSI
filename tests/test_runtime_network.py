@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from areal_rsi.modules.runtime_network import HttpsTunnel
+from areal_rsi.infra.runtime.runtime_network import HttpsTunnel
 
 
 def test_https_tunnel_rejects_private_destinations() -> None:

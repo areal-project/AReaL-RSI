@@ -11,12 +11,12 @@ from typing import Any
 import pytest
 from runtime_fakes import CallbackRuntime
 
-from areal_rsi.api.base import AgentState
+from areal_rsi.api.interfaces import AgentRuntimeError, ToolCall, ToolResult, TurnResult
+from areal_rsi.api.records import AgentState
 from areal_rsi.api.research import ResearchLimits, ResearchReport, TaskBrief
-from areal_rsi.coordination.actions import definition
-from areal_rsi.coordination.coordinator import Coordinator
-from areal_rsi.coordination.engine import ResearchEngine, ToolSet
-from areal_rsi.modules.agent_runtime import AgentRuntimeError, ToolCall, ToolResult, TurnResult
+from areal_rsi.infra.coordination.coordinator import Coordinator
+from areal_rsi.infra.coordination.engine import ResearchEngine, ToolSet
+from areal_rsi.infra.coordination.tools.actions import definition
 
 Json = dict[str, Any]
 
@@ -343,6 +343,72 @@ def test_execution_lock_excludes_another_scheduler(tmp_path: Path) -> None:
         finally:
             await first.close()
             await second.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("save_fails", [False, True])
+def test_close_releases_ownership_and_cannot_overwrite_successor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, save_fails: bool
+) -> None:
+    async def scenario() -> None:
+        c = coordinator(tmp_path, ResearchLimits(max_effective_seconds=60))
+
+        async def run(session: Path, delivery: Json) -> TurnResult:
+            return await finish(session, delivery)
+
+        runtime = CallbackRuntime(run)
+        first = ResearchEngine(c, runtime, lambda actor: tools(c, actor))
+        first._acquire()
+        with monkeypatch.context() as patch:
+            if save_fails:
+                def fail_save() -> None:
+                    raise OSError("disk full")
+
+                patch.setattr(c, "save", fail_save)
+                with pytest.raises(OSError, match="disk full"):
+                    await first.close()
+            else:
+                await first.close()
+        successor = Coordinator(c.store)
+        second = ResearchEngine(successor, runtime, lambda actor: tools(successor, actor))
+        try:
+            second._acquire()
+            successor.state["total_tokens"] = 17
+            successor.save()
+            await first.close()
+            assert json.loads(c.path.read_text())["total_tokens"] == 17
+        finally:
+            await second.close()
+            await first.close()
+
+    asyncio.run(scenario())
+
+
+def test_failed_worker_initialization_releases_execution_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        c = coordinator(tmp_path, ResearchLimits(max_effective_seconds=60))
+
+        async def run(session: Path, delivery: Json) -> TurnResult:
+            return await finish(session, delivery)
+
+        runtime = CallbackRuntime(run)
+        first = ResearchEngine(c, runtime, lambda actor: tools(c, actor))
+        second = ResearchEngine(Coordinator(c.store), runtime, lambda actor: tools(c, actor))
+        try:
+            with monkeypatch.context() as patch:
+                def fail_save() -> None:
+                    raise OSError("disk full")
+
+                patch.setattr(c, "save", fail_save)
+                with pytest.raises(OSError, match="disk full"):
+                    first._acquire()
+            second._acquire()
+        finally:
+            await second.close()
+            await first.close()
 
     asyncio.run(scenario())
 

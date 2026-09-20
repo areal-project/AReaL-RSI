@@ -14,17 +14,18 @@ import pytest
 from test_research_runtime_package import ResponsesModel
 
 from areal_rsi.api.research import TaskBrief
-from areal_rsi.coordination.config import ResearchConfig
+from areal_rsi.infra.coordination.config import ResearchConfig
 from areal_rsi.ui.preflight import preflight
 
 
-@pytest.mark.parametrize("backend", [
-    "codex",
-    pytest.param("standard", marks=pytest.mark.skipif(
+# The retry case also covers a successful restart; do not repeat it without an outage.
+@pytest.mark.parametrize("backend,wrong_memory,outages", [
+    ("codex", False, 2),
+    ("codex", True, 0),
+    pytest.param("standard", False, 0, marks=pytest.mark.skipif(
         os.environ.get("RSI_TEST_NATIVE_HARNESSES") != "1", reason="Opt in to native DSH"
     )),
 ])
-@pytest.mark.parametrize("wrong_memory,outages", [(False, 0), (True, 0), (False, 2)])
 def test_preflight_checks_native_tools_restart_and_duplicate_receipt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend: str, wrong_memory: bool, outages: int
 ) -> None:

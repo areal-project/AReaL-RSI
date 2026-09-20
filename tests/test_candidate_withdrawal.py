@@ -8,15 +8,15 @@ from unittest.mock import patch
 
 import pytest
 
-from areal_rsi.api.base import RecordRef
+from areal_rsi.api.interfaces import ToolCall
+from areal_rsi.api.records import RecordRef
 from areal_rsi.api.research import ResearchMessage, TaskBrief, VerificationContract, VerifiedResult
-from areal_rsi.base.storage import now
-from areal_rsi.coordination.actions import ResearchActions
-from areal_rsi.coordination.coordinator import Coordinator
-from areal_rsi.coordination.jobs import ResearchExecution
-from areal_rsi.coordination.views import record_preview
-from areal_rsi.execution import ApprovedCommand
-from areal_rsi.modules.agent_runtime import ToolCall
+from areal_rsi.infra.coordination.coordinator import Coordinator
+from areal_rsi.infra.coordination.evaluation.jobs import ResearchExecution
+from areal_rsi.infra.coordination.tools.actions import ResearchActions
+from areal_rsi.infra.coordination.views import record_preview
+from areal_rsi.infra.execution import ApprovedCommand
+from areal_rsi.infra.storage.files import now
 
 
 @pytest.mark.parametrize("direction,withdrawer", [("maximize", "rsi"), ("minimize", "research")])

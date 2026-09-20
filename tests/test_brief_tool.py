@@ -7,8 +7,8 @@ from typing import Any
 import pytest
 
 from areal_rsi.api.research import ResearchLimits, TaskBrief, VerificationContract
-from areal_rsi.base.storage import encode
-from areal_rsi.coordination.brief_tool import PASSK_HIDDEN_LIMITS, brief_tool, updated_brief
+from areal_rsi.infra.coordination.tools.brief import PASSK_HIDDEN_LIMITS, brief_tool, updated_brief
+from areal_rsi.infra.storage.files import encode
 
 
 def arguments(mode: str) -> dict[str, Any]:
@@ -66,8 +66,8 @@ def test_removed_model_call_limit_is_not_advertised_or_accepted(mode: str) -> No
 
 
 def test_action_catalog_follows_current_mode(tmp_path: Path) -> None:
-    from areal_rsi.coordination.actions import ResearchActions
-    from areal_rsi.coordination.coordinator import Coordinator
+    from areal_rsi.infra.coordination.coordinator import Coordinator
+    from areal_rsi.infra.coordination.tools.actions import ResearchActions
 
     coordinator = Coordinator.create(tmp_path, TaskBrief("test", "test"))
     actions = ResearchActions(coordinator)

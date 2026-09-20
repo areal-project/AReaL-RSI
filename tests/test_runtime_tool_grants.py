@@ -3,7 +3,7 @@ from typing import Any
 
 import pytest
 
-from areal_rsi.modules.runtime_worker import compile_config
+from areal_rsi.infra.runtime.runtime_worker import compile_config
 
 
 def request(tmp_path: Path, kind: str = "dsh") -> dict[str, Any]:

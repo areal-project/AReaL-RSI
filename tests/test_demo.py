@@ -20,10 +20,10 @@ import pytest
 from runtime_fakes import ActionRuntime
 
 from areal_rsi.api.research import TaskBrief, VerificationContract
-from areal_rsi.base.storage import encode
-from areal_rsi.coordination.config import ResearchConfig
-from areal_rsi.execution import ApprovedCommand
-from areal_rsi.research_app import ResearchApp
+from areal_rsi.infra.coordination.config import ResearchConfig
+from areal_rsi.infra.execution import ApprovedCommand
+from areal_rsi.infra.research import ResearchSystem
+from areal_rsi.infra.storage.files import encode
 from areal_rsi.ui.launch import ensure_workbench
 from areal_rsi.ui.workbench import WorkbenchServer
 
@@ -214,11 +214,11 @@ else:
     )
     config.brief.limits.max_wall_seconds = 0.2
     config.metadata["time_limit_scope"] = "exploration"
-    app = ResearchApp(
+    system = ResearchSystem(
         tmp_path,
         runtime_factory=lambda _: ActionRuntime("wait"),
     )
-    server = WorkbenchServer(app, port=0)
+    server = WorkbenchServer(system, port=0)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -228,7 +228,7 @@ else:
         first = client.request("/api/runs", params)
         assert first["run_id"] == client.request("/api/runs", params)["run_id"]
         if withdraw_final:
-            c = app.coordinator("demo")
+            c = system.coordinator("demo")
             workspace = tmp_path / "defective-product"
             workspace.mkdir()
             (workspace / "model.py").write_text("candidate")
@@ -706,7 +706,7 @@ def test_remote_preparation_rejects_device_only_isolation() -> None:
 def test_harness_config_defaults_and_early_budget_rejection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    module = runpy.run_path("scripts/configure_research.py")
+    module = runpy.run_path("examples/harness/kernelbench/configure.py")
     seed, prepared = tmp_path / "seed", tmp_path / "data"
     seed.mkdir()
     prepared.mkdir()
@@ -721,8 +721,6 @@ def test_harness_config_defaults_and_early_budget_rejection(
         )
     )
     argv = [
-        "--example",
-        "kernelbench",
         "--operator",
         str(operator),
         "--output",

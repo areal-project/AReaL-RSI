@@ -1,9 +1,10 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
 
-from areal_rsi.api.base import Trajectory, TrajectoryQuery
-from areal_rsi.base.storage import (
+from areal_rsi.api.records import Trajectory, TrajectoryQuery
+from areal_rsi.infra.storage.files import (
     FileContentStore,
     FileMemory,
     FileTrajectoryStore,
@@ -12,6 +13,49 @@ from areal_rsi.base.storage import (
 
 
 class StorageTest(unittest.IsolatedAsyncioTestCase):
+    async def test_snapshot_rejects_invalid_roots_and_special_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = FileContentStore(root / "content")
+            source = root / "source"
+            with self.assertRaises(ValueError):
+                await store.snapshot(source)
+            source.write_text("not a directory")
+            with self.assertRaises(ValueError):
+                await store.snapshot(source)
+            source.unlink()
+            source.mkdir()
+            link = root / "link"
+            link.symlink_to(source, target_is_directory=True)
+            with self.assertRaises(ValueError):
+                await store.snapshot(link)
+            os.mkfifo(source / "pipe")
+            with self.assertRaises(ValueError):
+                await store.snapshot(source)
+
+    async def test_failed_materialization_can_be_retried_without_partial_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = FileContentStore(root / "content")
+            source = root / "source"
+            source.mkdir()
+            (source / "a").write_text("first")
+            (source / "b").write_text("second")
+            snapshot = await store.snapshot(source)
+            second = await store.put_text("second")
+            blob = await store.resolve_path(second)
+            blob.unlink()
+            destination = root / "restored"
+            with self.assertRaises(FileNotFoundError):
+                await store.materialize(snapshot, destination)
+            self.assertFalse(destination.exists())
+            await store.put_text("second")
+            await store.materialize(snapshot, destination)
+            self.assertEqual((destination / "b").read_text(), "second")
+            with self.assertRaises(FileExistsError):
+                await store.materialize(snapshot, destination)
+            self.assertEqual((destination / "a").read_text(), "first")
+
     async def test_trajectory_store_query_filters_completed_records(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

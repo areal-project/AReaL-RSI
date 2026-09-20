@@ -13,12 +13,12 @@ import time
 from pathlib import Path
 from typing import Any
 
-from areal_rsi.api.base import EvolutionTarget
+from areal_rsi.api.records import EvolutionTarget
 from areal_rsi.api.research import ResearchLimits, TaskBrief, VerificationContract
-from areal_rsi.base.storage import safe_name, write_json
-from areal_rsi.coordination.collaboration import DEFAULT_MODULES, selected_modules
-from areal_rsi.coordination.config import ResearchConfig
-from areal_rsi.execution import ApprovedCommand
+from areal_rsi.infra.storage.files import safe_name, write_json
+from areal_rsi.infra.coordination.policies.collaboration import DEFAULT_MODULES, selected_modules
+from areal_rsi.infra.coordination.config import ResearchConfig
+from areal_rsi.infra.execution import ApprovedCommand
 
 HERE = Path(__file__).resolve().parent
 

@@ -11,15 +11,15 @@ from areal_agent_runtime.contracts.events import EventType, RunEvent
 from areal_agent_runtime.contracts.product import RunSnapshot, RunStatus
 from test_passk import ScriptedRuntime, setup
 
-from areal_rsi.api.base import AgentState, RecordRef
-from areal_rsi.coordination.collaboration import build_plan
-from areal_rsi.coordination.coordinator import Coordinator
-from areal_rsi.coordination.engine import ToolSet
-from areal_rsi.coordination.leader_guidance import GuidedPassKActions
-from areal_rsi.coordination.passk import PassKActions, PassKEngine
-from areal_rsi.coordination.store import ResearchStore
-from areal_rsi.modules.agent_runtime import ToolCall
-from areal_rsi.modules.runtime_storage import JournalStateStore
+from areal_rsi.api.interfaces import ToolCall
+from areal_rsi.api.records import AgentState, RecordRef
+from areal_rsi.infra.coordination.coordinator import Coordinator
+from areal_rsi.infra.coordination.engine import ToolSet
+from areal_rsi.infra.coordination.policies.collaboration import build_plan
+from areal_rsi.infra.coordination.policies.leader_guidance import GuidedPassKActions
+from areal_rsi.infra.coordination.policies.passk import PassKActions, PassKEngine
+from areal_rsi.infra.coordination.store import ResearchStore
+from areal_rsi.infra.runtime.runtime_storage import JournalStateStore
 
 
 def test_team_reads_and_targeted_advice_preserve_independent_attempts(tmp_path: Path) -> None:

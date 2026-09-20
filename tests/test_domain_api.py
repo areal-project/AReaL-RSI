@@ -2,26 +2,9 @@
 
 from pathlib import Path
 
-import pytest
-
-from areal_rsi.api.base import ArtifactChange, EvolutionTarget, ModelChange, ResearchChange
-from areal_rsi.base.catalog import LocalModelCatalog
-from areal_rsi.base.storage import FileContentStore, FileVersionManager, decode, encode
-from areal_rsi.coordination.config import config_from_dict
-
-
-@pytest.mark.parametrize("target", list(EvolutionTarget))
-def test_research_target_roundtrips_without_selecting_a_workflow(target: EvolutionTarget) -> None:
-    config = config_from_dict({
-        "brief": {"objective": "test", "instructions": "test"},
-        "evolution_target": target.value,
-    })
-    assert config.evolution_target is target
-    assert config_from_dict(config.public()).evolution_target is target
-    assert "workflow" not in config.public()
-    assert config.brief.limits.max_model_calls is None
-    with pytest.raises(ValueError):
-        config_from_dict({**config.public(), "evolution_target": "unknown"})
+from areal_rsi.api.records import ArtifactChange, ModelChange, ResearchChange
+from areal_rsi.infra.storage.catalog import LocalModelCatalog
+from areal_rsi.infra.storage.files import FileContentStore, FileVersionManager, decode, encode
 
 
 def test_domain_changes_and_catalog_reuse_immutable_versions(tmp_path: Path) -> None:

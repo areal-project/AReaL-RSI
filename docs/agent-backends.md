@@ -4,7 +4,8 @@ ResearchConfig 的 `backend` 支持 `standard`（默认）、`codex` 和 `runtim
 所有后端均通过 `PackageAgentRuntime` 使用 AReaL Agent Runtime 的公开
 `build_composition` / Application API。RSI 不再维护独立的 Codex App Server 客户端、
 请求代理或研究模型执行循环。旧 `ResponsesRuntime` 及其自建请求、重试、压缩循环
-已删除。连接配置和运行时接口分别位于 `research_settings.py`、`agent_runtime.py`；
+已删除。连接配置位于 `infra/config.py`，研究回合接口位于
+`api/interfaces.py`，桥接实现在 `infra/runtime/research_runtime.py`；
 `rsi preflight` 直接验证工作台实际使用的包运行时。
 
 | 选项 | Runtime 适配器 | 文件与命令 | 联网 |
@@ -27,7 +28,7 @@ DSH 首次启动安装随包冻结的 CLI/profile 依赖。
 ## 其他 Runtime 后端
 
 `examples/runtime/` 保留 Claude Code、Claude Agent SDK、Anthropic、Hermes、
-remote、entrypoint 和混合角色示例。这些是适配器配置，不是另一套编排器；仍由 ResearchApp
+remote、entrypoint 和混合角色示例。这些是适配器配置，不是另一套编排器；仍由 ResearchSystem
 执行研究。示例不代表所有后端已完成当前版本的端到端验收。
 
 ```bash
@@ -77,7 +78,7 @@ Codex 在 macOS 沙箱中使用进程专属的 HTTPS CONNECT 通道，避免依�
 通道只转发加密字节，不改写模型请求或重试策略；默认仅允许公网 443，另外允许明确配置的
 模型端点。解析后连接固定 IP，拒绝其他本地/私网目标；各进程仅开放自己的通道端口。
 CA 证书使用 `SSL_CERT_FILE`，未配置时使用 certifi；实现见
-[runtime_network.py](../src/areal_rsi/modules/runtime_network.py)。
+[runtime_network.py](../src/areal_rsi/infra/runtime/runtime_network.py)。
 
 可信 Linux 服务器可在启动工作台前显式设置：
 
@@ -149,4 +150,4 @@ RSI_TEST_NATIVE_HARNESSES=1 uv run --locked pytest \
 
 默认跳过未安装的可选原生后端；设置上述变量启用 DSH 用例，Hermes 另需
 `RSI_TEST_HERMES_ROOT` 指向实际安装目录。这些测试使用本地脚本模型，不代表模型效果。
-端到端验收还需真实 ResearchApp 记录、候选、实验作业及独立最终评分。
+端到端验收还需真实 ResearchSystem 记录、候选、实验作业及独立最终评分。

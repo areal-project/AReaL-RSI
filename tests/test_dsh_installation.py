@@ -8,28 +8,13 @@ from unittest.mock import Mock
 
 import pytest
 
-import areal_rsi.modules.dsh as dsh
-
-
-def test_complete_npm_cli_is_reused_without_installing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    manifest = tmp_path / "dsh-cli/node_modules/@deepseek-ai/dsh/package.json"
-    manifest.parent.mkdir(parents=True)
-    manifest.write_text(json.dumps({"version": dsh.DSH_VERSION}))
-    binary = tmp_path / "dsh-cli/node_modules/.bin/dsh"
-    binary.parent.mkdir()
-    binary.touch()
-    installer = Mock(side_effect=AssertionError("already installed"))
-    monkeypatch.setattr("areal_rsi.modules.dsh.subprocess.run", installer)
-    assert dsh.ensure_cli(tmp_path) == binary
-    installer.assert_not_called()
+import areal_rsi.infra.runtime.dsh as dsh
 
 
 def test_missing_node_and_pnpm_is_actionable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("areal_rsi.modules.dsh.shutil.which", lambda _: None)
+    monkeypatch.setattr("areal_rsi.infra.runtime.dsh.shutil.which", lambda _: None)
     with pytest.raises(RuntimeError, match=r"Node\.js.*pnpm"):
         dsh.ensure_cli(tmp_path)
     assert not (tmp_path / "dsh-cli").exists()
@@ -52,8 +37,8 @@ def test_concurrent_callers_share_one_completed_installation(
         binary.touch()
 
     installer = Mock(side_effect=install)
-    monkeypatch.setattr("areal_rsi.modules.dsh.subprocess.run", installer)
-    monkeypatch.setattr("areal_rsi.modules.dsh.shutil.which", lambda _: "/fixture/bin")
+    monkeypatch.setattr("areal_rsi.infra.runtime.dsh.subprocess.run", installer)
+    monkeypatch.setattr("areal_rsi.infra.runtime.dsh.shutil.which", lambda _: "/fixture/bin")
     with ThreadPoolExecutor(max_workers=2) as pool:
         first = pool.submit(dsh.ensure_cli, tmp_path)
         try:

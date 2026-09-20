@@ -13,19 +13,19 @@ import pytest
 from runtime_fakes import ActionRuntime
 from test_research_runtime_package import ResponsesModel
 
+from areal_rsi.api.interfaces import ToolCall
 from areal_rsi.api.research import TaskBrief
-from areal_rsi.base.storage import encode
-from areal_rsi.coordination.brief_tool import PASSK_HIDDEN_LIMITS
-from areal_rsi.coordination.config import config_from_dict
-from areal_rsi.coordination.engine import ResearchEngine
-from areal_rsi.coordination.passk import PassKActions, launch
-from areal_rsi.execution import ApprovedCommand
-from areal_rsi.modules.agent_runtime import ToolCall
-from areal_rsi.research_app import ResearchApp
+from areal_rsi.infra.coordination.config import config_from_dict
+from areal_rsi.infra.coordination.engine import ResearchEngine
+from areal_rsi.infra.coordination.policies.passk import PassKActions, launch
+from areal_rsi.infra.coordination.tools.brief import PASSK_HIDDEN_LIMITS
+from areal_rsi.infra.execution import ApprovedCommand
+from areal_rsi.infra.research import ResearchSystem
+from areal_rsi.infra.storage.files import encode
 
 
-def app_at(root: Path) -> ResearchApp:
-    return ResearchApp(root, runtime_factory=lambda _: ActionRuntime("wait"))
+def system_at(root: Path) -> ResearchSystem:
+    return ResearchSystem(root, runtime_factory=lambda _: ActionRuntime("wait"))
 
 
 @pytest.mark.parametrize("backend,modules", [
@@ -46,7 +46,7 @@ def test_research_prompt_selection_reaches_the_model(
     monkeypatch.setattr(ResearchEngine, "serve", idle)
 
     async def scenario() -> None:
-        app = ResearchApp(tmp_path)
+        system = ResearchSystem(tmp_path)
         try:
             config: dict[str, Any] = {
                 "brief": {"objective": "检查研究说明", "instructions": "整理已有资料"},
@@ -55,10 +55,10 @@ def test_research_prompt_selection_reaches_the_model(
                 "model_settings_pinned": True,
             }
             config["collaboration_modules"] = list(modules)
-            detail = await app.create({"config": config})
-            c = app.coordinator(detail["run_id"])
-            active = await app.attach(c)
-            assert app.config(c).collaboration_modules == modules
+            detail = await system.create({"config": config})
+            c = system.coordinator(detail["run_id"])
+            active = await system.attach(c)
+            assert system.config(c).collaboration_modules == modules
             c.start()
             c.begin_turn("rsi")
             assert isinstance(active.actions, PassKActions)
@@ -77,7 +77,7 @@ def test_research_prompt_selection_reaches_the_model(
             assert prompt.count("不允许以任何方式作弊") == 1
             assert c.actor(researcher.agent_id).wait_reason != "rsi_reply"
         finally:
-            await app.close()
+            await system.close()
 
     try:
         asyncio.run(scenario())
@@ -96,15 +96,15 @@ def test_conversation_can_bind_real_cpu_execution_without_template_or_baseline(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
-        app = app_at(tmp_path)
-        draft = await app.create({})
-        c = app.coordinator(draft["run_id"])
+        system = system_at(tmp_path)
+        draft = await system.create({})
+        c = system.coordinator(draft["run_id"])
         assert not draft["simulated"] and draft["status"] == "planned"
         assert draft["brief"]["verification"] is None
-        assert draft["nodes"] == [] and not app.active
+        assert draft["nodes"] == [] and not system.active
         with pytest.raises(ValueError, match="确认"):
-            await app.call("start", {"run_id": c.store.run_id})
-        active = await app.attach(c)
+            await system.call("start", {"run_id": c.store.run_id})
+        active = await system.attach(c)
         tools = active.actions.handler("interaction")
         brief = TaskBrief("研究文本处理", "比较规则与结果，保留具体观察")
         brief.limits.max_agents = 3
@@ -153,7 +153,7 @@ def test_conversation_can_bind_real_cpu_execution_without_template_or_baseline(
         )
         assert ready.stop and ready.output["ready"]
         try:
-            await app.call("start", {"run_id": c.store.run_id})
+            await system.call("start", {"run_id": c.store.run_id})
             assert active.engine.max_concurrent_turns == 5
             assert c.state["seed_candidate_id"] is None
             frozen = json.loads((c.store.root / "coordination/started-config.json").read_text())
@@ -185,27 +185,27 @@ def test_conversation_can_bind_real_cpu_execution_without_template_or_baseline(
             assert output.read_text() == "真实进程输出"
             blocked = await tools(ToolCall("set_execution", {"execution_json": "{}"}, "late"))
             assert "not available" in blocked.output["error"]
-            assert (await app.detail(c.store.run_id))["best"] is None
+            assert (await system.detail(c.store.run_id))["best"] is None
             with pytest.raises(ValueError, match="先停止"):
-                await app.call("delete", {"run_id": c.store.run_id})
-            await app.call("stop", {"run_id": c.store.run_id})
-            await app.call("delete", {"run_id": c.store.run_id})
+                await system.call("delete", {"run_id": c.store.run_id})
+            await system.call("stop", {"run_id": c.store.run_id})
+            await system.call("delete", {"run_id": c.store.run_id})
             assert not c.store.root.exists()
         finally:
-            await app.close()
+            await system.close()
 
     asyncio.run(scenario())
 
 
 def test_invalid_passk_brief_does_not_corrupt_draft(tmp_path: Path) -> None:
     async def scenario() -> None:
-        app = app_at(tmp_path)
+        system = system_at(tmp_path)
         try:
-            draft = await app.create(
+            draft = await system.create(
                 {"conversation": True, "collaboration": {"mode": "passk", "modules": []}}
             )
-            c = app.coordinator(draft["run_id"])
-            active = await app.attach(c)
+            c = system.coordinator(draft["run_id"])
+            active = await system.attach(c)
             path = c.store.root / "coordination/config.json"
             original_config = path.read_bytes()
             original_run = c.store.run()
@@ -217,7 +217,7 @@ def test_invalid_passk_brief_does_not_corrupt_draft(tmp_path: Path) -> None:
             assert "Additional properties" in str(result.output)
             assert path.read_bytes() == original_config
             assert c.store.run() == original_run
-            detail = await app.detail(c.store.run_id)
+            detail = await system.detail(c.store.run_id)
             assert detail["collaboration"]["mode"] == "passk"
             arguments = encode(brief)
             for key in PASSK_HIDDEN_LIMITS:
@@ -228,12 +228,12 @@ def test_invalid_passk_brief_does_not_corrupt_draft(tmp_path: Path) -> None:
                 ToolCall("update_brief", arguments, "valid")
             )
             assert "error" not in result.output
-            saved = app.config(c)
+            saved = system.config(c)
             assert saved.brief.limits.max_agents == 8
             for key in PASSK_HIDDEN_LIMITS:
                 assert getattr(saved.brief.limits, key) is None
         finally:
-            await app.close()
+            await system.close()
 
     asyncio.run(scenario())
 
@@ -241,17 +241,17 @@ def test_invalid_passk_brief_does_not_corrupt_draft(tmp_path: Path) -> None:
 @pytest.mark.parametrize("execution_required", [True, False])
 def test_passk_handoff_accepts_optional_execution(tmp_path: Path, execution_required: bool) -> None:
     from areal_rsi.api.research import VerificationContract
-    from areal_rsi.base.storage import write_json
-    from areal_rsi.coordination.intake import validate_execution
+    from areal_rsi.infra.coordination.intake import validate_execution
+    from areal_rsi.infra.storage.files import write_json
 
     async def scenario() -> None:
-        app = app_at(tmp_path)
+        system = system_at(tmp_path)
         try:
-            draft = await app.create(
+            draft = await system.create(
                 {"conversation": True, "collaboration": {"mode": "passk", "modules": []}}
             )
-            c = app.coordinator(draft["run_id"])
-            config = app.config(c)
+            c = system.coordinator(draft["run_id"])
+            config = system.config(c)
             config.brief.objective = "Improve external benchmark"
             config.brief.instructions = (
                 "Use the existing submit/status scripts and report their score"
@@ -268,7 +268,7 @@ def test_passk_handoff_accepts_optional_execution(tmp_path: Path, execution_requ
             run.brief_ref = c.store.put("briefs", "configured", config.brief)
             c.store.save_run(run)
             write_json(c.store.root / "coordination/config.json", config.public())
-            active = await app.attach(c)
+            active = await system.attach(c)
             c.enqueue("user", "interaction", "Start the benchmark", key="start")
             message, _ = c.begin_turn("interaction")
             result = await active.actions.handler("interaction")(
@@ -289,6 +289,6 @@ def test_passk_handoff_accepts_optional_execution(tmp_path: Path, execution_requ
             assert active.execution.verifier is None
             assert (c.store.root / "coordination/started-config.json").exists()
         finally:
-            await app.close()
+            await system.close()
 
     asyncio.run(scenario())

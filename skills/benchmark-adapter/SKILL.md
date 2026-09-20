@@ -6,18 +6,17 @@ description: Adapt a local or remote Benchmark to AReaL-RSI through its SupportB
 # Adapt A Benchmark
 
 Integrate the requested Benchmark without coupling it to an RSI optimization target. A Benchmark
-defines what is evaluated; `ExperimentPlan.target` independently determines whether an experiment
+defines what is evaluated; `ResearchConfig.evolution_target` independently determines whether an experiment
 changes a Harness, Model, or Artifact.
 
 ## Inspect The Existing Contract
 
 Read these files before editing:
 
-- `src/areal_rsi/benchmarks/config/supported_benchmarks.yaml`
-- `src/areal_rsi/benchmarks/catalog.py`
-- `src/areal_rsi/benchmarks/adapters.py`
-- `src/areal_rsi/api/modules.py`
-- The closest implementation under `src/areal_rsi/modules/` and its tests
+- `src/areal_rsi/infra/tasks/config/supported_benchmarks.yaml`
+- `src/areal_rsi/infra/tasks/catalog.py`
+- `src/areal_rsi/api/interfaces.py`
+- The closest implementation under `src/areal_rsi/infra/tasks/` and its tests
 
 Determine the upstream data identity, public task format, supported splits, hidden verification
 data, result format, aggregate metrics, configuration parameters, and whether execution is local
@@ -34,7 +33,7 @@ or remote. Do not assume that the location of the catalog and the execution prov
 4. Add a thin trusted Adapter that validates the declared verifier/evaluation pairing and returns a
    `BenchmarkBundle`.
 5. Register the Adapter under a stable name and add a declarative entry to
-   `config/supported_benchmarks.yaml`. Do not add a Benchmark-specific branch to `LocalApp`.
+   `config/supported_benchmarks.yaml`. Do not add a Benchmark-specific branch to `ResearchSystem`.
 
 The Manifest may describe locations, public metadata, parameter schemas, verifier/evaluation IDs,
 and provider names. It must not contain credentials, expected answers, shell commands, or arbitrary

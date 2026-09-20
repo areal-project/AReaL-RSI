@@ -13,12 +13,12 @@ import pytest
 from test_research_runtime_package import ResponsesModel
 
 from areal_rsi.api.research import TaskBrief
-from areal_rsi.coordination.actions import ResearchActions
-from areal_rsi.coordination.config import ResearchConfig
-from areal_rsi.coordination.coordinator import Coordinator
-from areal_rsi.modules.research_runtime import ResearchRuntime
-from areal_rsi.modules.runtime_package import PackageSession, RuntimeSettings
-from areal_rsi.modules.runtime_tools import invoke
+from areal_rsi.infra.coordination.config import ResearchConfig
+from areal_rsi.infra.coordination.coordinator import Coordinator
+from areal_rsi.infra.coordination.tools.actions import ResearchActions
+from areal_rsi.infra.runtime.research_runtime import ResearchRuntime
+from areal_rsi.infra.runtime.runtime_package import PackageSession, RuntimeSettings
+from areal_rsi.infra.runtime.runtime_tools import invoke
 
 
 def test_effect_survives_process_restart_and_explicit_retry(

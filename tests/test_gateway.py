@@ -1,5 +1,6 @@
 import json
 import threading
+import urllib.error
 import urllib.request
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -9,7 +10,8 @@ from io import BytesIO
 
 import pytest
 
-from areal_rsi.modules.gateway import GatewayProxy, _relay_stream, normalize_tool_deltas
+from areal_rsi.infra.runtime.gateway import GatewayProxy, _relay_stream
+from areal_rsi.infra.tasks.execution import TargetGateway
 
 
 @pytest.fixture(autouse=True)
@@ -132,48 +134,47 @@ def local_upstream(handler: type[BaseHTTPRequestHandler]) -> Iterator[str]:
         thread.join(timeout=2)
 
 
-def test_null_deltas_do_not_erase_tool_name_or_change_arguments() -> None:
-    events = [
-        {
-            "choices": [
-                {
-                    "delta": {
-                        "tool_calls": [
-                            {
-                                "id": "call_1",
-                                "index": 0,
-                                "function": {"name": "Bash", "arguments": ""},
-                            }
-                        ]
-                    }
-                }
-            ]
-        },
-        {
-            "choices": [
-                {
-                    "delta": {
-                        "tool_calls": [
-                            {
-                                "id": None,
-                                "index": 0,
-                                "function": {"name": None, "arguments": '{"command":"pwd"}'},
-                            }
-                        ]
-                    }
-                }
-            ]
-        },
-    ]
-    raw = "\n\n".join("data: " + json.dumps(event) for event in events) + "\n\ndata: [DONE]\n\n"
-    result = normalize_tool_deltas(raw.encode()).decode()
-    chunks = [json.loads(line[6:]) for line in result.splitlines() if line.startswith("data: {")]
-    first = chunks[0]["choices"][0]["delta"]["tool_calls"][0]
-    second = chunks[1]["choices"][0]["delta"]["tool_calls"][0]
-    assert first["function"]["name"] == "Bash"
-    assert "name" not in second["function"] and "id" not in second
-    assert second["function"]["arguments"] == '{"command":"pwd"}'
-    assert "[DONE]" in result
+def test_target_request_budget_includes_overload_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    attempts = 0
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            nonlocal attempts
+            attempts += 1
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            self.wfile.write(
+                b'data: {"error":{"type":"upstream_error",'
+                b'"message":"temporarily overloaded"}}\n\n'
+            )
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    monkeypatch.setattr("areal_rsi.infra.runtime.gateway.time.sleep", lambda _: None)
+    with local_upstream(Handler) as upstream:
+        gateway = TargetGateway(
+            upstream, "fixture", model="fixed", max_requests=1,
+            max_output_tokens=10, timeout_seconds=3,
+        )
+        try:
+            request = urllib.request.Request(
+                gateway.url + "/chat/completions",
+                data=b'{"model":"fixed","messages":[],"stream":true}',
+                headers={"Authorization": "Bearer " + gateway.token},
+            )
+            with urllib.request.urlopen(request, timeout=3) as response:
+                assert b"upstream_error" in response.read()
+            with pytest.raises(urllib.error.HTTPError) as error:
+                urllib.request.urlopen(request, timeout=3)
+            assert error.value.code == 429
+            error.value.close()
+            assert gateway.calls == attempts == 1
+            assert gateway.exhausted
+        finally:
+            gateway.close()
 
 
 def test_sse_first_event_arrives_before_upstream_finishes_with_split_utf8() -> None:
@@ -324,7 +325,7 @@ def test_stream_retries_overload_before_meaningful_output(monkeypatch: pytest.Mo
         def log_message(self, format: str, *args: object) -> None:
             pass
 
-    monkeypatch.setattr("areal_rsi.modules.gateway.time.sleep", lambda _: None)
+    monkeypatch.setattr("areal_rsi.infra.runtime.gateway.time.sleep", lambda _: None)
     with local_upstream(Handler) as upstream:
         proxy = GatewayProxy(upstream, "offline-fixture")
         try:
@@ -377,7 +378,7 @@ def test_stream_does_not_retry_after_meaningful_output(monkeypatch: pytest.Monke
         def log_message(self, format: str, *args: object) -> None:
             pass
 
-    monkeypatch.setattr("areal_rsi.modules.gateway.time.sleep", lambda _: None)
+    monkeypatch.setattr("areal_rsi.infra.runtime.gateway.time.sleep", lambda _: None)
     with local_upstream(Handler) as upstream:
         proxy = GatewayProxy(upstream, "offline-fixture")
         try:

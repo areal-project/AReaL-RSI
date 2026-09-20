@@ -86,3 +86,9 @@ Interaction 的 `update_brief` 使用结构化的 `objective`、`instructions`�
 
 原生后端的工具调用 ID 按会话目录和消息回合划分作用域，防止不同回合复用 ID 时
 读到旧状态或触发错误的去重；同一消息恢复执行仍使用稳定标识。
+
+pass@k 到达研究时限后进入收尾阶段，而不是立即取消整个研究。平台停止 Research
+Agents 和新实验，仅保留 RSI Agent；RSI 读取各独立尝试的最后报告，汇总已完成实验、
+最佳成绩与方案、失败和限制，再调用 `finish_research`。总结写入用户消息和
+`passk_closeout` 状态，随后研究标记为完成。没有可信 verifier 时，脚本输出只能作为
+研究员读取的实验成绩展示，不会伪装成平台 `VerifiedResult`。

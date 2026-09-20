@@ -119,9 +119,7 @@ def test_continuous_wait_is_cancellable(tmp_path: Path) -> None:
                     "submit",
                 )
             )
-            wait = asyncio.create_task(
-                execution.wait_for_result(agent, submitted.output["job_id"])
-            )
+            wait = asyncio.create_task(execution.wait_for_result(agent, submitted.output["job_id"]))
             await asyncio.sleep(0.1)
             assert not wait.done()
             wait.cancel()
@@ -258,6 +256,19 @@ class ScriptedRuntime:
         if agent == "rsi":
             handler = kwargs["handler"]
             state = await handler(ToolCall("get_state", {}, f"state-{len(self.calls)}"))
+            if state.output.get("closeout"):
+                result = await handler(
+                    ToolCall(
+                        "finish_research",
+                        {
+                            "summary": "到时汇总：最佳实验 score=0.8；该成绩来自实验脚本，"
+                            "没有平台可信验证记录。"
+                        },
+                        "finish-closeout",
+                    )
+                )
+                assert result.stop
+                return TurnResult(session_dir.name, "closed", "汇总完成", "completed", {})
             if not state.output["started_researchers"]:
                 state = await handler(ToolCall("start_researchers", {}, "start-fixed-team"))
             for researcher in state.output["researchers"]:
@@ -280,7 +291,7 @@ class ScriptedRuntime:
         raise AssertionError("unreachable")
 
 
-def test_all_attempts_continue_and_cancel_at_original_deadline(tmp_path: Path) -> None:
+def test_all_attempts_continue_then_rsi_summarizes_at_original_deadline(tmp_path: Path) -> None:
     async def scenario() -> None:
         c, actions, agents = await setup(tmp_path)
         original = c.state["started_at"]
@@ -308,6 +319,25 @@ def test_all_attempts_continue_and_cancel_at_original_deadline(tmp_path: Path) -
             assert set(agents) == runtime.cancelled
             assert c.state["started_at"] == original
             assert c.state["budget_stop_reason"] == "Run wall-time budget exhausted"
+            assert c.state["status"] == "running"
+            assert c.state["passk_closeout"]["status"] == "pending"
+            assert c.state["inboxes"]["rsi"]
+            async with asyncio.timeout(3):
+                while c.state["status"] != "succeeded":
+                    await engine.tick()
+                    await asyncio.sleep(0.01)
+            assert c.state["passk_closeout"]["status"] == "completed"
+            assert "最佳实验 score=0.8" in c.state["passk_closeout"]["summary"]
+            assert c.store.run().state.value == "succeeded"
+            assert c.store.run().finished_at is not None
+            assert c.actor("rsi").state == AgentState.STOPPED
+            user_messages = [
+                json.loads(path.read_text()) for path in (c.store.root / "messages").glob("*.json")
+            ]
+            assert any(
+                message["recipient"] == "user" and "最佳实验 score=0.8" in message["text"]
+                for message in user_messages
+            )
         finally:
             await engine.close()
 
@@ -371,7 +401,8 @@ def test_workbench_mode_stops_and_rejects_intervention(tmp_path: Path) -> None:
             with pytest.raises(ValueError, match="intervention"):
                 await app.call("chat", {"run_id": c.store.run_id, "text": "change direction"})
             await asyncio.wait_for(app.active[c.store.run_id].task, 3)
-            assert c.state["status"] == "stopped"
+            assert c.state["status"] == "succeeded"
+            assert c.state["passk_closeout"]["status"] == "completed"
             assert len(set(runtime.calls)) == 4  # RSI plus the fixed three attempts.
             assert len(c.store.run().research_agents) == 3
             assert (

@@ -640,7 +640,7 @@ class ResearchApp:
         async def poll() -> bool:
             current = self.active[c.store.run_id].config
             if (
-                (current.finalizer or current.mode == "passk")
+                current.finalizer
                 and c.state["status"] == "paused"
                 and c.state.get("budget_stop_reason") == "Run wall-time budget exhausted"
             ):
@@ -915,6 +915,7 @@ class ResearchApp:
             "messages": messages,
             "agent_activity": c.state.get("agent_activity", {}),
             "execution_setup": c.state.get("execution_setup", "ready"),
+            "passk_closeout": c.state.get("passk_closeout"),
             "model_settings": self.model_settings(c),
             "collaboration": self.collaboration_settings(c),
             "jobs": jobs,

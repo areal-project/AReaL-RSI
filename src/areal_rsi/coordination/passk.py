@@ -59,6 +59,13 @@ SUPERVISOR_TOOLS = [
     ),
     definition("wait", "结束本回合，等待研究员报告或系统提醒。", reason=STRING),
 ]
+FINISH_RESEARCH = definition(
+    "finish_research",
+    "研究时间已到。读取 get_state 中每位研究员的最后报告，汇总实际完成的实验、"
+    "最佳成绩与对应方案、失败或未完成项及限制，然后结束研究。脚本报告的成绩应明确"
+    "标为研究员读取的实验结果，不能声称经过平台可信验证。",
+    summary=STRING,
+)
 PROGRESS_TOOL = definition(
     "submit_report",
     "向 RSI 简要报告进展、结果或困难，报告后继续独立研究，不等待回复。",
@@ -98,7 +105,10 @@ class PassKActions(ResearchActions):
         if self.c.state["status"] == "planned" and agent_id == "interaction":
             return super().definitions(agent_id, include_hidden=include_hidden)
         if agent_id == "rsi":
-            return SUPERVISOR_TOOLS
+            return [
+                *SUPERVISOR_TOOLS,
+                *([FINISH_RESEARCH] if self.c.state.get("passk_closeout") else []),
+            ]
         if agent_id == "interaction":
             return []
         return [
@@ -173,6 +183,7 @@ class PassKActions(ResearchActions):
                 "brief": encode(c.store.brief()),
                 "started_researchers": bool(c.state.get("passk_ready")),
                 "budget": c.budget(),
+                "closeout": c.state.get("passk_closeout"),
                 "researchers": [
                     {
                         "agent_id": actor.agent_id,
@@ -231,6 +242,8 @@ class PassKActions(ResearchActions):
             await launch(self.c, self)
             return ToolResult(self.state("rsi"))
         if name == "continue_researcher":
+            if self.c.state.get("passk_closeout"):
+                raise ValueError("研究时间已到，当前只能汇总已有结果")
             target = args["agent_id"]
             if target not in {actor.agent_id for actor in self.c.store.run().research_agents}:
                 raise ValueError("Unknown researcher")
@@ -238,6 +251,28 @@ class PassKActions(ResearchActions):
                 return ToolResult({"continued": False, "reason": "研究员正在执行或等待自己的作业"})
             message_id = self.c.enqueue("rsi", target, CONTINUE_MESSAGE, key=key)
             return ToolResult({"continued": True, "message_id": message_id})
+        if name == "finish_research":
+            if agent_id != "rsi" or not self.c.state.get("passk_closeout"):
+                raise ValueError("只有到时后的 RSI 收尾回合可以结束 pass@k 研究")
+            summary = args["summary"].strip()
+            if not summary:
+                raise ValueError("最终总结不能为空")
+            self.c.state["passk_closeout"].update(status="completed", summary=summary)
+            self.c.state["status"] = "succeeded"
+            self.c.state["waiting_for_user"] = []
+            supervisor = self.c.actor("rsi")
+            supervisor.state, supervisor.wait_reason = (
+                AgentState.STOPPED,
+                "passk: summary completed",
+            )
+            self.c.save_actor(supervisor)
+            self.c.save()
+            run = self.c.store.run()
+            run.state, run.finished_at = RunState.SUCCEEDED, now()
+            self.c.store.save_run(run)
+            self.c.enqueue("rsi", "user", summary, key=key)
+            self.c.store.event("run_completed", summary=summary, closeout="passk")
+            return ToolResult({"completed": True}, stop=True, reason="completed")
         if name == "submit_report":
             return ToolResult(self.progress(agent_id, key, args["message"], args["references"]))
         if name == "get_state" and agent_id != "interaction":
@@ -362,9 +397,42 @@ def stop_on_target(c: Coordinator) -> None:
 
 
 class PassKEngine(ResearchEngine):
+    def _begin_closeout(self, reason: str) -> None:
+        c = self.coordinator
+        if c.state.get("passk_closeout"):
+            return
+        for actor in c.store.run().research_agents:
+            if actor.state != AgentState.STOPPED:
+                c.stop_agent(actor.agent_id, reason)
+        c.state["passk_closeout"] = {
+            "status": "pending",
+            "reason": reason,
+            "started_at": now(),
+        }
+        c.state["budget_stop_reason"] = reason
+        c.save()
+        c.enqueue(
+            "system",
+            "rsi",
+            "研究时间已到。研究员和新实验已停止。请调用 get_state，逐一检查每位研究员的"
+            "最后报告，汇总实际完成的实验、最佳成绩与对应方案、失败或未完成项及限制。"
+            "随后调用 finish_research；不要继续研究、启动研究员或提交实验。没有平台可信"
+            "验证器时，明确说明成绩来自现有实验脚本，不要伪装成正式验证记录。",
+            key="passk-closeout",
+        )
+        c.store.event("passk_closeout_started", reason=reason)
+
+    def _wall_reason(self) -> str | None:
+        if self.coordinator.state.get("passk_closeout"):
+            return None
+        return super()._wall_reason()
+
     async def tick(self) -> int:
         c = self.coordinator
         self._acquire()
+        reason = self._wall_reason()
+        if c.state["status"] == "running" and reason is not None:
+            self._begin_closeout(reason)
         if c.state["status"] == "running" and self._wall_reason() is None:
             retries = c.state.setdefault("passk_retries", {})
             for actor in (c.actor("rsi"), *c.store.run().research_agents):
@@ -403,6 +471,8 @@ class PassKEngine(ResearchEngine):
     def _actor_allowed(self, agent_id: str) -> bool:
         if self.coordinator.state["status"] == "planned":
             return agent_id == "interaction"
+        if self.coordinator.state.get("passk_closeout"):
+            return self.coordinator.state["status"] == "running" and agent_id == "rsi"
         return self.coordinator.state["status"] == "running" and (
             agent_id == "rsi"
             or (agent_id != "interaction" and bool(self.coordinator.state.get("passk_ready")))

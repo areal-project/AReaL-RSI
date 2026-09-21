@@ -13,6 +13,9 @@ src/areal_rsi/
 │   │   ├── passk.md
 │   │   ├── leader_guidance_v0.2.1.md
 │   │   ├── leader_guidance_v0.2.1.1.md
+│   │   ├── leader_guidance_v0.2.1.3.md
+│   │   ├── advise_researcher_v0.2.1.3.md
+│   │   ├── shared_experience_v0.2.1.3.md
 │   │   ├── leader_guidance_v0.2.2.md
 │   │   ├── leader_guidance_v0.2.3.md
 │   │   ├── leader_guidance_v0.2.4.md
@@ -24,6 +27,8 @@ src/areal_rsi/
 │   │   ├── passk.md
 │   │   ├── leader_guidance_v0.2.1.md    # v0.2.2 也使用这份
 │   │   ├── leader_guidance_v0.2.1.1.md
+│   │   ├── leader_guidance_v0.2.1.3.md
+│   │   ├── submit_report_v0.2.1.3.md
 │   │   ├── leader_guidance_v0.2.3.md
 │   │   ├── leader_guidance_v0.2.4.md
 │   │   ├── continue.md
@@ -79,6 +84,17 @@ v0.2.7 也从 v0.2.4 独立出发，为 RSI 添加 `researcher_restart.md`。
 v0.2.1.1 独立基于 v0.2.1，完整两份正文使用对应的 `leader_guidance_v0.2.1.1.md`。
 `problem_sharing` 模块限制未解决问题的传播，解决后可扩大分享；不继承 v0.2.4–v0.2.7 的调度和策略。
 实现边界及审阅入口见 [v0.2.1.1](leader-guidance-v0.2.1.1.md)。
+
+v0.2.1.2 复用 v0.2.1.1 的角色正文，为 RSI 补充 `researcher_profiles.md`，
+并在每名 researcher 正文开头加入其冻结的身份配置。
+v0.2.1.3 保留身份机制，使用新的两份角色正文、报告与分享工具说明、共享消息模板；
+全部存为 Markdown。共同的独立判断与报告要求放在角色正文，身份文件不重复维护。
+见 [v0.2.1.3](leader-guidance-v0.2.1.3.md)。
+
+v0.2.1.4 基于 v0.2.1.2，复用原角色正文。leader 只增加 `team_review.md`，
+定时提醒使用 `team_review_reminder.md`；researcher 以自己的 AGENTS.md 为身份来源，
+通过 `profile_resources.md` 加载冻结的必读知识与可选 skill。只有 KernelBench 的
+GPU 执行与编译身份配置 profiling skill。见 [v0.2.1.4](leader-guidance-v0.2.1.4.md)。
 
 1. 复制需要修改的角色 Markdown，例如新建 `leader_guidance_v0.2.5.md`。
 2. 在 `coordination/collaboration.py` 中注册对应协作模块，通过 `load_prompt()` 选择新文件。

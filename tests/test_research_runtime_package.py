@@ -231,7 +231,7 @@ def test_codex_native_tools_history_resume_and_usage(
                 result = await asyncio.wait_for(
                     runtime.turn(
                         session,
-                        system_prompt="Complete without tools",
+                        system_prompt="Complete without tools. IDENTITY_PROFILE_PERSISTENCE",
                         user_message=f"Remember turn {i}",
                         message_id=f"message-{i}",
                         tools=[definition("get_state", "Read your state")],
@@ -254,7 +254,7 @@ def test_codex_native_tools_history_resume_and_usage(
                     await runtime.close()  # Continue on the same native thread after restart.
             replay = await runtime.turn(
                 session,
-                system_prompt="Complete without tools",
+                system_prompt="Complete without tools. IDENTITY_PROFILE_PERSISTENCE",
                 user_message="Remember turn 1",
                 message_id="message-1",
                 tools=[definition("get_state", "Read your state")],
@@ -270,6 +270,11 @@ def test_codex_native_tools_history_resume_and_usage(
                 assert ("recovery-only-task" in inputs) == (i == 1)
                 assert "remaining" in inputs
             for request in model.requests:
+                assert any(
+                    item.get("role") == "developer"
+                    and "IDENTITY_PROFILE_PERSISTENCE" in json.dumps(item)
+                    for item in request["input"]
+                )
                 tools = json.dumps(request.get("tools", [])) + json.dumps(
                     [item for item in request["input"] if item.get("type") == "additional_tools"]
                 )

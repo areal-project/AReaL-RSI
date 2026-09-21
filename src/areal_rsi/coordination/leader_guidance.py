@@ -43,6 +43,7 @@ LEADER_TOOLS = {
     "read_job_output_file",
     "search_web",
     "fetch_url",
+    "withdraw_candidates",
 }
 TRACE_EVENTS = {
     "message.completed",
@@ -63,7 +64,14 @@ class GuidedPassKActions(PassKActions):
                 ADVISE,
                 TRACE,
                 *[
-                    tool
+                    {
+                        **tool,
+                        "description": "已核实具体候选违反任务要求时，列出其 ID 并直接撤回，"
+                        "附上反例或违规证据，不必等待作者回复。只影响选优，保留历史和代码；"
+                        "尚未核实的疑问、较慢的成绩或对研究方向的分歧不能作为撤回理由。",
+                    }
+                    if tool["name"] == "withdraw_candidates"
+                    else tool
                     for tool in ResearchActions.definitions(
                         self, agent_id, include_hidden=include_hidden
                     )
@@ -97,6 +105,10 @@ class GuidedPassKActions(PassKActions):
         return state
 
     async def _apply(self, agent_id: str, key: str, name: str, args: dict[str, Any]) -> ToolResult:
+        if agent_id == "rsi" and name == "withdraw_candidates":
+            if not args["references"]:
+                raise ValueError("RSI 撤回候选需要引用已核实的反例或违规证据")
+            return await ResearchActions._apply(self, agent_id, key, name, args)
         if name in {"advise_researcher", "read_researcher_trace"}:
             target = args["agent_id"]
             if target not in {actor.agent_id for actor in self.c.store.run().research_agents}:

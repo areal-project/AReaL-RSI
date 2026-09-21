@@ -12,6 +12,8 @@ from areal_agent_runtime.contracts.product import RunSnapshot, RunStatus
 from test_passk import ScriptedRuntime, setup
 
 from areal_rsi.api.base import AgentState, RecordRef
+from areal_rsi.api.research import VerifiedResult
+from areal_rsi.base.storage import now
 from areal_rsi.coordination.collaboration import build_plan
 from areal_rsi.coordination.coordinator import Coordinator
 from areal_rsi.coordination.engine import ToolSet
@@ -20,6 +22,77 @@ from areal_rsi.coordination.passk import PassKActions, PassKEngine
 from areal_rsi.coordination.store import ResearchStore
 from areal_rsi.modules.agent_runtime import ToolCall
 from areal_rsi.modules.runtime_storage import JournalStateStore
+
+
+def test_leader_can_exclude_confirmed_peer_defect_without_waiting_for_reply(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        c, independent, agents = await setup(tmp_path)
+        source, target, _ = agents
+        actions = build_plan("passk", ("leader_guidance", "problem_sharing")).actions(c)
+        candidates = []
+        for agent, score in ((target, 0.5), (source, 0.9)):
+            workspace = actions.workspace(agent)
+            (workspace / "model.py").write_text(f"# {agent}")
+            candidate = await c.store.snapshot(workspace, agent_id=agent, description=agent)
+            candidates.append(candidate.candidate_id)
+            c.store.record_verification(
+                VerifiedResult(
+                    agent,
+                    candidate.candidate_id,
+                    c.store.contract_digest(),
+                    now(),
+                    "succeeded",
+                    score,
+                    True,
+                )
+            )
+            c.store.consider_best(agent)
+        good, bad = candidates
+        evidence = c.store.put("materials", "counterexample", {"agent_id": target})
+        arguments = {
+            "candidate_ids": [bad],
+            "reason": "Confirmed counterexample",
+            "references": [evidence.uri],
+        }
+        assert (
+            "error"
+            in (
+                await independent.handler("rsi")(
+                    ToolCall("withdraw_candidates", arguments, "pure-passk")
+                )
+            ).output
+        )
+        assert (
+            "error"
+            in (
+                await actions.handler(target)(
+                    ToolCall("withdraw_candidates", arguments, "peer-withdraw")
+                )
+            ).output
+        )
+        assert (
+            "error"
+            in (
+                await actions.handler("rsi")(
+                    ToolCall("withdraw_candidates", {**arguments, "references": []}, "no-evidence")
+                )
+            ).output
+        )
+        assert not c.store.withdrawals()
+        c.state["selected_candidate_id"] = bad
+        result = await actions.handler("rsi")(
+            ToolCall("withdraw_candidates", arguments, "confirmed-defect")
+        )
+        assert result.output["withdrawn"]
+        assert c.store.is_withdrawn(bad) and not c.store.is_withdrawn(good)
+        assert c.store.public_record(c.store.run().best_result_ref)["candidate_id"] == good
+        assert c.state["selected_candidate_id"] is None
+        assert c.store.withdrawals()[0]["references"] == [{"uri": evidence.uri}]
+        # Selection is corrected without broadcasting a problem to other researchers.
+        assert not c.state.get("leader_advice")
+        assert not c.state.get("problem_sharing")
+
+    asyncio.run(scenario())
 
 
 def test_team_reads_and_targeted_advice_preserve_independent_attempts(tmp_path: Path) -> None:

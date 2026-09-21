@@ -1,0 +1,16 @@
+{
+  "group_name": "v0.2.1.4-luna",
+  "max_agents": 4,
+  "max_effective_seconds": 3600,
+  "reasoning_effort": "xhigh",
+  "execution_interface": "cli",
+  "runs": [
+    {"task": "L1P63", "model": "gpt-5.6-luna", "collaboration": "passk_guided_v0214", "label": "v0.2.1.4"},
+    {"task": "L1P77", "model": "gpt-5.6-luna", "collaboration": "passk_guided_v0214", "label": "v0.2.1.4"},
+    {"task": "L2P14", "model": "gpt-5.6-luna", "collaboration": "passk_guided_v0214", "label": "v0.2.1.4"},
+    {"task": "L2P71", "model": "gpt-5.6-luna", "collaboration": "passk_guided_v0214", "label": "v0.2.1.4"},
+    {"task": "L3P10", "model": "gpt-5.6-luna", "collaboration": "passk_guided_v0214", "label": "v0.2.1.4"},
+    {"task": "L3P19", "model": "gpt-5.6-luna", "collaboration": "passk_guided_v0214", "label": "v0.2.1.4"},
+    {"task": "L3P28", "model": "gpt-5.6-luna", "collaboration": "passk_guided_v0214", "label": "v0.2.1.4"}
+  ]
+}

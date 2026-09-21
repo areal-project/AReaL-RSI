@@ -1529,6 +1529,8 @@ button.primary.destructive { background: var(--red); }
 .agent-lane { position: absolute; top: 12px; border: 1px solid #e4eae1; border-radius: 12px; background: #ffffff80; }
 .agent-lane-heading { display: flex; align-items: center; gap: 9px; padding: 13px 16px; min-width: 0; }
 .agent-lane-heading strong { font-size: 12px; font-weight: 600; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: #4a5d51; }
+.agent-lane-identity { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.agent-profile-name { font-size: 10px; color: var(--muted); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .agent-monogram { display: grid; place-items: center; flex: 0 0 26px; height: 26px; border-radius: 8px; background: var(--agent-color); color: #fff; font-size: 10px; font-weight: 600; }
 .agent-rail { position: absolute; left: 9px; bottom: 18px; width: 1px; background: #dce4d9; }
 .agent-rail::after { content: ""; position: absolute; bottom: 0; left: -3px; border: 4px solid transparent; border-top-color: #b3c2af; }

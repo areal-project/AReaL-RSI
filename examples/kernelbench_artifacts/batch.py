@@ -17,6 +17,7 @@ from areal_rsi.base.storage import new_id, now, safe_name, write_json
 from areal_rsi.coordination.collaboration import build_plan, manifest, presets
 from areal_rsi.coordination.config import config_from_dict
 from areal_rsi.experiment_config import environment_scope
+from areal_rsi.prompts import load_prompt
 from areal_rsi.ui.launch import WorkbenchClient
 
 HERE = Path(__file__).resolve().parent
@@ -58,6 +59,55 @@ def prepare_trial(item: tuple[dict[str, Any], dict[str, Any]]) -> dict[str, Any]
     config["credential_file"] = base.credential_file
     config["api_key_env"] = base.api_key_env
     config["brief"]["objective"] = row["name"]
+    if "researcher_profiles" in row["modules"]:
+        profile_root = HERE / "v0.2.1.2/profiles"
+        config["metadata"]["researcher_profiles"] = [
+            {
+                "id": "general",
+                "name": "综合研究员",
+                "reminder": "从任务与实验出发，自由选择方法，独立完成整题。",
+                "prompt": load_prompt("agents/research/profiles/general.md"),
+            },
+            *[
+                {
+                    "id": key,
+                    "name": name,
+                    "reminder": reminder,
+                    "prompt": (profile_root / f"{key}.md").read_text(),
+                }
+                for key, name, reminder in (
+                    (
+                        "algorithm",
+                        "算法与计算结构研究员",
+                        "优先从数学表达和计算组织寻找机会，验证整体收益。",
+                    ),
+                    (
+                        "memory",
+                        "数据布局与访存研究员",
+                        "优先观察数据搬运、布局与复用，验证整体收益。",
+                    ),
+                    (
+                        "execution",
+                        "GPU 执行与编译研究员",
+                        "优先观察 GPU 执行、资源占用和等待，验证整体收益。",
+                    ),
+                )
+            ],
+        ]
+        if "profile_resources" in row["modules"]:
+            from areal_rsi.coordination.profile_resources import load_resources
+
+            general = (
+                Path(__file__).resolve().parents[2]
+                / "src/areal_rsi/agents/research/resources/general"
+            )
+            for profile in config["metadata"]["researcher_profiles"]:
+                directory = (
+                    general
+                    if profile["id"] == "general"
+                    else HERE / "v0.2.1.4/profiles" / profile["id"]
+                )
+                profile.update(load_resources(directory))
     write_json(path, config, immutable=True)
     return {"run_id": row["run_id"], "prepared": True}
 
@@ -85,6 +135,13 @@ def register_and_start(batch: dict[str, Any], client: WorkbenchClient) -> list[d
     }
     path = root / "workbench-groups.json"
     groups = read(path)["groups"] if path.exists() else []
+    previous_group = next((g for g in groups if g.get("name") == group["name"]), None)
+    if previous_group:
+        group.update(
+            id=previous_group["id"],
+            created_at=previous_group["created_at"],
+            run_ids=list(dict.fromkeys([*previous_group["run_ids"], *members])),
+        )
     write_json(path, {"groups": [group, *(g for g in groups if g["id"] != group["id"])]})
 
     def start(row: dict[str, Any]) -> dict[str, str]:
@@ -144,6 +201,9 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8198)
     parser.add_argument("--environment", type=Path, default=HERE / "et15.json")
     parser.add_argument("--resume", type=Path, help="重试 batch.json，不重复创建或重置研究")
+    parser.add_argument(
+        "--prepare-only", action="store_true", help="准备和校准后停止，用 --resume 启动"
+    )
     parser.add_argument("--watch", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.watch:
@@ -211,6 +271,9 @@ def main() -> None:
     with ProcessPoolExecutor(max_workers=len(batch["runs"])) as pool:
         results = list(pool.map(prepare_trial, [(batch, row) for row in batch["runs"]]))
     write_json(directory / "preparation.json", results)
+    if args.prepare_only:
+        print(f"准备完成：{batch_file}", flush=True)
+        return
     results = register_and_start(batch, client)
     if sys.platform == "darwin" and any(r["status"] == "running" for r in results):
         with (directory / "sleep-guard.log").open("ab") as log:

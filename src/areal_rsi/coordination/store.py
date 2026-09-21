@@ -366,15 +366,17 @@ class ResearchStore:
         return ref
 
     def withdrawals(self) -> list[dict[str, Any]]:
-        return [
+        records = [
             json.loads(path.read_text())
             for path in sorted((self.root / "withdrawals").glob("*.json"))
         ]
+        return [item for record in records for item in record.get("candidates", [record])]
 
     def is_withdrawn(self, candidate_id: str) -> bool:
         candidate = self.get("candidates", candidate_id, CandidateSnapshot)
         return any(
-            item["content_digest"] == candidate.content.digest for item in self.withdrawals()
+            item["content_digest"] == candidate.content.digest
+            for item in self.withdrawals()
             if not item.get("scope_agent_id") or item["scope_agent_id"] == candidate.source_agent_id
         )
 
@@ -410,21 +412,103 @@ class ResearchStore:
             self.event(
                 "candidate_withdrawn", agent_id=agent_id, candidate_id=candidate_id, reason=reason
             )
-        # Reconcile on replay too: a crash may follow the immutable withdrawal.
+        self.reselect_best(simulated_run=simulated_run)
+        return self.paths.reference(path)
+
+    def withdraw_candidates(
+        self,
+        candidate_ids: list[str],
+        reason: str,
+        references: tuple[RecordRef, ...],
+        *,
+        agent_id: str,
+        simulated_run: bool = False,
+        scope_agent_id: str | None = None,
+    ) -> RecordRef:
+        """Persist the entire explicit withdrawal in one atomic record before selecting."""
+        if not candidate_ids or not reason.strip():
+            raise ValueError("List the affected candidates and a concrete reason")
+        candidates = [
+            self.get("candidates", key, CandidateSnapshot) for key in sorted(set(candidate_ids))
+        ]
+        key = (
+            "batch_"
+            + hashlib.sha256(json_bytes([agent_id, candidate_ids, reason])).hexdigest()[:24]
+        )
+        path = self.root / "withdrawals" / f"{key}.json"
+        if not path.exists():
+            common = {
+                "agent_id": agent_id,
+                "reason": reason,
+                "created_at": now(),
+                "references": encode(references),
+                **({"scope_agent_id": scope_agent_id} if scope_agent_id else {}),
+            }
+            self.put(
+                "withdrawals",
+                key,
+                {
+                    **common,
+                    "candidate_ids": [c.candidate_id for c in candidates],
+                    "candidates": [
+                        {
+                            **common,
+                            "candidate_id": c.candidate_id,
+                            "content_digest": c.content.digest,
+                        }
+                        for c in candidates
+                    ],
+                },
+            )
+            self.event(
+                "candidates_withdrawn",
+                agent_id=agent_id,
+                candidate_ids=[c.candidate_id for c in candidates],
+                reason=reason,
+            )
+        self.reselect_best(simulated_run=simulated_run)
+        return self.paths.reference(path)
+
+    def reselect_best(self, *, simulated_run: bool = False) -> None:
+        # Reconcile on replay too. Read each withdrawal and verification once;
+        # calling consider_best repeatedly made a withdrawal quadratic in history.
         run = self.run()
         if run.final_result_ref and self.is_withdrawn(
             self.public_record(run.final_result_ref)["candidate_id"]
         ):
             run.final_result_ref = None
-        if run.best_result_ref and self.is_withdrawn(
-            self.public_record(run.best_result_ref)["candidate_id"]
-        ):
-            run.best_result_ref = None
-        self.save_run(run)
-        if self.brief().verification is not None:
+        run.best_result_ref = None
+        contract = self.brief().verification
+        if contract is not None:
+            withdrawn = {(w["content_digest"], w.get("scope_agent_id")) for w in self.withdrawals()}
+            digest = self.contract_digest()
+            eligible = []
             for result in self.records("verifications", VerifiedResult):
-                self.consider_best(result.result_id, simulated_run=simulated_run)
-        return self.paths.reference(path)
+                if (
+                    result.status != "succeeded"
+                    or not result.passed
+                    or result.phase != "search"
+                    or result.simulated != simulated_run
+                    or result.contract_digest != digest
+                    or result.score is None
+                ):
+                    continue
+                candidate = self.get("candidates", result.candidate_id, CandidateSnapshot)
+                if (candidate.content.digest, None) not in withdrawn and (
+                    candidate.content.digest,
+                    candidate.source_agent_id,
+                ) not in withdrawn:
+                    eligible.append(result)
+            if eligible:
+                best = sorted(
+                    eligible,
+                    key=lambda r: float(r.score or 0),
+                    reverse=contract.direction == "maximize",
+                )[0]
+                run.best_result_ref = self.paths.reference(
+                    self.root / "verifications" / f"{best.result_id}.json"
+                )
+        self.save_run(run)
 
     def consider_best(self, result_id: str, *, simulated_run: bool = False) -> bool:
         result = self.get("verifications", result_id, VerifiedResult)

@@ -6,17 +6,21 @@ from pathlib import Path
 import pytest
 from test_passk import ScriptedRuntime, setup
 
+from areal_rsi.api.base import RecordRef
 from areal_rsi.coordination.collaboration import build_plan, presets, selected_modules
 from areal_rsi.coordination.coordinator import Coordinator
 from areal_rsi.coordination.engine import ToolSet
 from areal_rsi.modules.agent_runtime import ToolCall
 
 
-def test_problem_recipient_persists_and_solution_can_reach_the_team(tmp_path: Path) -> None:
+@pytest.mark.parametrize("extra", [(), ("researcher_profiles", "objective_sharing")])
+def test_problem_recipient_persists_and_solution_can_reach_the_team(
+    tmp_path: Path, extra: tuple[str, ...]
+) -> None:
     async def scenario() -> None:
         c, _, agents = await setup(tmp_path, 4)
         source, helper, third, fourth = agents
-        plan = build_plan("passk", ("leader_guidance", "problem_sharing"))
+        plan = build_plan("passk", ("leader_guidance", "problem_sharing", *extra))
         actions = plan.actions(c)
         problem = c.store.put("materials", "problem", {"agent_id": source, "text": "Failure"})
         args = {
@@ -91,3 +95,41 @@ def test_v0211_is_a_separate_v021_recipe() -> None:
     for version in ("leader_guidance_v022", "leader_guidance_v023", "leader_guidance_v024"):
         with pytest.raises(ValueError, match="冲突"):
             selected_modules("passk", (*choice["modules"], version))
+
+
+def test_guidance_accepts_candidate_verification_and_job_evidence(tmp_path: Path) -> None:
+    async def scenario():
+        c, _, agents = await setup(tmp_path, 4)
+        actions = build_plan("passk", ("leader_guidance", "problem_sharing")).actions(c)
+        source, recipient = agents[:2]
+        workspace = tmp_path / "candidate"
+        workspace.mkdir()
+        (workspace / "source.txt").write_text("evidence")
+        candidate = await c.store.snapshot(workspace, agent_id=source, description="candidate")
+        references = [
+            c.store.record_reference(RecordRef("candidates/" + candidate.candidate_id)),
+            c.store.put("verifications", "verified", {"candidate_id": candidate.candidate_id}),
+            c.store.put(
+                "executions", "job-evidence", {"job_id": "job-evidence", "agent_id": source}
+            ),
+        ]
+        for i, ref in enumerate(references):
+            result = await actions.handler("rsi")(
+                ToolCall(
+                    "advise_researcher",
+                    {
+                        "agent_id": recipient,
+                        "message": "Check the original evidence",
+                        "references": [ref.uri],
+                        "experience": {
+                            "id": f"evidence-{i}",
+                            "kind": "positive",
+                            "source_agent_id": source,
+                        },
+                    },
+                    f"advice-{i}",
+                )
+            )
+            assert result.output["status"] == "queued"
+
+    asyncio.run(scenario())

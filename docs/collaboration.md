@@ -14,6 +14,9 @@
 | 纯 pass@k | `passk` | 固定 k 名研究员独立完成整题，RSI 接收报告并督促继续，不提供建议或共享信息 |
 | v0.2.1 · pass@k + RSI 协调 | `passk` + `leader_guidance` | 保留独立探索，RSI 查看原始证据，定向共享并发送非阻塞建议 |
 | v0.2.1.1 · 区分问题与成果分享 | `passk` + `leader_guidance` + `problem_sharing` | 基于 v0.2.1，未解决的问题只增加一名接收者，已验证成果可分享给多人；研究员自主判断建议 |
+| v0.2.1.2 · 不同研究偏好 | v0.2.1.1 + `researcher_profiles` | 为研究员配置持续保留的身份，每人仍独立完成整题 |
+| v0.2.1.3 · 及时报告与客观分享 | v0.2.1.2 + `objective_sharing` | 重要发现先简报；RSI 客观分享事实与条件，消息附双方身份，由接收者独立判断 |
+| v0.2.1.4 · 团队观察与人设资料 | v0.2.1.2 + `team_review` + `profile_resources` | 保留原协作，定期检查探索重叠；加载个人 AGENTS.md、知识和可选 skill，两项可独立消融 |
 | v0.2.2 · pass@k + RSI 协调 | `passk` + `leader_guidance` + `leader_guidance_v022` | 沿用 v0.2.1，仅调整 leader Prompt，关注未验证的思路和具体困难 |
 | v0.2.3 · pass@k + RSI 协调 | `passk` + `leader_guidance` + `leader_guidance_v023` | 精简两个角色的 Prompt，保留定向共享、自主判断和持续探索 |
 | v0.2.4 · pass@k + RSI 持续协调 | `passk` + `leader_guidance` + `leader_guidance_v024` | RSI 持续观察，自动展示研究员进展与实验，不依赖主动报告唤醒 |
@@ -89,6 +92,8 @@ mount/PID namespace 内增加私有根目录、网络隔离和权限收缩；只
 | `passk` | `PassKEngine` + `PassKActions` | [RSI](../src/areal_rsi/agents/rsi/passk.md)、[researcher](../src/areal_rsi/agents/research/passk.md) |
 | `passk` + `leader_guidance` | 同一个 `PassKEngine` + `GuidedPassKActions` | [RSI](../src/areal_rsi/agents/rsi/leader_guidance_v0.2.1.md)、[researcher](../src/areal_rsi/agents/research/leader_guidance_v0.2.1.md) |
 | `passk` + `leader_guidance` + `problem_sharing` | v0.2.1 调度，增加问题传播限额及持久化记录 | [RSI v0.2.1.1](../src/areal_rsi/agents/rsi/leader_guidance_v0.2.1.1.md)、[researcher v0.2.1.1](../src/areal_rsi/agents/research/leader_guidance_v0.2.1.1.md) |
+| 上一行 + `researcher_profiles` | v0.2.1.2，增加研究偏好 | 沿用 v0.2.1.1 正文，补充 RSI 身份说明及各研究员的身份 |
+| 上一行 + `objective_sharing` | v0.2.1.3，报告通道不变，共享消息补充身份 | [RSI v0.2.1.3](../src/areal_rsi/agents/rsi/leader_guidance_v0.2.1.3.md)、[researcher v0.2.1.3](../src/areal_rsi/agents/research/leader_guidance_v0.2.1.3.md) |
 | `passk` + `leader_guidance` + `leader_guidance_v022` | 与 v0.2.1 相同 | [RSI v0.2.2](../src/areal_rsi/agents/rsi/leader_guidance_v0.2.2.md)，researcher 复用上一行 |
 | `passk` + `leader_guidance` + `leader_guidance_v023` | 与 v0.2.1 相同 | [RSI v0.2.3](../src/areal_rsi/agents/rsi/leader_guidance_v0.2.3.md)、[researcher v0.2.3](../src/areal_rsi/agents/research/leader_guidance_v0.2.3.md) |
 | `passk` + `leader_guidance` + `leader_guidance_v024` | 持续观察、自动进展视图、定向建议 | [RSI v0.2.4](../src/areal_rsi/agents/rsi/leader_guidance_v0.2.4.md)、[researcher v0.2.4](../src/areal_rsi/agents/research/leader_guidance_v0.2.4.md) |
@@ -97,7 +102,7 @@ mount/PID namespace 内增加私有根目录、网络隔离和权限收缩；只
 `coordination/` 负责选择模板，统一通过 `areal_rsi.prompts.load_prompt()` 读取 Markdown。
 文件布局和新增版本的方法见 [Prompt 文件管理](prompts.md)。
 
-目前维护 **6 份 RSI 正文、5 份 researcher 正文**；另有一份公共 interaction Prompt。
+各版本按需要维护 RSI 和 researcher 正文；另有一份公共 interaction Prompt。
 运行时再填入人数、工作区、任务工具说明，并组合公共诚信规则、任务材料和 Runtime 调用说明。
 这些公共部分不按模型或每个实验复制。公共 communication 模块的文字按角色引用；
 不是每种模式都机械拼上同一整段。

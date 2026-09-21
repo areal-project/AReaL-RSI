@@ -415,6 +415,11 @@ class ResearchEngine:
         assignment = c.store.public_record(current.assignment_ref) if current else None
         return {
             "run_id": c.store.run_id,
+            "researcher_profile": {
+                key: value
+                for key, value in c.state.get("researcher_profiles", {}).get(agent_id, {}).items()
+                if key in {"id", "name", "reminder"}
+            },
             "status": c.state["status"],
             "simulated": c.state["simulated"],
             "brief": encode(c.store.brief()),
@@ -488,6 +493,10 @@ class ResearchEngine:
                 )
             else:
                 prompt = self.research_prompt.replace("{{tool_instructions}}", toolset.instructions)
+                profile = c.state.get("researcher_profiles", {}).get(agent_id)
+                if profile:
+                    opening, rest = prompt.split("\n", 1)
+                    prompt = opening + "\n\n" + profile["prompt"] + "\n" + rest
             prompt_id = hashlib.sha256(prompt.encode()).hexdigest()
             write_json(session / "prompts" / f"{prompt_id}.json", {"prompt": prompt})
             runtime = self.interaction_runtime if agent_id == "interaction" else self.runtime
@@ -498,9 +507,13 @@ class ResearchEngine:
 
             async def event_sink(event: Json) -> None:
                 await self._event(agent_id, session, event)
-                if event["type"] in {"tool_completed", "response_usage", "message_injected"}:
-                    # Keep the object passed to runtime current throughout a long
-                    # turn; checkpoint creation takes its own immutable copy.
+                if getattr(runtime, "uses_live_recovery_state", True) and event["type"] in {
+                    "tool_completed",
+                    "response_usage",
+                    "message_injected",
+                }:
+                    # Legacy response loops consume this object during compaction.
+                    # Package harnesses only need the fresh snapshot at delivery.
                     latest = self._recovery_state(agent_id)
                     if "backend_handoff" in state:
                         latest["backend_handoff"] = state["backend_handoff"]

@@ -79,10 +79,12 @@ class ProblemSharingActions(GuidedPassKActions):
         value = self.c.store.public_record(ref)
         if candidate := value.get("candidate_id"):
             value = self.c.store.public_record(
-                self.c.store.record_reference("candidates/" + candidate)
+                self.c.store.record_reference(RecordRef("candidates/" + candidate))
             )
         elif job := value.get("job_id"):
-            value = self.c.store.public_record(self.c.store.record_reference("executions/" + job))
+            value = self.c.store.public_record(
+                self.c.store.record_reference(RecordRef("executions/" + job))
+            )
         owner: str | None = value.get("source_agent_id") or value.get("agent_id")
         return owner
 

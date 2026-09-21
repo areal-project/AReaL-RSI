@@ -930,6 +930,10 @@ function graphAgentName(run, id) {
   return index >= 0 ? `Researcher ${index + 1}` : agentName(id);
 }
 
+function researcherProfileName(run, id) {
+  return run.researcher_profiles?.[id]?.name?.trim() || "通用研究员";
+}
+
 function renderGraph(run) {
   const model = ResearchGraph.model(run, {allJobs: state.graphAllJobs, collaborationOnly: state.graphCollaborationOnly});
   const layout = ResearchGraph.layout(model);
@@ -941,7 +945,7 @@ function renderGraph(run) {
   $("graph-sharing").setAttribute("aria-pressed", String(state.graphCollaborationOnly));
   const selected = state.selected.get(run.run_id);
   const signature = JSON.stringify([run.run_id, run.nodes, run.jobs, run.communications, run.edges,
-    run.agents, run.agent_activity, run.budget?.researchers, selected, state.graphAllJobs, state.graphCollaborationOnly]);
+    run.agents, run.researcher_profiles, run.agent_activity, run.budget?.researchers, selected, state.graphAllJobs, state.graphCollaborationOnly]);
   if (signature === state.graphSignature) return;
   state.graphSignature = signature;
   const viewport = $("graph-viewport"), canvas = $("graph-canvas");
@@ -979,7 +983,14 @@ function renderGraph(run) {
     header.dataset.x = laneX(id);
     header.dataset.width = layout.laneWidth - 10;
     header.style.setProperty("--agent-color", palette[index % palette.length]);
-    header.append(element("span", "agent-monogram", shortName(id)), element("strong", "", graphAgentName(run, id)));
+    const identity = element("div", "agent-lane-identity");
+    identity.append(element("strong", "", graphAgentName(run, id)));
+    if (id !== "rsi") {
+      const profile = element("span", "agent-profile-name", researcherProfileName(run, id));
+      profile.title = profile.textContent;
+      identity.append(profile);
+    }
+    header.append(element("span", "agent-monogram", shortName(id)), identity);
     $("graph-column-headings").append(header);
     const rail = element("div", "agent-rail");
     rail.style.top = `${layout.top - 16}px`;
@@ -993,7 +1004,7 @@ function renderGraph(run) {
     button.append(top);
     if (node) {
       button.dataset.node = node.iteration_id;
-      button.append(element("h3", "", run.collaboration?.mode === "passk" ? "独立探索" : owner?.direction || node.title || `第 ${nodes.length} 轮探索`));
+      button.append(element("h3", "", researcherProfileName(run, id)));
       if (node.verification) button.append(element("p", "node-score", `最佳 ${nodeScore(run, node)}`));
       else if (run.brief?.verification) button.append(element("p", "node-score muted", "暂无有效成绩"));
       if (ongoing) button.append(element("p", "node-progress", owner ? agentAction(run, owner) : "探索中"));
@@ -1192,7 +1203,7 @@ function renderNode(run) {
     (item) => item.iteration_id === state.selected.get(run.run_id),
   );
   const budget = run.budget?.researchers?.[node?.agent_id];
-  const signature = JSON.stringify([run.run_id, run.finished_at, node, budget]);
+  const signature = JSON.stringify([run.run_id, run.finished_at, node, budget, run.researcher_profiles]);
   if (signature === state.detailSignature) return;
   state.detailSignature = signature;
   if (!node) {
@@ -1211,7 +1222,7 @@ function renderNode(run) {
   const heading = element("div", "detail-header");
   heading.append(
     badge(node.state),
-    element("h3", "", "本轮任务"),
+    element("h3", "", `${graphAgentName(run, node.agent_id)} · ${researcherProfileName(run, node.agent_id)}`),
     element("p", "muted", node.iteration_id),
   );
   const [started, finished] = nodeTimes(run, node);

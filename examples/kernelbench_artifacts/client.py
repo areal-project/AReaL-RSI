@@ -23,9 +23,19 @@ def feedback_summary(job: dict[str, Any], task: str) -> dict[str, Any]:
     evaluation = job.get("evaluation") or {}
     result = {"task": task, "state": job["state"], "details_file": "remote-job.json"}
     for key in (
-        "compiled", "numerical_correct", "correct", "speedup", "runtime_ms", "ref_ms",
-        "runtime_stats", "scoring_method", "measured_ref_ms", "measured_speedup",
-        "seed", "num_correct_trials", "num_perf_trials",
+        "compiled",
+        "numerical_correct",
+        "correct",
+        "speedup",
+        "runtime_ms",
+        "ref_ms",
+        "runtime_stats",
+        "scoring_method",
+        "measured_ref_ms",
+        "measured_speedup",
+        "seed",
+        "num_correct_trials",
+        "num_perf_trials",
     ):
         if key in evaluation:
             result[key] = evaluation[key]
@@ -117,26 +127,28 @@ def diagnose(
     script_source = input_source(workspace, script)
     script_bytes = base64.b64decode(script_source)
     compile(script_bytes, "_rsi_diagnostic.py", "exec")
-    if arguments is not None:
-        script_bytes = (
-            "import sys\n"
-            f"sys.argv = {['_rsi_diagnostic.py', *arguments]!r}\n"
-            f"exec(compile({script_bytes!r}, '_rsi_diagnostic.py', 'exec'))\n"
-        ).encode()
-        script_source = base64.b64encode(script_bytes).decode()
+    setup = ""
     if manifest.get("diagnostic_precision") == "strict-fp32-v1":
         # Run the unmodified script with the formal reference precision. This
         # wrapper is only for diagnostics, never for submitted candidates.
-        script_source = base64.b64encode(
-            (
-                "import torch\n"
-                "torch.backends.cuda.matmul.allow_tf32 = False\n"
-                "torch.backends.cudnn.allow_tf32 = False\n"
-                "print('RSI diagnostic: FP32 reference; matmul TF32=False; "
-                "cuDNN TF32=False', flush=True)\n"
-                f"exec(compile({script_bytes!r}, '_rsi_diagnostic.py', 'exec'))\n"
-            ).encode()
-        ).decode()
+        setup = (
+            "import torch\n"
+            "torch.backends.cuda.matmul.allow_tf32 = False\n"
+            "torch.backends.cudnn.allow_tf32 = False\n"
+            "print('RSI diagnostic: FP32 reference; matmul TF32=False; "
+            "cuDNN TF32=False', flush=True)\n"
+        )
+    # Triton/inspect must see the original function in a real source file.
+    # Keep __future__ imports valid by executing the original file separately.
+    wrapper = (
+        "import runpy, sys\nfrom pathlib import Path\n"
+        "_source = Path(__file__).with_name('_rsi_diagnostic_source.py')\n"
+        f"_source.write_bytes({script_bytes!r})\n"
+        f"sys.argv = [str(_source), *{arguments or []!r}]\n"
+        + setup
+        + "runpy.run_path(str(_source), run_name='__main__')\n"
+    )
+    script_source = base64.b64encode(wrapper.encode()).decode()
     source = input_source(workspace, candidate) if candidate else ""
     submit_and_wait(
         manifest, output, task, "submit_diagnostic", source=source, script=script_source
@@ -375,7 +387,12 @@ def main() -> None:
         if not args.script:
             parser.error("diagnose requires --script")
         diagnose(
-            manifest, args.workspace, args.output, args.task, args.script, args.candidate or "",
+            manifest,
+            args.workspace,
+            args.output,
+            args.task,
+            args.script,
+            args.candidate or "",
             json.loads(args.script_args) if args.script_args is not None else None,
         )
         return

@@ -45,6 +45,7 @@ ALLOWED_TOOLS = {
     "save_candidate",
     "checkout_candidate",
     "withdraw_candidate",
+    "withdraw_candidates",
     "get_commands",
     "run_job",
     "rerun_job",
@@ -61,6 +62,8 @@ ALLOWED_TOOLS = {
 
 class PassKActions(ResearchActions):
     team_read = False
+    private_withdrawals = True
+    researcher_profiles: tuple[dict[str, Any], ...] = ()
 
     def definitions(self, agent_id: str, *, include_hidden: bool = False) -> list[dict[str, Any]]:
         if self.c.state["status"] == "planned" and agent_id == "interaction":
@@ -162,6 +165,9 @@ class PassKActions(ResearchActions):
                 "researchers": [
                     {
                         "agent_id": actor.agent_id,
+                        "profile": c.state.get("researcher_profiles", {})
+                        .get(actor.agent_id, {})
+                        .get("name"),
                         "state": actor.state,
                         "wait_reason": actor.wait_reason,
                         "needs_continue": needs_continue(c, actor.agent_id),
@@ -236,7 +242,8 @@ class PassKActions(ResearchActions):
             candidate = candidates[result.candidate_id]
             owner = candidate.source_agent_id
             if (candidate.content.digest, None) in withdrawn or (
-                candidate.content.digest, owner
+                candidate.content.digest,
+                owner,
             ) in withdrawn:
                 continue
             previous = best.get(owner)
@@ -249,6 +256,10 @@ class PassKActions(ResearchActions):
         return best
 
     async def _apply(self, agent_id: str, key: str, name: str, args: dict[str, Any]) -> ToolResult:
+        if name == "withdraw_candidates":
+            for candidate_id in args["candidate_ids"]:
+                self.candidate(agent_id, candidate_id, seed=False)
+            return await super()._apply(agent_id, key, name, args)
         if name == "start_researchers":
             await launch(self.c, self)
             return ToolResult(self.state("rsi"))
@@ -356,6 +367,11 @@ async def launch(c: Coordinator, actions: PassKActions) -> None:
         result = c.spawn(
             key=f"passk-{index + 1}", direction=f"独立探索 {index + 1}", instruction=instruction
         )
+        if actions.researcher_profiles:
+            c.state.setdefault("researcher_profiles", {})[result["agent_id"]] = (
+                actions.researcher_profiles[index]
+            )
+            c.save()
         await actions.initialize_workspace(result["agent_id"])
     c.state["passk_ready"] = True
     c.save()
@@ -472,6 +488,13 @@ class PassKEngine(ResearchEngine):
         if agent_id == "interaction":
             return super()._recovery_state(agent_id)
         state = PassKActions(self.coordinator).state(agent_id)
+        profile = self.coordinator.state.get("researcher_profiles", {}).get(agent_id)
+        if profile:
+            state["researcher_profile"] = {
+                k: v
+                for k, v in profile.items()
+                if k not in {"prompt", "resources", "required_reading"}
+            }
         # Native history retains the task and evidence. Repeating the complete
         # node reference list after every tool/turn makes context grow quadratically.
         state.pop("brief", None)

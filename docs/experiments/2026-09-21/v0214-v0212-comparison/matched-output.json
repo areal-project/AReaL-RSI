@@ -1,0 +1,65 @@
+[
+  {
+    "task": "l1p63",
+    "old_best25_eligible": 1.531,
+    "new_best25_eligible": 0.6121,
+    "new_total_output25": 121221,
+    "old_total_output25": 150577,
+    "old_minutes_same_output": 20.05,
+    "old_best_same_output": 1.4065
+  },
+  {
+    "task": "l1p77",
+    "old_best25_eligible": 6.0548,
+    "new_best25_eligible": 3.7836,
+    "new_total_output25": 135310,
+    "old_total_output25": 222674,
+    "old_minutes_same_output": 15.03,
+    "old_best_same_output": 5.8593
+  },
+  {
+    "task": "l2p14",
+    "old_best25_eligible": null,
+    "new_best25_eligible": null,
+    "new_total_output25": 136378,
+    "old_total_output25": 187879,
+    "old_minutes_same_output": 16.8,
+    "old_best_same_output": null
+  },
+  {
+    "task": "l2p71",
+    "old_best25_eligible": 3.1313,
+    "new_best25_eligible": 2.1893,
+    "new_total_output25": 128733,
+    "old_total_output25": 209660,
+    "old_minutes_same_output": 15.03,
+    "old_best_same_output": 3.1187
+  },
+  {
+    "task": "l3p10",
+    "old_best25_eligible": null,
+    "new_best25_eligible": null,
+    "new_total_output25": 157462,
+    "old_total_output25": 176842,
+    "old_minutes_same_output": 21.67,
+    "old_best_same_output": null
+  },
+  {
+    "task": "l3p19",
+    "old_best25_eligible": 0.5323,
+    "new_best25_eligible": 0.8035,
+    "new_total_output25": 174648,
+    "old_total_output25": 196668,
+    "old_minutes_same_output": 21.66,
+    "old_best_same_output": 0.4965
+  },
+  {
+    "task": "l3p28",
+    "old_best25_eligible": 2.0161,
+    "new_best25_eligible": 2.1733,
+    "new_total_output25": 175150,
+    "old_total_output25": 211201,
+    "old_minutes_same_output": 19.03,
+    "old_best_same_output": 2.0161
+  }
+]

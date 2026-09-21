@@ -13,6 +13,7 @@ import hmac
 import json
 import os
 import secrets
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -74,6 +75,10 @@ class Conversation:
 
 
 class ResearchRuntime:
+    # Package harnesses consume recovery state at delivery; they manage their
+    # own history and compaction during the turn. The next delivery gets a fresh snapshot.
+    uses_live_recovery_state = False
+
     def __init__(self, config: ResearchConfig, *, settings: RuntimeSettings | None = None):
         self.config = config
         # Retain the existing connection validation and model-window policy;
@@ -165,10 +170,12 @@ class ResearchRuntime:
                 call = ToolCall(
                     name, request["arguments"], hashlib.sha256(identity.encode()).hexdigest()
                 )
+                received_at = time.monotonic()
                 if connection.sink:
                     await connection.sink(
                         {"type": "tool_started", "name": name, "call_id": call.call_id}
                     )
+                handler_started = time.monotonic()
                 if name == "acknowledge_messages":
                     acknowledged = []
                     for identifier in request["arguments"]["message_ids"]:
@@ -180,6 +187,7 @@ class ResearchRuntime:
                     result = ToolResult({"acknowledged": acknowledged})
                 else:
                     result = await connection.handler(call)
+                handler_finished = time.monotonic()
                 output: Any = result.output
                 if result.stop:
                     connection.stop_reason = result.reason
@@ -198,7 +206,13 @@ class ResearchRuntime:
                 await writer.drain()
                 if connection.sink:
                     await connection.sink(
-                        {"type": "tool_completed", "name": name, "call_id": call.call_id}
+                        {
+                            "type": "tool_completed",
+                            "name": name,
+                            "call_id": call.call_id,
+                            "handler_seconds": handler_finished - handler_started,
+                            "service_seconds": time.monotonic() - received_at,
+                        }
                     )
             except (ValueError, KeyError, ValidationError) as exc:
                 writer.write((json.dumps({"error": str(exc)}) + "\n").encode())
@@ -266,7 +280,11 @@ class ResearchRuntime:
             # The CLI retains the same scoped capabilities. Hide the duplicate
             # submission/wait interface from the model's MCP catalog.
             bridge["shell_only_tools"] = [
-                "run_job", "rerun_job", "wait_for_job", "verify_candidate", "collect_job_output",
+                "run_job",
+                "rerun_job",
+                "wait_for_job",
+                "verify_candidate",
+                "collect_job_output",
             ]
         from areal_rsi.coordination.collaboration import build_plan
 
@@ -410,7 +428,14 @@ class ResearchRuntime:
             context = (
                 recovery_state
                 if recovering or (fresh_session and "backend_handoff" in recovery_state)
-                else {"budget": recovery_state["budget"]}
+                else {
+                    "budget": recovery_state["budget"],
+                    **(
+                        {"researcher_profile": recovery_state["researcher_profile"]}
+                        if recovery_state.get("researcher_profile")
+                        else {}
+                    ),
+                }
                 if "budget" in recovery_state
                 else {}
             )

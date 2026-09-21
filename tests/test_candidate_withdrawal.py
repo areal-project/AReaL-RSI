@@ -237,3 +237,46 @@ def test_late_final_result_does_not_reinstate_withdrawn_artifact(tmp_path: Path)
             runner.close(cancel=True)
 
     asyncio.run(scenario())
+
+
+def test_batch_withdrawal_is_atomic_before_selection_and_survives_stop(tmp_path: Path) -> None:
+    async def scenario():
+        c = Coordinator.create(
+            tmp_path, TaskBrief("test", "", verification=VerificationContract("quality"))
+        )
+        workspace = tmp_path / "input"
+        workspace.mkdir()
+        candidates = []
+        for i in range(3):
+            (workspace / "source.txt").write_text(str(i))
+            item = await c.store.snapshot(workspace, agent_id="rsi", description=str(i))
+            candidates.append(item.candidate_id)
+            c.store.record_verification(
+                VerifiedResult(
+                    str(i),
+                    item.candidate_id,
+                    c.store.contract_digest(),
+                    now(),
+                    "succeeded",
+                    float(i),
+                    True,
+                )
+            )
+            c.store.consider_best(str(i))
+        with pytest.raises(FileNotFoundError):
+            c.store.withdraw_candidates(
+                [candidates[1], "missing"], "counterexample", (), agent_id="rsi"
+            )
+        assert not c.store.withdrawals()
+        with patch.object(c.store, "save_run", side_effect=RuntimeError("crash after commit")):
+            with pytest.raises(RuntimeError):
+                c.store.withdraw_candidates(candidates[1:], "counterexample", (), agent_id="rsi")
+        assert all(c.store.is_withdrawn(key) for key in candidates[1:])
+        c.stop("budget expired")
+        recovered = Coordinator(c.store)
+        recovered.store.withdraw_candidates(candidates[1:], "counterexample", (), agent_id="rsi")
+        best = recovered.store.run().best_result_ref
+        assert recovered.store.public_record(best)["candidate_id"] == candidates[0]
+        assert len(recovered.store.withdrawals()) == 2
+
+    asyncio.run(scenario())

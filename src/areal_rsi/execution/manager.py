@@ -155,8 +155,10 @@ class JobManager:
     def records(self) -> tuple[JobRecord, ...]:
         with self._mutex:
             records = []
-            for path in self.root.glob("job-*/job.json"):
-                records.append(self.get(path.parent.name))
+            # Avoid opening every historical job directory on every scheduler tick.
+            for path in self.root.glob("job-*"):
+                if (path / "job.json").is_file():
+                    records.append(self.get(path.name))
             return tuple(sorted(records, key=lambda record: (record.created_at, record.job_id)))
 
     def submit(

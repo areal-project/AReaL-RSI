@@ -67,6 +67,30 @@ def apply_problem_sharing(plan: CollaborationPlan) -> CollaborationPlan:
     return apply(plan)
 
 
+def apply_researcher_profiles(plan: CollaborationPlan) -> CollaborationPlan:
+    return replace(
+        plan, rsi_prompt=plan.rsi_prompt + load_prompt("agents/rsi/researcher_profiles.md")
+    )
+
+
+def apply_objective_sharing(plan: CollaborationPlan) -> CollaborationPlan:
+    from areal_rsi.coordination.objective_sharing import apply
+
+    return apply(plan)
+
+
+def apply_team_review(plan: CollaborationPlan) -> CollaborationPlan:
+    from areal_rsi.coordination.team_review import apply
+
+    return apply(plan)
+
+
+def apply_profile_resources(plan: CollaborationPlan) -> CollaborationPlan:
+    from areal_rsi.coordination.profile_resources import apply
+
+    return apply(plan)
+
+
 def apply_leader_guidance_v023(plan: CollaborationPlan) -> CollaborationPlan:
     return replace(
         plan,
@@ -103,6 +127,40 @@ DEFAULT_MODULES = ("leader_guidance", "leader_guidance_v024")
 
 
 MODULES: dict[str, CollaborationModule] = {
+    "team_review": CollaborationModule(
+        "team_review",
+        "v0.2.1.4 · 定期观察与协调",
+        "沿用 v0.2.1.2 的指导方式，约每十分钟观察各人的探索并按需要协调。",
+        "1",
+        apply_team_review,
+        requires=("researcher_profiles",),
+        conflicts=("objective_sharing",),
+    ),
+    "profile_resources": CollaborationModule(
+        "profile_resources",
+        "v0.2.1.4 · 人设资料",
+        "冻结每人的 AGENTS.md、知识和可选技能，启动时加载必读正文并保留工作区文件。",
+        "1",
+        apply_profile_resources,
+        requires=("researcher_profiles",),
+        conflicts=("objective_sharing",),
+    ),
+    "objective_sharing": CollaborationModule(
+        "objective_sharing",
+        "v0.2.1.3 · 及时报告与客观分享",
+        "重要发现先简要报告；RSI 分享事实、条件与来源身份，接收者结合自己的研究偏好独立判断。",
+        "1",
+        apply_objective_sharing,
+        requires=("researcher_profiles",),
+    ),
+    "researcher_profiles": CollaborationModule(
+        "researcher_profiles",
+        "v0.2.1.2 · 不同研究偏好",
+        "在 v0.2.1.1 上为独立研究员配置不同身份，保留完整探索与定向共享。",
+        "1",
+        apply_researcher_profiles,
+        requires=("problem_sharing",),
+    ),
     "leader_guidance": CollaborationModule(
         "leader_guidance",
         "RSI 协调",
@@ -245,6 +303,44 @@ def presets() -> list[dict[str, Any]]:
             "mode": "passk",
             "modules": ["leader_guidance", "problem_sharing"],
             "description": MODULES["problem_sharing"].description,
+        }
+    )
+    choices.append(
+        {
+            "id": "passk_guided_v0212",
+            "label": "v0.2.1.2 · 不同研究偏好",
+            "mode": "passk",
+            "modules": ["leader_guidance", "problem_sharing", "researcher_profiles"],
+            "description": MODULES["researcher_profiles"].description,
+        }
+    )
+    choices.append(
+        {
+            "id": "passk_guided_v0213",
+            "label": "v0.2.1.3 · 及时报告与客观分享",
+            "mode": "passk",
+            "modules": [
+                "leader_guidance",
+                "problem_sharing",
+                "researcher_profiles",
+                "objective_sharing",
+            ],
+            "description": MODULES["objective_sharing"].description,
+        }
+    )
+    choices.append(
+        {
+            "id": "passk_guided_v0214",
+            "label": "v0.2.1.4 · 团队观察与人设资料",
+            "mode": "passk",
+            "modules": [
+                "leader_guidance",
+                "problem_sharing",
+                "researcher_profiles",
+                "team_review",
+                "profile_resources",
+            ],
+            "description": "基于 v0.2.1.2，定期协调探索，并加载任务配置的人设资料。",
         }
     )
     return choices

@@ -1022,6 +1022,14 @@ class Coordinator:
     def summary(self) -> dict[str, Any]:
         run = self.store.run()
         return {
+            "researcher_profiles": {
+                agent: {
+                    k: v
+                    for k, v in profile.items()
+                    if k not in {"prompt", "resources", "required_reading"}
+                }
+                for agent, profile in self.state.get("researcher_profiles", {}).items()
+            },
             "run_id": run.run_id,
             "mode": self.state.get("mode", "collaborative"),
             "runtime_turns": self.state.get("runtime_turns", 0),

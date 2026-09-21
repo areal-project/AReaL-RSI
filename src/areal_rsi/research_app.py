@@ -83,6 +83,7 @@ class ResearchApp:
         self.allow_simulation = allow_simulation
         self.active: dict[str, ActiveResearch] = {}
         self._run_locks: dict[str, asyncio.Lock] = {}
+        self._start_lock = asyncio.Lock()
 
     def run_lock(self, c: Coordinator) -> asyncio.Lock:
         return self._run_locks.setdefault(c.store.run_id, asyncio.Lock())
@@ -448,7 +449,32 @@ class ResearchApp:
             c.save()
 
     async def start(self, c: Coordinator, confirmation_message_id: str | None = None) -> None:
-        async with self.run_lock(c):
+        async with self._start_lock, self.run_lock(c):
+            limit = int(os.environ.get("RSI_MAX_CONCURRENT_RESEARCH", "0"))
+            if limit:
+                occupied = []
+                for path in (self.root / "runs").glob("*/coordination/state.json"):
+                    run_id = path.parent.parent.name
+                    if run_id == c.store.run_id:
+                        continue
+                    other = self.coordinator(run_id)
+                    final = other.state.get("finalization", {}).get("status")
+                    if (
+                        other.state["status"] == "running"
+                        or final == "running"
+                        or (
+                            other.state.get("started_at")
+                            and (
+                                (run_id in self.active and not self.active[run_id].task.done())
+                                or self.worker_elsewhere(other)
+                            )
+                        )
+                    ):
+                        occupied.append(run_id)
+                if len(occupied) >= limit:
+                    raise ValueError(
+                        f"同时运行的研究上限为 {limit}，包含最终确认；请等待现有研究完成"
+                    )
             await self._start(self.coordinator(c.store.run_id), confirmation_message_id)
 
     async def _start(self, c: Coordinator, confirmation_message_id: str | None) -> None:
@@ -616,6 +642,37 @@ class ResearchApp:
         c.state["mode"] = config.mode
         c.save()
         actions = plan.actions(c)
+        if "researcher_profiles" in config.collaboration_modules:
+            from areal_rsi.prompts import load_prompt
+
+            profiles = (
+                config.metadata.get("researcher_profiles")
+                or [
+                    {
+                        "id": "general",
+                        "name": "综合研究员",
+                        "reminder": "依据任务与实验自由选择研究方法。",
+                        "prompt": load_prompt("agents/research/profiles/general.md"),
+                    }
+                ]
+                * config.brief.limits.max_agents
+            )
+            if len(profiles) != config.brief.limits.max_agents or any(
+                not all(
+                    isinstance(p.get(k), str) and p[k].strip()
+                    for k in ("id", "name", "prompt", "reminder")
+                )
+                for p in profiles
+            ):
+                raise ValueError("每名 researcher 需要一份完整身份配置")
+            if "profile_resources" in config.collaboration_modules:
+                from areal_rsi.coordination.profile_resources import prepare_profiles
+
+                profiles = prepare_profiles(profiles)
+            write_json(
+                c.store.root / "coordination/researcher-profiles.json", profiles, immutable=True
+            )
+            actions.researcher_profiles = tuple(profiles)
         await actions.initialize_workspace("rsi")
         register_sources(
             actions,

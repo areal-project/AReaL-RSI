@@ -148,6 +148,10 @@ def public_detail(value: Json) -> Json:
         "base_url model reasoning_effort backend editable has_credentials",
     )
     result["collaboration"] = _collaboration(value.get("collaboration"))
+    result["researcher_profiles"] = {
+        agent_id: _fields(profile, "id name reminder")
+        for agent_id, profile in value.get("researcher_profiles", {}).items()
+    }
     result["pending_agents"] = [a for a in value.get("pending_agents", []) if isinstance(a, str)]
     result["execution_blocker"] = _fields(value.get("execution_blocker"), "job_id error created_at")
     result["agent_activity"] = {

@@ -121,6 +121,14 @@ COMMON = [
         candidate_id=STRING,
     ),
     definition(
+        "withdraw_candidates",
+        "发现一组候选存在同一错误时，一次列出所有受影响的候选 ID 并撤回。"
+        "整组撤回同时生效，保留历史和证据；不要逐个撤回同一错误系列。",
+        candidate_ids={"type": "array", "items": STRING, "minItems": 1},
+        reason=STRING,
+        references=REFERENCES,
+    ),
+    definition(
         "withdraw_candidate",
         "发现具体反例或违反任务契约后，将该产物及内容完全相同的快照从选优和交付中撤回。"
         "研究员可直接撤回本 run 中的产物，系统自动通知 RSI。保留原产物、历史分数和证据；"
@@ -240,6 +248,8 @@ INTERACTION = [
 
 
 class ResearchActions:
+    researcher_profiles: tuple[dict[str, Any], ...] = ()
+
     def __init__(self, coordinator: Coordinator):
         self.c = coordinator
         self.extras: dict[str, tuple[dict[str, Any], Callable[[str], ToolHandler], set[str]]] = {}
@@ -415,6 +425,37 @@ class ResearchActions:
         args: dict[str, Any],
     ) -> ToolResult:
         c = self.c
+        if name == "withdraw_candidates":
+            ref = c.store.withdraw_candidates(
+                args["candidate_ids"],
+                args["reason"],
+                self.refs(agent_id, args["references"]),
+                agent_id=agent_id,
+                simulated_run=c.state["simulated"],
+                scope_agent_id=(
+                    agent_id
+                    if getattr(self, "private_withdrawals", False) and agent_id != "rsi"
+                    else None
+                ),
+            )
+            selected = c.state.get("selected_candidate_id")
+            if selected and c.store.is_withdrawn(selected):
+                c.state["selected_candidate_id"] = None
+                c.save()
+            if self.role(agent_id) == "research":
+                c.enqueue(
+                    agent_id,
+                    "rsi",
+                    "已批量撤回候选："
+                    + ", ".join(args["candidate_ids"])
+                    + "\n原因："
+                    + args["reason"],
+                    key="withdrawal:" + ref.uri,
+                    references=(ref,),
+                )
+            return ToolResult(
+                {"withdrawn": True, "candidate_ids": args["candidate_ids"], "uri": ref.uri}
+            )
         if name == "withdraw_candidate":
             ref = c.store.withdraw_candidate(
                 args["candidate_id"],

@@ -7,13 +7,14 @@ ArithmeticVerifier 检查最终答案。正确答案不会复制到研究员或 
 配置 `.env` 中的研究模型 `RSI_*` 和被测模型 `RSI_TARGET_*`，然后执行：
 
 ```bash
-uv run --env-file .env --locked python -m areal_rsi.adapters.benchmark_research prepare \
-  --benchmark math --directory .rsi/math-research/setup
+uv run --env-file .env --locked rsi examples prepare arithmetic \
+  --directory .rsi/math-research/setup
 uv run --env-file .env --locked rsi research \
   --config .rsi/math-research/setup/research.json --data-root .rsi/math-research
 ```
 
-也可将生成的 ResearchConfig 导入工作台。准备命令只固定配置，不启动研究。
+`rsi examples` 可查看当前完整可运行的示例。准备命令只固定配置，不启动研究；生成的
+ResearchConfig 也可以导入工作台。
 
 ResearchApp 使用默认 v0.2.2 pass@k 协调配置，研究员固定为 1 名。
 研究员先保存自己的起点候选，用 `verify_candidate(diagnostic)` 做 TRAIN 基线诊断；

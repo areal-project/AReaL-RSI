@@ -22,10 +22,10 @@
 
 ```bash
 # 只检查 SSH、容器、GPUQ、题目与评分器摘要，不注册任务或消耗 GPU 额度
-uv run --env-file .env --locked python run.py --type demo --check
+uv run --env-file .env --locked python examples/kernelbench_artifacts/run.py --check
 
 # 正式启动；自动启动或复用 8197 端口的 RSI 工作台
-uv run --env-file .env --locked python run.py --type demo
+uv run --env-file .env --locked python examples/kernelbench_artifacts/run.py
 ```
 
 用 `--port 8200` 指定其他端口。端口被其他服务占用时报错；已有兼容的 RSI 工作台则复用。脚本输出研究链接，打开即可查看搜索图、任务、报告和成绩；不需要先与 Interaction 对话。
@@ -33,7 +33,7 @@ uv run --env-file .env --locked python run.py --type demo
 每次创建独立研究，从公开 reference 开始，不读取历史解法。中断后使用输出的 ID 恢复同一次研究，不重置时限：
 
 ```bash
-uv run --env-file .env --locked python run.py --type demo --resume <run_id>
+uv run --env-file .env --locked python examples/kernelbench_artifacts/run.py --resume <run_id>
 ```
 
 研究结束后自动选取每题未因具体反例撤回的最快正式正确源码，以 seed 137 复测；最终反馈不再用于优化。收尾适配器按通用选优清单中的源码摘要排除已撤回版本，保留其历史成绩。记录位于 `<数据目录>/runs/<run_id>/`，最终源码在 `finalization/output/candidate/<题号>/model_new.py`，分题成绩见工作台最终验证及 `verifications/`。准备配置位于 `setup/research.json`。

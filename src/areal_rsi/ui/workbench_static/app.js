@@ -84,7 +84,12 @@ const effortDropdown = new WorkbenchDropdown($("reasoning-effort"), {
 });
 const backendOptions = [{value: "standard", text: "standard"}, {value: "codex", text: "codex"}, {value: "runtime", text: "Runtime 配置"}];
 const backendDropdown = new WorkbenchDropdown($("agent-backend"), {
-  label: "Agent 后端", onChange: (value) => { modelDraft().backend = value; renderModelSettings(); },
+  label: "Agent 后端", onChange: (value) => { modelDraft().backend = value; if (value === "standard") modelDraft().auth_mode = "api_key"; renderModelSettings(); },
+});
+
+const authOptions = [{value: "api_key", text: "API key"}, {value: "codex_login", text: "本地 Codex 登录"}];
+const authDropdown = new WorkbenchDropdown($("auth-mode"), {
+  label: "认证方式", onChange: (value) => { modelDraft().auth_mode = value; modelDraft().api_key = ""; renderModelSettings(); },
 });
 
 const collaborationDropdown = new WorkbenchDropdown($("collaboration-mode"), {
@@ -212,7 +217,7 @@ function modelDraft() {
     const saved = state.run?.model_settings || {};
     state.modelDrafts.set(state.runId, {
       base_url: saved.base_url || "", model: saved.model || "",
-      reasoning_effort: saved.reasoning_effort || "", backend: saved.backend || "standard", api_key: "",
+      reasoning_effort: saved.reasoning_effort || "", backend: saved.backend || "standard", auth_mode: saved.auth_mode || "api_key", api_key: "",
     });
   }
   return state.modelDrafts.get(state.runId);
@@ -222,7 +227,7 @@ function modelSettingsChanged() {
   const saved = state.run?.model_settings;
   const draft = state.modelDrafts.get(state.runId);
   return !!saved?.editable && !!draft &&
-    (!!draft.api_key || ["base_url", "model", "reasoning_effort", "backend"].some((key) => draft[key] !== (saved[key] || (key === "backend" ? "standard" : ""))));
+    (!!draft.api_key || ["base_url", "model", "reasoning_effort", "backend", "auth_mode"].some((key) => draft[key] !== (saved[key] || (key === "backend" ? "standard" : key === "auth_mode" ? "api_key" : ""))));
 }
 
 function renderModelSettings() {
@@ -236,7 +241,7 @@ function renderModelSettings() {
   if (!saved.editable) state.modelDrafts.delete(state.runId);
   const draft = saved.editable ? (state.modelDrafts.get(state.runId) || saved) : saved;
   const disabled = !saved.editable || !!state.modelSavingRun;
-  $("model-settings-summary").textContent = `${saved.backend || "standard"} · ${saved.model} · ${saved.reasoning_effort}${saved.editable ? "" : " · 已锁定"}`;
+  $("model-settings-summary").textContent = `${saved.backend || "standard"}${saved.auth_mode === "codex_login" ? " · 本地登录" : ""} · ${saved.model} · ${saved.reasoning_effort}${saved.editable ? "" : " · 已锁定"}`;
   if ($("model-base-url").value !== draft.base_url) $("model-base-url").value = draft.base_url;
   $("model-base-url").disabled = disabled;
   $("model-name").value = draft.model;
@@ -244,6 +249,12 @@ function renderModelSettings() {
   $("model-api-key").value = draft.api_key || "";
   $("model-api-key").disabled = disabled;
   $("model-api-key").placeholder = saved.has_credentials ? "已配置 · 留空沿用当前密钥" : "请输入 API Key";
+  const localLogin = draft.auth_mode === "codex_login";
+  authDropdown.update(authOptions.map((item) => ({...item, disabled: item.value === "codex_login" && (draft.backend || "standard") === "standard"})), draft.auth_mode || "api_key", disabled);
+  for (const id of ["model-base-url", "model-api-key"]) {
+    $(id).closest("label").hidden = localLogin;
+    $(id).disabled = disabled || localLogin;
+  }
   const models = state.models.map((model) => ({ value: model.id, text: model.id }));
   if (!models.some((model) => model.value === draft.model))
     models.push({ value: draft.model, text: draft.model, disabled: true });
@@ -1800,8 +1811,19 @@ const createPreset = new WorkbenchDropdown($("create-model-preset"), {
   label: "常用模型", onChange: (value) => { $("create-model").value = value; updateCreateModels(); },
 });
 const createBackend = new WorkbenchDropdown($("create-backend"), {
-  label: "Agent 后端", onChange: (value) => { state.createBackend = value; },
+  label: "Agent 后端", onChange: (value) => { state.createBackend = value; if (value === "standard") state.createAuthMode = "api_key"; updateCreateAuth(); },
 });
+const createAuth = new WorkbenchDropdown($("create-auth-mode"), {
+  label: "认证方式", onChange: (value) => { state.createAuthMode = value; $("create-api-key").value = ""; updateCreateAuth(); },
+});
+function updateCreateAuth() {
+  const localLogin = state.createAuthMode === "codex_login";
+  createAuth.update(authOptions.map((item) => ({...item, disabled: item.value === "codex_login" && state.createBackend === "standard"})), state.createAuthMode);
+  for (const id of ["create-base-url", "create-api-key"]) {
+    $(id).closest("label").hidden = localLogin;
+    $(id).disabled = localLogin;
+  }
+}
 const createEffort = new WorkbenchDropdown($("create-effort"), {
   label: "推理强度", onChange: (value) => { state.createEffort = value; },
 });
@@ -1824,6 +1846,8 @@ function openCreate(message = "", collaboration = state.defaultCollaboration) {
   state.createEffort = defaults.reasoning_effort || "xhigh";
   state.createBackend = defaults.backend || "standard";
   createBackend.update(backendOptions, state.createBackend);
+  state.createAuthMode = defaults.auth_mode || "api_key";
+  updateCreateAuth();
   state.createCollaboration = collaborationSelection(collaboration);
   renderCreateCollaboration();
   updateCreateModels();
@@ -1835,7 +1859,8 @@ $("create-dialog").addEventListener("cancel", (event) => { if (state.creating) e
 $("create-form").addEventListener("submit", (event) => {
   event.preventDefault();
   createConversation($("create-message").value.trim(), {
-    base_url: $("create-base-url").value.trim(), api_key: $("create-api-key").value.trim(),
+    base_url: state.createAuthMode === "codex_login" ? "https://api.openai.com" : $("create-base-url").value.trim(), api_key: state.createAuthMode === "codex_login" ? "" : $("create-api-key").value.trim(),
+    auth_mode: state.createAuthMode,
     model: $("create-model").value.trim(), reasoning_effort: state.createEffort, backend: state.createBackend,
   }, collaborationSelection(state.createCollaboration));
 });

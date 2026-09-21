@@ -41,6 +41,7 @@ _OPTIONAL_ID = {"anyOf": [_ID, {"type": "null"}]}
 _MODEL = _object({
     **{name: _STRING for name in ("base_url", "model", "reasoning_effort", "backend")},
     "api_key": _STRING,
+    "auth_mode": {"enum": ["api_key", "codex_login"]},
 }, ("base_url", "model", "reasoning_effort"))
 _COLLABORATION = _object({
     "mode": _STRING, "modules": {"type": "array", "items": _STRING, "uniqueItems": True},

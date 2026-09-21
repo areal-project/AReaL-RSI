@@ -43,6 +43,14 @@ Agent 后端支持 `standard`（默认，DSH）、`codex` 和 `runtime`（受信
 固定。所有后端通过 `PackageAgentRuntime` 执行；原生会话、工具和压缩由 Runtime 管理，
 RSI 负责研究编排、权限、作业和验证。配置与隔离边界见[后端说明](docs/agent-backends.md)。
 
+Codex 后端可选择“本地 Codex 登录”：无需填写 API key 或 API 地址，复用启动工作台
+这台机器上 `$CODEX_HOME/auth.json`（默认 `~/.codex/auth.json`）的登录。
+认证文件通过链接共享，由原生 Codex 更新；研究会话和配置仍使用独立目录。
+配置标识为 `auth_mode: "codex_login"`；默认 `api_key` 保留原有 API 连接方式。
+本地登录仅适用于 Codex（包括各研究角色均为 codex-cli 的 Runtime 配置），
+不支持仅存储在系统钥匙串中的凭据；这种情况需先运行
+`codex -c 'cli_auth_credentials_store="file"' login`。运行中的研究不会切换认证方式。
+
 新实验可设置 `"mode": "passk"`：RSI 启动 k 个独立完成整题的 researcher，接收进展并督促持续探索；不提供研究建议、不调整方向，也不在研究员之间分享信息。任一正式结果达标或整组到时即停止。配置与比较方法见 [pass@k](docs/passk.md)。
 
 工作台可在新建研究或启动前选择纯 pass@k 或 pass@k + RSI 协调，协调模式提供 v0.2.1 和 v0.2.2，新研究默认 v0.2.2。RSI 协调作为附加模块，增加原始证据查看、定向共享和非阻塞建议。启动配置和模块版本会冻结；已下线的旧版分工模式仍可查看历史记录，不能启动或恢复。详见[协作配置](docs/collaboration.md)。

@@ -7,16 +7,21 @@ parent so this listener cannot become a route into another run's local services.
 from __future__ import annotations
 
 import asyncio
+import base64
 import ipaddress
 import socket
+import ssl
 from contextlib import suppress
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 
 class HttpsTunnel:
-    def __init__(self, base_url: str = "") -> None:
+    def __init__(self, base_url: str = "", *, proxy_url: str = "") -> None:
         provider = urlsplit(base_url)
         self.provider = (provider.hostname, provider.port or 443)
+        self.proxy = urlsplit(proxy_url) if proxy_url else None
+        if self.proxy and (self.proxy.scheme not in {"http", "https"} or not self.proxy.hostname):
+            raise ValueError("本地 Codex 登录需要 HTTP(S) CONNECT 代理")
         self.server: asyncio.Server | None = None
         self.tasks: set[asyncio.Task[None]] = set()
 
@@ -49,9 +54,35 @@ class HttpsTunnel:
                     ipaddress.ip_address(row[4][0]).is_global for row in addresses
                 ):
                     raise ValueError("Private destinations are not allowed")
-                upstream, remote = await asyncio.open_connection(
-                    str(addresses[0][4][0]), endpoint.port
-                )
+                host = str(addresses[0][4][0])
+                if self.proxy:
+                    upstream, remote = await asyncio.open_connection(
+                        self.proxy.hostname, self.proxy.port or
+                        (443 if self.proxy.scheme == "https" else 80),
+                        ssl=ssl.create_default_context() if self.proxy.scheme == "https" else None,
+                    )
+                    # Only the configured provider may use the operator proxy's DNS.
+                    # Other public destinations retain their validated address pin.
+                    target_host = endpoint.hostname if trusted else host
+                    authority = f"[{target_host}]" if ":" in target_host else target_host
+                    authority += f":{endpoint.port}"
+                    auth = ""
+                    if self.proxy.username is not None:
+                        credentials = unquote(self.proxy.username) + ":" + unquote(
+                            self.proxy.password or ""
+                        )
+                        auth = "Proxy-Authorization: Basic " + base64.b64encode(
+                            credentials.encode()
+                        ).decode() + "\r\n"
+                    remote.write((f"CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n"
+                                  f"{auth}\r\n").encode())
+                    await remote.drain()
+                    response = await upstream.readuntil(b"\r\n\r\n")
+                    status = response.split(b"\r\n", 1)[0].split()
+                    if len(status) < 2 or status[1] != b"200":
+                        raise OSError("Upstream CONNECT failed")
+                else:
+                    upstream, remote = await asyncio.open_connection(host, endpoint.port)
                 writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
                 await writer.drain()
 

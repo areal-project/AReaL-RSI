@@ -89,8 +89,29 @@ def compile_config(request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
         vendor.setdefault("permissionMode", "dontAsk")
         vendor.setdefault("env", {}).update(ANTHROPIC_BASE_URL=base, ANTHROPIC_API_KEY=key)
     elif kind == "codex-cli":
-        vendor.update(model=model, baseUrl=base, apiKeyEnv="RSI_RUNTIME_KEY")
-        vendor.setdefault("provider", "rsi")
+        vendor["model"] = model
+        if request.get("codex_login"):
+            for name in ("baseUrl", "apiKeyEnv", "provider", "codexHome", "stateDirectory"):
+                vendor.pop(name, None)
+            for name in (
+                "RSI_RUNTIME_KEY", "OPENAI_API_KEY", "CODEX_API_KEY",
+                "CODEX_ACCESS_TOKEN", "OPENAI_BASE_URL",
+            ):
+                os.environ.pop(name, None)
+                vendor.get("env", {}).pop(name, None)
+            request["codex_config"] = {
+                **(request.get("codex_config") or {}),
+                "cli_auth_credentials_store": "file",
+                # The local sandbox tunnels HTTPS; use native HTTP streaming
+                # while leaving endpoint selection and refresh to Codex auth.
+                "model_provider": "rsi-local",
+                "model_providers.rsi-local.name": "OpenAI",
+                "model_providers.rsi-local.requires_openai_auth": True,
+                "model_providers.rsi-local.supports_websockets": False,
+            }
+        else:
+            vendor.update(baseUrl=base, apiKeyEnv="RSI_RUNTIME_KEY")
+            vendor.setdefault("provider", "rsi")
         (directory / "codex-home").mkdir(exist_ok=True)
         vendor.setdefault("codexHome", str(directory / "codex-home"))
         vendor.setdefault("stateDirectory", str(directory / "codex-state"))

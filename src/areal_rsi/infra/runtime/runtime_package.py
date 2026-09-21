@@ -136,6 +136,7 @@ def sandbox_command(
     service_ports: tuple[int, ...] = (),
     *,
     isolation: str = "sandbox",
+    codex_auth_file: Path | None = None,
 ) -> list[str]:
     validate_isolation(isolation)
     worker = [
@@ -199,6 +200,10 @@ def sandbox_command(
         profile.append(f'(allow network-outbound (remote ip "localhost:{port}"))')
     for path in sorted(roots):
         profile.append(f"(allow file-read* (subpath {json.dumps(str(path))}))")
+    if codex_auth_file is not None:
+        profile.append(
+            f"(allow file-write* (literal {json.dumps(str(codex_auth_file.resolve()))}))"
+        )
     # The installed RSI package includes benchmark/verifier code and hidden
     # fixture answers. The worker uses a minimal materialized namespace instead.
     profile.append(
@@ -368,6 +373,7 @@ class PackageAgentRuntime:
         role: str,
         base_url: str,
         api_key: str,
+        codex_auth_file: Path | None = None,
         timeout: float = 1200,
         max_tokens: int = 4096,
         dsh_root: Path | None = None,
@@ -379,12 +385,17 @@ class PackageAgentRuntime:
         self.settings, self.role = settings, role
         self.selection = settings.select(role)
         self.base_url, self.api_key, self.timeout = base_url, api_key, timeout
+        self.codex_auth_file = codex_auth_file
         self.max_tokens, self.dsh_root = max_tokens, dsh_root
         self.credential_env_names = credential_env_names
         self.agent_directories = agent_directories
         self.mcp_registry: dict[str, dict[str, Any]] = {}
         self.sessions: set[PackageSession] = set()
-        self.https_tunnel = HttpsTunnel(base_url)
+        self.https_tunnel = HttpsTunnel(
+            "https://chatgpt.com" if codex_auth_file else base_url,
+            proxy_url=(os.environ.get("https_proxy") or os.environ.get("HTTPS_PROXY") or "")
+            if codex_auth_file else "",
+        )
 
     async def open(
         self,
@@ -432,6 +443,21 @@ class PackageAgentRuntime:
         workspace.mkdir(parents=True, exist_ok=True)
         selection = copy.deepcopy(self.selection)
         readable = list(self.settings.readable_paths)
+        if self.codex_auth_file is not None:
+            if selection["kind"] != "codex-cli":
+                raise ValueError("Local Codex authentication requires codex-cli")
+            auth_source = self.codex_auth_file.resolve(strict=True)
+            home = directory / "codex-home"
+            home.mkdir(exist_ok=True)
+            auth_link = home / "auth.json"
+            if auth_link.is_symlink():
+                if auth_link.resolve() != auth_source:
+                    raise ValueError("Codex login source changed; start a new research")
+            elif auth_link.exists():
+                raise ValueError("Codex authentication file already exists in this session")
+            else:
+                auth_link.symlink_to(auth_source)
+            readable.append(auth_source)
         if selection["kind"] == "codex-cli" and not selection.get("config", {}).get("codexBin"):
             from codex_cli_bin import bundled_codex_path  # type: ignore[import-untyped]
 
@@ -478,6 +504,7 @@ class PackageAgentRuntime:
             "mcp": [self.mcp_registry[name] for name in agent.mcp_servers],
             "base_url": self.base_url,
             "max_tokens": self.max_tokens,
+            "codex_login": self.codex_auth_file is not None,
         }
         if research_tools is not None:
             config["research_tools"] = research_tools
@@ -601,6 +628,7 @@ class PackageAgentRuntime:
             else tuple(local_ports),
             tuple(service_ports),
             isolation=self.settings.isolation,
+            codex_auth_file=self.codex_auth_file,
         )
         if research_tools is not None:
             # Fail before spending model calls if the agent's actual shell cannot

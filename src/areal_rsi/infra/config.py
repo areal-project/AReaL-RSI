@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -12,6 +14,21 @@ from areal_rsi.api.records import JsonObject
 
 class ModelConfigurationError(ValueError):
     """模型连接缺失或无效，可以直接向用户展示的配置错误。"""
+
+
+def local_codex_auth() -> Path:
+    """Resolve the operator's file-backed Codex login without copying its tokens."""
+    path = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))) / "auth.json"
+    try:
+        value = json.loads(path.read_text())
+        if not (value.get("OPENAI_API_KEY") or (value.get("tokens") or {}).get("access_token")):
+            raise ValueError("No cached login")
+    except (OSError, ValueError, AttributeError):
+        raise ModelConfigurationError(
+            "未找到本地 Codex 文件登录凭据；请运行 codex -c "
+            "'cli_auth_credentials_store=\"file\"' login 后重试。仅支持文件认证存储。"
+        ) from None
+    return path.absolute()
 
 
 @dataclass(frozen=True)

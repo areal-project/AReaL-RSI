@@ -363,10 +363,21 @@ test('creation configures the first conversation and modal dropdowns stay intera
   ui.$('create-backend-trigger').click();
   ui.$('create-backend-options').querySelectorAll('[role="option"]')[1].click();
   ui.submit('create-form'); await settle();
-  assert.deepEqual(submitted.model_settings, {base_url: 'https://custom.example/v1', api_key: 'dummy-ui-key', model: 'custom-model', reasoning_effort: 'high', backend: 'codex'});
+  assert.deepEqual(submitted.model_settings, {base_url: 'https://custom.example/v1', api_key: 'dummy-ui-key', auth_mode: 'api_key', model: 'custom-model', reasoning_effort: 'high', backend: 'codex'});
   assert.equal(ui.$('create-dialog').open, false);
   assert.equal(ui.$('create-api-key').value, '');
   assert.equal(ui.$('objective').textContent, '研究 new');
+  ui.$('new-run').click();
+  ui.$('create-backend-trigger').click();
+  ui.$('create-backend-options').querySelectorAll('[role="option"]')[1].click();
+  ui.$('create-auth-mode-trigger').click();
+  ui.$('create-auth-mode-options').querySelectorAll('[role="option"]')[1].click();
+  assert.equal(ui.$('create-api-key').disabled, true);
+  assert.equal(ui.$('create-base-url').closest('label').hidden, true);
+  ui.submit('create-form'); await settle();
+  assert.equal(submitted.model_settings.auth_mode, 'codex_login');
+  assert.equal(submitted.model_settings.api_key, '');
+  assert.equal(submitted.model_settings.base_url, 'https://api.openai.com');
 });
 
 test('agent timeline grows down and shares use distinct reserved rows with inspectable provenance', async (t) => {

@@ -147,7 +147,7 @@ class ResearchSystem:
             if c.state.started_at and recorded:
                 settings = json.loads(recorded[0].read_text())
                 for key in MODEL_FIELDS:
-                    setattr(config, key, settings.get(key, "standard"))
+                    setattr(config, key, settings.get(key, getattr(config, key)))
                 config.model_settings_pinned = True
             else:
                 config.pin_model_settings()
@@ -317,7 +317,8 @@ class ResearchSystem:
         key = values.pop("api_key", "")
         if not isinstance(key, str) or len(key) > 8192 or any(c.isspace() for c in key.strip()):
             raise ValueError("API Key 格式无效")
-        return validate_model_settings(values), key.strip()
+        settings = validate_model_settings(values)
+        return settings, "" if settings["auth_mode"] == "codex_login" else key.strip()
 
     @staticmethod
     def save_credentials(c: Coordinator, config: ResearchConfig, key: str) -> None:

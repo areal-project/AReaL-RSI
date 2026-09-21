@@ -6,12 +6,12 @@ import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from areal_rsi.api.control import validate_record
 from areal_rsi.api.records import EvolutionTarget
 from areal_rsi.api.research import TaskBrief
-from areal_rsi.infra.config import ResearchConnection, validate_base_url
+from areal_rsi.infra.config import ResearchConnection, local_codex_auth, validate_base_url
 from areal_rsi.infra.coordination.policies.collaboration import selected_modules
 from areal_rsi.infra.execution import ApprovedCommand
 from areal_rsi.infra.storage.files import decode, encode
@@ -25,16 +25,22 @@ MODEL_EFFORTS = {
     "gpt-5.6-terra": ("none", "low", "medium", "high", "xhigh", "max"),
     "gpt-6-astra": ("low", "medium", "high", "xhigh", "max"),
 }
-MODEL_FIELDS = ("base_url", "model", "reasoning_effort", "backend")
+MODEL_FIELDS = ("base_url", "model", "reasoning_effort", "backend", "auth_mode")
 
 
 def validate_model_settings(value: dict[str, Any]) -> dict[str, str]:
-    value = {"backend": "standard", **value}
+    value = {"backend": "standard", "auth_mode": "api_key", **value}
     if set(value) != set(MODEL_FIELDS) or any(
         not isinstance(value[key], str) or not value[key].strip() for key in MODEL_FIELDS
     ):
         raise ValueError("请填写 API 地址、模型和推理强度")
     settings = {key: value[key].strip() for key in MODEL_FIELDS}
+    if settings["auth_mode"] not in {"api_key", "codex_login"}:
+        raise ValueError("认证方式支持 api_key 或 codex_login")
+    if settings["auth_mode"] == "codex_login":
+        if settings["backend"] not in {"codex", "runtime"}:
+            raise ValueError("本地 Codex 登录仅支持 Codex 后端")
+        settings["base_url"] = "https://api.openai.com"
     if settings["backend"] not in {"standard", "codex", "runtime"}:
         raise ValueError("Agent 后端支持 standard、codex 或 runtime")
     if len(settings["model"]) > 200 or any(c.isspace() for c in settings["model"]):
@@ -54,6 +60,7 @@ class ResearchConfig:
     collaboration_modules: tuple[str, ...] = ()
     seed_dir: str | None = None
     backend: str = "standard"
+    auth_mode: Literal["api_key", "codex_login"] = "api_key"
     runtime_config: dict[str, Any] | None = None
     model: str = "gpt-5.6-luna"
     reasoning_effort: str = "xhigh"
@@ -73,6 +80,12 @@ class ResearchConfig:
     evolution_target: EvolutionTarget | None = None
 
     def __post_init__(self) -> None:
+        if self.auth_mode not in {"api_key", "codex_login"}:
+            raise ValueError("Invalid authentication mode")
+        if self.auth_mode == "codex_login":
+            if self.backend not in {"codex", "runtime"}:
+                raise ValueError("本地 Codex 登录仅支持 Codex 后端")
+            self.base_url = "https://api.openai.com"
         if self.evolution_target is not None:
             self.evolution_target = EvolutionTarget(self.evolution_target)
         if self.brief.limits.max_model_calls is not None:
@@ -162,7 +175,13 @@ class ResearchConfig:
 
     def runtime(self) -> ResearchConnection:
         connection = self.connection_settings()
-        if not self.api_key():
+        if self.auth_mode == "codex_login":
+            settings = self.runtime_settings()
+            if any(settings.select(role)["kind"] != "codex-cli"
+                   for role in ("rsi-agent", "research-agent", "interaction-agent")):
+                raise ValueError("本地登录要求所有研究角色使用 Codex Runtime")
+            local_codex_auth()
+        elif not self.api_key():
             raise ValueError(f"Set {self.api_key_env} before starting model agents")
         return connection
 
@@ -194,6 +213,8 @@ class ResearchConfig:
         )
 
     def api_key(self) -> str:
+        if self.auth_mode == "codex_login":
+            return ""
         if self.credential_file:
             return str(json.loads(Path(self.credential_file).read_text())["api_key"])
         return os.environ.get(self.api_key_env, "")

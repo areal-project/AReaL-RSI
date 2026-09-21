@@ -23,6 +23,7 @@ from jsonschema import ValidationError, validate
 
 from areal_rsi.api.interfaces import EventSink, ToolCall, ToolHandler, TurnResult
 from areal_rsi.api.records import AgentSpec, ModelVersion
+from areal_rsi.infra.config import local_codex_auth
 from areal_rsi.infra.coordination.config import ResearchConfig, config_from_dict
 from areal_rsi.infra.runtime.runtime_package import (
     PackageAgentRuntime,
@@ -222,6 +223,9 @@ class ResearchRuntime:
                 role=role,
                 base_url=self.connection.runtime_base_url,
                 api_key=self.config.api_key(),
+                codex_auth_file=(
+                    local_codex_auth() if self.config.auth_mode == "codex_login" else None
+                ),
                 timeout=86400,
                 max_tokens=self.config.max_output_tokens,
                 dsh_root=Path(
@@ -269,8 +273,9 @@ class ResearchRuntime:
                 "agents.enabled": False,
                 "features.goals": False,
                 "features.standalone_web_search": allow_web,
-                "model_providers.rsi.supports_standalone_web_search": allow_web,
             }
+            if self.config.auth_mode != "codex_login":
+                codex_config["model_providers.rsi.supports_standalone_web_search"] = allow_web
             if self.config.context_window_tokens is not None:
                 codex_config["model_context_window"] = self.config.context_window_tokens
             session = await runtime.open(

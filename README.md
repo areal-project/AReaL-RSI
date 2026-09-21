@@ -25,6 +25,25 @@ RSI_REASONING_EFFORT=xhigh
 RSI_DATA_ROOT=.rsi/research-lab
 ```
 
+## 第一次完整研究
+
+建议先运行内置 Arithmetic 示例。它只需要研究模型 `RSI_*` 和被测模型
+`RSI_TARGET_*`，不依赖 GPU、SSH 或 EnvArena，并覆盖候选保存、TRAIN 验证和独立
+VALIDATE 最终复测：
+
+```bash
+uv run --env-file .env --locked python -m areal_rsi.adapters.benchmark_research prepare \
+  --benchmark math --directory .rsi/arithmetic/setup
+uv run --env-file .env --locked rsi research \
+  --config .rsi/arithmetic/setup/research.json --data-root .rsi/arithmetic
+```
+
+命令会持续输出 run ID、状态和成绩；中断后使用输出中的恢复命令继续。完整记录位于
+`.rsi/arithmetic/runs/<run_id>/`，也可以用相同 `--data-root` 打开工作台查看。
+
+其他任务按依赖和优化对象列在[示例目录](examples/README.md)中。Runtime profile、数据组件
+和集群部署资产与完整 ResearchApp 示例分开标注，避免把配置片段误认为可直接运行的研究。
+
 ## 启动 Web 工作台
 
 在仓库根目录运行：
@@ -102,8 +121,10 @@ CLI 持续输出进度；Ctrl+C 保存状态供恢复。用同一数据目录打
 数学和 LCB 均使用 ResearchApp。操作员适配器准备固定的题目、目标模型和评分身份，
 研究模型自主调用候选与验证工具：
 
-- [数学示例](examples/local/README.md)：3 道 TRAIN / 3 道 VALIDATE 原创算术题。
-- [LCB 示例](examples/remote/README.md)：EnvArena 固定题目与 Reward，研究员修改通用 system prompt。
+- [Arithmetic quickstart](examples/local/README.md)：3 道 TRAIN / 3 道 VALIDATE 原创算术题。
+- [LiveCodeBench](examples/remote/README.md)：EnvArena 固定题目与 Reward，研究员修改通用 system prompt。
+
+更多任务、Runtime 配置和部署资产见[示例目录](examples/README.md)。
 
 ## 检查研究运行时
 

@@ -1,35 +1,60 @@
 # AReaL-RSI
 
-一个支持持续研究的多 Agent 系统：Interaction 与用户确定需求，RSI 制定计划并协调 Research Agents，Research Agents 执行实验、汇报结果并在原会话中继续研究。工作台按 Agent 展示纵向研究时间线、信息共享、作业进度、耗时与验证成绩。
+AReaL-RSI is a persistent multi-agent system for open-ended research. An Interaction agent
+clarifies the task with the user, RSI plans and coordinates the work, and Research Agents run
+experiments and report evidence. The workbench keeps the entire process visible and resumable,
+including agent timelines, shared findings, jobs, budgets, verification results, and final output.
 
-## 准备
+## Quick start
 
-需要 Python 3.11+ 和 uv。默认隔离模式需要 macOS `sandbox-exec`；可信 Linux
-服务器可在 `.env` 中显式设置 `RSI_RUNTIME_ISOLATION=linux-unrestricted`，
-Agent 将以服务用户权限运行，不提供文件或进程隔离，详见[后端说明](docs/agent-backends.md)。
-standard 后端还需要 Node.js 22.19+ 和 pnpm。standard/codex 的研究模型接口须支持
-Responses API 和工具调用；其他后端使用对应的协议。
+### Requirements
+
+- Python 3.11 or later
+- [uv](https://docs.astral.sh/uv/)
+- Node.js 22.19 or later and pnpm when using the default `standard` agent backend
+- A Responses-compatible model endpoint with tool calling for the `standard` and `codex` backends
+
+The default macOS runtime uses `sandbox-exec`. On a trusted Linux server, set
+`RSI_RUNTIME_ISOLATION=linux-unrestricted` explicitly. This runs agents with the service user's
+permissions and does not provide filesystem or process isolation. See
+[Agent backends](docs/agent-backends.md) for the full trust model.
+
+### Install
 
 ```bash
 uv sync --locked
 cp -n .env.example .env
 ```
 
-在 `.env` 中配置模型连接，密钥仅保存在本机：
+Configure the research model in `.env`. Credentials remain on the local machine.
 
 ```dotenv
-RSI_BASE_URL=https://4ipic.com
-RSI_API_KEY=<你的密钥>
+RSI_BASE_URL=https://your-provider.example/v1
+RSI_API_KEY=<your-api-key>
 RSI_MODEL=gpt-5.6-luna
 RSI_REASONING_EFFORT=xhigh
 RSI_DATA_ROOT=.rsi/research-lab
 ```
 
-## 第一次完整研究
+## Choose a workflow
 
-建议先运行内置 Arithmetic 示例。它只需要研究模型 `RSI_*` 和被测模型
-`RSI_TARGET_*`，不依赖 GPU、SSH 或 EnvArena，并覆盖候选保存、TRAIN 验证和独立
-VALIDATE 最终复测：
+| Goal | Start with | Additional requirements |
+| --- | --- | --- |
+| Run a first complete research loop | [Arithmetic research](#run-your-first-complete-research-loop) | A research model and a target model |
+| Create and monitor research interactively | [Web workbench](#web-workbench) | A research model |
+| Optimize a real GPU kernel | [KernelBench](#kernelbench-passk-research) | SSH access and a deployed GPUQ |
+| Run an existing frozen configuration | [Research CLI](#research-cli-and-http-api) | A `ResearchConfig` JSON file |
+
+The [example catalog](examples/README.md) separates complete workflows from runtime profiles,
+reusable components, benchmark assets, and deployment configurations.
+
+## Run your first complete research loop
+
+The built-in arithmetic workflow is the smallest end-to-end path. It requires only the research
+model variables (`RSI_*`) and target model variables (`RSI_TARGET_*`). It does not require a GPU,
+SSH, or EnvArena.
+
+Prepare a frozen configuration, then run it through `ResearchApp`:
 
 ```bash
 uv run --env-file .env --locked python -m areal_rsi.adapters.benchmark_research prepare \
@@ -38,129 +63,168 @@ uv run --env-file .env --locked rsi research \
   --config .rsi/arithmetic/setup/research.json --data-root .rsi/arithmetic
 ```
 
-命令会持续输出 run ID、状态和成绩；中断后使用输出中的恢复命令继续。完整记录位于
-`.rsi/arithmetic/runs/<run_id>/`，也可以用相同 `--data-root` 打开工作台查看。
+The command prints the run ID, status, and verification scores. If interrupted, use the printed
+resume command. Complete records are stored under `.rsi/arithmetic/runs/<run_id>/`; open the
+workbench with the same `--data-root` to inspect them visually.
 
-其他任务按依赖和优化对象列在[示例目录](examples/README.md)中。Runtime profile、数据组件
-和集群部署资产与完整 ResearchApp 示例分开标注，避免把配置片段误认为可直接运行的研究。
+This workflow covers candidate snapshots, TRAIN evaluation, selection, and an independent
+VALIDATE final verification. See the [Arithmetic guide](examples/local/README.md) for its task and
+verification contract.
 
-## 启动 Web 工作台
+## Web workbench
 
-在仓库根目录运行：
+Start or reuse a background workbench from the repository root:
 
 ```bash
 uv run --env-file .env --locked python run.py --type web
 ```
 
-打开 **http://127.0.0.1:8197**，新建研究，与 Interaction 讨论任务、环境、资源限制和目标，要求开始后交给 RSI。开始前可选择 Agent 后端，并修改模型地址、密钥、名称和推理强度；开始后任务和协作配置锁定，可查看进展或明确停止。
+Open **http://127.0.0.1:8197**, create a research session, and discuss the task, environment,
+resource limits, and target with the Interaction agent. Once started, the task and collaboration
+configuration are frozen, while progress and evidence remain visible throughout the run.
 
-Agent 后端支持 `standard`（默认，DSH）、`codex` 和 `runtime`（受信 Runtime 配置，
-可选择 Hermes、Claude 等适配器，也可按角色选择后端）。模型连接和后端配置在研究开始前
-固定。所有后端通过 `PackageAgentRuntime` 执行；原生会话、工具和压缩由 Runtime 管理，
-RSI 负责研究编排、权限、作业和验证。配置与隔离边界见[后端说明](docs/agent-backends.md)。
+Use `--port 8200` for another port or `--data-root /path/to/data` for another data directory. A
+compatible running workbench is reused; an unrelated service on the selected port causes a clear
+error and is never stopped or replaced. Background logs and PID files are stored under
+`<data-root>/runtime/`.
 
-新实验可设置 `"mode": "passk"`：RSI 启动 k 个独立完成整题的 researcher，接收进展并督促持续探索；不提供研究建议、不调整方向，也不在研究员之间分享信息。任一正式结果达标或整组到时即停止。配置与比较方法见 [pass@k](docs/passk.md)。
-
-工作台可在新建研究或启动前选择纯 pass@k 或 pass@k + RSI 协调，协调模式提供 v0.2.1 和 v0.2.2，新研究默认 v0.2.2。RSI 协调作为附加模块，增加原始证据查看、定向共享和非阻塞建议。启动配置和模块版本会冻结；已下线的旧版分工模式仍可查看历史记录，不能启动或恢复。详见[协作配置](docs/collaboration.md)。
-
-研究图中每个 Agent 占一列，进展按实际发生时间向下展开，空白时段压缩；个人有效时间单独显示在研究员卡片中。默认展示成绩突破、汇报、建议和待完成作业，也可切换“只看协作”或展开全部作业。虚线根据建议附带的同一研究内的引用标明信息来源；点击事件可查看原文和送达状态。送达不代表已被采纳，没有明确同伴来源的消息显示为 RSI 的建议。此视图只读取历史记录，不改变 agent 协作或补写实验数据。
-
-`rsi`、`rsi web` 和 `rsi workbench` 均以前台方式启动同一个新工作台；
-`python run.py --type web` 负责后台启动或复用服务。新工作台、`rsi research` 和
-`rsi preflight` 的数据目录统一按 `--data-root`、`RSI_DATA_ROOT`、`.rsi/research-lab`
-的顺序选择。以前直接运行 CLI 保存在 `.rsi` 的研究，可用 `--data-root .rsi` 打开。
-研究入口统一为 ResearchApp；旧 `tui/run/resume/status/local-app`、TUI/MCP 控制器和
-固定轮次调度器已移除。旧计划与检查点不迁移，请使用当前配置新建研究。
-
-仓库入口自动在后台启动服务；已有兼容的 RSI 工作台则复用，其他进程占用端口则报错，不关闭或覆盖它。用 `--port 8200` 指定端口，用 `--data-root /path/to/data` 指定数据目录。旧版 RSI 服务需要先重启到当前版本。
-
-服务日志和 PID 位于 `<数据目录>/runtime/workbench-<端口>.log / .pid`。若希望前台运行、用 Ctrl+C 停止服务：
+For a foreground process that stops with Ctrl+C, run:
 
 ```bash
 uv run --env-file .env --locked rsi workbench --port 8197
 ```
 
-## 一键运行 KernelBench pass@k demo
+`rsi`, `rsi web`, and `rsi workbench` all start the same foreground workbench. New workbenches,
+`rsi research`, and `rsi preflight` resolve their data directory in this order:
+`--data-root`, `RSI_DATA_ROOT`, then `.rsi/research-lab`.
 
-拥有 et15 SSH 和已部署 GPUQ 的访问权限后，无需先打开浏览器或重复填写需求：
+### Agent backends and collaboration
+
+The workbench supports the `standard` backend, the `codex` backend, and trusted `runtime`
+configurations such as Hermes or Claude adapters. Model settings and backend selection are frozen
+when research starts. Every backend runs through `PackageAgentRuntime`; the runtime owns native
+sessions, tools, and context compression, while RSI owns orchestration, permissions, jobs, and
+verification.
+
+In `passk` mode, RSI launches independent researchers that each solve the complete task. The run
+stops when a formal result reaches the target or the group budget expires. Optional RSI
+coordination adds evidence sharing and non-blocking guidance; new runs default to coordination
+version v0.2.2, while v0.2.1 remains available for comparison. See
+[pass@k](docs/passk.md) and [Collaboration](docs/collaboration.md).
+
+The workbench renders one timeline per agent and compresses idle periods. It highlights score
+improvements, reports, guidance, and active jobs. Evidence links show where shared information came
+from without implying that the receiving agent adopted it. The view reads persisted history and
+does not modify the collaboration state.
+
+## KernelBench pass@k research
+
+With access to the `et15` SSH host and a deployed GPUQ, start the default KernelBench research run:
 
 ```bash
 uv run --env-file .env --locked python run.py --type demo
 ```
 
-脚本自动启动或复用工作台，默认以 v0.2.2 协调模式启动 L3P10 的四名独立研究员，探索限时一小时、提交不限次数。结束后自动冻结最佳候选、独立复测并归档。关闭浏览器或启动终端不影响后台研究。
+The launcher starts or reuses the workbench and runs four independent researchers on L3P10 with
+the v0.2.2 coordination profile. Exploration runs for one hour with unlimited submissions. At the
+end, the system freezes the best candidate, performs an independent final verification, and
+archives the result. Closing the browser or launch terminal does not stop the background run.
 
-三题并行、每名研究员半小时有效时间的固定实验，见 [v0.2.1 示例](examples/kernelbench_artifacts/v0.2.1/README.md)。
+The [KernelBench guide](examples/kernelbench_artifacts/README.md) documents environment checks,
+recovery, task selection, submission budgets, and recorded results. For the fixed three-task,
+30-minute-per-researcher experiment, see
+[KernelBench v0.2.1](examples/kernelbench_artifacts/v0.2.1/README.md). The
+[generic harness workflow](examples/kernelbench/README.md) is a separate task that optimizes a
+harness rather than a specific kernel.
 
-题目、提交预算、环境检查、恢复命令和历史结果见 [KernelBench demo 快速指南](examples/kernelbench_artifacts/README.md)。这条入口优化具体 kernel，不需要额外 Task Agent；[通用 harness 优化](examples/kernelbench/README.md)是另一种任务。
+## Research CLI and HTTP API
 
-## CLI 与 API
-
-已有完整研究配置时，可以不经过 Interaction，直接在终端运行：
+Run a prepared `ResearchConfig` without an Interaction conversation:
 
 ```bash
 uv run --env-file .env --locked rsi research --config /absolute/path/research.json
 uv run --env-file .env --locked rsi research --resume <run_id>
 ```
 
-CLI 持续输出进度；Ctrl+C 保存状态供恢复。用同一数据目录打开工作台即可查看。CLI 持有执行权期间，Web 只读；需要同时操作研究时，使用上面的 demo/API 入口，让工作台后台执行。
+The CLI streams progress and preserves state when interrupted with Ctrl+C. Open the workbench with
+the same data directory to inspect the run. While the CLI owns execution, the Web UI is read-only.
+Use the workbench API when research must continue in the background while remaining interactive.
 
-工作台提供本机 HTTP API。先 `GET /api/bootstrap` 获取 `csrf_token`，写请求使用 `X-RSI-Token` 请求头和 JSON body：
+The local HTTP API uses a CSRF token. Read it from `GET /api/bootstrap`, then include it in the
+`X-RSI-Token` header for write requests.
 
-| 接口 | 用途 |
+| Endpoint | Purpose |
 | --- | --- |
-| `POST /api/runs`，body 为 `{"message":"研究需求"}` | 创建 Interaction 对话 |
-| `POST /api/runs`，body 为 `{"run_id":"自定ID","config":{...}}` | 用完整 `ResearchConfig` 创建研究；同一 ID、同一请求可安全重试 |
-| `POST /api/runs/<id>/start`，body 为 `{}` | 启动已准备的研究 |
-| `GET /api/runs`、`GET /api/runs/<id>` | 查看列表、搜索图、报告、作业和成绩 |
-| `POST /api/runs/<id>/chat`，body 为 `{"text":"补充要求"}` | 发送消息 |
-| `POST /api/runs/<id>/pause`、`resume`、`stop` | 控制执行，body 为 `{}` |
+| `POST /api/runs` with `{"message":"research request"}` | Create an Interaction conversation |
+| `POST /api/runs` with `{"run_id":"id","config":{...}}` | Create a configured, idempotent run |
+| `POST /api/runs/<id>/start` | Start a prepared run |
+| `GET /api/runs` and `GET /api/runs/<id>` | Read runs, reports, jobs, and scores |
+| `POST /api/runs/<id>/chat` | Send a user message |
+| `POST /api/runs/<id>/pause`, `resume`, or `stop` | Control execution |
 
-## 数学与 LCB
+Write requests use a JSON body and the `X-RSI-Token` header.
 
-数学和 LCB 均使用 ResearchApp。操作员适配器准备固定的题目、目标模型和评分身份，
-研究模型自主调用候选与验证工具：
+## Other runnable benchmarks
 
-- [Arithmetic quickstart](examples/local/README.md)：3 道 TRAIN / 3 道 VALIDATE 原创算术题。
-- [LiveCodeBench](examples/remote/README.md)：EnvArena 固定题目与 Reward，研究员修改通用 system prompt。
+Arithmetic and LiveCodeBench both use `ResearchApp`. Their operator adapters freeze the task set,
+target model, scoring identity, and allowed changes before research starts.
 
-更多任务、Runtime 配置和部署资产见[示例目录](examples/README.md)。
+- [Arithmetic quickstart](examples/local/README.md): three original TRAIN tasks and three
+  independent VALIDATE tasks.
+- [LiveCodeBench](examples/remote/README.md): a pinned EnvArena benchmark where researchers optimize
+  a general system prompt.
 
-## 检查研究运行时
+See the [example catalog](examples/README.md) for more tasks, runtime configurations, reusable
+components, and deployment assets.
+
+## Validate the runtime
+
+Run a production-path preflight before starting an expensive experiment:
 
 ```bash
 uv run --env-file .env --locked rsi preflight --backend standard
 uv run --env-file .env --locked rsi preflight --backend codex
-# 也可传入实际研究配置：rsi preflight --config /absolute/path/research.json
+# Validate an exact research configuration:
+uv run --env-file .env --locked rsi preflight --config /absolute/path/research.json
 ```
 
-预检使用生产工作台的 Runtime 工厂，实际调用配置的模型与任务工具，并检查进程重启后
-的会话记忆、会话标识和重复消息回执。默认总超时 180 秒，可用 `--timeout` 调整。
-记录写入数据目录下的 `preflight/`，不会创建正式研究或提交 GPU 作业。
-旧 `scripts/preflight_responses.py` 命令转发到同一个预检。
+Preflight uses the production runtime factory and checks the configured model, task tools, session
+restart behavior, session identity, and duplicate-message receipts. The default timeout is 180
+seconds and can be changed with `--timeout`. Results are written below `<data-root>/preflight/` and
+do not create a research run or submit GPU work.
 
-## 记录与恢复
+## Storage and recovery
 
-每次研究的数据集中在 `RSI_DATA_ROOT/runs/<run_id>/`，包含需求、会话、任务、报告、共享证据、冻结候选和验证记录。等待作业、报告或用户时不调用模型；临时 API 故障自动重试。
+Each run is stored under `RSI_DATA_ROOT/runs/<run_id>/`, including the task brief, sessions, jobs,
+reports, shared evidence, frozen candidates, and verification results. RSI does not call models
+while waiting for a job, report, or user response. Temporary API failures are retried.
 
-上下文窗口、原生重试和会话边界见[后端说明](docs/agent-backends.md)。
-`brief.limits.max_model_calls` 保留可空字段，目前只接受 `null`；已移除的旧压缩/重试字段
-会明确报错，不自动迁移旧配置或会话。
+After a service restart, active background runs and finalization resume automatically. Manually
+paused runs remain paused. A run cannot modify candidates after final verification has completed;
+start a new run for another experiment. Invalid external credentials and cluster failures remain
+visible as explicit errors or waiting states.
 
-demo 在服务重启后自动恢复尚在执行的研究或收尾；手动暂停的研究保持暂停。完成最终复测后不能继续修改这次候选，需要新建 run。外部凭据失效或集群故障会明确报错或等待处理。
+All current entry points use `ResearchApp`. Removed TUI, MCP, fixed-round, and
+`tui/run/resume/status/local-app` flows are not migrated. Existing records remain readable, but old
+plans and checkpoints should not be resumed with current configurations.
 
-## 文档导航
+## Documentation
 
-启动方式与示例见本 README；按需阅读以下专题：
-
-| 文档 | 内容 |
+| Guide | Contents |
 | --- | --- |
-| [架构](docs/architecture.md) | 组件职责、消息、候选与数据流 |
-| [接口](docs/interfaces/README.md) | ResearchConfig、领域 API、实验命令与验证契约 |
-| [后端](docs/agent-backends.md) | Runtime 配置、工具桥、隔离、会话与测试 |
-| [pass@k](docs/passk.md) | 独立尝试、预算、停止与实验比较 |
-| [协作](docs/collaboration.md) | guidance 版本、权限、Prompt 来源与复现 |
-| [有效时间](docs/effective-time.md) | API 故障和 GPU 排队的扣时规则 |
-| [GPU 隔离](docs/gpu-queue-isolation.md) | KernelBench 队列部署及隔离边界 |
+| [Architecture](docs/architecture.md) | Component ownership, messages, candidates, and data flow |
+| [Interfaces](docs/interfaces/README.md) | `ResearchConfig`, domain APIs, commands, and verification contracts |
+| [Agent backends](docs/agent-backends.md) | Runtime configuration, isolation, tools, sessions, and testing |
+| [pass@k](docs/passk.md) | Independent attempts, budgets, stopping, and experiment comparison |
+| [Collaboration](docs/collaboration.md) | Guidance versions, permissions, prompts, and reproducibility |
+| [Effective time](docs/effective-time.md) | Excluding API failures and GPU queue delays from active time |
+| [GPU isolation](docs/gpu-queue-isolation.md) | KernelBench queue deployment and isolation boundaries |
 
-开发检查：`make check`；前端检查：`npm ci --prefix tests/frontend && npm test --prefix tests/frontend`。
+## Development
+
+Run the Python checks with `make check`. Run frontend checks with:
+
+```bash
+npm ci --prefix tests/frontend
+npm test --prefix tests/frontend
+```

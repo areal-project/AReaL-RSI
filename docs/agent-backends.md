@@ -31,6 +31,17 @@ DSH 通过 Runtime 的 ToolProvider 插件调用 RSI 工具。当前版本的 Ru
 默认 `sandbox` 模式下，每个会话有独立工作区、原生运行目录和 macOS
 `sandbox-exec` 子进程，隐藏评测数据和其他研究员工作区不向子进程开放。
 
+Linux 服务器推荐使用 Bubblewrap：
+
+```dotenv
+RSI_RUNTIME_ISOLATION=linux-bwrap
+```
+
+该模式只挂载当前会话、当前 workspace、Runtime 安装和操作员显式配置的只读路径。
+宿主 `/storage`、相邻实验和历史答案不会出现在 Agent 文件视图中。standard 与 codex
+后端都可使用；Codex 内层保持 `danger-full-access`，真正的访问边界由外层 Bubblewrap
+继承到所有命令子进程。网络仍与宿主共享。修改后须重启工作台。
+
 可信 Linux 服务器可在启动工作台前显式设置：
 
 ```dotenv

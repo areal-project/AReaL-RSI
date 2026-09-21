@@ -1,7 +1,8 @@
 """RSI sessions backed by the public ARealAgentRuntime Python package.
 
 Each conversation owns an embedded composition in a separate Python process.
-macOS uses a sandbox; trusted Linux deployments can explicitly disable isolation.
+macOS uses sandbox-exec. Linux can use Bubblewrap, or trusted deployments can
+explicitly disable isolation.
 """
 
 from __future__ import annotations
@@ -137,10 +138,155 @@ class RuntimeSettings:
 
 
 def validate_isolation(mode: str) -> None:
-    if mode not in {"sandbox", "linux-unrestricted"}:
-        raise ValueError("RSI_RUNTIME_ISOLATION must be sandbox or linux-unrestricted")
-    if mode == "linux-unrestricted" and sys.platform != "linux":
-        raise RuntimeError("linux-unrestricted mode is only supported on Linux")
+    if mode not in {"sandbox", "linux-bwrap", "linux-unrestricted"}:
+        raise ValueError("RSI_RUNTIME_ISOLATION must be sandbox, linux-bwrap or linux-unrestricted")
+    if mode.startswith("linux-") and sys.platform != "linux":
+        raise RuntimeError(f"{mode} mode is only supported on Linux")
+
+
+def _bwrap_parent_dirs(paths: set[Path]) -> list[str]:
+    """Create mount destinations without exposing their host-side parents."""
+    parents: set[Path] = set()
+    for path in paths:
+        current = path.parent
+        while current != current.parent:
+            parents.add(current)
+            current = current.parent
+    result: list[str] = []
+    for path in sorted(parents, key=lambda item: (len(item.parts), str(item))):
+        result.extend(["--dir", str(path)])
+    return result
+
+
+def _linux_bwrap_command(
+    directory: Path,
+    workspace: Path,
+    readable: tuple[Path, ...],
+    readonly_mounts: tuple[tuple[Path, Path], ...],
+    worker: list[str],
+) -> list[str]:
+    bwrap = shutil.which("bwrap")
+    if bwrap is None:
+        raise RuntimeError("RSI_RUNTIME_ISOLATION=linux-bwrap requires Bubblewrap (bwrap) in PATH")
+    writable = {directory.resolve(), workspace.resolve()}
+    workspace_alias = Path("/workspace")
+    aliased_readonly_mounts = tuple(
+        (source, workspace_alias / destination.relative_to(workspace.resolve()))
+        for source, destination in readonly_mounts
+    )
+    readonly = {path.resolve() for path in readable if path.exists()}
+    # Runtime binaries and libraries are host installation inputs, never task data.
+    for path in (
+        Path("/usr"),
+        Path("/usr/local"),
+        Path("/lib"),
+        Path("/lib64"),
+        Path(sys.prefix),
+        Path(sys.base_prefix),
+        Path(sys.executable).absolute().parent,
+    ):
+        if path.exists() and not path.is_symlink():
+            readonly.add(path.absolute())
+    node_binary = shutil.which("node")
+    if node_binary:
+        resolved_node = Path(node_binary).resolve()
+        # /usr/local/bin/node is commonly a symlink into an installation under
+        # /opt. Mount the installation itself so the symlink remains usable.
+        if resolved_node.exists() and len(resolved_node.parents) >= 2:
+            readonly.add(resolved_node.parent.parent)
+    system_files = tuple(
+        path
+        for path in (
+            Path("/etc/ssl"),
+            Path("/etc/pki"),
+            Path("/etc/resolv.conf"),
+            Path("/etc/hosts"),
+            Path("/etc/nsswitch.conf"),
+            Path("/etc/passwd"),
+            Path("/etc/group"),
+            Path("/etc/localtime"),
+        )
+        if path.exists()
+    )
+    executable_mounts: list[tuple[Path, Path]] = []
+    executable = Path(sys.executable).absolute()
+    seen: set[Path] = set()
+    while executable.is_symlink() and executable not in seen:
+        seen.add(executable)
+        target = Path(os.readlink(executable))
+        if not target.is_absolute():
+            target = executable.parent / target
+        if target.is_absolute() and len(target.parents) >= 2:
+            alias_root = target.parent.parent
+            executable_mounts.append((alias_root.resolve(), alias_root))
+        executable = target
+    mounts = (
+        writable
+        | readonly
+        | set(system_files)
+        | {destination for _, destination in readonly_mounts}
+        | {destination for _, destination in aliased_readonly_mounts}
+        | {destination for _, destination in executable_mounts}
+        | {Path("/proc"), Path("/run"), workspace_alias}
+    )
+    command = [
+        bwrap,
+        "--unshare-user",
+        "--unshare-ipc",
+        "--unshare-uts",
+        "--unshare-cgroup",
+        "--die-with-parent",
+        "--new-session",
+        "--dev",
+        "/dev",
+        "--dir",
+        "/workspace",
+        "--dir",
+        "/proc",
+        "--dir",
+        "/proc/self",
+        "--ro-bind",
+        "/proc/self",
+        "/proc/self",
+        "--dir",
+        "/run",
+        "--tmpfs",
+        "/run",
+        *_bwrap_parent_dirs(mounts),
+    ]
+    for source in sorted(writable):
+        command.extend(["--bind", str(source), str(source)])
+    command.extend(["--bind", str(workspace.resolve()), str(workspace_alias)])
+    for source in sorted(readonly):
+        command.extend(["--ro-bind", str(source), str(source)])
+    for source, destination in readonly_mounts:
+        command.extend(["--ro-bind", str(source), str(destination)])
+    for source, destination in aliased_readonly_mounts:
+        command.extend(["--ro-bind", str(source), str(destination)])
+    for source, destination in executable_mounts:
+        command.extend(["--ro-bind", str(source), str(destination)])
+    for path in system_files:
+        command.extend(["--ro-bind", str(path), str(path)])
+    for link in (Path("/bin"), Path("/sbin"), Path("/lib"), Path("/lib64")):
+        if link.is_symlink():
+            command.extend(["--symlink", os.readlink(link), str(link)])
+    return [*command, "--chdir", str(workspace_alias), "--", *worker]
+
+
+def _process_descendants(pid: int) -> list[int]:
+    """Return Linux descendants, direct children first, for wrapper-aware shutdown."""
+    found: list[int] = []
+    pending = [pid]
+    while pending:
+        parent = pending.pop()
+        children = Path(f"/proc/{parent}/task/{parent}/children")
+        try:
+            current = [int(value) for value in children.read_text().split()]
+        except (FileNotFoundError, PermissionError, ValueError):
+            continue
+        pending.extend(current)
+        found.extend(current)
+    return found
 
 
 def sandbox_command(
@@ -148,6 +294,7 @@ def sandbox_command(
     workspace: Path,
     readable: tuple[Path, ...],
     executable_aliases: tuple[Path, ...] = (),
+    readonly_mounts: tuple[tuple[Path, Path], ...] = (),
     *,
     isolation: str = "sandbox",
 ) -> list[str]:
@@ -161,11 +308,18 @@ def sandbox_command(
         str(directory / "worker-code"),
     ]
     if isolation == "linux-unrestricted":
+        if readonly_mounts:
+            raise RuntimeError("Read-only workspace mounts require linux-bwrap isolation")
         return worker
+    if isolation == "linux-bwrap":
+        return _linux_bwrap_command(directory, workspace, readable, readonly_mounts, worker)
+    if readonly_mounts:
+        raise RuntimeError("Read-only workspace mounts require linux-bwrap isolation")
     if sys.platform != "darwin":
         raise RuntimeError(
-            "Agent sandbox requires macOS sandbox-exec; on trusted Linux hosts explicitly set "
-            "RSI_RUNTIME_ISOLATION=linux-unrestricted (no filesystem or process isolation)"
+            "Agent sandbox requires macOS sandbox-exec; on Linux set "
+            "RSI_RUNTIME_ISOLATION=linux-bwrap, or explicitly use linux-unrestricted "
+            "for a trusted host"
         )
     # Installed packages are readable, experiment data is not. No source checkout is granted.
     roots = {
@@ -284,7 +438,11 @@ class PackageSession:
         if self.process.returncode is None:
             # SIGTERM lets the worker cancel the active Run and commit its terminal state.
             with suppress(ProcessLookupError):
-                self.process.terminate()
+                if self.runtime.settings.isolation == "linux-bwrap":
+                    descendants = _process_descendants(self.process.pid)
+                    os.kill(descendants[0] if descendants else self.process.pid, signal.SIGTERM)
+                else:
+                    self.process.terminate()
             with suppress(TimeoutError):
                 await asyncio.wait_for(self.process.wait(), 10)
             # Also reap native grandchildren on failed or timed-out cleanup.
@@ -378,6 +536,7 @@ class PackageAgentRuntime:
         research_tools: dict[str, Any] | None = None,
         codex_config: dict[str, Any] | None = None,
         context_window_tokens: int | None = None,
+        workspace_readonly_mounts: tuple[tuple[str, str], ...] = (),
     ) -> PackageSession:
         if agent.runtime not in {"areal-agent-runtime@v1", "deepseek-harness@v1"}:
             raise ValueError(f"Unknown RSI Runtime binding: {agent.runtime}")
@@ -410,6 +569,22 @@ class PackageAgentRuntime:
             shutil.copyfile(Path(__file__).parent / name, modules / name)
         workspace = Path(workspace_root).resolve() if workspace_root else directory / "workspace"
         workspace.mkdir(parents=True, exist_ok=True)
+        readonly_mounts: list[tuple[Path, Path]] = []
+        for source_value, target_value in workspace_readonly_mounts:
+            source = Path(source_value).expanduser().resolve()
+            target_relative = Path(target_value)
+            if not source.exists():
+                raise FileNotFoundError(f"Read-only workspace mount does not exist: {source}")
+            if target_relative.is_absolute() or ".." in target_relative.parts:
+                raise ValueError("Read-only workspace mount target must stay inside the workspace")
+            target = (workspace / target_relative).resolve()
+            if not target.is_relative_to(workspace):
+                raise ValueError("Read-only workspace mount target escapes the workspace")
+            if not target.exists():
+                raise FileNotFoundError(
+                    f"Read-only workspace mount target placeholder does not exist: {target}"
+                )
+            readonly_mounts.append((source, target))
         selection = copy.deepcopy(self.selection)
         readable = list(self.settings.readable_paths)
         if selection["kind"] == "codex-cli" and not selection.get("config", {}).get("codexBin"):
@@ -491,7 +666,7 @@ class PackageAgentRuntime:
             if key
             in {"PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR"}
         }
-        if self.settings.isolation == "linux-unrestricted":
+        if self.settings.isolation in {"linux-bwrap", "linux-unrestricted"}:
             for name in (
                 "HTTP_PROXY",
                 "HTTPS_PROXY",
@@ -519,6 +694,11 @@ class PackageAgentRuntime:
             + os.pathsep
             + str(Path(sys.executable).parent)
             + os.pathsep
+            + (
+                str(Path(node_binary).resolve().parent) + os.pathsep
+                if (node_binary := shutil.which("node"))
+                else ""
+            )
             + env.get("PATH", "/usr/bin:/bin")
         )
         env.update(
@@ -536,16 +716,19 @@ class PackageAgentRuntime:
             workspace,
             tuple(readable),
             (Path(interpreter),) if interpreter else (),
+            tuple(readonly_mounts),
             isolation=self.settings.isolation,
         )
         if research_tools is not None:
             # Fail before spending model calls if the agent's actual shell cannot
             # write heredocs/tempfiles or resolve its scoped task-tool command.
-            shell_command = (
-                ["/bin/bash", "-ec"]
-                if self.settings.isolation == "linux-unrestricted"
-                else [*command[:3], "/bin/zsh", "-lec"]
-            )
+            if self.settings.isolation == "linux-unrestricted":
+                shell_command = ["/bin/bash", "-ec"]
+            elif self.settings.isolation == "linux-bwrap":
+                separator = len(command) - 1 - command[::-1].index("--")
+                shell_command = [*command[: separator + 1], "/bin/bash", "-ec"]
+            else:
+                shell_command = [*command[:3], "/bin/zsh", "-lec"]
             probe = await asyncio.to_thread(
                 subprocess.run,
                 [

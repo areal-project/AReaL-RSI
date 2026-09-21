@@ -314,6 +314,24 @@ class ResearchApp:
                 if previous.state.get("creation_digest") != creation_digest:
                     raise ValueError("该 run_id 已用于不同的创建请求")
                 return await self.detail(run_id)
+        benchmark = params.get("benchmark")
+        if benchmark is not None:
+            if supplied is not None:
+                raise ValueError("benchmark 模板不能与完整 config 同时使用")
+            from areal_rsi.benchmarks.scale import prepare_config
+
+            run_id = run_id or new_id(f"research_{benchmark}")
+            supplied = encode(
+                prepare_config(
+                    self.root,
+                    self.repository,
+                    run_id,
+                    str(benchmark),
+                    max_agents=params.get("max_agents", 1),
+                    max_jobs=params.get("max_jobs", 5),
+                    hours=params.get("hours", 3),
+                )
+            )
         conversation = bool(
             params.get(
                 "conversation",
@@ -376,6 +394,7 @@ class ResearchApp:
         c = Coordinator.create(self.root, config.brief, simulated=simulated, run_id=run_id)
         c.state["creation_digest"] = creation_digest
         c.state["mode"] = config.mode
+        c.state["shared_agent_workspace"] = config.metadata.get("shared_agent_workspace", False)
         c.save()
         if key:
             self.save_credentials(c, config, key)
@@ -999,6 +1018,8 @@ class ResearchApp:
             return {}
         if action == "bootstrap":
             config = self.default_config or ResearchConfig(TaskBrief("新的研究", ""))
+            from areal_rsi.benchmarks.scale import catalog as scale_catalog
+
             return {
                 "service": "areal-rsi",
                 "api_version": 1,
@@ -1020,6 +1041,7 @@ class ResearchApp:
                     {"id": model, "efforts": list(efforts)}
                     for model, efforts in MODEL_EFFORTS.items()
                 ],
+                "benchmark_templates": scale_catalog(self.repository),
             }
         if action == "list":
             runs = FileRunStore(self.root).list(ExperimentRun)

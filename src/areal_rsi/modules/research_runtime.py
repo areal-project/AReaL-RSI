@@ -47,6 +47,12 @@ def usage_event(event: Json) -> Json:
     return {"type": "runtime_usage", "event_id": event["eventId"], "usage": normalized}
 
 
+def meaningful_usage(event: Json) -> Json | None:
+    """Discard intermediate DSH usage notifications that account for nothing."""
+    normalized = usage_event(event)
+    return normalized if any(value > 0 for value in normalized["usage"].values()) else None
+
+
 @dataclass
 class Conversation:
     runtime: PackageAgentRuntime
@@ -255,6 +261,10 @@ class ResearchRuntime:
         if self.config.context_window_tokens is not None:
             codex_config["model_context_window"] = self.config.context_window_tokens
         try:
+            readonly_mounts = tuple(
+                (str(item["source"]), str(item["target"]))
+                for item in self.config.metadata.get("workspace_readonly_mounts", [])
+            )
             session = await runtime.open(
                 spec,
                 workspace_root=str(workspace),
@@ -266,6 +276,7 @@ class ResearchRuntime:
                     else self.connection.effective_context_window_tokens
                 ),
                 codex_config=codex_config if self.backend == "codex" else None,
+                workspace_readonly_mounts=readonly_mounts,
             )
         except BaseException:
             server.close()
@@ -315,7 +326,9 @@ class ResearchRuntime:
                 history, _ = read_journal(session_dir / "runtime/data/state")
                 for event in history:
                     if event.type == "usage.updated":
-                        await event_sink(usage_event(event.model_dump(mode="json", by_alias=True)))
+                        normalized = meaningful_usage(event.model_dump(mode="json", by_alias=True))
+                        if normalized is not None:
+                            await event_sink(normalized)
             connection = await self._open(
                 session_dir,
                 workspace,
@@ -336,7 +349,7 @@ class ResearchRuntime:
 
         async def on_event(event: Json) -> None:
             kind, data = event["type"], event.get("data", {})
-            normalized = usage_event(event) if kind == "usage.updated" else None
+            normalized = meaningful_usage(event) if kind == "usage.updated" else None
             if normalized is not None:
                 for name, value in normalized["usage"].items():
                     usage[name] = usage.get(name, 0) + value

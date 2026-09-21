@@ -13,6 +13,31 @@ from areal_rsi.coordination.coordinator import Coordinator
 from areal_rsi.modules.responses import ToolCall
 
 
+def test_shared_agent_workspace_is_one_explicit_run_directory(tmp_path: Path) -> None:
+    c = Coordinator.create(tmp_path, TaskBrief("共享工作区", ""))
+    c.state["shared_agent_workspace"] = True
+    c.save()
+    actions = ResearchActions(c)
+    rsi = actions.workspace("rsi")
+    researcher = actions.workspace("researcher-1")
+    assert rsi == researcher == c.store.root / "shared-workspace"
+    (rsi / "change.py").write_text("visible = True\n")
+    assert (researcher / "change.py").read_text() == "visible = True\n"
+
+
+def test_passk_attempts_get_independent_workspaces_even_for_shared_templates(
+    tmp_path: Path,
+) -> None:
+    c = Coordinator.create(tmp_path, TaskBrief("独立探索", ""))
+    c.state.update(shared_agent_workspace=True, mode="passk")
+    c.save()
+    actions = ResearchActions(c)
+    first = actions.workspace("researcher-1")
+    second = actions.workspace("researcher-2")
+    assert first != second
+    assert first == c.store.paths.agent("researcher-1") / "workspace"
+
+
 def test_rsi_handoff_grants_prose_and_message_references_after_recovery(tmp_path: Path) -> None:
     async def scenario() -> None:
         c = Coordinator.create(tmp_path, TaskBrief("研究一般产物", ""))

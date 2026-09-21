@@ -200,13 +200,14 @@ class ResearchEngine:
         kind = event["type"]
         if kind == "runtime_usage":
             settled = self.coordinator.state.setdefault("runtime_usage", {})
-            if event["event_id"] not in settled:
-                settled[event["event_id"]] = {"agent_id": agent_id, "usage": event["usage"]}
-                self.coordinator.state["total_tokens"] += event["usage"].get("total_tokens", 0)
-                self.coordinator.save()
-                limit = self.coordinator.store.brief().limits.max_total_tokens
-                if limit is not None and self.coordinator.state["total_tokens"] >= limit:
-                    self._pause_for_budget("Run token budget exhausted")
+            if event["event_id"] in settled:
+                return
+            settled[event["event_id"]] = {"agent_id": agent_id, "usage": event["usage"]}
+            self.coordinator.state["total_tokens"] += event["usage"].get("total_tokens", 0)
+            self.coordinator.save()
+            limit = self.coordinator.store.brief().limits.max_total_tokens
+            if limit is not None and self.coordinator.state["total_tokens"] >= limit:
+                self._pause_for_budget("Run token budget exhausted")
         if kind == "runtime_turn_started":
             # A native harness turn can contain many provider calls. Do not
             # misrepresent it as one model request in comparison statistics.

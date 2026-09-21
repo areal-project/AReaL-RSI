@@ -21,6 +21,7 @@ def test_complete_npm_cli_is_reused_without_installing(
     binary.parent.mkdir()
     binary.touch()
     installer = Mock(side_effect=AssertionError("already installed"))
+    monkeypatch.setattr(dsh, "_require_compatible_node", lambda: Path("/fixture/node"))
     monkeypatch.setattr("areal_rsi.modules.dsh.subprocess.run", installer)
     assert dsh.ensure_cli(tmp_path) == binary
     installer.assert_not_called()
@@ -33,6 +34,18 @@ def test_missing_node_and_pnpm_is_actionable(
     with pytest.raises(RuntimeError, match=r"Node\.js.*pnpm"):
         dsh.ensure_cli(tmp_path)
     assert not (tmp_path / "dsh-cli").exists()
+
+
+def test_incompatible_node_reports_the_detected_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(dsh.shutil, "which", lambda name: f"/fixture/{name}")
+    probe = Mock(returncode=1)
+    version = Mock(stdout="v18.20.8\n")
+    runner = Mock(side_effect=(probe, version))
+    monkeypatch.setattr(dsh.subprocess, "run", runner)
+    with pytest.raises(RuntimeError, match=r"22\.19.*v18\.20\.8"):
+        dsh.ensure_cli(tmp_path)
 
 
 def test_concurrent_callers_share_one_completed_installation(
@@ -52,6 +65,7 @@ def test_concurrent_callers_share_one_completed_installation(
         binary.touch()
 
     installer = Mock(side_effect=install)
+    monkeypatch.setattr(dsh, "_require_compatible_node", lambda: Path("/fixture/node"))
     monkeypatch.setattr("areal_rsi.modules.dsh.subprocess.run", installer)
     monkeypatch.setattr("areal_rsi.modules.dsh.shutil.which", lambda _: "/fixture/bin")
     with ThreadPoolExecutor(max_workers=2) as pool:

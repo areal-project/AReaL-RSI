@@ -149,6 +149,38 @@ test('creation sends the selected recipe and registered modules appear without f
   assert.deepEqual(submitted.collaboration, {mode: 'passk', modules: ['test_evidence']});
 });
 
+test('benchmark creation keeps collaboration visible and submits it before start', async (t) => {
+  let submitted;
+  const records = {a: run('a')};
+  const ui = await setup(t, records, (path, options) => {
+    if (path === '/api/bootstrap') return Promise.resolve(response({
+      csrf_token: 'test', default_model_settings: defaults, models: [],
+      collaboration_catalog: collaborationCatalog,
+      default_collaboration: {mode: 'passk', modules: []},
+      benchmark_templates: [{id: 'opsd', label: 'On-Policy Self-Distillation'}],
+    }));
+    if (path === '/api/runs' && options.method === 'POST') {
+      submitted = JSON.parse(options.body);
+      records.new = run('new');
+      return Promise.resolve(response(records.new));
+    }
+    if (path === '/api/runs/new/start') return Promise.resolve(response(records.new));
+  });
+  ui.$('new-run').click();
+  const benchmarkOption = ui.window.document.createElement('option');
+  benchmarkOption.value = 'opsd'; benchmarkOption.textContent = 'On-Policy Self-Distillation';
+  ui.$('create-task-type').append(benchmarkOption);
+  ui.$('create-task-type').selectedIndex = 1;
+  assert.equal(ui.$('create-task-type').value, 'opsd');
+  ui.$('create-task-type').dispatchEvent(new ui.window.Event('change', {bubbles: true}));
+  assert.equal(ui.$('create-collaboration-mode-trigger').hidden, false);
+  assert.equal(ui.$('create-message-fields').hidden, true);
+  ui.submit('create-form'); await settle();
+  assert.equal(submitted.benchmark, 'opsd');
+  assert.deepEqual(submitted.collaboration, {mode: 'passk', modules: []});
+  assert.ok(ui.calls.some((call) => call.path === '/api/runs/new/start'));
+});
+
 test('switching runs uses cached views and rejects a late response from the previous run', async (t) => {
   const records = {a: run('a'), b: run('b')};
   let hold = false, resolve;
@@ -279,18 +311,24 @@ test('creation configures the first conversation and modal dropdowns stay intera
     }
   });
   ui.$('new-run').click();
+  assert.equal(ui.$('create-hours').checkValidity(), true);
+  assert.equal(ui.$('create-max-jobs').hasAttribute('max'), false);
+  assert.equal(ui.$('create-collaboration-mode-trigger').hidden, false);
   assert.equal(ui.$('create-base-url').value, defaults.base_url);
   assert.equal(ui.$('create-model').value, defaults.model);
   assert.match(ui.$('create-api-key').placeholder, /默认密钥/);
   assert.equal(ui.$('create-effort-options').closest('dialog'), ui.$('create-dialog'));
   ui.$('create-effort-trigger').click();
   const option = ui.$('create-effort-options').querySelector('[role="option"]');
+  const effortLabel = option.querySelector('.dropdown-option-body span').textContent;
   option.click();
+  assert.equal(ui.$('create-effort-trigger').textContent.trim(), effortLabel);
   ui.input('create-base-url', 'https://custom.example/v1');
   ui.input('create-api-key', 'dummy-ui-key');
   ui.input('create-model', 'custom-model');
   ui.$('create-backend-trigger').click();
   ui.$('create-backend-options').querySelectorAll('[role="option"]')[1].click();
+  assert.match(ui.$('create-backend-trigger').textContent, /codex/);
   ui.submit('create-form'); await settle();
   assert.deepEqual(submitted.model_settings, {base_url: 'https://custom.example/v1', api_key: 'dummy-ui-key', model: 'custom-model', reasoning_effort: 'high', backend: 'codex'});
   assert.equal(ui.$('create-dialog').open, false);

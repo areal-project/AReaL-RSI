@@ -46,6 +46,7 @@ const state = {
   defaultCollaboration: {mode: "collaborative", modules: []},
   collaborationDrafts: new Map(),
   collaborationSavingRun: null,
+  benchmarkTemplates: [],
 };
 const emptyChat = $("messages").firstElementChild.cloneNode(true);
 const mobileRunPicker = $("mobile-run-picker");
@@ -1569,7 +1570,7 @@ $("delete-form").addEventListener("submit", async (event) => {
   }
 });
 
-async function createConversation(message = "", modelSettings, collaboration) {
+async function createConversation(message = "", modelSettings, collaboration, benchmark) {
   if (state.creating) return;
   state.creating = true;
   $("new-run").disabled = $("mobile-new").disabled = $("welcome-send").disabled = true;
@@ -1577,14 +1578,23 @@ async function createConversation(message = "", modelSettings, collaboration) {
   try {
     $("create-submit").disabled = true;
     $("create-submit").textContent = "正在创建…";
-    const result = await api("/api/runs", { message, message_id: crypto.randomUUID(), ...(modelSettings ? {model_settings: modelSettings} : {}), ...(collaboration ? {collaboration} : {}) });
+    const result = await api("/api/runs", {
+      ...(benchmark ? benchmark : {message, message_id: crypto.randomUUID()}),
+      ...(modelSettings ? {model_settings: modelSettings} : {}),
+      ...(collaboration ? {collaboration} : {}),
+    });
     $("create-dialog").close();
     $("create-api-key").value = "";
     if (!result.run_id) throw new Error("未能读取研究记录，请刷新列表。");
     await loadRuns();
     state.runId = null;
     await selectRun(result.run_id);
-    switchTab("chat");
+    if (benchmark) {
+      await api(`/api/runs/${encodeURIComponent(result.run_id)}/start`, {});
+      await refresh(true);
+      switchTab("brief");
+      notice("Benchmark 研究已创建并启动。");
+    } else switchTab("chat");
     $("welcome-input").value = "";
     $("chat-input").focus();
   } catch (error) {
@@ -1622,6 +1632,8 @@ function openCreate(message = "", collaboration = state.defaultCollaboration) {
   $("create-api-key").value = "";
   $("create-api-key").placeholder = defaults.has_credentials ? "留空使用默认密钥（已配置）" : "请输入 API Key";
   $("create-message").value = message;
+  $("create-task-type").value = "";
+  renderCreateTaskType();
   $("create-error").hidden = true;
   state.createEffort = defaults.reasoning_effort || "xhigh";
   state.createBackend = defaults.backend || "standard";
@@ -1632,14 +1644,30 @@ function openCreate(message = "", collaboration = state.defaultCollaboration) {
   $("create-dialog").showModal();
 }
 $("create-model").addEventListener("input", updateCreateModels);
+function renderCreateTaskType() {
+  const benchmark = $("create-task-type").value;
+  $("create-benchmark-limits").hidden = !benchmark;
+  $("create-message-fields").hidden = !!benchmark;
+  $("create-task-description").textContent = benchmark
+    ? "创建干净 benchmark 会话并立即启动；RSI 与 Research Agent 共用工作区。"
+    : "创建后先与 Interaction 确认目标和执行环境。";
+  $("create-submit").textContent = benchmark ? "创建并启动" : "创建研究";
+}
+$("create-task-type").addEventListener("change", renderCreateTaskType);
 $("create-cancel").addEventListener("click", () => { if (!state.creating) $("create-dialog").close(); });
 $("create-dialog").addEventListener("cancel", (event) => { if (state.creating) event.preventDefault(); });
 $("create-form").addEventListener("submit", (event) => {
   event.preventDefault();
+  const benchmark = $("create-task-type").value;
   createConversation($("create-message").value.trim(), {
     base_url: $("create-base-url").value.trim(), api_key: $("create-api-key").value.trim(),
     model: $("create-model").value.trim(), reasoning_effort: state.createEffort, backend: state.createBackend,
-  }, collaborationSelection(state.createCollaboration));
+  }, collaborationSelection(state.createCollaboration), benchmark ? {
+    benchmark,
+    hours: Number($("create-hours").value),
+    max_jobs: Number($("create-max-jobs").value),
+    max_agents: Number($("create-max-agents").value),
+  } : null);
 });
 $("new-run").addEventListener("click", () => openCreate());
 $("mobile-new").addEventListener("click", () => openCreate());
@@ -1809,6 +1837,18 @@ async function bootstrap() {
   state.defaultModelSettings = config.default_model_settings || {};
   state.collaborationCatalog = config.collaboration_catalog || {modes: [], modules: []};
   state.defaultCollaboration = config.default_collaboration || {mode: "collaborative", modules: []};
+  state.benchmarkTemplates = config.benchmark_templates || [];
+  const taskType = $("create-task-type");
+  const freeResearch = document.createElement("option");
+  freeResearch.value = "";
+  freeResearch.textContent = "自由研究（先与 Interaction 对话）";
+  taskType.replaceChildren(freeResearch);
+  for (const benchmark of state.benchmarkTemplates) {
+    const option = document.createElement("option");
+    option.value = benchmark.id;
+    option.textContent = benchmark.label;
+    taskType.append(option);
+  }
 }
 
 async function boot() {

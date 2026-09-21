@@ -399,6 +399,9 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                                 for item in raw.get("collaboration_catalog", {}).get("modules", [])
                             ],
                         },
+                        "benchmark_templates": [
+                            _fields(item, "id label") for item in raw.get("benchmark_templates", [])
+                        ],
                     },
                 )
                 return
@@ -479,11 +482,17 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                     "collaboration",
                     "config",
                     "run_id",
+                    "benchmark",
+                    "hours",
+                    "max_jobs",
+                    "max_agents",
                 }:
                     raise ValueError("请发送研究需求，或提供完整的 config")
                 params = {
                     **_fields(
-                        params, "message message_id model_settings collaboration config run_id"
+                        params,
+                        "message message_id model_settings collaboration config run_id "
+                        "benchmark hours max_jobs max_agents",
                     ),
                     "conversation": "config" not in params,
                 }

@@ -124,6 +124,9 @@ class WorkbenchDropdown {
     const choice = this.choices[index];
     if (!choice || choice.disabled || this.trigger.disabled) return;
     this.close();
+    // Reflect the selection synchronously. Consumers may persist or further
+    // constrain it in onChange, but the combobox itself owns its visible value.
+    this.update(this.choices, choice.value);
     this.trigger.focus({ preventScroll: true });
     this.onChange(choice.value);
   }

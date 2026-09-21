@@ -305,6 +305,16 @@
       <form id="create-form">
         <div class="card-heading"><h2 id="create-title">新建研究</h2><button type="button" id="create-cancel" class="quiet" aria-label="关闭新建研究">✕</button></div>
         <p class="muted">先选择模型，再与 Interaction 聊聊研究目标。</p>
+        <label for="create-task-type">任务类型</label>
+        <select id="create-task-type">
+          <option value="">自由研究（先与 Interaction 对话）</option>
+        </select>
+        <p id="create-task-description" class="muted">创建后先与 Interaction 确认目标和执行环境。</p>
+        <div id="create-benchmark-limits" class="benchmark-limits" hidden>
+          <label for="create-hours">研究时长（小时）<input id="create-hours" type="number" min="0.5" max="48" step="0.5" value="3" /></label>
+          <label for="create-max-jobs">最多实验次数<input id="create-max-jobs" type="number" min="1" step="1" value="5" /></label>
+          <label for="create-max-agents">Research Agent 数<input id="create-max-agents" type="number" min="1" max="8" step="1" value="1" /></label>
+        </div>
         <div class="model-settings-fields">
           <div><label for="create-backend-trigger">Agent 后端</label><div id="create-backend"></div></div>
         <label for="create-base-url">API 地址<input id="create-base-url" type="url" required autocomplete="off" spellcheck="false" /></label>
@@ -315,8 +325,10 @@
         <label for="create-collaboration-mode-trigger">协作方式</label><div id="create-collaboration-mode"></div>
         <p id="create-collaboration-description" class="muted"></p>
         <div id="create-collaboration-modules" class="collaboration-modules"></div>
-        <label class="create-message-label" for="create-message">研究想法 <span class="muted">（可稍后聊）</span></label>
-        <textarea id="create-message" rows="3" maxlength="12000" placeholder="描述想解决的问题…"></textarea>
+        <div id="create-message-fields">
+          <label class="create-message-label" for="create-message">研究想法 <span class="muted">（可稍后聊）</span></label>
+          <textarea id="create-message" rows="3" maxlength="12000" placeholder="描述想解决的问题…"></textarea>
+        </div>
         <p id="create-error" class="form-error" role="alert" hidden></p>
         <div class="model-settings-footer"><span class="muted">开始研究前仍可修改配置。</span><button id="create-submit" class="primary" type="submit">创建研究</button></div>
       </form>

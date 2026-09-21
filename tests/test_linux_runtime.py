@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -23,7 +24,7 @@ def test_isolation_requires_explicit_supported_mode(
 ) -> None:
     monkeypatch.delenv("RSI_RUNTIME_ISOLATION", raising=False)
     assert RuntimeSettings({}).isolation == "sandbox"
-    with patch("sys.platform", "linux"), pytest.raises(RuntimeError, match="explicitly set"):
+    with patch("sys.platform", "linux"), pytest.raises(RuntimeError, match="linux-bwrap"):
         sandbox_command(tmp_path, tmp_path, ())
     monkeypatch.setenv("RSI_RUNTIME_ISOLATION", "typo")
     with pytest.raises(ValueError, match="RSI_RUNTIME_ISOLATION"):
@@ -34,6 +35,71 @@ def test_isolation_requires_explicit_supported_mode(
         command = sandbox_command(tmp_path, tmp_path, ())
         assert command[:2] == ["/usr/bin/sandbox-exec", "-f"]
         assert "(deny file-write*)" in (tmp_path / "sandbox.sb").read_text()
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux" or not __import__("shutil").which("bwrap"),
+    reason="Linux Bubblewrap integration",
+)
+def test_linux_bwrap_hides_host_tree_and_keeps_workspace_writable(tmp_path: Path) -> None:
+    session = tmp_path / "session"
+    workspace = tmp_path / "workspace"
+    private = tmp_path / "private"
+    for path in (session / "worker-code", workspace, private):
+        path.mkdir(parents=True)
+    (private / "answer.txt").write_text("hidden")
+    command = sandbox_command(session, workspace, (), isolation="linux-bwrap")
+    separator = len(command) - 1 - command[::-1].index("--")
+    probe = subprocess.run(
+        [
+            *command[: separator + 1],
+            "/bin/bash",
+            "-ec",
+            f"test ! -e {private}; "
+            "node -e \"if(typeof require('node:util').parseEnv !== 'function') process.exit(1)\"; "
+            "printf ok > probe.txt",
+        ],
+        text=True,
+        capture_output=True,
+    )
+    assert probe.returncode == 0, probe.stderr
+    assert (workspace / "probe.txt").read_text() == "ok"
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux" or not __import__("shutil").which("bwrap"),
+    reason="Linux Bubblewrap integration",
+)
+def test_linux_bwrap_overlays_readonly_workspace_file(tmp_path: Path) -> None:
+    session, workspace = tmp_path / "session", tmp_path / "workspace"
+    source, target = tmp_path / "published.jsonl", workspace / "data/pool.jsonl"
+    (session / "worker-code").mkdir(parents=True)
+    target.parent.mkdir(parents=True)
+    target.touch()
+    source.write_text("published\n")
+    command = sandbox_command(
+        session,
+        workspace,
+        (),
+        readonly_mounts=((source, target),),
+        isolation="linux-bwrap",
+    )
+    separator = len(command) - 1 - command[::-1].index("--")
+    probe = subprocess.run(
+        [
+            *command[: separator + 1],
+            "/bin/bash",
+            "-ec",
+            'test "$PWD" = /workspace; '
+            'test "$(cat /workspace/data/pool.jsonl)" = published; '
+            f'test "$(cat {target})" = published; '
+            "! printf changed > data/pool.jsonl 2>/dev/null",
+        ],
+        text=True,
+        capture_output=True,
+    )
+    assert probe.returncode == 0, probe.stderr
+    assert target.read_text() == ""
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux worker integration")

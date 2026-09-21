@@ -15,6 +15,11 @@ from areal_agent_runtime import BootstrapConfig, build_composition
 from areal_agent_runtime.contracts import CancelRunCommand, StartRunCommand
 
 
+def initial_session_id(runtime_kind: str, saved: dict[str, Any]) -> str | None:
+    """Return a durable vendor session; DSH sessions are process-local."""
+    return None if runtime_kind == "dsh" else saved.get("session_id")
+
+
 def compile_config(request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     directory, workspace = Path(request["directory"]), Path(request["workspace"])
     runtime = copy.deepcopy(request["runtime"])
@@ -261,7 +266,10 @@ async def serve(request: dict[str, Any], output: Any) -> None:
     active: str | None = None
     binding = Path(request["directory"]) / "session-binding.json"
     saved = json.loads(binding.read_text()) if binding.exists() else {}
-    session_id: str | None = saved.get("session_id")
+    # DSH session IDs belong to the running DSH process. After a worker restart
+    # its process-local session no longer exists, while turns handled by this
+    # worker can still resume through the in-memory value assigned below.
+    session_id = initial_session_id(request["runtime"]["kind"], saved)
     bindings = Path(request["directory"]) / "run-bindings.json"
     run_ids: list[str] = json.loads(bindings.read_text()) if bindings.exists() else []
     try:

@@ -360,10 +360,27 @@ class ResearchActions:
 
         return handle
 
+    def shared_workspace(self) -> bool:
+        # pass@k attempts must not replace files underneath one another. They
+        # still share the same runtime and execution bridge, but each attempt
+        # owns its writable checkout.
+        return (
+            bool(self.c.state.get("shared_agent_workspace")) and self.c.state.get("mode") != "passk"
+        )
+
     def workspace(self, agent_id: str) -> Path:
-        root = self.c.store.paths.agent(agent_id) / "workspace"
+        root = (
+            self.c.store.root / "shared-workspace"
+            if self.shared_workspace()
+            else self.c.store.paths.agent(agent_id) / "workspace"
+        )
         root.mkdir(parents=True, exist_ok=True)
         return root
+
+    def workspace_marker(self, agent_id: str) -> Path:
+        if self.shared_workspace():
+            return self.c.store.root / "shared-workspace-initialized.json"
+        return self.c.store.paths.agent(agent_id) / "workspace_initialized.json"
 
     def workspace_path(self, agent_id: str, name: str) -> Path:
         root = self.workspace(agent_id).resolve()
@@ -907,20 +924,20 @@ class ResearchActions:
         )
 
     def workspace_candidate(self, agent_id: str) -> str | None:
-        marker = self.c.store.paths.agent(agent_id) / "workspace_initialized.json"
+        marker = self.workspace_marker(agent_id)
         return json.loads(marker.read_text()).get("candidate_id") if marker.exists() else None
 
     def mark_workspace_candidate(self, agent_id: str, candidate_id: str | None) -> None:
         write_json(
-            self.c.store.paths.agent(agent_id) / "workspace_initialized.json",
+            self.workspace_marker(agent_id),
             {"candidate_id": candidate_id},
         )
 
     async def checkout_candidate(
         self, agent_id: str, candidate: CandidateSnapshot, key: str
     ) -> None:
-        parent = self.c.store.paths.agent(agent_id)
         workspace = self.workspace(agent_id)
+        parent = workspace.parent if self.shared_workspace() else self.c.store.paths.agent(agent_id)
         staging, backup = parent / (key + "-checkout"), parent / (key + "-previous")
         # If the process stopped between the two renames, retain/recover the
         # old workspace before checking whether it contains unsaved work.
@@ -952,7 +969,7 @@ class ResearchActions:
 
     async def initialize_workspace(self, agent_id: str) -> None:
         root = self.workspace(agent_id)
-        marker = self.c.store.paths.agent(agent_id) / "workspace_initialized.json"
+        marker = self.workspace_marker(agent_id)
         seed_id = self.c.state["seed_candidate_id"]
         if marker.exists() or seed_id is None:
             return

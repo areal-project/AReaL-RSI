@@ -14,7 +14,19 @@ if [[ ${1:-} == install ]]; then
         --python "$RSI_ROOT/.venv/bin/python" -r "$RSI_ROOT/requirements.txt"
     exit 0
 fi
-source "$RSI_ROOT/.venv/bin/activate"
+if [[ $RSI_ROOT == /rsi ]]; then
+    export VIRTUAL_ENV=/rsi/.venv
+    export PATH="/tmp/rsi-bin:/rsi/.venv/bin:$PATH"
+    export HF_DATASETS_CACHE=/tmp/hf-datasets
+    mkdir -p /tmp/rsi-bin "$HF_DATASETS_CACHE"
+    cat > /tmp/rsi-bin/accelerate <<'EOF'
+#!/bin/sh
+exec /rsi/.venv/bin/python /rsi/.venv/bin/accelerate "$@"
+EOF
+    chmod +x /tmp/rsi-bin/accelerate
+else
+    source "$RSI_ROOT/.venv/bin/activate"
+fi
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 TOKENIZERS_PARALLELISM=false WANDB_MODE=disabled
 export NLTK_DATA=/opt/nltk_data

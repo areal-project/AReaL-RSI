@@ -1475,10 +1475,15 @@ button.primary.destructive { background: var(--red); }
 .create-dialog .card-heading { padding: 0; border: 0; }
 .create-dialog > form > p { margin: 12px 0; }
 .create-dialog textarea { width: 100%; resize: vertical; border: 1px solid var(--line); border-radius: 9px; padding: 12px; font: inherit; }
+.create-dialog select, .benchmark-limits input { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; color: var(--ink); background: #fff; font: inherit; }
+.benchmark-limits { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 12px 0; }
+.benchmark-limits label { font-size: 12px; color: var(--muted); }
+.benchmark-limits input { display: block; margin-top: 7px; }
 .create-message-label { display: block; font-size: 13px; margin: 22px 0 10px; }
 .form-error { color: #a13c32; }
 @media (max-width: 560px) {
   .model-settings-fields { grid-template-columns: 1fr; }
+  .benchmark-limits { grid-template-columns: 1fr; }
   .create-dialog { padding: 18px; }
 }
 

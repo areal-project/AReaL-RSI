@@ -129,9 +129,13 @@ class PackageRuntimeTest(unittest.IsolatedAsyncioTestCase):
             workspace.mkdir()
             hidden = root / "hidden-validation.txt"
             hidden.write_text("hidden-answer")
-            prefix = sandbox_command(directory, workspace, ())[:3]
+            if sys.platform == "linux":
+                command = sandbox_command(directory, workspace, (), isolation="linux-bwrap")
+                separator = len(command) - 1 - command[::-1].index("--")
+                prefix = command[: separator + 1]
+            else:
+                prefix = sandbox_command(directory, workspace, ())[:3]
             script = "import pathlib,sys; pathlib.Path(sys.argv[1]).read_text()"
-            import sys
 
             process = await asyncio.create_subprocess_exec(
                 *prefix,
@@ -145,7 +149,7 @@ class PackageRuntimeTest(unittest.IsolatedAsyncioTestCase):
             out, err = await process.communicate()
             self.assertNotEqual(process.returncode, 0)
             self.assertNotIn(b"hidden-answer", out)
-            self.assertIn(b"PermissionError", err)
+            self.assertTrue(b"PermissionError" in err or b"FileNotFoundError" in err)
             import areal_rsi
 
             evaluator = Path(areal_rsi.__file__).parent / "modules/benchmark.py"
@@ -161,7 +165,7 @@ class PackageRuntimeTest(unittest.IsolatedAsyncioTestCase):
             )
             out, err = await process.communicate()
             self.assertNotEqual(process.returncode, 0)
-            self.assertIn(b"PermissionError", err)
+            self.assertTrue(b"PermissionError" in err or b"FileNotFoundError" in err)
 
     @unittest.skipUnless(sys.platform == "darwin", "macOS sandbox-exec integration")
     async def test_shared_dsh_links_use_canonical_paths_without_broadening_access(self) -> None:

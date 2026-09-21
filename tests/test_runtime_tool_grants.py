@@ -3,7 +3,13 @@ from typing import Any
 
 import pytest
 
-from areal_rsi.modules.runtime_worker import compile_config
+from areal_rsi.modules.runtime_worker import compile_config, initial_session_id
+
+
+def test_dsh_session_is_not_resumed_after_worker_restart() -> None:
+    saved = {"session_id": "process-local-session"}
+    assert initial_session_id("dsh", saved) is None
+    assert initial_session_id("codex-cli", saved) == "process-local-session"
 
 
 def request(tmp_path: Path, kind: str = "dsh") -> dict[str, Any]:

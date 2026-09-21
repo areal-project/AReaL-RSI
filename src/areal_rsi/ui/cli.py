@@ -261,6 +261,18 @@ def main() -> None:
     preflight_parser.add_argument("--backend", choices=("standard", "codex", "runtime"))
     preflight_parser.add_argument("--data-root", "--root", dest="root", type=Path)
     preflight_parser.add_argument("--timeout", type=float, default=180)
+    examples = commands.add_parser("examples", help="list or prepare runnable workflows")
+    example_commands = examples.add_subparsers(dest="example_command")
+    examples.set_defaults(example_command="list")
+    example_commands.add_parser("list", help="list complete runnable workflows")
+    prepare = example_commands.add_parser("prepare", help="create a frozen ResearchConfig")
+    prepare.add_argument("name", choices=("arithmetic", "livecodebench"))
+    prepare.add_argument("--directory", type=Path, required=True)
+    prepare.add_argument("--arena-config", type=Path)
+    prepare.add_argument("--time-limit", type=float, default=1200)
+    prepare.add_argument(
+        "--backend", choices=("standard", "codex", "runtime"), default="standard"
+    )
     args = parser.parse_args()
     try:
         if args.command in {"workbench", "web"}:
@@ -294,6 +306,27 @@ def main() -> None:
                     root=args.root,
                 )
             )
+        elif args.command == "examples":
+            if args.example_command == "list":
+                print("arithmetic\nlivecodebench")
+            else:
+                if args.name == "arithmetic" and args.arena_config is not None:
+                    raise ValueError("--arena-config is only valid for livecodebench")
+                if args.name == "livecodebench" and args.arena_config is None:
+                    raise ValueError("livecodebench requires --arena-config")
+                from areal_rsi.adapters.benchmark_research import prepare as prepare_benchmark
+
+                path = asyncio.run(
+                    prepare_benchmark(
+                        "math" if args.name == "arithmetic" else "lcb",
+                        args.directory,
+                        arena_config=args.arena_config,
+                        max_wall_seconds=args.time_limit,
+                        backend=args.backend,
+                    )
+                )
+                print(path)
+            code = 0
     except (ValueError, OSError) as exc:
         parser.exit(2, f"研究配置或启动错误：{exc}\n检查配置及 .env 后重试。\n")
     except KeyboardInterrupt:

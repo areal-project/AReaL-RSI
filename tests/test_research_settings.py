@@ -37,11 +37,11 @@ def test_current_brief_can_be_updated_and_started(tmp_path: Path) -> None:
             config = system.config(c)
             config.commands = (ApprovedCommand("noop", (sys.executable, "-c", "pass")),)
             write_json(c.store.root / "coordination/config.json", config.public())
-            c.state["intake"]["status"] = "ready"
-            c.state["execution_setup"] = "pending"
+            c.state.intake.status = "ready"
+            c.state.execution_setup = "pending"
             c.save()
             await system.start(c.store.run_id)
-            assert system.coordinator(c.store.run_id).state["status"] == "running"
+            assert system.coordinator(c.store.run_id).state.status == "running"
             started = json.loads((c.store.root / "coordination/started-config.json").read_text())
             assert started["brief"]["limits"]["max_model_calls"] is None
         finally:

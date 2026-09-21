@@ -205,7 +205,7 @@ def test_progress_wakes_coordinator_without_ending_research_stage(tmp_path: Path
         assert c.actor(agent).iterations[-1].report_ref is None
         recovered = ResearchActions(Coordinator(c.store))
         assert (await recovered.handler(agent)(tool)).output == sent.output
-        assert c.state["inboxes"]["rsi"].count(sent.output["message_id"]) == 1
+        assert c.state.inboxes["rsi"].count(sent.output["message_id"]) == 1
         c.report(agent, key="done", fields={"message": "阶段已完成"})
         c.end_turn(agent)
         assert c.actor(agent).wait_reason == "rsi_reply"
@@ -269,7 +269,7 @@ def test_peer_handoff_is_scoped_and_preserves_report_boundaries(tmp_path: Path) 
         recovered = ResearchActions(Coordinator(c.store))
         assert recovered.read_record(recipient, ref.uri)["value"] == "usable"
         assert (await recovered.handler(source)(tool)).output == sent.output
-        assert c.state["inboxes"][recipient].count(peer_id) == 1
+        assert c.state.inboxes[recipient].count(peer_id) == 1
         assert source in c.turn_update_senders(recipient)
         c.begin_turn(recipient)
         # An update is the continuation of this node, never a new assignment.
@@ -332,7 +332,7 @@ def test_peer_handoff_recovers_after_delivery_and_recipient_report(
         assert set((c.store.root / "messages").glob("*.json")) == messages_before
         assert recipient not in recovered.pending()
         assert recovered.actor(recipient).wait_reason == "rsi_reply"
-        assert recovered.state["inboxes"]["rsi"].count(result.output["message_id"]) == 1
+        assert recovered.state.inboxes["rsi"].count(result.output["message_id"]) == 1
 
     asyncio.run(scenario())
 

@@ -30,6 +30,7 @@ class RunState(StrEnum):
     PLANNED = "planned"
     RUNNING = "running"
     SUCCEEDED = "succeeded"
+    COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
 

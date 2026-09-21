@@ -6,6 +6,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from areal_rsi.api.execution import JobSpec
 from areal_rsi.api.records import ContentRef, JsonObject, RecordRef
 from areal_rsi.api.records import JsonValue as JsonValue  # Recursive JsonObject type resolution.
 
@@ -214,6 +215,64 @@ class VerifiedResult:
 
 
 @dataclass(slots=True)
+class JobWaiter:
+    iteration_id: str | None = None
+    notified: bool = False
+
+
+@dataclass(slots=True)
+class ResearchJob:
+    """Research ownership and publication state; process state belongs to JobRecord."""
+
+    agent_id: str
+    output: str
+    spec: JobSpec
+    created_at: str
+    iteration_id: str | None = None
+    candidate_id: str | None = None
+    source_job_id: str | None = None
+    verification: bool = False
+    phase: Literal["search", "final", "diagnostic", "prepare"] = "diagnostic"
+    parameters: dict[str, str] | None = None
+    waiting: bool = False
+    processed: bool = False
+    automatic: bool = False
+    completion: bool = False
+    output_subdir: str = "."
+    public_output_subdir: str | None = None
+    feedback_file: str | None = "feedback.json"
+    queue_timing_file: str | None = None
+    auto_verify_output: str | None = None
+    waiters: dict[str, JobWaiter] = field(default_factory=dict)
+    result: VerifiedResult | None = None
+    result_ref: RecordRef | None = None
+    # Public receipts and arbitrary tool feedback are transport payloads, not control state.
+    execution_result: JsonObject | None = None
+    feedback: JsonObject | None = None
+    published_candidate_id: str | None = None
+    verification_job_id: str | None = None
+    publication_error: str | None = None
+
+
+@dataclass(slots=True)
+class CompletionRecord:
+    """Optional result confirmation, independent of whether a numeric target was reached."""
+
+    status: Literal["running", "interrupted", "failed", "completed"]
+    exploration_finished_at: float | None = None
+    target_reached: bool | None = None
+    error: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.status not in {"running", "interrupted", "failed", "completed"}:
+            raise ValueError("Unknown completion status")
+        if self.exploration_finished_at is not None and not math.isfinite(
+            self.exploration_finished_at
+        ):
+            raise ValueError("Completion cutoff must be finite")
+
+
+@dataclass(slots=True)
 class ResearchMessage:
     message_id: str
     sender: str
@@ -232,3 +291,151 @@ class ResearchEvent:
     agent_id: str | None = None
     iteration_id: str | None = None
     data: JsonObject = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class IntakeState:
+    status: str | None = None  # None means no conversational intake was requested.
+    summary: str = ""
+    environment: str = ""
+    config_revision: str = ""
+    prepared_at: str | None = None
+    execution_required: bool = False
+    confirmation_message_id: str | None = None
+
+
+@dataclass(slots=True)
+class TurnFailure:
+    kind: str
+    message_id: str
+    iteration_id: str | None = None
+
+
+@dataclass(slots=True)
+class TurnRetry:
+    message_id: str
+    retry_id: str
+    mode: str | None = None
+
+
+@dataclass(slots=True)
+class RetryBackoff:
+    count: int = 0
+    at: float | None = None
+
+
+@dataclass(slots=True)
+class AgentActivity:
+    type: str
+    tool: str | None
+    updated_at: str
+
+
+@dataclass(slots=True)
+class RuntimeUsage:
+    agent_id: str
+    usage: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class ReportSummary:
+    uri: str
+    message: str
+    created_at: str
+
+
+@dataclass(slots=True)
+class PendingReportReply:
+    agent_id: str
+    direction: str | None
+    iteration_id: str
+    report_ref: RecordRef
+
+
+@dataclass(slots=True)
+class LeaderAdvice:
+    message_id: str
+    message: str
+    references: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class UserQuestion:
+    message_id: str
+    agent_id: str = ""
+    question: str = ""
+    created_at: str = ""
+
+
+@dataclass(slots=True)
+class PublishedResult(VerifiedResult):
+    uri: str = ""
+
+
+@dataclass(slots=True)
+class TargetObservation:
+    result: PublishedResult
+    observed_at: str
+
+
+@dataclass(slots=True)
+class AgentClock:
+    started_at: float
+    finished_at: float | None = None
+    api_spans: list[tuple[float, float | None]] = field(default_factory=list)
+    queue_spans: dict[str, tuple[float, float | None]] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class EffectiveClock:
+    protocol: str = "baseline-active-v1"
+    periods: list[tuple[float, float | None]] = field(default_factory=list)
+    agents: dict[str, AgentClock] = field(default_factory=dict)
+    heartbeat_at: float = 0.0
+
+
+@dataclass(slots=True)
+class CoordinationState:
+    """Durable scheduling state. JSON is decoded once when a run is opened."""
+
+    status: str = "planned"
+    created_at: str = ""
+    simulated: bool = False
+    inboxes: dict[str, list[str]] = field(default_factory=dict)
+    active: dict[str, str] = field(default_factory=dict)
+    delivered: list[str] = field(default_factory=list)
+    plan: str = ""
+    seed_candidate_id: str | None = None
+    baseline_candidate_id: str | None = None
+    selected_candidate_id: str | None = None
+    model_calls: int = 0
+    total_tokens: int = 0
+    verify_calls: int = 0
+    started_at: str | None = None
+    waiting_for_user: list[UserQuestion] = field(default_factory=list)
+    finalization: CompletionRecord | None = None
+    intake: IntakeState = field(default_factory=IntakeState)
+    effective_time: EffectiveClock | None = None
+    turn_failures: dict[str, TurnFailure] = field(default_factory=dict)
+    turn_retries: dict[str, TurnRetry] = field(default_factory=dict)
+    turn_followups: dict[str, list[str]] = field(default_factory=dict)
+    runtime_usage: dict[str, RuntimeUsage] = field(default_factory=dict)
+    agent_activity: dict[str, AgentActivity] = field(default_factory=dict)
+    passk_reports: dict[str, ReportSummary] = field(default_factory=dict)
+    passk_retries: dict[str, RetryBackoff] = field(default_factory=dict)
+    leader_advice: dict[str, LeaderAdvice] = field(default_factory=dict)
+    passk_target: TargetObservation | None = None
+    passk_ready: bool = False
+    passk_supervision_at: float = 0.0
+    runtime_turns: int = 0
+    mode: str | None = None
+    execution_setup: str = "ready"
+    creation_digest: str | None = None
+    budget_stop_reason: str | None = None
+    user_stopped: bool = False
+    rsi_explicit_wait: bool = False
+    require_final_confirmation: bool = False
+    run_stop_agents: list[str] | None = None
+    archived_chat_message_ids: list[str] = field(default_factory=list)
+    # Opaque historical request receipts, used only to project legacy counters.
+    model_requests: dict[str, JsonObject] = field(default_factory=dict)

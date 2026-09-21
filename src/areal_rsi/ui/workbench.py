@@ -135,7 +135,7 @@ def public_detail(value: Json) -> Json:
     )
     result["brief"] = _brief(value.get("brief"))
     result["finalization"] = _fields(
-        value.get("finalization"), "status error exploration_finished_at"
+        value.get("finalization"), "status error exploration_finished_at target_reached"
     )
     result["intake"] = _fields(value.get("intake"), "status summary environment execution_required")
     result["model_settings"] = _fields(

@@ -87,8 +87,8 @@ def model_state(c: Coordinator, agent_id: str) -> dict[str, Any]:
     ]
     result["evidence_has_more"] = len(evidence) > 5
     result["brief_ref"] = encode(c.store.run().brief_ref)
-    result["seed_candidate_id"] = c.state["seed_candidate_id"]
-    seed_id = c.state["seed_candidate_id"]
+    result["seed_candidate_id"] = c.state.seed_candidate_id
+    seed_id = c.state.seed_candidate_id
     if seed_id:
         seed = c.store.get("candidates", seed_id, CandidateSnapshot)
         result["seed_candidate"] = {
@@ -228,12 +228,17 @@ def communications(
 
 
 def research_detail(
-    c: Coordinator, *, after: int = 0, event_limit: int | None = None,
-    model_settings: dict[str, Any], collaboration: dict[str, Any],
-    worker_alive: bool, active_agents: tuple[str, ...],
+    c: Coordinator,
+    *,
+    after: int = 0,
+    event_limit: int | None = None,
+    model_settings: dict[str, Any],
+    collaboration: dict[str, Any],
+    worker_alive: bool,
+    active_agents: tuple[str, ...],
 ) -> dict[str, Any]:
     summary = c.summary()
-    summary["finalization"] = c.state.get("finalization")
+    summary["finalization"] = encode(c.completion)
     run = c.store.run()
     actors = {actor["agent_id"]: actor for actor in summary["agents"]}
     evidence = encode(c.store.records("evidence", EvidenceRecord))
@@ -251,15 +256,13 @@ def research_detail(
     }
     reports_by_iteration: dict[str, list[dict[str, Any]]] = {}
     reports_by_message = {}
-    delivered = set(c.state["delivered"])
+    delivered = set(c.state.delivered)
     for report_record in sorted(
         c.store.records("reports", ResearchReport),
         key=lambda item: (item.created_at, item.report_id),
     ):
         report_view = encode(report_record)
-        ref = c.store.paths.reference(
-            c.store.root / "reports" / f"{report_record.report_id}.json"
-        )
+        ref = c.store.paths.reference(c.store.root / "reports" / f"{report_record.report_id}.json")
         message = report_messages.get(ref.uri)
         report_view["delivery_status"] = (
             "delivered"
@@ -308,7 +311,7 @@ def research_detail(
                             "kind": "reference",
                         }
                     )
-    archived_chat = set(c.state.get("archived_chat_message_ids", []))
+    archived_chat = set(c.state.archived_chat_message_ids)
     messages = [
         encode(m)
         for m in all_messages
@@ -332,7 +335,7 @@ def research_detail(
             baseline = bool(
                 info.get("verification")
                 and info.get("candidate_id")
-                and info["candidate_id"] == c.state.get("baseline_candidate_id")
+                and info["candidate_id"] == c.state.baseline_candidate_id
                 and info.get("phase") == "search"
             )
             phase = info.get("phase")
@@ -367,7 +370,7 @@ def research_detail(
                     "finished_at": record["finished_at"],
                     "exit_code": record["exit_code"],
                     "error": record["error"],
-                    "simulated": c.state["simulated"],
+                    "simulated": c.state.simulated,
                     "result": info.get("result"),
                     "published_candidate_id": info.get("published_candidate_id"),
                     "verification_job_id": info.get("verification_job_id"),
@@ -387,7 +390,7 @@ def research_detail(
                 and result.get("score") is not None
                 and result.get("phase") == "search"
                 and result.get("contract_digest") == contract_digest
-                and result.get("simulated") == c.state["simulated"]
+                and result.get("simulated") == c.state.simulated
             ):
                 candidate_id = result["candidate_id"]
                 if candidate_id not in withdrawn:
@@ -405,7 +408,7 @@ def research_detail(
                         ):
                             public_node["verification"] = result
     events = c.store.events(after, limit=event_limit)
-    if c.state.get("mode") == "passk":
+    if c.state.mode == "passk":
         # Older runs have the durable report/message, but no named report event.
         # Reuse its original cursor and timestamp; never rewrite archived events.
         for index, event in enumerate(events):
@@ -429,8 +432,8 @@ def research_detail(
         "nodes": nodes,
         "edges": edges,
         "messages": messages,
-        "agent_activity": c.state.get("agent_activity", {}),
-        "execution_setup": c.state.get("execution_setup", "ready"),
+        "agent_activity": encode(c.state.agent_activity),
+        "execution_setup": c.state.execution_setup,
         "model_settings": model_settings,
         "collaboration": collaboration,
         "jobs": jobs,
@@ -441,13 +444,16 @@ def research_detail(
         "worker_alive": worker_alive,
         "active_agents": list(active_agents),
         "pending_agents": c.pending(),
-        "started_at": c.state.get("started_at"),
+        "started_at": c.state.started_at,
         "finished_at": run.finished_at,
     }
 
 
 def research_list(
-    root: Path, coordinator: Callable[[str], Coordinator], *, allow_simulation: bool,
+    root: Path,
+    coordinator: Callable[[str], Coordinator],
+    *,
+    allow_simulation: bool,
 ) -> dict[str, Any]:
     runs = FileRunStore(root).list(ResearchRun)
     # Workbench organization is independent of frozen experiment records.
@@ -461,8 +467,8 @@ def research_list(
 
     def created_at(run: ResearchRun) -> str:
         c = coordinator(run.run_id)
-        if c.state.get("created_at"):
-            return str(c.state["created_at"])
+        if c.state.created_at:
+            return str(c.state.created_at)
         # Older runs predate the timestamp field. Their first immutable
         # event records creation, unlike file modification time.
         event = c.store.root / "events" / "000000000001.json"
@@ -478,16 +484,13 @@ def research_list(
                 {
                     "run_id": r.run_id,
                     "objective": r.plan.goal,
-                    "status": coordinator(r.run_id).state["status"],
-                    "simulated": coordinator(r.run_id).state["simulated"],
+                    "status": coordinator(r.run_id).state.status,
+                    "simulated": coordinator(r.run_id).state.simulated,
                     "created_at": created_at(r),
                     "group": run_groups.get(r.run_id),
                 }
                 for r in runs
-                if (
-                    allow_simulation
-                    or not coordinator(r.run_id).state["simulated"]
-                )
+                if (allow_simulation or not coordinator(r.run_id).state.simulated)
             ],
             key=lambda r: (r["created_at"], r["run_id"]),
             reverse=True,

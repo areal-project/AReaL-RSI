@@ -17,7 +17,7 @@ from test_research_runtime_package import ResponsesModel
 
 from areal_rsi.api.interfaces import ResearchAgentRuntime, ToolCall, ToolResult, TurnResult
 from areal_rsi.api.records import AgentState
-from areal_rsi.api.research import TaskBrief
+from areal_rsi.api.research import CoordinationState, TaskBrief
 from areal_rsi.infra.coordination.config import ResearchConfig
 from areal_rsi.infra.coordination.effective_time import EffectiveTime
 from areal_rsi.infra.coordination.engine import ToolSet
@@ -25,11 +25,11 @@ from areal_rsi.infra.coordination.evaluation.jobs import ResearchExecution
 from areal_rsi.infra.coordination.policies.passk import PassKEngine
 from areal_rsi.infra.execution import ApprovedCommand
 from areal_rsi.infra.runtime.research_runtime import ResearchRuntime
-from areal_rsi.infra.storage.files import write_json
+from areal_rsi.infra.storage.files import decode, encode, write_json
 
 
 def test_baseline_union_and_worker_restart_do_not_double_subtract() -> None:
-    state: dict[str, Any] = {}
+    state = CoordinationState()
     timer = EffectiveTime(state)
     timer.open_worker(0)
     timer.start_agent("a", 0)
@@ -41,7 +41,9 @@ def test_baseline_union_and_worker_restart_do_not_double_subtract() -> None:
     # Maintenance gap 70..100 is not worker time.
     timer = EffectiveTime(state)
     timer.open_worker(100)
-    timer.data["heartbeat_at"] = 110
+    timer.data.heartbeat_at = 110
+    # Deserialize the historic JSON shape, including arrays and per-agent maps.
+    state = decode(CoordinationState, {"effective_time": encode(state.effective_time)})
     timer = EffectiveTime(state)
     timer.open_worker(200)  # Recover a crash at the last durable heartbeat.
     result = timer.budget("a", 220, 100)
@@ -126,7 +128,7 @@ def test_each_researcher_stops_at_own_budget_excluding_pauses_and_leader_waits(
             await engine.tick()
             assert c.actor(agents[0]).state == AgentState.STOPPED
             assert c.actor(agents[1]).state != AgentState.STOPPED
-            assert c.state["status"] == "running" and c.actor("rsi").state != AgentState.STOPPED
+            assert c.state.status == "running" and c.actor("rsi").state != AgentState.STOPPED
             leader_budget = actions.state("rsi")["budget"]
             own_budget = actions.state(agents[1])["budget"]
             assert "elapsed_seconds" not in leader_budget and "elapsed_seconds" not in own_budget
@@ -137,7 +139,7 @@ def test_each_researcher_stops_at_own_budget_excluding_pauses_and_leader_waits(
             assert "elapsed_seconds" in c.budget(), "Operator view retains total wall time"
             clock[0] = 291
             await engine.tick()
-            assert c.state["status"] == "stopped"
+            assert c.state.status == "stopped"
             assert all(c.actor(a).state == AgentState.STOPPED for a in ["rsi", *agents])
             assert timer.budget(agents[0], 999, 60)["effective_seconds"] == 61
             assert timer.budget(agents[1], 999, 60)["effective_seconds"] == 61
@@ -235,7 +237,7 @@ def test_failed_local_job_closes_stale_remote_queue(tmp_path: Path) -> None:
             record = execution.manager.get(result.output["job_id"])
             assert record.state == "failed" and record.finished_at is not None
             await execution.poll()
-            spans = timer.data["agents"][agents[0]]["queue_spans"]
+            spans = timer.data.agents[agents[0]].queue_spans
             assert spans["remote:" + record.job_id][1] == record.finished_at
             before = timer.budget(agents[0], record.finished_at, 60)
             after = timer.budget(agents[0], record.finished_at + 30, 60)

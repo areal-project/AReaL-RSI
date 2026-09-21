@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -20,9 +21,17 @@ from areal_rsi.api.records import (
 )
 from areal_rsi.api.research import (
     Assignment,
+    CandidateSnapshot,
+    CompletionRecord,
+    CoordinationState,
+    PendingReportReply,
+    ResearchJob,
     ResearchMessage,
     ResearchReport,
     TaskBrief,
+    TurnFailure,
+    TurnRetry,
+    UserQuestion,
     VerifiedResult,
 )
 from areal_rsi.infra.coordination.effective_time import EffectiveTime
@@ -40,7 +49,7 @@ class Coordinator:
     def __init__(self, store: ResearchStore):
         self.store = store
         self.path = store.root / "coordination" / "state.json"
-        self.state: dict[str, Any] = json.loads(self.path.read_text())
+        self.state: CoordinationState = decode(CoordinationState, json.loads(self.path.read_text()))
 
     @classmethod
     def create(
@@ -75,28 +84,111 @@ class Coordinator:
             )
         write_json(
             store.root / "coordination" / "state.json",
-            {
-                "status": "planned",
-                "created_at": now(),
-                "simulated": simulated,
-                "inboxes": {},
-                "active": {},
-                "delivered": [],
-                "plan": "",
-                "seed_candidate_id": None,
-                "baseline_candidate_id": None,
-                "model_calls": 0,
-                "total_tokens": 0,
-                "verify_calls": 0,
-                "started_at": None,
-                "waiting_for_user": [],
-            },
+            CoordinationState(created_at=now(), simulated=simulated),
         )
         store.event("run_created", objective=brief.objective, simulated=simulated)
         return cls(store)
 
     def save(self) -> None:
         write_json(self.path, self.state)
+
+    @property
+    def completion(self) -> CompletionRecord | None:
+        return self.state.finalization
+
+    @property
+    def selected_candidate_id(self) -> str | None:
+        value = self.state.selected_candidate_id
+        return str(value) if value else None
+
+    def select_candidate(self, candidate_id: str | None) -> None:
+        if candidate_id is not None:
+            self.store.get("candidates", candidate_id, CandidateSnapshot)
+            if self.store.is_withdrawn(candidate_id):
+                raise ValueError("最终候选已撤回，不能发布")
+        self.state.selected_candidate_id = candidate_id
+        self.save()
+
+    def _save_completion(self, record: CompletionRecord, *, status: str | None = None) -> None:
+        state = replace(self.state, finalization=record)
+        if status is not None:
+            state.status = status
+        write_json(self.path, state)
+        self.state = state
+
+    def begin_completion(self) -> CompletionRecord:
+        previous = self.completion
+        if previous and previous.status == "completed":
+            return previous
+        if self.state.status not in {"stopped", "succeeded"} or self.state.user_stopped:
+            raise ValueError("Result confirmation requires exploration to have ended")
+        cutoff = previous.exploration_finished_at if previous else None
+        run = self.store.run()
+        if cutoff is None:
+            cutoff = datetime.fromisoformat(run.finished_at or now()).timestamp()
+            limit = self.store.brief().limits.max_wall_seconds
+            if self.state.started_at and limit is not None:
+                cutoff = min(
+                    cutoff, datetime.fromisoformat(self.state.started_at).timestamp() + limit
+                )
+        record = CompletionRecord("running", cutoff)
+        self._save_completion(record)
+        run.finished_at = None
+        self.store.save_run(run)
+        self.store.event("finalization_started", summary="探索已结束，正在验证和归档结果")
+        return record
+
+    def interrupt_completion(self, error: str | None = None) -> None:
+        record = self.completion
+        if record is None or record.status != "running":
+            raise ValueError("No running result confirmation")
+        record.status = "failed" if error is not None else "interrupted"
+        record.error = error
+        self._save_completion(record)
+        if error is not None:
+            self.store.event(
+                "finalization_failed", summary="结果验证失败，可恢复后继续", error=error
+            )
+
+    def execution_cutoffs(
+        self, jobs: dict[str, ResearchJob], cutoff: float
+    ) -> dict[str, float] | None:
+        if self.store.brief().limits.max_effective_seconds is None:
+            return None
+        timer = EffectiveTime(self.state)
+        return {
+            key: end
+            for key, job in jobs.items()
+            if not job.verification
+            and (end := timer.execution_cutoff(job.agent_id, cutoff)) is not None
+        }
+
+    def complete_research(self, result: VerifiedResult, reference: RecordRef) -> None:
+        record = self.completion
+        if record is None or record.status != "running" or result.status != "succeeded":
+            raise ValueError("Cannot complete research without a finished verification")
+        self.select_candidate(result.candidate_id)
+        contract = self.store.brief().verification
+        reached = None
+        if contract is not None and contract.target is not None:
+            reached = bool(
+                result.passed
+                and result.score is not None
+                and (
+                    result.score >= contract.target
+                    if contract.direction == "maximize"
+                    else result.score <= contract.target
+                )
+            )
+        record.status, record.target_reached = "completed", reached
+        run = self.store.run()
+        run.state = RunState.SUCCEEDED if reached else RunState.COMPLETED
+        run.final_result_ref, run.finished_at = reference, now()
+        self.store.save_run(run)
+        self._save_completion(record, status="succeeded" if reached else "completed")
+        message = f"研究已完成，最终 {contract.metric if contract else 'score'}={result.score}。"
+        self.enqueue("runtime", "user", message, key="automatic-finalization-completed")
+        self.store.event("finalization_completed", summary=message)
 
     def actor(self, agent_id: str) -> ResearchAgentState:
         safe_name(agent_id)
@@ -161,15 +253,15 @@ class Coordinator:
                 **(event_data or {}),
             )
         if recipient != "user":
-            inbox = self.state["inboxes"].setdefault(recipient, [])
-            if message_id not in self.state["delivered"] and message_id not in inbox:
+            inbox = self.state.inboxes.setdefault(recipient, [])
+            if message_id not in self.state.delivered and message_id not in inbox:
                 inbox.append(message_id)
         self.save()
         return message_id
 
-    def user_questions(self) -> list[dict[str, Any]]:
+    def user_questions(self) -> list[UserQuestion]:
         """Project outstanding questions, including records written before direct RSI replies."""
-        pending = self.state["waiting_for_user"]
+        pending = self.state.waiting_for_user
         if not pending:
             return []
         answered = {
@@ -179,32 +271,27 @@ class Coordinator:
         }
         questions = []
         for item in pending:
-            message_id = item["message_id"]
+            message_id = item.message_id
             if message_id in answered:
                 continue
             message = self.store.get("messages", message_id, ResearchMessage)
             questions.append(
-                {
-                    "message_id": message_id,
-                    "agent_id": message.sender,
-                    "question": message.text,
-                    "created_at": message.created_at,
-                }
+                UserQuestion(message_id, message.sender, message.text, message.created_at)
             )
         return questions
 
     def ask_user(self, agent_id: str, question: str, *, key: str) -> str:
         if agent_id not in {"rsi", "interaction"}:
             raise ValueError("Only RSI and Interaction can ask the user")
-        if self.state["status"] not in {"planned", "running", "paused"}:
+        if self.state.status not in {"planned", "running", "paused"}:
             raise ValueError("研究已结束，不能再创建待回复问题")
         if not question.strip():
             raise ValueError("请说明需要用户回答的问题")
         message_id = self.enqueue(agent_id, "user", question, key=key)
-        if not any(q["message_id"] == message_id for q in self.state["waiting_for_user"]):
-            self.state["waiting_for_user"].append({"message_id": message_id})
+        if not any(q.message_id == message_id for q in self.state.waiting_for_user):
+            self.state.waiting_for_user.append(UserQuestion(message_id))
         # Replaying an interrupted tool must not reopen an already answered question.
-        self.state["waiting_for_user"] = self.user_questions()
+        self.state.waiting_for_user = self.user_questions()
         self.save()
         self.wait(agent_id, "user")
         return message_id
@@ -218,7 +305,7 @@ class Coordinator:
         recipient: str | None = None,
     ) -> str:
         """Deliver a user reply to its question's author, or send an independent message."""
-        if self.state["status"] not in {"planned", "running", "paused"}:
+        if self.state.status not in {"planned", "running", "paused"}:
             raise ValueError("研究已结束，记录仍可查看；新的研究请另建对话")
         if not isinstance(text, str) or not 1 <= len(text.strip()) <= 12000:
             raise ValueError("Message must contain 1–12000 characters")
@@ -244,16 +331,16 @@ class Coordinator:
         else:
             questions = self.user_questions()
             if reply_to is None and recipient is None and len(questions) == 1:
-                reply_to = questions[0]["message_id"]
+                reply_to = questions[0].message_id
             if reply_to is not None:
-                question = next((q for q in questions if q["message_id"] == reply_to), None)
+                question = next((q for q in questions if q.message_id == reply_to), None)
                 if question is None:
                     raise ValueError("该问题不存在或已回复，请刷新后再发送")
-                if recipient is not None and recipient != question["agent_id"]:
+                if recipient is not None and recipient != question.agent_id:
                     raise ValueError("回复必须发送给原提问者")
-                recipient = question["agent_id"]
+                recipient = question.agent_id
         recipient = recipient or "interaction"
-        if recipient == "rsi" and self.state["started_at"] is None:
+        if recipient == "rsi" and self.state.started_at is None:
             raise ValueError("研究尚未开始，请先与 Interaction 确认需求")
         message_id = self.enqueue("user", recipient, text, key=key, reply_to=reply_to)
         if previous is None and self.actor(recipient).state == AgentState.FAILED:
@@ -261,19 +348,19 @@ class Coordinator:
             # background retry loop. Preserve the interrupted delivery and tools.
             self.retry_agent(recipient)
         # The archived reply is authoritative if a process stopped between these writes.
-        self.state["waiting_for_user"] = self.user_questions()
+        self.state.waiting_for_user = self.user_questions()
         self.save()
         return message_id
 
     def start(self) -> None:
-        if self.state["status"] != "planned":
+        if self.state.status != "planned":
             raise ValueError("Run has already started")
-        if "intake" in self.state and self.state["intake"].get("status") != "ready":
+        if self.state.intake.status is not None and self.state.intake.status != "ready":
             raise ValueError("请先与 Interaction 确认研究目标和执行条件")
-        self.state["status"] = "running"
-        self.state["started_at"] = now()
+        self.state.status = "running"
+        self.state.started_at = now()
         run = self.store.run()
-        run.state, run.started_at = RunState.RUNNING, self.state["started_at"]
+        run.state, run.started_at = RunState.RUNNING, self.state.started_at
         self.store.save_run(run)
         self.enqueue(
             "interaction",
@@ -285,18 +372,18 @@ class Coordinator:
         self.store.event("run_started")
 
     def pending(self) -> list[str]:
-        if self.state["status"] not in {"planned", "running"}:
+        if self.state.status not in {"planned", "running"}:
             return []
         ready = []
         for actor in self.actors():
-            if self.state["status"] == "planned" and actor.agent_id != "interaction":
+            if self.state.status == "planned" and actor.agent_id != "interaction":
                 continue
             if actor.state in {AgentState.STOPPED, AgentState.PAUSED, AgentState.FAILED}:
                 continue
             if (
                 actor.agent_id not in {"rsi", "interaction"}
-                and self.state.get("mode") != "passk"
-                and actor.agent_id not in self.state["active"]
+                and self.state.mode != "passk"
+                and actor.agent_id not in self.state.active
                 and any(
                     node.iteration_id == actor.current_iteration_id and node.report_ref is not None
                     for node in actor.iterations
@@ -306,11 +393,11 @@ class Coordinator:
                 # Preserve them for the next assignment. An interrupted active
                 # turn may still resume to finish its already-published report.
                 continue
-            if self.state["inboxes"].get(actor.agent_id) or actor.agent_id in self.state["active"]:
+            if self.state.inboxes.get(actor.agent_id) or actor.agent_id in self.state.active:
                 ready.append(actor.agent_id)
         return ready
 
-    def pending_report_replies(self) -> list[dict[str, Any]]:
+    def pending_report_replies(self) -> list[PendingReportReply]:
         """Derive outstanding replies from existing nodes, not a second report store."""
         result = []
         for actor in self.store.run().research_agents:
@@ -321,12 +408,9 @@ class Coordinator:
             )
             if node is not None and node.report_ref is not None:
                 result.append(
-                    {
-                        "agent_id": actor.agent_id,
-                        "direction": actor.direction,
-                        "iteration_id": node.iteration_id,
-                        "report_ref": encode(node.report_ref),
-                    }
+                    PendingReportReply(
+                        actor.agent_id, actor.direction, node.iteration_id, node.report_ref
+                    )
                 )
         return result
 
@@ -338,30 +422,30 @@ class Coordinator:
         Stable message identities prevent polling/restarts from causing a loop.
         """
         if (
-            self.state["status"] != "running"
+            self.state.status != "running"
             or self.actor("rsi").state != AgentState.WAITING
             or self.actor("rsi").wait_reason != "message"
-            or self.state.get("rsi_explicit_wait")
-            or self.state["inboxes"].get("rsi")
-            or "rsi" in self.state["active"]
+            or self.state.rsi_explicit_wait
+            or self.state.inboxes.get("rsi")
+            or "rsi" in self.state.active
         ):
             return []
         reminders = []
         for item in self.pending_report_replies():
-            ref = RecordRef(item["report_ref"]["uri"])
+            ref = item.report_ref
             report = ResearchReport.from_record(self.store.public_record(ref))
             original_message = effect_id("message", report.report_id)
             key = "report-reply:" + report.report_id
             if (
-                original_message not in self.state["delivered"]
-                or effect_id("message", key) in self.state["delivered"]
+                original_message not in self.state.delivered
+                or effect_id("message", key) in self.state.delivered
             ):
                 continue
             reminders.append(
                 self.enqueue(
                     "runtime",
                     "rsi",
-                    f"系统提醒：研究员 {item['agent_id']}（{item['direction']}）"
+                    f"系统提醒：研究员 {item.agent_id}（{item.direction}）"
                     "已经提交报告，仍在等待你的回复。\n"
                     f"报告记录：{ref.uri}\n"
                     "请根据报告安排下一步或停止该方向。"
@@ -380,11 +464,11 @@ class Coordinator:
         actor = self.actor(agent_id)
         if agent_id not in self.pending():
             raise ValueError("Agent has no authorized pending turn")
-        active = self.state["active"].get(agent_id)
+        active = self.state.active.get(agent_id)
         resumed = active is not None
         if agent_id == "rsi" and not resumed:
-            self.state.pop("rsi_explicit_wait", None)
-        identifier = active or self.state["inboxes"][agent_id][0]
+            self.state.rsi_explicit_wait = False
+        identifier = active or self.state.inboxes[agent_id][0]
         if not active and agent_id not in {"rsi", "interaction"}:
             current = next(
                 (
@@ -397,10 +481,10 @@ class Coordinator:
             if current is not None:
                 assignment = self.store.public_record(current.assignment_ref)
                 assigned_message = effect_id("message", assignment["assignment_id"])
-                if assigned_message in self.state["inboxes"][agent_id]:
+                if assigned_message in self.state.inboxes[agent_id]:
                     # Start from the new goal before injecting retained facts.
                     identifier = assigned_message
-        self.state["active"][agent_id] = identifier
+        self.state.active[agent_id] = identifier
         actor.state, actor.wait_reason = AgentState.RUNNING, None
         self.save_actor(actor)
         self.save()
@@ -412,15 +496,13 @@ class Coordinator:
     ) -> None:
         if error is not None:
             actor = self.actor(agent_id)
-            failures = self.state.setdefault("turn_failures", {})
+            failures = self.state.turn_failures
             if missing_report:
-                if agent_id in {"rsi", "interaction"} or agent_id not in self.state["active"]:
+                if agent_id in {"rsi", "interaction"} or agent_id not in self.state.active:
                     raise ValueError("Missing-report recovery requires an active research delivery")
-                failures[agent_id] = {
-                    "kind": "missing_report",
-                    "message_id": self.state["active"][agent_id],
-                    "iteration_id": actor.current_iteration_id,
-                }
+                failures[agent_id] = TurnFailure(
+                    "missing_report", self.state.active[agent_id], actor.current_iteration_id
+                )
             else:
                 failures.pop(agent_id, None)
             self.save()
@@ -432,28 +514,28 @@ class Coordinator:
                 "user",
                 f"{agent_id} 已停止：{error}。已有进度和对话已保存。"
                 "你可以发送补充消息继续，或点击重试。",
-                key="failure:" + effect_id(agent_id, error + str(self.state.get("model_calls"))),
+                key="failure:" + effect_id(agent_id, error + str(self.state.model_calls)),
             )
-            if agent_id not in {"rsi", "interaction"} and self.state.get("mode") != "passk":
+            if agent_id not in {"rsi", "interaction"} and self.state.mode != "passk":
                 self.enqueue(
                     "runtime",
                     "rsi",
                     f"研究员 {agent_id} 执行停止：{error}。原任务、会话与已完成操作均已保存。"
                     "请检查原因，决定用 retry_researcher 恢复、停止方向或向用户报告阻塞。",
                     key="researcher-failure:"
-                    + effect_id(agent_id, error + str(self.state.get("model_calls"))),
+                    + effect_id(agent_id, error + str(self.state.model_calls)),
                 )
             # Preserve the active delivery for explicit recovery of the same turn.
             return
-        identifier = self.state["active"].pop(agent_id, None)
-        self.state.get("turn_followups", {}).pop(agent_id, None)
-        self.state.get("turn_retries", {}).pop(agent_id, None)
-        self.state.get("turn_failures", {}).pop(agent_id, None)
+        identifier = self.state.active.pop(agent_id, None)
+        self.state.turn_followups.pop(agent_id, None)
+        self.state.turn_retries.pop(agent_id, None)
+        self.state.turn_failures.pop(agent_id, None)
         if identifier:
-            if identifier not in self.state["delivered"]:
-                self.state["delivered"].append(identifier)
-            inbox = self.state["inboxes"].get(agent_id, [])
-            self.state["inboxes"][agent_id] = [key for key in inbox if key != identifier]
+            if identifier not in self.state.delivered:
+                self.state.delivered.append(identifier)
+            inbox = self.state.inboxes.get(agent_id, [])
+            self.state.inboxes[agent_id] = [key for key in inbox if key != identifier]
         actor = self.actor(agent_id)
         if actor.state == AgentState.RUNNING:
             actor.state, actor.wait_reason = AgentState.WAITING, "message"
@@ -494,7 +576,7 @@ class Coordinator:
                 {
                     "agent_id": actor.agent_id,
                     "direction": actor.direction,
-                    "accepts_updates": self.state["status"] == "running"
+                    "accepts_updates": self.state.status == "running"
                     and actor.state in {AgentState.RUNNING, AgentState.WAITING}
                     and node is not None
                     and node.report_ref is None,
@@ -508,19 +590,19 @@ class Coordinator:
         allowed = self.turn_update_senders(agent_id)
         if message.sender not in allowed or message.recipient != agent_id:
             raise ValueError("This sender cannot update the agent's active delivery")
-        followups = self.state.setdefault("turn_followups", {}).setdefault(agent_id, [])
+        followups = self.state.turn_followups.setdefault(agent_id, [])
         if message_id not in followups:
             followups.append(message_id)
-        if message_id not in self.state["delivered"]:
-            self.state["delivered"].append(message_id)
-        self.state["inboxes"][agent_id] = [
-            item for item in self.state["inboxes"].get(agent_id, []) if item != message_id
+        if message_id not in self.state.delivered:
+            self.state.delivered.append(message_id)
+        self.state.inboxes[agent_id] = [
+            item for item in self.state.inboxes.get(agent_id, []) if item != message_id
         ]
         self.save()
 
     def current_message_ids(self, agent_id: str) -> list[str]:
-        active = self.state["active"].get(agent_id)
-        result: list[str] = ([active] if active else []) + self.state.get("turn_followups", {}).get(
+        active = self.state.active.get(agent_id)
+        result: list[str] = ([active] if active else []) + self.state.turn_followups.get(
             agent_id, []
         )
         return result
@@ -529,16 +611,13 @@ class Coordinator:
         actor = self.actor(agent_id)
         if actor.state != AgentState.FAILED:
             raise ValueError("Only a failed agent can be retried")
-        active = self.state["active"].get(agent_id)
-        failure = self.state.get("turn_failures", {}).get(agent_id, {})
-        if failure.get("kind") == "missing_report":
+        active = self.state.active.get(agent_id)
+        failure = self.state.turn_failures.get(agent_id)
+        if failure is not None and failure.kind == "missing_report":
             retry_id = self._retry_missing_report(actor, failure)
         elif active is not None:
             retry_id = new_id("retry")
-            self.state.setdefault("turn_retries", {})[agent_id] = {
-                "message_id": active,
-                "retry_id": retry_id,
-            }
+            self.state.turn_retries[agent_id] = TurnRetry(active, retry_id)
             self.save()
         else:
             retry_id = new_id("retry")
@@ -552,38 +631,34 @@ class Coordinator:
             key="retry-notice:" + retry_id,
         )
 
-    def _retry_missing_report(self, actor: ResearchAgentState, failure: dict[str, Any]) -> str:
+    def _retry_missing_report(self, actor: ResearchAgentState, failure: TurnFailure) -> str:
         """Correct a completed model reply without creating another research node."""
         agent_id = actor.agent_id
-        original = failure["message_id"]
+        original = failure.message_id
         node = next(
             (item for item in actor.iterations if item.iteration_id == actor.current_iteration_id),
             None,
         )
         if (
             node is None
-            or node.iteration_id != failure["iteration_id"]
+            or node.iteration_id != failure.iteration_id
             or node.report_ref is not None
-            or self.state["active"].get(agent_id) not in {None, original}
+            or self.state.active.get(agent_id) not in {None, original}
         ):
             raise ValueError("Missing-report recovery no longer matches the active research node")
-        retries = self.state.setdefault("turn_retries", {})
-        intent = retries.get(agent_id, {})
-        if intent.get("mode") != "report" or intent.get("message_id") != original:
-            intent = {
-                "mode": "report",
-                "message_id": original,
-                "retry_id": new_id("retry"),
-            }
+        retries = self.state.turn_retries
+        intent = retries.get(agent_id)
+        if intent is None or intent.mode != "report" or intent.message_id != original:
+            intent = TurnRetry(original, new_id("retry"), mode="report")
             retries[agent_id] = intent
             self.save()
         # Persist intent first, then acknowledge the completed delivery. If the
         # process dies before enqueue, a second explicit retry uses the same ID.
-        self.state["active"].pop(agent_id, None)
-        if original not in self.state["delivered"]:
-            self.state["delivered"].append(original)
-        inbox = self.state["inboxes"].get(agent_id, [])
-        self.state["inboxes"][agent_id] = [key for key in inbox if key != original]
+        self.state.active.pop(agent_id, None)
+        if original not in self.state.delivered:
+            self.state.delivered.append(original)
+        inbox = self.state.inboxes.get(agent_id, [])
+        self.state.inboxes[agent_id] = [key for key in inbox if key != original]
         self.save()
         self.enqueue(
             "rsi",
@@ -595,10 +670,10 @@ class Coordinator:
             "调用 submit_report，写清已完成的工作、问题、实际结果、不确定性和剩余事项。"
             "如果外部依赖阻碍完成，使用明确的等待工具。"
             "本次修正不授权新任务、新节点或新方向；上报后等待 RSI 的明确回复。",
-            key="report-retry:" + intent["retry_id"],
+            key="report-retry:" + intent.retry_id,
             reply_to=original,
         )
-        return str(intent["retry_id"])
+        return str(intent.retry_id)
 
     def spawn(
         self,
@@ -609,7 +684,7 @@ class Coordinator:
         completion_criteria: str = "",
         references: tuple[RecordRef, ...] = (),
     ) -> dict[str, str]:
-        if self.state["status"] != "running":
+        if self.state.status != "running":
             raise ValueError("Run is not running")
         agent_id = effect_id("research", key)
         run = self.store.run()
@@ -650,7 +725,7 @@ class Coordinator:
         reply_to_report_id: str | None = None,
         references: tuple[RecordRef, ...] = (),
     ) -> dict[str, str]:
-        if self.state["status"] != "running":
+        if self.state.status != "running":
             raise ValueError("Run is not running")
         actor = self.actor(agent_id)
         if agent_id in {"rsi", "interaction"}:
@@ -736,8 +811,8 @@ class Coordinator:
         original = effect_id("message", assignment["assignment_id"])
         return [
             identifier
-            for identifier in self.state["inboxes"].get(agent_id, [])
-            if identifier != self.state["active"].get(agent_id)
+            for identifier in self.state.inboxes.get(agent_id, [])
+            if identifier != self.state.active.get(agent_id)
             and self.store.get("messages", identifier, ResearchMessage).reply_to == original
         ]
 
@@ -749,7 +824,7 @@ class Coordinator:
         key: str,
         references: tuple[RecordRef, ...] = (),
     ) -> str:
-        if agent_id in {"rsi", "interaction"} or self.state["status"] != "running":
+        if agent_id in {"rsi", "interaction"} or self.state.status != "running":
             raise ValueError("任务补充只能发给运行中的研究方向")
         if not instruction.strip():
             raise ValueError("任务补充不能为空")
@@ -869,7 +944,7 @@ class Coordinator:
         actor.state, actor.wait_reason = AgentState.WAITING, reason
         self.save_actor(actor)
         if agent_id == "rsi":
-            self.state["rsi_explicit_wait"] = True
+            self.state.rsi_explicit_wait = True
             self.save()
         self.store.event("agent_waiting", agent_id=agent_id, reason=reason)
 
@@ -882,37 +957,37 @@ class Coordinator:
             if node.state in {IterationState.PENDING, IterationState.RUNNING}:
                 node.state, node.updated_at = IterationState.CANCELLED, now()
         self.save_actor(actor)
-        self.state["inboxes"][agent_id] = []
+        self.state.inboxes[agent_id] = []
         self.save()
         self.store.event("agent_stopped", agent_id=agent_id, reason=reason)
 
     def pause(self) -> None:
-        if self.state["status"] != "running":
+        if self.state.status != "running":
             raise ValueError("Only a running run can be paused")
-        self.state["status"] = "paused"
-        if "effective_time" in self.state:
+        self.state.status = "paused"
+        if self.state.effective_time is not None:
             EffectiveTime(self.state).close_worker(datetime.fromisoformat(now()).timestamp())
         self.save()
         self.store.event("run_paused")
 
     def resume(self) -> None:
-        if self.state["status"] != "paused":
+        if self.state.status != "paused":
             raise ValueError("Only a paused run can be resumed")
-        self.state["status"] = "running"
-        if "effective_time" in self.state:
+        self.state.status = "running"
+        if self.state.effective_time is not None:
             EffectiveTime(self.state).open_worker(datetime.fromisoformat(now()).timestamp())
         self.save()
         self.store.event("run_resumed")
 
     def reopen(self) -> None:
         """Explicit user recovery; completed work and cancelled executions stay archived."""
-        if self.state["status"] != "stopped":
+        if self.state.status != "stopped":
             raise ValueError("Only a stopped research run can be reopened")
-        if not self.state.get("started_at"):
+        if not self.state.started_at:
             raise ValueError("This discussion has not started research")
         stop_events = [event for event in self.store.events() if event.kind == "run_stopped"]
         stop_reason = stop_events[-1].data.get("reason") if stop_events else None
-        stopped_by_run = self.state.get("run_stop_agents")
+        stopped_by_run = self.state.run_stop_agents
         for actor in self.actors():
             controller = actor.agent_id in {"rsi", "interaction"}
             reported = bool(actor.iterations and actor.iterations[-1].report_ref)
@@ -929,7 +1004,7 @@ class Coordinator:
         run = self.store.run()
         run.state, run.finished_at = RunState.RUNNING, None
         self.store.save_run(run)
-        self.state["status"] = "running"
+        self.state.status = "running"
         self.save()
         self.enqueue(
             "user",
@@ -948,12 +1023,12 @@ class Coordinator:
         return {"job_id": latest.result_id, "error": latest.error, "created_at": latest.created_at}
 
     def stop(self, reason: str) -> None:
-        if self.state["status"] != "stopped":
-            self.state["run_stop_agents"] = [
+        if self.state.status != "stopped":
+            self.state.run_stop_agents = [
                 actor.agent_id for actor in self.actors() if actor.state != AgentState.STOPPED
             ]
-        self.state["status"] = "stopped"
-        self.state["waiting_for_user"] = []
+        self.state.status = "stopped"
+        self.state.waiting_for_user = []
         for actor in self.actors():
             if actor.agent_id not in {"rsi", "interaction"}:
                 self.stop_agent(actor.agent_id, reason)
@@ -972,7 +1047,7 @@ class Coordinator:
             if observed_at is not None
             else datetime.fromisoformat(now())
         )
-        started = self.state.get("started_at")
+        started = self.state.started_at
         finished = self.store.run().finished_at
         limit = self.store.brief().limits.max_wall_seconds
         elapsed = (
@@ -986,12 +1061,15 @@ class Coordinator:
             if started
             else 0.0
         )
-        result = {
-            **{name: self.state[name] for name in ("model_calls", "total_tokens", "verify_calls")},
+        result: dict[str, Any] = {
+            "model_calls": self.state.model_calls,
+            "total_tokens": self.state.total_tokens,
+            "verify_calls": self.state.verify_calls,
             # Read-only historical counters; native runs do not create request reservations.
             "reserved_tokens": sum(
-                record.get("reserved_tokens", 0)
-                for record in self.state.get("model_requests", {}).values()
+                value
+                for record in self.state.model_requests.values()
+                if isinstance(value := record.get("reserved_tokens", 0), (int, float))
             ),
             "observed_at": observed.isoformat(),
             "elapsed_seconds": elapsed,
@@ -1000,8 +1078,9 @@ class Coordinator:
             if started and limit is not None
             else None,
             "api_attempts": sum(
-                record.get("api_attempts", 1)
-                for record in self.state.get("model_requests", {}).values()
+                value
+                for record in self.state.model_requests.values()
+                if isinstance(value := record.get("api_attempts", 1), (int, float))
             ),
         }
         effective_limit = self.store.brief().limits.max_effective_seconds
@@ -1020,22 +1099,22 @@ class Coordinator:
         run = self.store.run()
         return {
             "run_id": run.run_id,
-            "mode": self.state.get("mode", "collaborative"),
-            "runtime_turns": self.state.get("runtime_turns", 0),
-            "status": self.state["status"],
+            "mode": self.state.mode or "collaborative",
+            "runtime_turns": self.state.runtime_turns,
+            "status": self.state.status,
             "brief": encode(self.store.brief()),
-            "plan": self.state["plan"],
+            "plan": self.state.plan,
             "execution_blocker": self.execution_blocker(),
             "withdrawn_candidates": self.store.withdrawals(),
             "agents": encode(self.actors()),
-            "simulated": self.state["simulated"],
+            "simulated": self.state.simulated,
             "best": self.store.public_record(run.best_result_ref) if run.best_result_ref else None,
             "baseline": self.store.public_record(run.baseline_result_ref)
             if run.baseline_result_ref
             else None,
             "budget": self.budget(),
-            "waiting_for_user": self.user_questions(),
-            "pending_report_replies": self.pending_report_replies(),
-            "budget_stop_reason": self.state.get("budget_stop_reason"),
-            "intake": self.state.get("intake"),
+            "waiting_for_user": encode(self.user_questions()),
+            "pending_report_replies": encode(self.pending_report_replies()),
+            "budget_stop_reason": self.state.budget_stop_reason,
+            "intake": encode(self.state.intake) if self.state.intake.status is not None else None,
         }

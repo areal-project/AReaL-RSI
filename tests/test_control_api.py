@@ -95,7 +95,7 @@ def test_direct_stop_and_dispatch_share_operator_reason(tmp_path: Path) -> None:
         await system.call("stop", {"run_id": "dispatch", "reason": "operator reason"})
         for run_id in ("direct", "dispatch"):
             c = system.coordinator(run_id)
-            assert c.state["status"] == "stopped"
+            assert c.state.status == "stopped"
             assert any(event.data.get("reason") == "operator reason" for event in c.store.events())
         await system.close()
 

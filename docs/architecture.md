@@ -134,7 +134,7 @@ config/intake/presets（配置与启动）、store/views（记录与只读视图
 coordination/
 ├── policies/     # collaboration、passk、leader_guidance：研究策略
 ├── tools/        # actions、brief、web：Agent 工具与输入校验
-└── evaluation/   # jobs、verification、finalization：实验及可信评测
+└── evaluation/   # jobs、verification：实验及可信评测
 ```
 
 子包只组织代码，不新增调用层或管理器；数据目录仍是原来的 coordination/。
@@ -148,7 +148,6 @@ coordination/
 | `infra/coordination/store.py` | 研究记录、候选快照、契约摘要、可信成绩和撤回选优；复用 storage，不管理模型回合。 |
 | `infra/coordination/evaluation/jobs.py` | 把实验作业关联到研究员/节点/候选，冻结输入、发布反馈、触发验证与完成消息；底层进程由 execution 管理。 |
 | `infra/coordination/evaluation/verification.py` | 校验操作员验证输出与冻结候选、契约、phase、数据身份一致；stdout 不构成正式分数。 |
-| `infra/coordination/evaluation/finalization.py` | 探索结束后的最终确认及归档；其反馈不能重新用于探索，因此与普通搜索作业分开。 |
 | `infra/coordination/config.py` | 整个研究的操作员配置：需求、协作、命令、连接选择、冻结/加载；与 infra/config 的连接值对象范围不同。 |
 | `infra/coordination/intake.py` | 启动前整理需求、接入环境、检查执行条件与用户确认；原 preparation 已合入，内置准备只有这一处调用。 |
 | `infra/coordination/tools/brief.py` | update_brief 的 schema 与更新规则；工具定义和服务端校验共用。 |
@@ -236,6 +235,22 @@ LLM 推理会话属于 runtime，不能把这些名字都叫“执行”就合�
 | `resources/runtime/` | 固定的 DSH Runtime 包、来源信息和依赖锁，不是业务模块。 |
 | `infra/tasks/config/` | 支持的评测及公开参数清单，不含答案或任意动态代码入口。 |
 
+## 结果完成与作业数据
+
+`finalization.py` 已删除。研究结束时，ResearchSystem 只组织候选选择和可选验证；
+输入冻结、作业登记、等待及结果核验统一由 ResearchExecution 处理。
+执行锁与同一个 JobManager 持续持有到结果处理结束，不再在两个执行器之间交接。
+
+`api/research.py` 的 ResearchJob、JobWaiter、CompletionRecord 分别定义作业关联、
+完成订阅和结果处理状态。JSON 字典只在存储/对外投影处转换，作业索引由 ResearchStore
+统一编解码；旧 jobs.json 和 finalization 字段在读取时适配，不因读取而写回迁移。
+`Coordinator` 负责候选选择及开始、中断、失败、完成状态迁移。
+
+结束阶段成功处理结果记为 completed；若明确的数值 target 达标则记为 succeeded，是否达标另存
+`CompletionRecord.target_reached`。没有 target 时该字段为 null，不再把正常完成记为取消。
+尚未确认释放资源的 lost 作业不能启动下一次尝试；暂停服务会保留已启动的结果评测，
+恢复时复用原作业身份。用户明确停止则取消作业，并保留无法确认的资源声明。
+
 ## 迁移与保留原则
 
 - `ResearchApp` / `research_app.py` 已移除，统一使用 `areal_rsi.infra.research.ResearchSystem`。
@@ -249,3 +264,15 @@ LLM 推理会话属于 runtime，不能把这些名字都叫“执行”就合�
 
 不新增调度器、持久化机制或服务框架。`tests/test_architecture.py` 检查 API/infra/UI 边界，
 已有行为测试覆盖核心流程；统一运行 `make check`。公开接口见[接口文档](interfaces/README.md)。
+
+### 内部状态与 JSON 边界
+
+`api/research.py` 的 `CoordinationState` 定义运行调度状态；需求确认、回合失败与重试、
+报告摘要、Agent 活动和有效计时均使用具名记录。Coordinator 打开记录时解码，
+保存时统一编码，业务代码使用属性访问；按 Agent/作业 ID 查询的字典保留，值有明确类型。
+旧记录缺省字段由数据契约补齐，读取不会写回磁盘。计时区间仍序列化为原来的二元素数组。
+
+工具输入、外部协议、插件配置和 UI 投影允许 JSON；这些数据不应反过来成为内部状态模型。
+例如待回复报告先形成 `PendingReportReply`，只有输出给 UI 时才编码；作业通知队列直接
+保存 `JobEvent` 对象。新增固定字段应先更新契约，再通过 Mypy 检查所有调用点，不能以
+`Any`、`get()` 默认值或字典兼容包装绕过约束。

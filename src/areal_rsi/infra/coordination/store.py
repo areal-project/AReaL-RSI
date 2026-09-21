@@ -16,11 +16,14 @@ from pathlib import Path
 from typing import Any, TypeVar, cast
 from urllib.parse import unquote, urlsplit
 
-from areal_rsi.api.records import RecordRef, ResearchRun
+from areal_rsi.api.execution import JobSpec
+from areal_rsi.api.records import ContentRef, RecordRef, ResearchRun
 from areal_rsi.api.research import (
     CandidateSnapshot,
     EvidenceRecord,
+    JobWaiter,
     ResearchEvent,
+    ResearchJob,
     ResearchReport,
     TaskBrief,
     VerifiedResult,
@@ -79,6 +82,97 @@ class ResearchStore:
 
     def save_run(self, run: ResearchRun) -> None:
         self.runs.save(self.run_id, run, immutable=False)
+
+    def research_jobs(self) -> dict[str, ResearchJob]:
+        """Decode old job indexes without rewriting them during reads."""
+        path = self.root / "coordination/jobs.json"
+        records = json.loads(path.read_text()) if path.exists() else {}
+        legacy_completion_ids = {
+            "job-" + hashlib.sha256(f"closeout:{phase}:{attempt}".encode()).hexdigest()
+            for phase in ("prepare", "search", "final")
+            for attempt in range(len(records))
+        }
+        jobs = {}
+        for key, saved in records.items():
+            value = dict(saved)
+            result = value.pop("result", None)
+            value["result_ref"] = RecordRef(result["uri"]) if result and result.get("uri") else None
+            value["result"] = (
+                decode(VerifiedResult, {k: v for k, v in result.items() if k != "uri"})
+                if result and value["verification"]
+                else None
+            )
+            value["execution_result"] = result if not value["verification"] else None
+            subscriptions = value.get("waiters", {})
+            if "waiters" not in value and value.get("waiting"):
+                subscriptions = {value["agent_id"]: {"iteration_id": value.get("iteration_id")}}
+            value["waiters"] = {
+                actor: decode(JobWaiter, item) for actor, item in subscriptions.items()
+            }
+            value["completion"] = value.get("completion", key in legacy_completion_ids)
+            value["spec"] = decode(JobSpec, value["spec"])
+            jobs[key] = ResearchJob(**value)
+        return jobs
+
+    @staticmethod
+    def job_result(job: ResearchJob) -> dict[str, Any] | None:
+        result = encode(job.result) if job.verification else job.execution_result
+        if result is None:
+            return None
+        return {**result, **({"uri": job.result_ref.uri} if job.result_ref else {})}
+
+    def save_jobs(self, jobs: dict[str, ResearchJob]) -> None:
+        records = {}
+        for key, job in jobs.items():
+            value = encode(job)
+            value.pop("result_ref")
+            value.pop("execution_result")
+            value["result"] = self.job_result(job)
+            records[key] = value
+        write_json(self.root / "coordination/jobs.json", records)
+
+    async def export_selection(self, cutoffs: dict[str, float] | None) -> Path:
+        """Serialize the frozen operator-adapter contract; never rewrite an existing selection."""
+        path = self.root / "finalization/candidate-selection.json"
+        if not path.exists():
+            withdrawn = []
+            for item in self.withdrawals():
+                candidate = self.get("candidates", item["candidate_id"], CandidateSnapshot)
+                manifest = await self.content.read_json(candidate.content)
+                assert isinstance(manifest, dict) and isinstance(manifest["files"], dict)
+                withdrawn.append(
+                    {
+                        **item,
+                        "files": {
+                            name: decode(ContentRef, value).digest
+                            for name, value in manifest["files"].items()
+                        },
+                    }
+                )
+            write_json(
+                path,
+                {
+                    "schema_version": 1,
+                    "run_id": self.run_id,
+                    "withdrawn_candidates": withdrawn,
+                    **({"execution_cutoffs": cutoffs} if cutoffs is not None else {}),
+                },
+                immutable=True,
+            )
+        return path
+
+    async def completion_candidate(self, directory: Path) -> CandidateSnapshot:
+        content = await self.content.snapshot(directory)
+        if any(item["content_digest"] == content.digest for item in self.withdrawals()):
+            raise ValueError(
+                "Finalizer returned a withdrawn candidate; honor RSI_CANDIDATE_SELECTION"
+            )
+        key = "candidate-closeout"
+        if (self.root / "candidates" / f"{key}.json").exists():
+            return self.get("candidates", key, CandidateSnapshot)
+        return await self.snapshot(
+            directory, agent_id="operator", description="探索结束后冻结的最终版本", candidate_id=key
+        )
 
     def brief(self) -> TaskBrief:
         ref = self.run().brief_ref
@@ -374,7 +468,8 @@ class ResearchStore:
     def is_withdrawn(self, candidate_id: str) -> bool:
         candidate = self.get("candidates", candidate_id, CandidateSnapshot)
         return any(
-            item["content_digest"] == candidate.content.digest for item in self.withdrawals()
+            item["content_digest"] == candidate.content.digest
+            for item in self.withdrawals()
             if not item.get("scope_agent_id") or item["scope_agent_id"] == candidate.source_agent_id
         )
 

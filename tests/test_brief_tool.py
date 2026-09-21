@@ -74,5 +74,5 @@ def test_action_catalog_follows_current_mode(tmp_path: Path) -> None:
     tools = actions.definitions("interaction")
     tool = next(tool for tool in tools if tool["name"] == "update_brief")
     assert tool == brief_tool("passk")
-    coordinator.state["status"] = "running"
+    coordinator.state.status = "running"
     assert all(tool["name"] != "update_brief" for tool in actions.definitions("interaction"))

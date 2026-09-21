@@ -8,7 +8,15 @@ from urllib.parse import urlsplit
 
 from areal_rsi.api.interfaces import ToolCall, ToolHandler, ToolResult
 from areal_rsi.api.records import AgentState, RecordRef, RunState
-from areal_rsi.api.research import CandidateSnapshot, ResearchReport, VerifiedResult
+from areal_rsi.api.research import (
+    CandidateSnapshot,
+    PublishedResult,
+    ReportSummary,
+    ResearchReport,
+    RetryBackoff,
+    TargetObservation,
+    VerifiedResult,
+)
 from areal_rsi.infra.coordination.coordinator import Coordinator, effect_id
 from areal_rsi.infra.coordination.engine import ResearchEngine
 from areal_rsi.infra.coordination.tools.actions import (
@@ -17,7 +25,7 @@ from areal_rsi.infra.coordination.tools.actions import (
     ResearchActions,
     definition,
 )
-from areal_rsi.infra.storage.files import encode, now
+from areal_rsi.infra.storage.files import decode, encode, now
 
 SUPERVISOR_TOOLS = [
     definition("start_researchers", "一次启动固定数量的独立研究员，每人获得相同的完整任务。"),
@@ -67,7 +75,7 @@ class PassKActions(ResearchActions):
     team_read = False
 
     def definitions(self, agent_id: str, *, include_hidden: bool = False) -> list[dict[str, Any]]:
-        if self.c.state["status"] == "planned" and agent_id == "interaction":
+        if self.c.state.status == "planned" and agent_id == "interaction":
             return super().definitions(agent_id, include_hidden=include_hidden)
         if agent_id == "rsi":
             return SUPERVISOR_TOOLS
@@ -84,13 +92,13 @@ class PassKActions(ResearchActions):
     ) -> CandidateSnapshot:
         candidate = self.c.store.get("candidates", candidate_id, CandidateSnapshot)
         if candidate.source_agent_id != agent_id and not (
-            seed and candidate_id == self.c.state["seed_candidate_id"]
+            seed and candidate_id == self.c.state.seed_candidate_id
         ):
             raise ValueError("This candidate is not part of your attempt")
         return candidate
 
     def read_record(self, agent_id: str, uri: str) -> Any:
-        if agent_id == "interaction" and self.c.state["status"] == "planned":
+        if agent_id == "interaction" and self.c.state.status == "planned":
             return super().read_record(agent_id, uri)
         ref = self.c.store.record_reference(RecordRef(uri))
         value = self.c.store.public_record(ref)
@@ -126,10 +134,8 @@ class PassKActions(ResearchActions):
                     if not team_read and (candidate_id := call.arguments.get("candidate_id")):
                         self.candidate(agent_id, candidate_id, seed=call.name != "verify_candidate")
                     if not team_read and (job_id := call.arguments.get("job_id")):
-                        jobs = json.loads(
-                            (self.c.store.root / "coordination/jobs.json").read_text()
-                        )
-                        if jobs.get(job_id, {}).get("agent_id") != agent_id:
+                        job = self.c.store.research_jobs().get(job_id)
+                        if job is None or job.agent_id != agent_id:
                             raise ValueError("This job is not part of your attempt")
                     if call.name == "verify_candidate" and call.arguments.get("phase") == "final":
                         raise ValueError(
@@ -156,10 +162,10 @@ class PassKActions(ResearchActions):
             return {
                 "run_id": c.store.run_id,
                 "agent_id": "rsi",
-                "status": c.state["status"],
+                "status": c.state.status,
                 "brief": encode(c.store.brief()),
-                "started_researchers": bool(c.state.get("passk_ready")),
-                "plan": c.state.get("plan", ""),
+                "started_researchers": bool(c.state.passk_ready),
+                "plan": c.state.plan,
                 "budget": budget,
                 "researchers": [
                     {
@@ -168,7 +174,7 @@ class PassKActions(ResearchActions):
                         "wait_reason": actor.wait_reason,
                         "needs_continue": needs_continue(c, actor.agent_id),
                         "best": self.state(actor.agent_id)["best"],
-                        "latest_report": c.state.get("passk_reports", {}).get(actor.agent_id),
+                        "latest_report": encode(c.state.passk_reports.get(actor.agent_id)),
                     }
                     for actor in c.store.run().research_agents
                 ],
@@ -184,7 +190,7 @@ class PassKActions(ResearchActions):
             and result.passed
             and result.phase == "search"
             and result.contract_digest == c.store.contract_digest()
-            and result.simulated == c.state["simulated"]
+            and result.simulated == c.state.simulated
             and result.score is not None
             and not c.store.is_withdrawn(result.candidate_id)
         ]
@@ -196,11 +202,11 @@ class PassKActions(ResearchActions):
         return {
             "run_id": c.store.run_id,
             "agent_id": agent_id,
-            "status": c.state["status"],
+            "status": c.state.status,
             "brief": encode(c.store.brief()),
-            "simulated": c.state["simulated"],
+            "simulated": c.state.simulated,
             "current_node": encode(actor.iterations[-1]) if actor.iterations else None,
-            "seed_candidate_id": c.state["seed_candidate_id"],
+            "seed_candidate_id": c.state.seed_candidate_id,
             "workspace_candidate_id": self.workspace_candidate(agent_id),
             "best": encode(results[0]) if results else None,
             "budget": {
@@ -245,7 +251,7 @@ class PassKActions(ResearchActions):
                 args["reason"],
                 self.refs(agent_id, args["references"]),
                 agent_id=agent_id,
-                simulated_run=self.c.state["simulated"],
+                simulated_run=self.c.state.simulated,
                 scope_agent_id=agent_id,
             )
             return ToolResult(
@@ -275,11 +281,9 @@ class PassKActions(ResearchActions):
             c.store.put("reports", report_id, {**encode(report), "agent_id": agent_id})
         node.report_ref = c.store.paths.reference(path)
         c.save_actor(actor)  # A progress report does not complete its research node.
-        c.state.setdefault("passk_reports", {})[agent_id] = {
-            "uri": node.report_ref.uri,
-            "message": report.message[:4000],
-            "created_at": report.created_at,
-        }
+        c.state.passk_reports[agent_id] = ReportSummary(
+            node.report_ref.uri, report.message[:4000], report.created_at
+        )
         c.save()
         c.enqueue(
             agent_id,
@@ -300,24 +304,24 @@ class PassKActions(ResearchActions):
 def needs_continue(c: Coordinator, agent_id: str) -> bool:
     actor = c.actor(agent_id)
     return (
-        c.state["status"] == "running"
+        c.state.status == "running"
         and actor.state == AgentState.WAITING
         and actor.wait_reason == "passk_supervision"
-        and agent_id not in c.state["active"]
-        and not c.state["inboxes"].get(agent_id)
+        and agent_id not in c.state.active
+        and not c.state.inboxes.get(agent_id)
     )
 
 
 async def launch(c: Coordinator, actions: PassKActions) -> None:
     """RSI invokes this fixed launch; no sampled assignments or replacement attempts."""
-    if c.state.get("passk_ready"):
+    if c.state.passk_ready:
         return
     for agent_id in ("interaction",):
         actor = c.actor(agent_id)
         actor.state, actor.wait_reason = AgentState.STOPPED, "passk: no intervention"
         c.save_actor(actor)
-        c.state["inboxes"][agent_id] = []
-        c.state["active"].pop(agent_id, None)
+        c.state.inboxes[agent_id] = []
+        c.state.active.pop(agent_id, None)
     c.save()
     brief = c.store.brief()
     instruction = (
@@ -331,7 +335,7 @@ async def launch(c: Coordinator, actions: PassKActions) -> None:
             key=f"passk-{index + 1}", direction=f"独立探索 {index + 1}", instruction=instruction
         )
         await actions.initialize_workspace(result["agent_id"])
-    c.state["passk_ready"] = True
+    c.state.passk_ready = True
     c.save()
     c.store.event("passk_launched", k=brief.limits.max_agents)
 
@@ -339,7 +343,7 @@ async def launch(c: Coordinator, actions: PassKActions) -> None:
 def stop_on_target(c: Coordinator) -> None:
     contract = c.store.brief().verification
     best = c.store.run().best_result_ref
-    if c.state["status"] != "running" or not contract or contract.target is None or not best:
+    if c.state.status != "running" or not contract or contract.target is None or not best:
         return
     result = c.store.public_record(best)
     score = result["score"]
@@ -347,12 +351,12 @@ def stop_on_target(c: Coordinator) -> None:
         score >= contract.target if contract.direction == "maximize" else score <= contract.target
     )
     if reached:
-        c.state["passk_target"] = {"result": result, "observed_at": now()}
+        c.state.passk_target = TargetObservation(decode(PublishedResult, result), now())
         c.save()
         c.stop("已有独立尝试通过正式验证并达到目标，停止整组探索")
         if contract.identity.get("require_final_confirmation"):
             return  # Search success is provisional until the independent final passes.
-        c.state["status"] = "succeeded"
+        c.state.status = "succeeded"
         c.save()
         run = c.store.run()
         run.state = RunState.SUCCEEDED
@@ -365,9 +369,9 @@ class PassKEngine(ResearchEngine):
             return
         c = self.coordinator
         at = self.clock()
-        if at - self.effective.data["heartbeat_at"] < 1:
+        if at - self.effective.data.heartbeat_at < 1:
             return
-        self.effective.data["heartbeat_at"] = at
+        self.effective.data.heartbeat_at = at
         limit = c.store.brief().limits.max_effective_seconds
         assert limit is not None
         for actor in c.store.run().research_agents:
@@ -393,39 +397,39 @@ class PassKEngine(ResearchEngine):
     async def tick(self) -> int:
         c = self.coordinator
         self._acquire()
-        if c.state["status"] == "running":
+        if c.state.status == "running":
             self._check_effective_time()
-        if c.state["status"] == "running" and self._wall_reason() is None:
-            retries = c.state.setdefault("passk_retries", {})
+        if c.state.status == "running" and self._wall_reason() is None:
+            retries = c.state.passk_retries
             for actor in (c.actor("rsi"), *c.store.run().research_agents):
                 if actor.state != AgentState.FAILED:
                     continue
-                entry = retries.setdefault(actor.agent_id, {"count": 0, "at": None})
-                if entry["at"] is None:
-                    entry["at"] = self.clock() + min(60, 2 ** min(entry["count"] + 1, 6))
+                entry = retries.setdefault(actor.agent_id, RetryBackoff())
+                if entry.at is None:
+                    entry.at = self.clock() + min(60, 2 ** min(entry.count + 1, 6))
                     c.save()
-                elif self.clock() >= entry["at"]:
+                elif self.clock() >= entry.at:
                     # Recovery continues the same attempt and native history;
                     # it neither replaces its sample nor changes its direction.
                     c.retry_agent(actor.agent_id)
-                    entry.update(count=entry["count"] + 1, at=None)
+                    entry.count, entry.at = entry.count + 1, None
                     c.save()
             for actor in c.store.run().research_agents:
                 if needs_continue(c, actor.agent_id):
-                    report = c.state["passk_reports"][actor.agent_id]
+                    report = c.state.passk_reports[actor.agent_id]
                     c.enqueue(
                         "system",
                         actor.agent_id,
                         CONTINUE_MESSAGE,
-                        key="passk-continue:" + report["uri"],
+                        key="passk-continue:" + report.uri,
                     )
             if (
-                "rsi" not in c.state["active"]
-                and not c.state["inboxes"].get("rsi")
-                and not c.state.get("passk_ready")
-                and self.clock() >= c.state.get("passk_supervision_at", 0) + 30
+                "rsi" not in c.state.active
+                and not c.state.inboxes.get("rsi")
+                and not c.state.passk_ready
+                and self.clock() >= c.state.passk_supervision_at + 30
             ):
-                c.state["passk_supervision_at"] = self.clock()
+                c.state.passk_supervision_at = self.clock()
                 c.enqueue(
                     "system",
                     "rsi",
@@ -435,11 +439,11 @@ class PassKEngine(ResearchEngine):
         return await super().tick()
 
     def _actor_allowed(self, agent_id: str) -> bool:
-        if self.coordinator.state["status"] == "planned":
+        if self.coordinator.state.status == "planned":
             return agent_id == "interaction"
-        return self.coordinator.state["status"] == "running" and (
+        return self.coordinator.state.status == "running" and (
             agent_id == "rsi"
-            or (agent_id != "interaction" and bool(self.coordinator.state.get("passk_ready")))
+            or (agent_id != "interaction" and bool(self.coordinator.state.passk_ready))
         )
 
     def _recovery_state(self, agent_id: str) -> dict[str, Any]:
@@ -467,7 +471,7 @@ class PassKEngine(ResearchEngine):
             [],
         )
         c.end_turn(agent_id)
-        if c.state["status"] == "running":
+        if c.state.status == "running":
             actor = c.actor(agent_id)
             actor.state, actor.wait_reason = AgentState.WAITING, "passk_supervision"
             c.save_actor(actor)

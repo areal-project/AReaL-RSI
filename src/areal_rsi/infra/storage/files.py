@@ -64,6 +64,9 @@ def decode(kind: Any, value: Any) -> Any:
         return None
     origin = get_origin(kind)
     if origin is types.UnionType:
+        options = [option for option in get_args(kind) if option is not type(None)]
+        if len(options) == 1:
+            return decode(options[0], value)
         for option in get_args(kind):
             if isinstance(option, type) and issubclass(option, Enum):
                 return option(value)
@@ -72,8 +75,20 @@ def decode(kind: Any, value: Any) -> Any:
                 if isinstance(value, dict) and set(value) <= names:
                     return decode(option, value)
         return value
+    if origin is dict:
+        key_type, item_type = get_args(kind)
+        return {decode(key_type, k): decode(item_type, v) for k, v in value.items()}
     if origin in (tuple, list):
-        items = [decode(get_args(kind)[0], v) for v in value]
+        args = get_args(kind)
+        items = [
+            decode(
+                args[i]
+                if origin is tuple and len(args) > 1 and args[-1] is not Ellipsis
+                else args[0],
+                v,
+            )
+            for i, v in enumerate(value)
+        ]
         return tuple(items) if origin is tuple else items
     if isinstance(kind, type) and issubclass(kind, Enum):
         return kind(value)

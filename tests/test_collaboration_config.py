@@ -82,7 +82,7 @@ def test_selection_rebuilds_runtime_and_freezes_versions(
             assert active.engine.research_prompt == plan.research_prompt
             assert "你的默认工作区" in active.engine.tools_factory("rsi").instructions
             # Starting directly here avoids invoking a real Interaction agent.
-            c.state["intake"]["status"] = "ready"
+            c.state.intake.status = "ready"
             c.save()
             await system.start(c.store.run_id)
             path = c.store.root / "coordination/collaboration.json"
@@ -93,7 +93,7 @@ def test_selection_rebuilds_runtime_and_freezes_versions(
                 {"id": module.id, "version": module.version}
             ]
             for state in ("running", "paused", "stopped"):
-                c.state["status"] = state
+                c.state.status = state
                 c.save()
                 with pytest.raises(ValueError, match="已锁定"):
                     await system.set_collaboration(c.store.run_id, {"mode": "passk", "modules": []})
@@ -129,8 +129,9 @@ def test_environment_import_preserves_selected_collaboration(tmp_path: Path) -> 
             c = system.coordinator(detail["run_id"])
             active = await system.attach(c)
             intake = ResearchIntake(
-                active.actions, repository=system.repository,
-                start=lambda message: system.start(c.store.run_id)
+                active.actions,
+                repository=system.repository,
+                start=lambda message: system.start(c.store.run_id),
             )
             incoming = ResearchConfig(TaskBrief("environment", "adapter instructions"))
             intake.import_config(incoming, "loaded adapter")
@@ -181,7 +182,7 @@ def test_http_selection_and_historical_read_only_projection(tmp_path: Path) -> N
         # A pre-feature stopped run has no manifest. Reading it never rewrites
         # frozen config to pretend its implementation version was recorded.
         c = system.coordinator(run_id)
-        c.state.update(status="stopped", started_at="2026-09-16T10:00:00Z")
+        c.state.status, c.state.started_at = "stopped", "2026-09-16T10:00:00Z"
         c.save()
         path = c.store.root / "coordination/config.json"
         config = json.loads(path.read_text())
@@ -216,7 +217,7 @@ def test_recovery_skips_retired_mode_without_writing_history(tmp_path: Path) -> 
         try:
             detail = await system.create({"conversation": True})
             c = system.coordinator(detail["run_id"])
-            c.state.update(status="running", started_at="2026-09-16T10:00:00Z")
+            c.state.status, c.state.started_at = "running", "2026-09-16T10:00:00Z"
             c.save()
             path = c.store.root / "coordination/config.json"
             config = json.loads(path.read_text())
@@ -232,7 +233,7 @@ def test_recovery_skips_retired_mode_without_writing_history(tmp_path: Path) -> 
             assert before == {p: p.read_bytes() for p in c.store.root.rglob("*") if p.is_file()}
             # Historical workers cannot resume, but operators can still clean them up.
             await system.call("stop", {"run_id": c.store.run_id})
-            assert system.coordinator(c.store.run_id).state["status"] == "stopped"
+            assert system.coordinator(c.store.run_id).state.status == "stopped"
             assert json.loads(path.read_text()) == config
             await system.call("delete", {"run_id": c.store.run_id})
             assert not c.store.root.exists()

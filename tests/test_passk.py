@@ -50,7 +50,7 @@ def configuration(k: int = 3, seconds: float = 60) -> ResearchConfig:
 
 async def setup(root: Path, k: int = 3) -> tuple[Coordinator, PassKActions, list[str]]:
     c = Coordinator.create(root, configuration(k).brief)
-    c.state["mode"] = "passk"
+    c.state.mode = "passk"
     c.start()
     actions = PassKActions(c)
     await launch(c, actions)
@@ -79,7 +79,7 @@ def test_job_wait_keeps_turn_and_reuses_job_after_recovery(tmp_path: Path) -> No
             job_id = result.output["job_id"]
             assert not result.stop
             assert "wait_for_job" in result.output["instruction"]
-            assert not execution.waiters(execution.jobs[job_id])
+            assert not execution.jobs[job_id].waiters
             assert c.actor(agent).state == AgentState.RUNNING
             # Closing the coordinator's manager preserves the actual job.
             execution.close()
@@ -97,7 +97,7 @@ def test_job_wait_keeps_turn_and_reuses_job_after_recovery(tmp_path: Path) -> No
             )
             assert not again.stop and again.output["state"] == "succeeded"
             # The tool result is the feedback: no duplicate wakeup delivery.
-            assert not execution.waiters(execution.jobs[job_id])
+            assert not execution.jobs[job_id].waiters
         finally:
             execution.close(cancel=True)
 
@@ -129,7 +129,7 @@ def test_continuous_wait_is_cancellable(tmp_path: Path) -> None:
             wait.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await asyncio.wait_for(wait, 1)
-            assert not execution.waiters(execution.jobs[submitted.output["job_id"]])
+            assert not execution.jobs[submitted.output["job_id"]].waiters
         finally:
             execution.close(cancel=True)
 
@@ -226,7 +226,7 @@ def test_independent_records_jobs_and_identical_snapshots(tmp_path: Path) -> Non
         assert result.output["withdrawn"]
         assert c.store.is_withdrawn(first.candidate_id)
         assert not c.store.is_withdrawn(second.candidate_id), "One attempt must not prune another"
-        assert len(c.state["inboxes"]["rsi"]) == 1  # Initial launch request only.
+        assert len(c.state.inboxes["rsi"]) == 1  # Initial launch request only.
 
     asyncio.run(scenario())
 
@@ -291,10 +291,11 @@ def test_all_attempts_continue_and_cancel_at_original_deadline(
 ) -> None:
     async def scenario() -> None:
         c, actions, agents = await setup(tmp_path)
-        original = c.state["started_at"]
+        original = c.state.started_at
         await launch(c, actions)
         assert len(c.store.run().research_agents) == 3
         runtime = ScriptedRuntime(leader_busy)
+        assert original is not None
         clock = datetime.fromisoformat(original).timestamp()
         engine = PassKEngine(
             c,
@@ -314,8 +315,8 @@ def test_all_attempts_continue_and_cancel_at_original_deadline(
             clock += 61
             await engine.tick()
             assert set(agents) == runtime.cancelled
-            assert c.state["started_at"] == original
-            assert c.state["budget_stop_reason"] == "Run wall-time budget exhausted"
+            assert c.state.started_at == original
+            assert c.state.budget_stop_reason == "Run wall-time budget exhausted"
         finally:
             await engine.close()
 
@@ -350,14 +351,15 @@ def test_only_trusted_passing_search_result_stops_group(tmp_path: Path) -> None:
             if digest != c.store.contract_digest():
                 with pytest.raises(ValueError, match="different comparison contract"):
                     c.store.record_verification(result)
-                assert c.state["status"] == "running"
+                assert c.state.status == "running"
                 continue
             c.store.record_verification(result)
             c.store.consider_best(result.result_id)
             stop_on_target(c)
-            assert c.state["status"] == ("succeeded" if i == 4 else "running")
+            assert c.state.status == ("succeeded" if i == 4 else "running")
         assert all(c.actor(a).state == AgentState.STOPPED for a in agents)
-        assert c.state["passk_target"]["result"]["score"] == 1.0
+        assert c.state.passk_target is not None
+        assert c.state.passk_target.result.score == 1.0
 
     asyncio.run(scenario())
 
@@ -379,7 +381,7 @@ def test_workbench_mode_stops_and_rejects_intervention(tmp_path: Path) -> None:
             with pytest.raises(ValueError, match="intervention"):
                 await system.call("chat", {"run_id": c.store.run_id, "text": "change direction"})
             await asyncio.wait_for(system.active[c.store.run_id].task, 3)
-            assert c.state["status"] == "stopped"
+            assert c.state.status == "stopped"
             assert len(set(runtime.calls)) == 4  # RSI plus the fixed three attempts.
             assert len(c.store.run().research_agents) == 3
             assert (
@@ -438,8 +440,8 @@ def test_supervisor_reports_do_not_block_or_share_research(tmp_path: Path) -> No
         assert not result.stop
         assert c.actor(actor_id).state == AgentState.RUNNING
         assert len(c.actor(actor_id).iterations) == 1
-        report = c.state["passk_reports"][actor_id]
-        assert report["message"] == "我自己的实验发现"
+        report = c.state.passk_reports[actor_id]
+        assert report.message == "我自己的实验发现"
         events = [event for event in c.store.events() if event.kind == "report_submitted"]
         assert len(events) == 1
         assert events[0].agent_id == actor_id
@@ -450,7 +452,7 @@ def test_supervisor_reports_do_not_block_or_share_research(tmp_path: Path) -> No
         )
         assert len([e for e in c.store.events() if e.kind == "report_submitted"]) == 1
         with pytest.raises(ValueError, match="not part"):
-            actions.read_record(agents[1], report["uri"])
+            actions.read_record(agents[1], report.uri)
         assert not any(
             "我自己的实验发现" in json.loads(p.read_text()).get("text", "")
             for p in (c.store.root / "messages").glob("*.json")
@@ -541,7 +543,7 @@ def test_kernelbench_verification_uses_only_own_attempt_receipts(tmp_path: Path)
 def test_leader_budget_preserves_native_model_input_contract(tmp_path: Path) -> None:
     async def scenario() -> None:
         c, actions, agents = await setup(tmp_path, 1)
-        c.state["runtime_turns"] = 7
+        c.state.runtime_turns = 7
         # Keep native-turn diagnostics, without adding them to model-visible budgets.
         assert c.summary()["runtime_turns"] == 7
         for agent in ["rsi", *agents]:

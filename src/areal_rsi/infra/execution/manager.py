@@ -240,20 +240,20 @@ class JobManager:
     def _dispatch_events(self) -> None:
         if self.on_event is None:
             return
-        pending: list[tuple[Path, dict[str, Any]]] = []
+        pending: list[tuple[Path, JobEvent]] = []
         for path in (self.root / "events").glob("*.json"):
             value = read_json(path)
             if value is not None and not value["delivered"]:
-                pending.append((path, value))
-        pending.sort(key=lambda item: (item[1]["event"]["timestamp"], item[0].name))
-        for path, value in pending:
+                pending.append((path, JobEvent(**value["event"])))
+        pending.sort(key=lambda item: (item[1].timestamp, item[0].name))
+        for path, event in pending:
             try:
-                self.on_event(JobEvent(**value["event"]))
+                self.on_event(event)
             except Exception as exception:
                 self.callback_error = f"{type(exception).__name__}: {exception}"
                 # Preserve event ordering; a later poll retries this notification.
                 break
-            write_json(path, {**value, "delivered": True})
+            write_json(path, {"event": asdict(event), "delivered": True})
 
     def _schedule(self) -> None:
         if not self.scheduling_enabled:

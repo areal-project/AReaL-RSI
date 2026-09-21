@@ -32,7 +32,7 @@ def fixture(root: Path, direction: Literal["maximize", "minimize"] = "maximize")
     )
     c = Coordinator.create(root, config.brief)
     write_json(c.store.root / "coordination/config.json", config.public())
-    c.state["mode"] = "passk"
+    c.state.mode = "passk"
     c.start()
     c.spawn(key="attempt", direction="Independent attempt", instruction="Solve the whole task")
     return c
@@ -127,7 +127,9 @@ def test_reports_have_history_delivery_status_and_paginated_events_without_mutat
             actions.progress(actor.agent_id, key, f"progress {key}", [])
         report_events = [e for e in c.store.events() if e.kind == "report_submitted"]
         assert len(report_events) == 2
-        c.state["delivered"].append(report_events[0].data["message_id"])
+        message_id = report_events[0].data["message_id"]
+        assert isinstance(message_id, str)
+        c.state.delivered.append(message_id)
         c.save()
         if legacy_events:
             for event in report_events:
@@ -220,7 +222,7 @@ def test_graph_attributes_explicit_sources_without_mutating_or_reading_other_run
             key="unknown",
             references=(foreign,),
         )
-        c.state["delivered"].append(shared)
+        c.state.delivered.append(shared)
         c.save()
         before = {p: p.read_bytes() for p in c.store.root.rglob("*.json")}
         detail = public_detail(

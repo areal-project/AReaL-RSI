@@ -70,6 +70,8 @@ Interaction 的 `update_brief` 使用结构化的 `objective`、`instructions`�
 - `ResearchRun`：执行状态、研究员、需求与基线/最佳/最终成绩引用。
 - `ResearchIteration`：任务分配、报告、引用及时间戳，不绑定任务类型。
 - `CandidateSnapshot`：不可变目录摘要与来源。
+- `ResearchJob` / `JobWaiter`：研究作业关联和完成通知订阅，不复制进程状态。
+- `CompletionRecord`：结果处理状态、探索截止时间、错误及独立的 target_reached。
 - `VerifiedResult`：绑定研究契约和候选摘要的 search/final/diagnostic 结果；基础设施错误不产生有效数值分数。
 
 完整记录保存在 `infra/storage/runs.py` 管理的 `runs/<id>/` 下。系统给模型的视图经过权限检查和
@@ -142,3 +144,5 @@ verifier。完整执行配置在启动前校验和冻结，不要求 RSI 重复�
 旧 `api.workflow`、`WorkflowContext`、`RsiWorkflow`、`ExperimentService`、
 绑定 Workflow 的 `ExperimentPlan / ExperimentRun` 和 `ResearchAgent.propose/select`、
 `RsiAgent.chat/prune` 协议不恢复；当前系统使用 ResearchSystem 和原生回合接口。
+
+结果处理成功返回 `completed`；达到显式数值目标返回 `succeeded`。两者都是已结束的研究，CLI 返回 0，恢复请求不修改它们。现有 HTTP 的 `finalization` 字段名保留，新增 `target_reached`（无 target 时为 null）。

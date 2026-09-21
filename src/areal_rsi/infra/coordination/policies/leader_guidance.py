@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from areal_rsi.api.interfaces import ToolResult
 from areal_rsi.api.records import RecordRef
+from areal_rsi.api.research import LeaderAdvice
 from areal_rsi.infra.agents.research.leader_guidance_prompt import PROMPT as RESEARCH_PROMPT
 from areal_rsi.infra.agents.rsi.leader_guidance_prompt import PROMPT as RSI_PROMPT
 from areal_rsi.infra.coordination.policies.passk import SUPERVISOR_TOOLS, PassKActions
@@ -18,7 +19,7 @@ from areal_rsi.infra.coordination.tools.actions import (
     definition,
 )
 from areal_rsi.infra.runtime.runtime_storage import read_journal
-from areal_rsi.infra.storage.files import now
+from areal_rsi.infra.storage.files import encode, now
 
 if TYPE_CHECKING:
     from areal_rsi.infra.coordination.policies.collaboration import CollaborationPlan
@@ -87,8 +88,8 @@ class GuidedPassKActions(PassKActions):
         state = super().state(agent_id)
         if agent_id == "rsi":
             for researcher in state["researchers"]:
-                researcher["latest_advice"] = self.c.state.get("leader_advice", {}).get(
-                    researcher["agent_id"]
+                researcher["latest_advice"] = encode(
+                    self.c.state.leader_advice.get(researcher["agent_id"])
                 )
         if agent_id not in {"rsi", "interaction"}:
             state["researchers"] = [
@@ -96,7 +97,7 @@ class GuidedPassKActions(PassKActions):
                     "agent_id": actor.agent_id,
                     "direction": actor.direction,
                     "state": actor.state,
-                    "latest_report": self.c.state.get("passk_reports", {}).get(actor.agent_id),
+                    "latest_report": encode(self.c.state.passk_reports.get(actor.agent_id)),
                 }
                 for actor in self.c.store.run().research_agents
             ]
@@ -116,11 +117,9 @@ class GuidedPassKActions(PassKActions):
                     key=key,
                     references=refs,
                 )
-                self.c.state.setdefault("leader_advice", {})[target] = {
-                    "message_id": message_id,
-                    "message": args["message"],
-                    "references": [ref.uri for ref in refs],
-                }
+                self.c.state.leader_advice[target] = LeaderAdvice(
+                    message_id, args["message"], [ref.uri for ref in refs]
+                )
                 self.c.save()
                 return ToolResult({"message_id": message_id, "status": "queued"})
             return self.trace(target, key, args["offset"])

@@ -69,12 +69,12 @@ def test_team_reads_and_targeted_advice_preserve_independent_attempts(tmp_path: 
         assert not reply.stop
         assert (await actions.handler("rsi")(advice)) == reply
         message_id = reply.output["message_id"]
-        assert c.state["inboxes"][target].count(message_id) == 1
-        assert message_id not in c.state["inboxes"][other]
+        assert c.state.inboxes[target].count(message_id) == 1
+        assert message_id not in c.state.inboxes[other]
         assert [c.actor(agent).current_iteration_id for agent in agents] == nodes
         assert all(c.actor(agent).state == AgentState.RUNNING for agent in agents)
         c.receive_during_turn(target, message_id)
-        assert message_id in c.state["delivered"]
+        assert message_id in c.state.delivered
         restored = GuidedPassKActions(Coordinator(ResearchStore(tmp_path, c.store.run_id)))
         result = await restored.handler(target)(ToolCall(read.name, read.arguments, "after"))
         assert result.output["content"] == "# original experiment\n"

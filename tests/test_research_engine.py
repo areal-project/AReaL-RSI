@@ -95,8 +95,9 @@ def test_delivery_origin_and_updates_do_not_reassign_active_work(
         runtime = CallbackRuntime(run)
         engine = ResearchEngine(c, runtime, lambda agent: tools(c, agent))
         await engine.run_until_idle(timeout=3)
-        assert c.state["delivered"].count(message) == c.state["delivered"].count(update) == 1
-        assert not c.state["inboxes"][recipient]
+        assert update is not None
+        assert c.state.delivered.count(message) == c.state.delivered.count(update) == 1
+        assert not c.state.inboxes[recipient]
         count = len(runtime.calls)
         await engine.run_until_idle(timeout=3)
         assert len(runtime.calls) == count
@@ -163,14 +164,14 @@ def test_queued_updates_wait_for_next_assignment_across_restart(tmp_path: Path) 
         runtime = CallbackRuntime(run)
         await ResearchEngine(c, runtime, lambda agent: tools(c, agent)).run_until_idle(timeout=3)
         assert c.actor(recipient).wait_reason == "rsi_reply"
-        assert c.state["inboxes"][recipient] == updates
+        assert c.state.inboxes[recipient] == updates
         c = Coordinator(c.store)
         assert recipient not in c.pending()
         c.assign(recipient, key="next", instruction="Next phase")
         await ResearchEngine(c, runtime, lambda agent: tools(c, agent)).run_until_idle(timeout=3)
         assert researcher_calls == 2
-        assert all(c.state["delivered"].count(identifier) == 1 for identifier in updates)
-        assert not c.state["inboxes"][recipient]
+        assert all(c.state.delivered.count(identifier) == 1 for identifier in updates)
+        assert not c.state.inboxes[recipient]
 
     asyncio.run(scenario())
 
@@ -195,7 +196,8 @@ def test_report_publication_survives_crash_before_delivery_ack(tmp_path: Path) -
 def test_wall_budget_keeps_deadline_across_wait_pause_and_resume(tmp_path: Path) -> None:
     async def scenario() -> None:
         c = coordinator(tmp_path, ResearchLimits(max_wall_seconds=1800))
-        started = datetime.fromisoformat(c.state["started_at"]).timestamp()
+        assert c.state.started_at is not None
+        started = datetime.fromisoformat(c.state.started_at).timestamp()
         clock = [started + 1200]
         snapshots: list[Json] = []
 
@@ -217,8 +219,8 @@ def test_wall_budget_keeps_deadline_across_wait_pause_and_resume(tmp_path: Path)
         assert snapshots[-1]["deadline_at"] == snapshots[0]["deadline_at"]
         clock[0] = started + 1801
         await engine.tick()
-        assert c.state["status"] == "paused"
-        assert c.state["budget_stop_reason"] == "Run wall-time budget exhausted"
+        assert c.state.status == "paused"
+        assert c.state.budget_stop_reason == "Run wall-time budget exhausted"
         assert len(runtime.calls) == 2
         await engine.close()
 
@@ -244,11 +246,11 @@ def test_pause_cancels_turn_and_resume_keeps_delivery_and_session(tmp_path: Path
         try:
             await engine.tick()
             await asyncio.wait_for(started.wait(), 2)
-            original = c.state["active"]["rsi"]
+            original = c.state.active["rsi"]
             c.pause()
             await engine.tick()
             assert cancelled.is_set()
-            assert c.state["active"]["rsi"] == original
+            assert c.state.active["rsi"] == original
             assert c.actor("rsi").state == AgentState.PAUSED
             c.resume()
             await engine.run_until_idle(timeout=3)
@@ -257,7 +259,7 @@ def test_pause_cancels_turn_and_resume_keeps_delivery_and_session(tmp_path: Path
             assert first[0] == second[0]
             assert first[1]["message_id"] == second[1]["message_id"] == original
             assert first[1]["user_message"] and second[1]["user_message"] is None
-            assert c.state["delivered"].count(original) == 1
+            assert c.state.delivered.count(original) == 1
         finally:
             await engine.close()
 
@@ -294,7 +296,7 @@ def test_final_reply_archives_report_and_followup_reuses_session(tmp_path: Path)
         assert calls[0][1]["message_id"] != calls[1][1]["message_id"]
         assert len(c.store.records("reports", ResearchReport)) == 2
         assert len(c.actor(agent).iterations) == 2
-        assert agent not in c.state.get("turn_failures", {})
+        assert agent not in c.state.turn_failures
 
     asyncio.run(scenario())
 
@@ -310,16 +312,16 @@ def test_native_usage_is_deduplicated_across_restart_and_pauses_at_limit(tmp_pat
         engine = ResearchEngine(c, runtime, lambda actor: tools(c, actor))
         event = {"type": "runtime_usage", "event_id": "native-1", "usage": {"total_tokens": 12}}
         await engine._event("rsi", event)
-        assert c.state["total_tokens"] == 12
+        assert c.state.total_tokens == 12
         c = Coordinator(c.store)
         engine = ResearchEngine(c, runtime, lambda actor: tools(c, actor))
         await engine._event("rsi", event)
-        assert c.state["total_tokens"] == 12
+        assert c.state.total_tokens == 12
         await engine._event("rsi", {**event, "event_id": "native-2"})
-        assert c.state["total_tokens"] == 24 and c.state["status"] == "paused"
-        assert c.state["budget_stop_reason"] == "Run token budget exhausted"
+        assert c.state.total_tokens == 24 and c.state.status == "paused"
+        assert c.state.budget_stop_reason == "Run token budget exhausted"
         assert await engine.tick() == 0
-        assert not runtime.calls and "model_requests" not in c.state
+        assert not runtime.calls and not c.state.model_requests
         await engine.close()
 
     asyncio.run(scenario())
@@ -374,7 +376,7 @@ def test_close_releases_ownership_and_cannot_overwrite_successor(
         second = ResearchEngine(successor, runtime, lambda actor: tools(successor, actor))
         try:
             second._acquire()
-            successor.state["total_tokens"] = 17
+            successor.state.total_tokens = 17
             successor.save()
             await first.close()
             assert json.loads(c.path.read_text())["total_tokens"] == 17
@@ -434,7 +436,7 @@ def test_usage_replay_does_not_rebuild_full_recovery_state(tmp_path: Path) -> No
             }
             for _ in range(20):
                 await delivery["event_sink"](event)
-            observations["tokens"] = c.state["total_tokens"]
+            observations["tokens"] = c.state.total_tokens
             observations["usage_refreshes"] = refreshes - initial
             # Meaningful tool boundaries still refresh the context, including current usage.
             await delivery["event_sink"]({"type": "tool_completed", "name": "probe"})

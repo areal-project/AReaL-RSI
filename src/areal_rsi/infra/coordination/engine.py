@@ -26,14 +26,14 @@ from areal_rsi.api.interfaces import (
     ToolHandler,
 )
 from areal_rsi.api.records import AgentState
-from areal_rsi.api.research import ResearchMessage
+from areal_rsi.api.research import AgentActivity, CoordinationState, ResearchMessage, RuntimeUsage
 from areal_rsi.infra.agents.communication import INTEGRITY_PROMPT
 from areal_rsi.infra.agents.interaction.prompt import PROMPT as INTERACTION_PROMPT
 from areal_rsi.infra.agents.research.passk_prompt import PROMPT as RESEARCH_PROMPT
 from areal_rsi.infra.agents.rsi.passk_prompt import PROMPT as RSI_PROMPT
 from areal_rsi.infra.coordination.coordinator import Coordinator
 from areal_rsi.infra.coordination.effective_time import EffectiveTime
-from areal_rsi.infra.storage.files import encode, now, write_json
+from areal_rsi.infra.storage.files import decode, encode, now, write_json
 
 Json = dict[str, Any]
 TickHook = Callable[[], Awaitable[bool | None]]
@@ -107,7 +107,9 @@ class ResearchEngine:
         self._lock_file = handle
         try:
             # A previous owner may have advanced state since this object was created.
-            self.coordinator.state = json.loads(self.coordinator.path.read_text())
+            self.coordinator.state = decode(
+                CoordinationState, json.loads(self.coordinator.path.read_text())
+            )
             self.effective = None
             self._initialize_effective_time()
             self.coordinator.store.event("worker_started", pid=os.getpid())
@@ -128,19 +130,19 @@ class ResearchEngine:
         # Intake can change the budget while this worker already owns the lock.
         # Bind the clock to the frozen research brief, before dispatching researchers.
         c = self.coordinator
-        if self.effective is not None or c.state["status"] not in {"running", "paused"}:
+        if self.effective is not None or c.state.status not in {"running", "paused"}:
             return
         if c.store.brief().limits.max_effective_seconds is None:
             return
         self.effective = EffectiveTime(c.state)
-        if c.state["status"] == "paused":
-            self.effective.close_worker(self.effective.data.get("heartbeat_at", self.clock()))
+        if c.state.status == "paused":
+            self.effective.close_worker(self.effective.data.heartbeat_at)
         else:
             self.effective.open_worker(self.clock())
         c.save()
 
     def _wall_reason(self) -> str | None:
-        started = self.coordinator.state.get("started_at")
+        started = self.coordinator.state.started_at
         if started is None:
             return None
         elapsed = self.clock() - datetime.fromisoformat(started.replace("Z", "+00:00")).timestamp()
@@ -150,11 +152,11 @@ class ResearchEngine:
         return None
 
     def _pause_for_budget(self, reason: str) -> None:
-        if self.coordinator.state["status"] not in {"running", "planned"}:
+        if self.coordinator.state.status not in {"running", "planned"}:
             return
-        self.coordinator.state["budget_stop_reason"] = reason
+        self.coordinator.state.budget_stop_reason = reason
         self.coordinator.save()
-        if self.coordinator.state["status"] == "running":
+        if self.coordinator.state.status == "running":
             self.coordinator.pause()
         self.coordinator.store.event("budget_exhausted", reason=reason)
         self.wake()
@@ -167,25 +169,23 @@ class ResearchEngine:
                 self.coordinator.save()
             return
         if kind == "runtime_usage":
-            settled = self.coordinator.state.setdefault("runtime_usage", {})
+            settled = self.coordinator.state.runtime_usage
             if event["event_id"] not in settled:
-                settled[event["event_id"]] = {"agent_id": agent_id, "usage": event["usage"]}
-                self.coordinator.state["total_tokens"] += event["usage"].get("total_tokens", 0)
+                settled[event["event_id"]] = RuntimeUsage(agent_id, event["usage"])
+                self.coordinator.state.total_tokens += event["usage"].get("total_tokens", 0)
                 self.coordinator.save()
                 limit = self.coordinator.store.brief().limits.max_total_tokens
-                if limit is not None and self.coordinator.state["total_tokens"] >= limit:
+                if limit is not None and self.coordinator.state.total_tokens >= limit:
                     self._pause_for_budget("Run token budget exhausted")
         if kind == "runtime_turn_started":
             # A native harness turn can contain many provider calls. Do not
             # misrepresent it as one model request in comparison statistics.
-            self.coordinator.state["runtime_turns"] = (
-                self.coordinator.state.get("runtime_turns", 0) + 1
-            )
+            self.coordinator.state.runtime_turns = self.coordinator.state.runtime_turns + 1
             self.coordinator.save()
         if kind in {"runtime_turn_started", "tool_started", "tool_completed"}:
-            self.coordinator.state.setdefault("agent_activity", {})[agent_id] = {
-                "type": kind, "tool": event.get("name"), "updated_at": now(),
-            }
+            self.coordinator.state.agent_activity[agent_id] = AgentActivity(
+                kind, event.get("name"), now()
+            )
             self.coordinator.save()
         if kind == "message_injected":
             self.coordinator.receive_during_turn(agent_id, event["message_id"])
@@ -226,22 +226,22 @@ class ResearchEngine:
             None,
         )
         run = c.store.run()
-        message_id = c.state["active"].get(agent_id)
+        message_id = c.state.active.get(agent_id)
         message = c.store.get("messages", message_id, ResearchMessage) if message_id else None
         assignment = c.store.public_record(current.assignment_ref) if current else None
         return {
             "run_id": c.store.run_id,
-            "status": c.state["status"],
-            "simulated": c.state["simulated"],
+            "status": c.state.status,
+            "simulated": c.state.simulated,
             "brief": encode(c.store.brief()),
-            "seed_candidate_id": c.state.get("seed_candidate_id"),
+            "seed_candidate_id": c.state.seed_candidate_id,
             "best": c.store.public_record(run.best_result_ref) if run.best_result_ref else None,
             "baseline": c.store.public_record(run.baseline_result_ref)
             if run.baseline_result_ref
             else None,
-            "execution_setup": c.state.get("execution_setup", "ready"),
+            "execution_setup": c.state.execution_setup,
             "withdrawn_candidates": c.store.withdrawals(),
-            "plan": c.state["plan"],
+            "plan": c.state.plan,
             "agent_id": agent_id,
             "current_message": {
                 "message_id": message.message_id,
@@ -250,8 +250,10 @@ class ResearchEngine:
             }
             if message
             else None,
-            "followup_message_ids": c.state.get("turn_followups", {}).get(agent_id, []),
-            "waiting_for_user": c.user_questions() if agent_id in {"rsi", "interaction"} else [],
+            "followup_message_ids": c.state.turn_followups.get(agent_id, []),
+            "waiting_for_user": encode(c.user_questions())
+            if agent_id in {"rsi", "interaction"}
+            else [],
             "direction": actor.direction,
             "collaborators": c.collaborators(agent_id),
             "current_node": encode(current),
@@ -309,7 +311,8 @@ class ResearchEngine:
             runtime = self.interaction_runtime if agent_id == "interaction" else self.runtime
             configuration = (
                 runtime.configuration_for(agent_id)
-                if isinstance(runtime, RoleConfiguredRuntime) else runtime.configuration()
+                if isinstance(runtime, RoleConfiguredRuntime)
+                else runtime.configuration()
             )
             write_json(
                 session / "configuration.json",
@@ -330,13 +333,13 @@ class ResearchEngine:
                     state.clear()
                     state.update(latest)
 
-            retry = c.state.get("turn_retries", {}).get(agent_id, {})
+            retry = c.state.turn_retries.get(agent_id)
 
             def incoming_messages() -> list[Json]:
                 allowed = c.turn_update_senders(agent_id)
                 updates = (
                     c.store.get("messages", identifier, ResearchMessage)
-                    for identifier in c.state["inboxes"].get(agent_id, [])
+                    for identifier in c.state.inboxes.get(agent_id, [])
                     if identifier != message.message_id
                 )
                 return [
@@ -361,8 +364,10 @@ class ResearchEngine:
                 handler=toolset.call,
                 event_sink=event_sink,
                 recovery_state=state,
-                retry_id=retry.get("retry_id")
-                if retry.get("mode") != "report" and retry.get("message_id") == message.message_id
+                retry_id=retry.retry_id
+                if retry is not None
+                and retry.mode != "report"
+                and retry.message_id == message.message_id
                 else None,
                 incoming_messages=incoming_messages,
                 workspace=toolset.workspace,
@@ -394,7 +399,7 @@ class ResearchEngine:
         except asyncio.CancelledError:
             actor = c.actor(agent_id)
             if actor.state not in {AgentState.STOPPED, AgentState.FAILED}:
-                paused = c.state["status"] == "paused"
+                paused = c.state.status == "paused"
                 actor.state = AgentState.PAUSED if paused else AgentState.WAITING
                 actor.wait_reason = "run_paused" if paused else "worker_interrupted"
                 c.save_actor(actor)
@@ -406,7 +411,7 @@ class ResearchEngine:
             self.wake()
 
     def _actor_allowed(self, agent_id: str) -> bool:
-        status = self.coordinator.state["status"]
+        status = self.coordinator.state.status
         return status == "running" or (status == "planned" and agent_id == "interaction")
 
     def _complete_research_turn(
@@ -438,7 +443,7 @@ class ResearchEngine:
                 self._pause_for_budget(reason)
             if self.tick_hook is not None:
                 self._jobs_pending = bool(await self.tick_hook())
-            status = self.coordinator.state["status"]
+            status = self.coordinator.state.status
             cancelled = []
             for agent_id, task in self._tasks.items():
                 state = self.coordinator.actor(agent_id).state
@@ -488,7 +493,7 @@ class ResearchEngine:
         async def run() -> None:
             while True:
                 active = await self.tick()
-                if self.coordinator.state["status"] not in {"running", "planned"}:
+                if self.coordinator.state.status not in {"running", "planned"}:
                     return
                 if not active and not self.coordinator.pending() and not self._jobs_pending:
                     return
@@ -503,16 +508,21 @@ class ResearchEngine:
             await self.close()
 
     async def serve(self) -> None:
-        """Serve a run, keeping paused/idle sessions dormant until an external event arrives."""
+        """Run model turns; the owner closes us after any result confirmation."""
+        self._acquire()
         try:
-            while self.coordinator.state["status"] not in {"stopped", "succeeded", "failed"}:
+            while self.coordinator.state.status not in {
+                "stopped",
+                "succeeded",
+                "failed",
+                "completed",
+            }:
                 await self.tick()
                 await self._wait()
         finally:
-            await self.close()
+            await self._stop_turns()
 
-    async def close(self) -> None:
-        """Stop local execution while retaining active delivery IDs for another worker."""
+    async def _stop_turns(self) -> None:
         tasks = tuple(self._tasks.values())
         for task in tasks:
             if not task.done():
@@ -520,9 +530,14 @@ class ResearchEngine:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._tasks.clear()
+        if self.effective is not None:
+            self.effective.close_worker(self.clock())
+            self.coordinator.save()
+            self.effective = None
+
+    async def close(self) -> None:
+        """Stop local execution while retaining active delivery IDs for another worker."""
         try:
-            if self._lock_file is not None and self.effective is not None:
-                self.effective.close_worker(self.clock())
-                self.coordinator.save()
+            await self._stop_turns()
         finally:
             self._release_ownership()

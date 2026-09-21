@@ -138,12 +138,12 @@ async def run_research(
                 print(serialized, flush=True)
                 last_printed = serialized
             status = detail["status"]
-            if status in {"succeeded", "failed", "stopped", "cancelled"} and not detail.get(
-                "worker_alive"
+            if status in {"succeeded", "completed", "failed", "stopped", "cancelled"} and not (
+                detail.get("worker_alive")
             ):
                 if (detail.get("finalization") or {}).get("status") == "failed":
                     return 1
-                return 0 if status == "succeeded" else 1
+                return 0 if status in {"succeeded", "completed"} else 1
             if stopped.is_set() or (timeout is not None and loop.time() - began >= timeout):
                 exit_status = "interrupted" if stopped.is_set() else "timeout"
                 print(

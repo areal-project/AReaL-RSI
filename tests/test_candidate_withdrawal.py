@@ -60,7 +60,7 @@ def test_withdrawal_survives_crash_and_excludes_identical_artifacts(
         run = c.store.run()
         assert run.best_result_ref is not None
         assert c.store.public_record(run.best_result_ref)["candidate_id"] == bad.candidate_id
-        c.state["selected_candidate_id"] = bad.candidate_id
+        c.state.selected_candidate_id = bad.candidate_id
         c.save()
         agent = c.spawn(
             key="repair", direction="Repair", instruction="Investigate the counterexample"
@@ -102,7 +102,7 @@ def test_withdrawal_survives_crash_and_excludes_identical_artifacts(
         withdrawal = await recovered.handler(actor)(tool)
         assert withdrawal.output["withdrawn"]
         assert withdrawal.output["best"]["candidate_id"] == candidates[0].candidate_id
-        assert recovered.c.state["selected_candidate_id"] is None
+        assert recovered.c.state.selected_candidate_id is None
         assert c.store.get("verifications", "defective", VerifiedResult) == results[1]
         assert c.store.is_withdrawn(duplicate.candidate_id)
         assert not c.store.consider_best("defective")
@@ -128,7 +128,7 @@ def test_withdrawal_survives_crash_and_excludes_identical_artifacts(
             assert notification.sender == agent
             assert bad.candidate_id in notification.text
             assert tool.arguments["reason"] in notification.text
-            assert notification.message_id in recovered.c.state["inboxes"]["rsi"]
+            assert notification.message_id in recovered.c.state.inboxes["rsi"]
             assert evidence in notification.references
         preview = record_preview(withdrawal_record, withdrawal_ref)
         assert preview["record_id"] == "withdrawals/" + bad.candidate_id

@@ -290,6 +290,7 @@ const statuses = {
   queued: "排队中",
   completed: "已完成",
   succeeded: "已完成",
+  completed: "已完成",
   cancelled: "已取消",
   created: "已创建",
   starting: "启动中",

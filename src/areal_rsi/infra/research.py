@@ -9,7 +9,9 @@ import json
 import os
 import shutil
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, overload
 
@@ -19,6 +21,7 @@ from areal_rsi.api.records import ResearchRun
 from areal_rsi.api.research import (
     CandidateSnapshot,
     EvidenceRecord,
+    IntakeState,
     ResearchMessage,
     TaskBrief,
     VerifiedResult,
@@ -127,7 +130,7 @@ class ResearchSystem:
                 key=lambda p: p.stat().st_mtime,
                 reverse=True,
             )
-            if c.state.get("started_at") and recorded:
+            if c.state.started_at and recorded:
                 settings = json.loads(recorded[0].read_text())
                 for key in MODEL_FIELDS:
                     setattr(config, key, settings.get(key, "standard"))
@@ -142,8 +145,8 @@ class ResearchSystem:
             **config.model_settings(),
             "has_credentials": bool(config.api_key()),
             "editable": config.mode in MODES
-            and c.state["status"] == "planned"
-            and not c.state.get("started_at"),
+            and c.state.status == "planned"
+            and not c.state.started_at,
         }
 
     def collaboration_settings(self, c: Coordinator) -> dict[str, Any]:
@@ -156,8 +159,8 @@ class ResearchSystem:
             "label": MODES.get(config.mode, {"label": "旧版协作（仅供查看）"})["label"],
             "supported": config.mode in MODES,
             "editable": config.mode in MODES
-            and c.state["status"] == "planned"
-            and not c.state.get("started_at")
+            and c.state.status == "planned"
+            and not c.state.started_at
             and frozen is None,
             # Do not backfill current versions into historical experiments.
             "manifest": frozen,
@@ -205,7 +208,7 @@ class ResearchSystem:
                 # The native session freezes its collaboration and tool configuration.
                 self._reset_interaction_session(c)
             write_json(c.store.root / "coordination/config.json", config.public())
-            c.state["mode"] = config.mode
+            c.state.mode = config.mode
             c.save()
             c.store.event(
                 "collaboration_updated",
@@ -310,7 +313,7 @@ class ResearchSystem:
             safe_name(run_id)
             if (self.root / "runs" / run_id / "run.json").exists():
                 previous = self.coordinator(run_id)
-                if previous.state.get("creation_digest") != creation_digest:
+                if previous.state.creation_digest != creation_digest:
                     raise ValueError("该 run_id 已用于不同的创建请求")
                 return await self.detail(run_id)
         conversation = bool(
@@ -376,14 +379,14 @@ class ResearchSystem:
             if issues:
                 raise ValueError("；".join(issues))
         c = Coordinator.create(self.root, config.brief, simulated=simulated, run_id=run_id)
-        c.state["creation_digest"] = creation_digest
-        c.state["mode"] = config.mode
+        c.state.creation_digest = creation_digest
+        c.state.mode = config.mode
         c.save()
         if key:
             self.save_credentials(c, config, key)
         write_json(c.store.root / "coordination" / "config.json", config.public(), immutable=True)
         if conversation:
-            c.state["intake"] = {"status": "discussing", "summary": "", "environment": ""}
+            c.state.intake = IntakeState(status="discussing")
             c.save()
         else:
             await self._seed(c, config)
@@ -434,13 +437,13 @@ class ResearchSystem:
         return await self.detail(c.store.run_id)
 
     async def _seed(self, c: Coordinator, config: ResearchConfig) -> None:
-        if config.seed_dir and not c.state.get("seed_candidate_id"):
+        if config.seed_dir and not c.state.seed_candidate_id:
             candidate = await c.store.snapshot(
                 Path(config.seed_dir), agent_id="operator", description="研究起点"
             )
-            c.state["seed_candidate_id"] = candidate.candidate_id
+            c.state.seed_candidate_id = candidate.candidate_id
             if config.metadata.get("evaluate_seed_as_baseline"):
-                c.state["baseline_candidate_id"] = candidate.candidate_id
+                c.state.baseline_candidate_id = candidate.candidate_id
             c.save()
 
     async def start(self, run_id: str, confirmation_message_id: str | None = None) -> None:
@@ -449,9 +452,9 @@ class ResearchSystem:
             await self._start(self.coordinator(c.store.run_id), confirmation_message_id)
 
     async def _start(self, c: Coordinator, confirmation_message_id: str | None) -> None:
-        if c.state["status"] != "planned":
+        if c.state.status != "planned":
             raise ValueError("研究已经开始")
-        if "intake" in c.state and c.state["intake"].get("status") != "ready":
+        if c.state.intake.status is not None and c.state.intake.status != "ready":
             raise ValueError("请先与 Interaction 确认研究目标和执行条件")
         config = self.config(c)
         selected_modules(config.mode, config.collaboration_modules)
@@ -461,7 +464,7 @@ class ResearchSystem:
         config.pin_model_settings()
         config.connection_settings()
         write_json(c.store.root / "coordination" / "config.json", config.public())
-        pending_setup = c.state.get("execution_setup") == "pending"
+        pending_setup = c.state.execution_setup == "pending"
         # A complete operator configuration imported during intake needs no
         # second model turn to approve the same commands after the clock starts.
         prepared_setup = (
@@ -475,7 +478,7 @@ class ResearchSystem:
                 "passk requires the execution setup to be complete before starting: "
                 + ("；".join(issues) if issues else "尚未登记实际执行命令")
             )
-        if "intake" in c.state and not pending_setup:
+        if c.state.intake.status is not None and not pending_setup:
             issues = validate_execution(config)
             if issues:
                 raise ValueError("；".join(issues))
@@ -504,8 +507,8 @@ class ResearchSystem:
             manifest(config.mode, config.collaboration_modules),
             immutable=True,
         )
-        if "intake" in c.state:
-            c.state["intake"]["confirmation_message_id"] = confirmation_message_id
+        if c.state.intake.status is not None:
+            c.state.intake.confirmation_message_id = confirmation_message_id
             c.save()
         c.start()
         active.engine.wake()
@@ -513,9 +516,7 @@ class ResearchSystem:
     async def freeze_execution(self, c: Coordinator) -> None:
         config = self.config(c)
         issues = validate_execution(config)
-        if c.state.get("intake", {}).get("execution_required") and not (
-            config.commands or config.verifier
-        ):
+        if c.state.intake.execution_required and not (config.commands or config.verifier):
             issues.append("尚未接入实际执行命令")
         if issues:
             raise ValueError("；".join(issues))
@@ -532,7 +533,7 @@ class ResearchSystem:
         write_json(
             c.store.root / "coordination" / "execution-config.json", config.public(), immutable=True
         )
-        c.state["execution_setup"] = "ready"
+        c.state.execution_setup = "ready"
         c.save()
         c.store.event("execution_ready")
 
@@ -546,7 +547,7 @@ class ResearchSystem:
                 "contract_digest": c.store.contract_digest(),
                 "created_at": now(),
                 "phase": phase,
-                "simulated": c.state["simulated"],
+                "simulated": c.state.simulated,
             }
             if record.state != "succeeded":
                 from areal_rsi.infra.execution.diagnostics import failure_summary
@@ -559,7 +560,7 @@ class ResearchSystem:
                         record.error or record.state,
                     ),
                 )
-            if c.state["simulated"]:
+            if c.state.simulated:
                 path = c.store.root / "simulation" / "scores.json"
                 scores = json.loads(path.read_text()) if path.exists() else {}
                 identity = candidate.content.digest
@@ -592,7 +593,7 @@ class ResearchSystem:
         if existing:
             existing.execution.close()
         config = self.config(c)
-        if c.state.get("started_at"):
+        if c.state.started_at:
             config.validate_clock()
         plan = build_plan(config.mode, config.collaboration_modules)
         frozen = c.store.root / "coordination/collaboration.json"
@@ -601,7 +602,7 @@ class ResearchSystem:
         ):
             raise ValueError("协作实现与启动时冻结的版本不同；请使用原版本恢复或新建研究")
         runtime = self.runtime_factory(config)
-        if c.state["status"] == "planned" and config.model_settings_revision:
+        if c.state.status == "planned" and config.model_settings_revision:
             actor = c.actor("interaction")
             session = (
                 c.store.paths.agent("interaction")
@@ -611,7 +612,7 @@ class ResearchSystem:
             await runtime.reconfigure_session(session, config.model_settings_revision)
         from areal_rsi.infra.coordination.policies.passk import stop_on_target
 
-        c.state["mode"] = config.mode
+        c.state.mode = config.mode
         c.save()
         actions = plan.actions(c)
         await actions.initialize_workspace("rsi")
@@ -624,7 +625,7 @@ class ResearchSystem:
             commands={item.name: item for item in config.commands},
             verifier=config.verifier,
             read_verification=self._verification_reader(c, config),
-            simulated=c.state["simulated"],
+            simulated=c.state.simulated,
             mock_duration=0.2,
             execution_env=config.execution_env,
         )
@@ -640,14 +641,13 @@ class ResearchSystem:
             current = self.active[c.store.run_id].config
             if (
                 (current.finalizer or current.mode == "passk")
-                and c.state["status"] == "paused"
-                and c.state.get("budget_stop_reason") == "Run wall-time budget exhausted"
+                and c.state.status == "paused"
+                and c.state.budget_stop_reason == "Run wall-time budget exhausted"
             ):
                 # The engine pauses at a hard budget. A configured closeout must
                 # still run without a user having to turn that pause into a stop.
                 c.stop("探索时间已到，停止研究并自动验证和归档已有产物")
-            if c.state["status"] == "stopped":
-                execution.close(cancel=True)
+            if c.state.status == "stopped":
                 return False
             pending = await execution.poll()
             if current.mode == "passk":
@@ -661,9 +661,12 @@ class ResearchSystem:
                 actions.definitions(agent_id, include_hidden=True),
                 actions.handler(agent_id),
                 tool_instructions(
-                    str(actions.workspace(agent_id).resolve()), backend=config.backend,
+                    str(actions.workspace(agent_id).resolve()),
+                    backend=config.backend,
                     supervisor_only=agent_id == "rsi" and plan.supervisor_only,
-                    extra=self.active[c.store.run_id].config.metadata.get("agent_tool_instructions"),
+                    extra=self.active[c.store.run_id].config.metadata.get(
+                        "agent_tool_instructions"
+                    ),
                 ),
                 actions.definitions(agent_id),
                 actions.workspace(agent_id),
@@ -677,29 +680,105 @@ class ResearchSystem:
         async def serve() -> None:
             try:
                 await engine.serve()
-                execution.close(cancel=True)
                 current = self.active[c.store.run_id].config
                 if (
                     current.needs_finalization
-                    and c.state["status"] in {"stopped", "succeeded"}
-                    and not c.state.get("user_stopped")
+                    and c.state.status in {"stopped", "succeeded"}
+                    and not c.state.user_stopped
                 ):
-                    from areal_rsi.infra.coordination.evaluation.finalization import finalize
-
-                    await finalize(c, current)
+                    await self._complete_result(c, current, execution)
+                else:
+                    await execution.cancel_pending()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 c.store.event("worker_error", error=str(exc))
             finally:
-                execution.close(cancel=c.state["status"] in {"stopped", "succeeded", "failed"})
-                await runtime.close()
-                await engine.interaction_runtime.close()
+                try:
+                    if c.state.user_stopped:
+                        await execution.cancel_pending()
+                finally:
+                    try:
+                        execution.close()
+                        await engine.close()
+                    finally:
+                        try:
+                            await runtime.close()
+                        finally:
+                            if engine.interaction_runtime is not runtime:
+                                await engine.interaction_runtime.close()
 
         task = asyncio.create_task(serve(), name="research:" + c.store.run_id)
         active = ActiveResearch(c, config, actions, execution, engine, task)
         self.active[c.store.run_id] = active
         return active
+
+    async def _complete_result(
+        self,
+        c: Coordinator,
+        config: ResearchConfig,
+        execution: ResearchExecution,
+    ) -> None:
+        completion = c.begin_completion()
+        if completion.status == "completed":
+            return
+        assert completion.exploration_finished_at is not None and config.verifier is not None
+        remaining = None
+        limit = config.brief.limits.max_wall_seconds
+        if limit is not None and config.metadata.get("time_limit_scope", "total") == "total":
+            started = c.state.started_at
+            if started:
+                remaining = max(
+                    0,
+                    limit
+                    - (datetime.now().timestamp() - datetime.fromisoformat(started).timestamp()),
+                )
+        cutoff = (
+            completion.exploration_finished_at
+            if (config.metadata.get("time_limit_scope") == "exploration")
+            else None
+        )
+        try:
+            async with asyncio.timeout(remaining):
+                await execution.cancel_pending(exploration_only=True)
+                if config.finalizer:
+                    await c.store.export_selection(
+                        c.execution_cutoffs(execution.jobs, completion.exploration_finished_at)
+                    )
+                    prepared = await execution.execute_completion(
+                        config.finalizer, "prepare", cutoff=cutoff
+                    )
+                    candidate = await c.store.completion_candidate(
+                        Path(prepared.output) / "candidate"
+                    )
+                    c.select_candidate(candidate.candidate_id)
+                    await execution.execute_completion(
+                        config.verifier, "search", candidate=candidate, cutoff=cutoff
+                    )
+                else:
+                    selected = c.selected_candidate_id
+                    if selected is None:
+                        best = c.store.run().best_result_ref
+                        if best is None:
+                            raise ValueError("没有通过正式验证的候选，无法进行最终确认")
+                        selected = decode(VerifiedResult, c.store.public_record(best)).candidate_id
+                    c.select_candidate(selected)
+                    candidate = c.store.get("candidates", selected, CandidateSnapshot)
+                checked = await execution.execute_completion(
+                    config.verifier, "final", candidate=candidate, cutoff=cutoff
+                )
+                assert checked.result is not None and checked.result_ref is not None
+                c.complete_research(checked.result, checked.result_ref)
+        except asyncio.CancelledError:
+            c.interrupt_completion()
+            raise
+        except Exception as exc:
+            if isinstance(exc, TimeoutError):
+                # Durable jobs retain any unconfirmed resource claims.
+                with suppress(TimeoutError, RuntimeError):
+                    await execution.cancel_pending()
+                exc = TimeoutError("研究已到总时间上限；已验证的最佳版本仍保留")
+            c.interrupt_completion(str(exc)[:500])
 
     async def detail(
         self, run_id: str, after: int = 0, *, event_limit: int | None = None
@@ -708,8 +787,11 @@ class ResearchSystem:
         c = self._visible_coordinator(run_id)
         active = self.active.get(run_id)
         return research_detail(
-            c, after=after, event_limit=event_limit,
-            model_settings=self.model_settings(c), collaboration=self.collaboration_settings(c),
+            c,
+            after=after,
+            event_limit=event_limit,
+            model_settings=self.model_settings(c),
+            collaboration=self.collaboration_settings(c),
             worker_alive=bool(active and not active.task.done()) or self.worker_elsewhere(c),
             active_agents=active.engine.active_agents if active else (),
         )
@@ -718,9 +800,8 @@ class ResearchSystem:
         c = self._visible_coordinator(run_id)
         async with self.run_lock(c):
             c = self.coordinator(c.store.run_id)
-            if (
-                c.state["status"] in {"running", "paused"}
-                or (c.state.get("finalization") or {}).get("status") == "running"
+            if c.state.status in {"running", "paused"} or (
+                c.completion is not None and c.completion.status == "running"
             ):
                 raise ValueError("研究仍在运行或暂停中，请先停止研究再删除")
             if self.worker_elsewhere(c):
@@ -740,7 +821,9 @@ class ResearchSystem:
                 except BlockingIOError:
                     raise ValueError("研究由其他进程运行，请先停止该进程再删除") from None
                 manager = JobManager(c.store.root, auto_monitor=False, scheduling_enabled=False)
-                manager.close(preserve_running=False)
+                await asyncio.to_thread(manager.close, preserve_running=False)
+                if any(not record.resources_released for record in manager.records()):
+                    raise ValueError("作业资源释放尚未确认，暂时不能删除研究")
                 destination = self.root / ".deleting" / new_id("research")
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 c.store.root.rename(destination)
@@ -748,11 +831,16 @@ class ResearchSystem:
         return {"run_id": c.store.run_id, "status": "deleted"}
 
     async def send_message(
-        self, run_id: str, text: str, *, message_id: str | None = None,
-        reply_to: str | None = None, recipient: str | None = None,
+        self,
+        run_id: str,
+        text: str,
+        *,
+        message_id: str | None = None,
+        reply_to: str | None = None,
+        recipient: str | None = None,
     ) -> dict[str, Any]:
         c = self._control_coordinator(run_id, "chat")
-        if self.config(c).mode == "passk" and c.state.get("started_at"):
+        if self.config(c).mode == "passk" and c.state.started_at:
             raise ValueError(
                 "passk researchers cannot receive intervention after launch; "
                 "create a new run to change the task"
@@ -767,7 +855,7 @@ class ResearchSystem:
             )
             active = await self.attach(c)
             active.engine.wake()
-        return {"run_id": c.store.run_id, "message_id": message_id, "status": c.state["status"]}
+        return {"run_id": c.store.run_id, "message_id": message_id, "status": c.state.status}
 
     async def pause(self, run_id: str) -> dict[str, Any]:
         c = self._control_coordinator(run_id, "pause")
@@ -784,24 +872,27 @@ class ResearchSystem:
             c = self.coordinator(c.store.run_id)
             if (
                 self.config(c).mode == "passk"
-                and c.state["status"] == "stopped"
-                and not c.state.get("finalization")
+                and c.state.status == "stopped"
+                and c.completion is None
             ):
                 raise ValueError(
                     "This passk experiment has ended; create a new run for another budget"
                 )
-            c.state.pop("user_stopped", None)
+            completion = c.completion
+            if completion and completion.status == "completed":
+                raise ValueError("最终复测已完成；继续探索请新建研究")
+            if c.state.status not in {"planned", "running", "paused", "stopped"}:
+                raise ValueError("This run cannot be resumed")
+            c.state.user_stopped = False
             c.save()
-            if self.config(c).needs_finalization and c.state.get("finalization"):
-                if c.state["finalization"]["status"] == "completed":
-                    raise ValueError("最终复测已完成；继续探索请新建研究")
+            if self.config(c).needs_finalization and completion:
                 active = await self.attach(c)
                 return await self.detail(c.store.run_id)
-            if c.state["status"] == "paused":
+            if c.state.status == "paused":
                 c.resume()
-            elif c.state["status"] == "stopped":
+            elif c.state.status == "stopped":
                 c.reopen()
-            elif c.state["status"] not in {"planned", "running"}:
+            elif c.state.status not in {"planned", "running"}:
                 raise ValueError("This run cannot be resumed")
             active = await self.attach(c)
             active.engine.wake()
@@ -820,22 +911,24 @@ class ResearchSystem:
         c = self._control_coordinator(run_id, "stop")
         async with self.run_lock(c):
             c = self.coordinator(c.store.run_id)
-            c.state["user_stopped"] = True
+            if c.completion is not None and c.completion.status == "completed":
+                return await self.detail(c.store.run_id)
+            c.state.user_stopped = True
             c.stop(reason)
             if c.store.run_id in self.active:
                 active = self.active[c.store.run_id]
-                await active.engine.close()
-                active.execution.close(cancel=True)
                 active.task.cancel()
                 await asyncio.gather(active.task, return_exceptions=True)
+                await active.execution.cancel_pending()
+                active.execution.close()
             else:
                 manager = JobManager(c.store.root, auto_monitor=False, scheduling_enabled=False)
-                manager.close(preserve_running=False)
+                await asyncio.to_thread(manager.close, preserve_running=False)
         return await self.detail(c.store.run_id)
 
     def _visible_coordinator(self, run_id: str) -> Coordinator:
         c = self.coordinator(run_id)
-        if c.state["simulated"] and not self.allow_simulation:
+        if c.state.simulated and not self.allow_simulation:
             raise ValueError("该记录属于开发测试，请在独立的测试工作台查看")
         return c
 
@@ -854,7 +947,7 @@ class ResearchSystem:
     async def export(self, run_id: str, *, candidate_id: str | None = None) -> ArtifactDownload:
         c = self._visible_coordinator(run_id)
         result_ref = c.store.run().final_result_ref or c.store.run().best_result_ref
-        candidate_id = candidate_id or c.state.get("selected_candidate_id")
+        candidate_id = candidate_id or c.selected_candidate_id
         if not candidate_id and result_ref is not None:
             candidate_id = c.store.public_record(result_ref)["candidate_id"]
         if not candidate_id:
@@ -868,7 +961,7 @@ class ResearchSystem:
                 and r.status == "succeeded"
                 and r.passed
                 and r.contract_digest == c.store.contract_digest()
-                and r.simulated == c.state["simulated"]
+                and r.simulated == c.state.simulated
             ]
             matching.sort(key=lambda r: (r.phase == "final", r.created_at), reverse=True)
             verification = encode(matching[0]) if matching else None
@@ -879,7 +972,7 @@ class ResearchSystem:
             {
                 "run_id": c.store.run_id,
                 "candidate_id": candidate_id,
-                "simulated": c.state["simulated"],
+                "simulated": c.state.simulated,
                 "verification": verification,
             },
         )
@@ -887,9 +980,7 @@ class ResearchSystem:
         return ArtifactDownload(Path(archive), candidate_id + ".zip")
 
     async def list_runs(self) -> dict[str, Any]:
-        return research_list(
-            self.root, self.coordinator, allow_simulation=self.allow_simulation
-        )
+        return research_list(self.root, self.coordinator, allow_simulation=self.allow_simulation)
 
     async def recover(self) -> dict[str, Any]:
         for run in FileRunStore(self.root).list(ResearchRun):
@@ -898,18 +989,18 @@ class ResearchSystem:
                 config = self.config(c)
             except (OSError, ValueError, KeyError):
                 continue
-            finalization = c.state.get("finalization") or {}
+            completion = c.completion
             if (
                 config.mode in MODES
                 and config.metadata.get("auto_resume")
-                and c.state.get("started_at")
-                and not c.state.get("user_stopped")
+                and c.state.started_at
+                and not c.state.user_stopped
                 and (
-                    c.state["status"] == "running"
+                    c.state.status == "running"
                     or (
                         config.needs_finalization
-                        and c.state["status"] in {"stopped", "succeeded"}
-                        and finalization.get("status") not in {"completed", "failed"}
+                        and c.state.status in {"stopped", "succeeded"}
+                        and (completion is None or completion.status not in {"completed", "failed"})
                     )
                 )
                 and not self.worker_elsewhere(c)
@@ -942,8 +1033,7 @@ class ResearchSystem:
             "default_simulated": self.allow_simulation and self.default_config is None,
             "has_config": self.default_config is not None,
             "models": [
-                {"id": model, "efforts": list(efforts)}
-                for model, efforts in MODEL_EFFORTS.items()
+                {"id": model, "efforts": list(efforts)} for model, efforts in MODEL_EFFORTS.items()
             ],
         }
 
@@ -958,9 +1048,7 @@ class ResearchSystem:
         self, action: str, params: dict[str, Any]
     ) -> dict[str, Any] | ArtifactDownload: ...
 
-    async def call(
-        self, action: str, params: dict[str, Any]
-    ) -> dict[str, Any] | ArtifactDownload:
+    async def call(self, action: str, params: dict[str, Any]) -> dict[str, Any] | ArtifactDownload:
         if action == "create":
             return await self.create(params)
         validate_request(action, params)
@@ -972,10 +1060,18 @@ class ResearchSystem:
                 await self.set_collaboration(params["run_id"], values)
             return await self.detail(params["run_id"])
         handlers: dict[str, Callable[..., Awaitable[dict[str, Any] | ArtifactDownload | None]]] = {
-            "recover": self.recover, "bootstrap": self.bootstrap, "list": self.list_runs,
-            "detail": self.detail, "delete": self.delete, "chat": self.send_message,
-            "start": self.start, "pause": self.pause, "resume": self.resume,
-            "retry": self.retry_agent, "stop": self.stop, "export": self.export,
+            "recover": self.recover,
+            "bootstrap": self.bootstrap,
+            "list": self.list_runs,
+            "detail": self.detail,
+            "delete": self.delete,
+            "chat": self.send_message,
+            "start": self.start,
+            "pause": self.pause,
+            "resume": self.resume,
+            "retry": self.retry_agent,
+            "stop": self.stop,
+            "export": self.export,
         }
         result = await handlers[action](**params)
         return await self.detail(params["run_id"]) if result is None else result

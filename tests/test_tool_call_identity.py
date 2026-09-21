@@ -63,7 +63,7 @@ def test_effect_survives_process_restart_and_explicit_retry(
         try:
             with pytest.raises(RuntimeError, match="Crash after effect"):
                 await runtime.turn(session, user_message="first", message_id="first", **kwargs)
-            assert c.state["plan"] == "inspect"
+            assert c.state.plan == "inspect"
             await runtime.close()
             runtime = ResearchRuntime(config, settings=settings)
             # A retry grant changes the receipt, but must not change existing effect keys.
@@ -83,12 +83,12 @@ def test_effect_survives_process_restart_and_explicit_retry(
                     "name": "update_plan", "arguments": {"plan": "changed", "reason": "smoke"},
                     "call_id": "reused-native-id",
                 })
-            assert c.state["plan"] == "inspect"
+            assert c.state.plan == "inspect"
             stop = True
             finished = await runtime.turn(
                 session, user_message="second", message_id="second", **kwargs
             )
-            assert finished.stop_reason == "stopped" and c.state["status"] == "stopped"
+            assert finished.stop_reason == "stopped" and c.state.status == "stopped"
             assert len(list((c.store.root / "actions").glob("*.json"))) == 2
         finally:
             await runtime.close()
@@ -148,12 +148,12 @@ def test_native_stop_run_after_another_turn_reuses_the_provider_call_id(
             await asyncio.wait_for(runtime.turn(
                 session, user_message="first-delivery: update_plan", message_id="first", **kwargs
             ), 60)
-            assert c.state["plan"] == "inspect"
+            assert c.state.plan == "inspect"
             # Keep the same live session: DSH generates colliding IDs at this boundary.
             final = await asyncio.wait_for(runtime.turn(
                 session, user_message="second-delivery: stop_run", message_id="second", **kwargs
             ), 60)
-            assert final.stop_reason == "stopped" and c.state["status"] == "stopped"
+            assert final.stop_reason == "stopped" and c.state.status == "stopped"
             records = [json.loads(p.read_text()) for p in (c.store.root / "actions").glob("*.json")]
             assert sorted(r["name"] for r in records) == ["stop_run", "update_plan"]
             assert all(r["status"] == "completed" for r in records)

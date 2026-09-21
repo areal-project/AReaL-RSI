@@ -264,10 +264,7 @@ class ResearchActions:
         if not include_hidden:
             if {"read", "write", "glob"} <= self.extras.keys():
                 hidden.update({"read_file", "write_file", "list_files"})
-            if (
-                self.c.state["status"] != "planned"
-                and self.c.state.get("execution_setup") != "pending"
-            ):
+            if self.c.state.status != "planned" and self.c.state.execution_setup != "pending":
                 hidden.update(
                     {
                         "get_setup",
@@ -287,7 +284,7 @@ class ResearchActions:
             tool
             for tool in [
                 *common,
-                *([brief_tool(self.c.state.get("mode", "passk"))] if role == "interaction" else []),
+                *([brief_tool(self.c.state.mode or "passk")] if role == "interaction" else []),
                 *{"rsi": RSI, "interaction": INTERACTION, "research": RESEARCH}[role],
                 *(tool for tool, _, roles in self.extras.values() if role in roles),
             ]
@@ -420,12 +417,12 @@ class ResearchActions:
                 args["candidate_id"],
                 args["reason"],
                 self.refs(agent_id, args["references"]),
-                simulated_run=c.state["simulated"],
+                simulated_run=c.state.simulated,
                 agent_id=agent_id,
             )
-            selected = c.state.get("selected_candidate_id")
+            selected = c.selected_candidate_id
             if selected and c.store.is_withdrawn(selected):
-                c.state["selected_candidate_id"] = None
+                c.select_candidate(None)
                 c.save()
             withdrawal = c.store.public_record(ref)
             if self.role(agent_id) == "research" and withdrawal["agent_id"] == agent_id:
@@ -520,7 +517,7 @@ class ResearchActions:
             return ToolResult({"path": relative_name, "content": text})
         if name == "import_candidate":
             candidate = c.store.get("candidates", args["candidate_id"], CandidateSnapshot)
-            await c.store.check_candidate_scope(candidate, c.state["seed_candidate_id"])
+            await c.store.check_candidate_scope(candidate, c.state.seed_candidate_id)
             target = self.workspace_path(agent_id, args["destination"])
             if target.exists():
                 if (
@@ -566,7 +563,7 @@ class ResearchActions:
             path.write_text(args["content"])
             return ToolResult({"path": args["path"], "bytes": path.stat().st_size})
         if name == "update_plan":
-            c.state["plan"] = args["plan"]
+            c.state.plan = args["plan"]
             c.save()
             c.store.event(
                 "plan_updated", agent_id=agent_id, plan=args["plan"], reason=args["reason"]
@@ -613,7 +610,7 @@ class ResearchActions:
                 (n for n in actor.iterations if n.iteration_id == actor.current_iteration_id), None
             )
             if (
-                c.state["status"] != "running"
+                c.state.status != "running"
                 or not message
                 or node is None
                 or node.report_ref is not None
@@ -636,7 +633,7 @@ class ResearchActions:
                     )
                 ).output
                 refs = (*refs, RecordRef(saved["uri"]))
-                if c.state["status"] != "running" or c.actor(agent_id).state in {
+                if c.state.status != "running" or c.actor(agent_id).state in {
                     AgentState.STOPPED,
                     AgentState.FAILED,
                 }:
@@ -695,9 +692,9 @@ class ResearchActions:
                 raise ValueError(
                     "Stopping requires an evidence-based reason and remaining limitation"
                 )
-            if c.state["status"] not in {"planned", "running", "paused", "stopped"}:
+            if c.state.status not in {"planned", "running", "paused", "stopped"}:
                 raise ValueError("This run has already concluded")
-            if c.state["status"] != "stopped" and (blocker := c.execution_blocker()):
+            if c.state.status != "stopped" and (blocker := c.execution_blocker()):
                 raise ValueError(
                     f"验证作业 {blocker['job_id']} 仍有基础设施错误，不能据此结束整个研究。"
                     "请用 ask_user 说明故障、已做检查及需要的处理，保留当前任务等待回复；"
@@ -722,12 +719,12 @@ class ResearchActions:
             c.enqueue("interaction", "rsi", args["message"], key=key)
             return ToolResult({"sent": True})
         if name == "update_brief":
-            if c.state["status"] != "planned":
+            if c.state.status != "planned":
                 raise ValueError("Hard constraints are frozen after start; discuss a new run")
-            brief = updated_brief(c.state.get("mode", "passk"), c.store.brief(), args)
+            brief = updated_brief(c.state.mode or "passk", c.store.brief(), args)
             config_path = c.store.root / "coordination" / "config.json"
             config = None
-            if "intake" in c.state:
+            if c.state.intake.status is not None:
                 config = json.loads(config_path.read_text())
                 config["brief"] = encode(brief)
                 # Validate the combined configuration before changing any durable record.
@@ -740,7 +737,7 @@ class ResearchActions:
             c.store.save_run(run)
             if config is not None:
                 write_json(config_path, config)
-                c.state["intake"].update(status="discussing", prepared_at=None)
+                c.state.intake.status, c.state.intake.prepared_at = "discussing", None
                 c.save()
             c.store.event("brief_updated", brief=encode(brief))
             return ToolResult({"brief": encode(brief)})
@@ -792,14 +789,14 @@ class ResearchActions:
                 description=args["description"],
                 parent_candidate_id=self.workspace_candidate(agent_id),
                 candidate_id=candidate_id,
-                scope_base_candidate_id=c.state["seed_candidate_id"],
+                scope_base_candidate_id=c.state.seed_candidate_id,
             )
             self.mark_workspace_candidate(agent_id, candidate_id)
             c.link_reference(agent_id, c.store.paths.reference(path))
             return ToolResult(await self.candidate_receipt(agent_id, candidate))
         if name == "checkout_candidate":
             candidate = c.store.get("candidates", args["candidate_id"], CandidateSnapshot)
-            await c.store.check_candidate_scope(candidate, c.state["seed_candidate_id"])
+            await c.store.check_candidate_scope(candidate, c.state.seed_candidate_id)
             await self.checkout_candidate(agent_id, candidate, key)
             return ToolResult({"candidate_id": candidate.candidate_id, "checked_out": True})
         if name == "finish":
@@ -826,7 +823,7 @@ class ResearchActions:
                     if result.candidate_id == selected
                     and result.phase == phase
                     and result.contract_digest == c.store.contract_digest()
-                    and result.simulated == c.state["simulated"]
+                    and result.simulated == c.state.simulated
                 ]
                 # A newer failed confirmation cannot be hidden by selecting an
                 # older successful attempt of this same candidate.
@@ -853,9 +850,9 @@ class ResearchActions:
                 if actor.state != AgentState.STOPPED:
                     c.stop_agent(actor.agent_id, "研究已完成")
             run.research_agents = c.store.run().research_agents
-            c.state["selected_candidate_id"] = selected
-            c.state["status"] = "succeeded"
-            c.state["waiting_for_user"] = []
+            c.select_candidate(selected)
+            c.state.status = "succeeded"
+            c.state.waiting_for_user = []
             c.save()
             run.state, run.finished_at = RunState.SUCCEEDED, now()
             c.store.save_run(run)
@@ -898,7 +895,7 @@ class ResearchActions:
 
     def require_final_confirmation(self) -> bool:
         contract = self.c.store.brief().verification
-        return self.c.state.get("require_final_confirmation") is True or (
+        return self.c.state.require_final_confirmation is True or (
             contract is not None and contract.identity.get("require_final_confirmation") is True
         )
 
@@ -949,7 +946,7 @@ class ResearchActions:
     async def initialize_workspace(self, agent_id: str) -> None:
         root = self.workspace(agent_id)
         marker = self.c.store.paths.agent(agent_id) / "workspace_initialized.json"
-        seed_id = self.c.state["seed_candidate_id"]
+        seed_id = self.c.state.seed_candidate_id
         if marker.exists() or seed_id is None:
             return
         candidate = self.c.store.get("candidates", seed_id, CandidateSnapshot)

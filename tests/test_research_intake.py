@@ -155,7 +155,7 @@ def test_conversation_can_bind_real_cpu_execution_without_template_or_baseline(
         try:
             await system.call("start", {"run_id": c.store.run_id})
             assert active.engine.max_concurrent_turns == 5
-            assert c.state["seed_candidate_id"] is None
+            assert c.state.seed_candidate_id is None
             frozen = json.loads((c.store.root / "coordination/started-config.json").read_text())
             assert frozen["brief"]["objective"] == brief.objective
             assert frozen["execution_env"]["RSI_TEST_VALUE"] == "真实进程输出"
@@ -181,7 +181,7 @@ def test_conversation_can_bind_real_cpu_execution_without_template_or_baseline(
                 await asyncio.sleep(0.02)
             assert record is not None and record.state == "succeeded"
             assert record.spec.backend == "local"
-            output = Path(active.execution.jobs[job_id]["output"]) / "result.txt"
+            output = Path(active.execution.jobs[job_id].output) / "result.txt"
             assert output.read_text() == "真实进程输出"
             blocked = await tools(ToolCall("set_execution", {"execution_json": "{}"}, "late"))
             assert "not available" in blocked.output["error"]
@@ -283,9 +283,9 @@ def test_passk_handoff_accepts_optional_execution(tmp_path: Path, execution_requ
                 )
             )
             assert result.output == {"started": True}
-            assert c.state["status"] == "running"
-            assert c.state["execution_setup"] == "ready"
-            assert c.state["started_at"]
+            assert c.state.status == "running"
+            assert c.state.execution_setup == "ready"
+            assert c.state.started_at
             assert active.execution.verifier is None
             assert (c.store.root / "coordination/started-config.json").exists()
         finally:

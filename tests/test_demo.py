@@ -264,8 +264,9 @@ else:
         assert detail["finalization"]["status"] == "completed", detail
         assert detail["final"]["score"] == 0.5
         assert (
-            detail["status"] == "stopped"
-        )  # Valid completion is not falsely called target success.
+            detail["status"] == "completed"
+        )  # Completion is distinct from reaching the configured target.
+        assert detail["finalization"]["target_reached"] is False
         with pytest.raises(ValueError, match="复测已完成"):
             client.request("/api/runs/demo/resume", {})
         assert (tmp_path / "runs/demo/finalization/output/calls").read_text() == "once\n"

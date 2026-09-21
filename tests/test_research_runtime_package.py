@@ -571,11 +571,12 @@ def test_native_codex_passk_launches_independent_attempts_and_stops_on_result(
             c.store.record_verification(result)
             c.store.consider_best(result.result_id)
             await asyncio.wait_for(active.task, 15)
-            assert c.state["status"] == "succeeded"
+            assert c.state.status == "succeeded"
             assert all(process.returncode is not None for process in processes)
-            assert c.state["passk_target"]["result"]["candidate_id"] == candidate.candidate_id
+            assert c.state.passk_target is not None
+            assert c.state.passk_target.result.candidate_id == candidate.candidate_id
             assert list(c.store.paths.agent("rsi").glob("sessions/*/runtime/request.json"))
-            assert c.state["total_tokens"] > 0
+            assert c.state.total_tokens > 0
         finally:
             await system.close()
 

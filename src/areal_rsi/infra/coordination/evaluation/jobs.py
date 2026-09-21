@@ -8,12 +8,19 @@ import json
 import shutil
 from collections.abc import Callable
 from contextlib import suppress
+from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from areal_rsi.api.interfaces import ToolCall, ToolHandler, ToolResult
 from areal_rsi.api.records import AgentState, ContentRef, IterationState, RecordRef
-from areal_rsi.api.research import CandidateSnapshot, ResearchMessage, VerifiedResult
+from areal_rsi.api.research import (
+    CandidateSnapshot,
+    JobWaiter,
+    ResearchJob,
+    ResearchMessage,
+    VerifiedResult,
+)
 from areal_rsi.infra.coordination.coordinator import effect_id
 from areal_rsi.infra.coordination.effective_time import EffectiveTime
 from areal_rsi.infra.coordination.tools.actions import STRING, ResearchActions, definition
@@ -68,15 +75,15 @@ class ResearchExecution:
             auto_monitor=False,
             scheduling_enabled=False,
         )
-        self.path = self.c.store.root / "coordination" / "jobs.json"
-        self.jobs: dict[str, Any] = json.loads(self.path.read_text()) if self.path.exists() else {}
+        self.jobs = self.c.store.research_jobs()
+        self.closed = False
         for tool in (
             definition(
                 "run_job",
                 "按已配置命令运行固定输入。candidate_id 为空时使用当前工作区。"
                 + (
                     "wait=true 在当前回合等待结果；若仍在运行，继续 wait_for_job 等原作业。"
-                    if self.c.state.get("mode") == "passk"
+                    if self.c.state.mode == "passk"
                     else "wait=true 时短作业直接返回，长作业停止推理、完成后带回公开反馈。"
                 )
                 + "返回的记录引用在作业运行中即可交接；实时状态用 job_status 查询。",
@@ -134,7 +141,7 @@ class ResearchExecution:
                 "wait_for_job",
                 (
                     "在当前回合等待原作业并返回反馈；仍在运行时继续等待，不重复提交。"
-                    if self.c.state.get("mode") == "passk"
+                    if self.c.state.mode == "passk"
                     else "结束本回合，等作业完成后在同一任务中继续。作业已经完成时直接返回结果。"
                 ),
                 job_id=STRING,
@@ -151,7 +158,7 @@ class ResearchExecution:
             actions.register(tool, self.handler, roles={"rsi", "research"})
 
     def save(self) -> None:
-        write_json(self.path, self.jobs)
+        self.c.store.save_jobs(self.jobs)
 
     def find_job(self, job_id: str) -> JobRecord | None:
         try:
@@ -209,7 +216,7 @@ class ResearchExecution:
                         "verification_feedback_available": self.verifier is not None
                         and self.verifier.public_output_subdir is not None,
                         "simulated": self.simulated,
-                        "execution_setup": self.c.state.get("execution_setup", "ready"),
+                        "execution_setup": self.c.state.execution_setup,
                     }
                 )
             if call.name in {"run_job", "verify_candidate"}:
@@ -225,8 +232,8 @@ class ResearchExecution:
             if (
                 call.name
                 in {"read_job_log", "collect_job_output", "read_job_output_file", "rerun_job"}
-                and not info["verification"]
-                and agent_id not in {"rsi", info["agent_id"]}
+                and not info.verification
+                and agent_id not in {"rsi", info.agent_id}
             ):
                 self.actions.read_record(
                     agent_id,
@@ -237,18 +244,20 @@ class ResearchExecution:
             record = self.manager.get(job_id)
             assert record is not None
             if call.name == "rerun_job":
-                if not record.terminal:
-                    raise ValueError("原作业尚未结束，请等待原作业，不要重复提交")
-                if info["verification"]:
+                if not record.terminal or not record.resources_released:
+                    raise ValueError("原作业尚未结束或资源释放未确认，不要重复提交")
+                if info.verification:
                     raise ValueError("验证作业请直接用 verify_candidate 和原 candidate_id")
+                if info.parameters is None:
+                    raise ValueError("原作业没有保存调用参数，不能推断参数并自动复测")
                 snapshot = self.c.store.root / "execution-inputs" / job_id / "snapshot.json"
                 content = decode(ContentRef, json.loads(snapshot.read_text()))
                 replay = ToolCall(
                     "run_job",
                     {
                         "command_name": record.spec.metadata["command_template"],
-                        "candidate_id": info.get("candidate_id") or "",
-                        "parameters_json": json.dumps(info["parameters"]),
+                        "candidate_id": info.candidate_id or "",
+                        "parameters_json": json.dumps(info.parameters),
                     },
                     call.call_id,
                     recovered=call.recovered,
@@ -260,7 +269,7 @@ class ResearchExecution:
                     return await self.wait_for_result(agent_id, result.output["job_id"])
                 return result
             if call.name == "read_job_log":
-                if info["verification"]:
+                if info.verification:
                     raise ValueError("Private verifier logs are not public feedback")
                 with open(record.log_path, "rb") as stream:
                     stream.seek(0, 2)
@@ -269,16 +278,12 @@ class ResearchExecution:
             if call.name in {"collect_job_output", "read_job_output_file"}:
                 if record.state != "succeeded":
                     raise ValueError("Job outputs are available after successful completion")
-                subdir = (
-                    info.get("public_output_subdir")
-                    if info["verification"]
-                    else info.get("output_subdir", ".")
-                )
+                subdir = info.public_output_subdir if info.verification else info.output_subdir
                 if subdir is None:
                     raise ValueError(
                         "The verifier has not published file feedback; use its result record"
                     )
-                output_root = Path(info["output"])
+                output_root = Path(info.output)
                 source = output_root / subdir
                 if not source.resolve().is_relative_to(output_root.resolve()):
                     raise ValueError("Configured artifact path escapes job output")
@@ -325,9 +330,9 @@ class ResearchExecution:
                             source,
                             agent_id=agent_id,
                             description="作业产物：" + job_id,
-                            parent_candidate_id=info.get("candidate_id"),
+                            parent_candidate_id=info.candidate_id,
                             candidate_id=candidate_id,
-                            scope_base_candidate_id=self.c.state["seed_candidate_id"],
+                            scope_base_candidate_id=self.c.state.seed_candidate_id,
                         )
                     self.c.link_reference(agent_id, self.c.store.paths.reference(candidate_path))
                     collected["candidate_id"] = candidate.candidate_id
@@ -353,7 +358,7 @@ class ResearchExecution:
     async def wait_for_result(
         self, agent_id: str, job_id: str, *, inline: bool = True
     ) -> ToolResult:
-        continuous = self.c.state.get("mode") == "passk"
+        continuous = self.c.state.mode == "passk"
         wait_seconds = (
             self.continuous_wait_seconds
             if continuous
@@ -379,14 +384,11 @@ class ResearchExecution:
                 }
             )
         info = self.jobs[job_id]
-        self.waiters(info).setdefault(
+        info.waiters.setdefault(
             agent_id,
-            {
-                "iteration_id": self.c.actor(agent_id).current_iteration_id,
-                "notified": False,
-            },
+            JobWaiter(self.c.actor(agent_id).current_iteration_id),
         )
-        info["waiting"] = True
+        info.waiting = True
         self.save()
         self.c.wait(agent_id, "job:" + job_id)
         return ToolResult(self.for_agent(record, agent_id), stop=True, reason="job")
@@ -399,14 +401,14 @@ class ResearchExecution:
         source_content: ContentRef | None = None,
         source_job_id: str | None = None,
     ) -> ToolResult:
-        if self.c.state.get("execution_setup") == "pending":
+        if self.c.state.execution_setup == "pending":
             raise ValueError("执行接入尚未冻结；RSI 调用 freeze_execution 后才能运行作业")
         key = effect_id("job", agent_id + ":" + call.call_id).replace("job_", "job-", 1)
         if key in self.jobs:
             record = self.find_job(key)
             if record is None:
-                record = self.manager.submit(decode(JobSpec, self.jobs[key]["spec"]), job_id=key)
-            if not self.jobs[key]["verification"]:
+                record = self.manager.submit(self.jobs[key].spec, job_id=key)
+            if not self.jobs[key].verification:
                 self.publish_execution(record)
             return ToolResult(self.public(record))
         args = call.arguments
@@ -421,7 +423,7 @@ class ResearchExecution:
             max_verify = self.c.store.brief().limits.max_verify_calls
             if (
                 max_verify is not None
-                and sum(bool(info["verification"]) for info in self.jobs.values()) >= max_verify
+                and sum(bool(info.verification) for info in self.jobs.values()) >= max_verify
             ):
                 raise ValueError("Verification budget exhausted")
         else:
@@ -429,54 +431,13 @@ class ResearchExecution:
         candidate_id = args.get("candidate_id") or None
         if verification and candidate_id is None:
             raise ValueError("Verification requires an immutable candidate")
-        if (
-            verification
-            and phase == "final"
-            and candidate_id is not None
-            and self.c.store.is_withdrawn(candidate_id)
-        ):
-            raise ValueError("Withdrawn candidates cannot be selected for final confirmation")
-        if (
-            verification
-            and phase == "final"
-            and not self.simulated
-            and command.final_candidate_policy == "single"
-        ):
-            confirmed = {
-                item["candidate_id"]
-                for item in self.jobs.values()
-                if item["verification"] and item["phase"] == "final"
-            }
-            if confirmed and candidate_id not in confirmed:
-                raise ValueError(
-                    "This final pool has already been queried for another candidate; "
-                    "use a new run with a fresh final pool for independent confirmation"
-                )
-        input_root = self.c.store.root / "execution-inputs" / key
-        workspace = input_root / "workspace"
+        if verification:
+            self._check_final_candidate(command, candidate_id, phase)
         output = self.c.store.root / "execution-outputs" / key
         output.mkdir(parents=True, exist_ok=True)
-        # Persist which snapshot is used before materialization, so a restart
-        # cannot silently switch to a subsequently edited live workspace.
-        snapshot_record = input_root / "snapshot.json"
-        if snapshot_record.exists():
-            content = decode(ContentRef, json.loads(snapshot_record.read_text()))
-        else:
-            if source_content is not None:
-                content = source_content
-            elif candidate_id is not None:
-                content = self.c.store.get("candidates", candidate_id, CandidateSnapshot).content
-            else:
-                content = await self.c.store.content.snapshot(self.actions.workspace(agent_id))
-            write_json(snapshot_record, content, immutable=True)
-        ready = input_root / "ready.json"
-        if not ready.exists():
-            # Only application-created incomplete input copies can be removed;
-            # a job cannot have launched before this completion marker exists.
-            if workspace.exists():
-                shutil.rmtree(workspace)
-            await self.c.store.content.materialize(content, workspace)
-            write_json(ready, {"content": encode(content)}, immutable=True)
+        workspace = await self._workspace(
+            key, candidate_id, agent_id=agent_id, source_content=source_content
+        )
         supplied = {} if verification else json.loads(args["parameters_json"])
         if not isinstance(supplied, dict) or any(not isinstance(v, str) for v in supplied.values()):
             raise ValueError("Command parameters must be a JSON object of strings")
@@ -503,19 +464,111 @@ class ResearchExecution:
             old_values = dict(values)
             for name, value in {
                 "workspace": old.spec.cwd,
-                "output": self.jobs[source_job_id]["output"],
+                "output": self.jobs[source_job_id].output,
             }.items():
                 if name in old_values:
                     old_values[name] = value
             if command.bind(old_values, cwd=old.spec.cwd).command != old.spec.command:
                 raise ValueError("原作业的命令配置已变化，不能作为同一实验直接复测")
-        if self.execution_env:
-            from dataclasses import replace
+        spec = self._bind_spec(
+            spec, candidate_id=candidate_id, verification=verification, phase=phase
+        )
+        info = ResearchJob(
+            agent_id=agent_id,
+            iteration_id=self.c.actor(agent_id).current_iteration_id,
+            parameters=supplied,
+            candidate_id=candidate_id,
+            source_job_id=source_job_id,
+            verification=verification,
+            phase=phase,
+            output=str(output),
+            output_subdir=command.output_subdir,
+            public_output_subdir=command.public_output_subdir,
+            feedback_file=command.feedback_file,
+            queue_timing_file=command.queue_timing_file,
+            auto_verify_output=command.auto_verify_output if not verification else None,
+            created_at=now(),
+            spec=spec,
+        )
+        self.manager.scheduling_enabled = self.c.state.status == "running"
+        record = self._submit_record(key, info)
+        if not verification:
+            self.publish_execution(record)
+        self.c.store.event("job_submitted", agent_id=agent_id, job=self.public(record))
+        return ToolResult(self.public(record))
 
-            spec = replace(spec, env=dict(self.execution_env))
+    def _check_final_candidate(
+        self,
+        command: ApprovedCommand,
+        candidate_id: str | None,
+        phase: str,
+    ) -> None:
+        if (
+            phase == "final"
+            and candidate_id is not None
+            and self.c.store.is_withdrawn(candidate_id)
+        ):
+            raise ValueError("Withdrawn candidates cannot be selected for final confirmation")
+        if phase == "final" and not self.simulated and command.final_candidate_policy == "single":
+            confirmed = {
+                item.candidate_id
+                for item in self.jobs.values()
+                if item.verification and item.phase == "final"
+            }
+            if confirmed and candidate_id not in confirmed:
+                raise ValueError(
+                    "This final pool has already been queried for another candidate; "
+                    "use a new run with a fresh final pool for independent confirmation"
+                )
+
+    async def _workspace(
+        self,
+        key: str,
+        candidate_id: str | None,
+        *,
+        agent_id: str | None = None,
+        source_content: ContentRef | None = None,
+    ) -> Path:
+        input_root = self.c.store.root / "execution-inputs" / key
+        workspace = input_root / "workspace"
+        # Persist which snapshot is used before materialization, so a restart
+        # cannot silently switch to a subsequently edited live workspace.
+        snapshot_record = input_root / "snapshot.json"
+        if snapshot_record.exists():
+            content = decode(ContentRef, json.loads(snapshot_record.read_text()))
+        else:
+            if source_content is not None:
+                content = source_content
+            elif candidate_id is not None:
+                content = self.c.store.get("candidates", candidate_id, CandidateSnapshot).content
+            else:
+                content = await self.c.store.content.snapshot(
+                    self.actions.workspace(agent_id or "rsi")
+                )
+            write_json(snapshot_record, content, immutable=True)
+        ready = input_root / "ready.json"
+        if not ready.exists():
+            # Only application-created incomplete input copies can be removed;
+            # a job cannot have launched before this completion marker exists.
+            if workspace.exists():
+                shutil.rmtree(workspace)
+            await self.c.store.content.materialize(content, workspace)
+            write_json(ready, {"content": encode(content)}, immutable=True)
+        return workspace
+
+    def _bind_spec(
+        self,
+        spec: JobSpec,
+        *,
+        candidate_id: str | None,
+        verification: bool,
+        phase: str,
+        extra_env: dict[str, str] | None = None,
+    ) -> JobSpec:
+        environment = {**self.execution_env, **(extra_env or {})}
+        if environment:
+            spec = replace(spec, env=environment)
         if verification:
-            from dataclasses import replace
-
             assert candidate_id is not None
             candidate = self.c.store.get("candidates", candidate_id, CandidateSnapshot)
             spec = replace(
@@ -537,37 +590,181 @@ class ResearchExecution:
                 metadata=spec.metadata,
                 timeout_seconds=spec.timeout_seconds,
             )
-        self.jobs[key] = {
-            "agent_id": agent_id,
-            "iteration_id": self.c.actor(agent_id).current_iteration_id,
-            "parameters": supplied,
-            "candidate_id": candidate_id,
-            "source_job_id": source_job_id,
-            "verification": verification,
-            "phase": phase,
-            "waiting": False,
-            "processed": False,
-            "output": str(output),
-            "output_subdir": command.output_subdir,
-            "public_output_subdir": command.public_output_subdir,
-            "feedback_file": command.feedback_file,
-            "queue_timing_file": command.queue_timing_file,
-            "auto_verify_output": command.auto_verify_output if not verification else None,
-            "created_at": now(),
-            "spec": encode(spec),
-        }
+        return spec
+
+    def _submit_record(self, key: str, info: ResearchJob) -> JobRecord:
+        self.jobs[key] = info
         self.save()
-        if verification:
-            self.c.state["verify_calls"] = sum(
-                bool(info["verification"]) for info in self.jobs.values()
+        self.c.state.verify_calls = sum(job.verification for job in self.jobs.values())
+        self.c.save()
+        return self.manager.submit(info.spec, job_id=key)
+
+    async def cancel_pending(self, *, exploration_only: bool = False) -> None:
+        """Keep the manager/claim lock; do not block other runs while processes stop."""
+        if self.closed:
+            return
+        self.manager.scheduling_enabled = False
+        records = [
+            record
+            for record in self.manager.records()
+            if not exploration_only
+            or record.job_id not in self.jobs
+            or not self.jobs[record.job_id].completion
+        ]
+        for record in records:
+            if not record.terminal or not record.resources_released:
+                self.manager.cancel(record.job_id)
+        async with asyncio.timeout(5):
+            while any(not self.manager.get(record.job_id).terminal for record in records):
+                self.manager.poll()
+                await asyncio.sleep(0.05)
+        if any(not self.manager.get(record.job_id).resources_released for record in records):
+            raise RuntimeError("Previous job ownership is uncertain; resources remain reserved")
+
+    async def execute_completion(
+        self,
+        command: ApprovedCommand,
+        phase: Literal["prepare", "search", "final"],
+        *,
+        cutoff: float | None = None,
+        candidate: CandidateSnapshot | None = None,
+    ) -> ResearchJob:
+        """Closing work uses the same input, intent and result path as search jobs."""
+        completion = self.c.completion
+        if completion is None or completion.status != "running":
+            raise ValueError("No active result confirmation")
+        if (phase == "prepare") != (candidate is None):
+            raise ValueError("Verification requires a candidate; preparation does not")
+        if candidate is not None:
+            self._check_final_candidate(command, candidate.candidate_id, phase)
+        self.manager.poll()
+        attempt = 0
+        while True:
+            # Keep existing IDs and output paths so interrupted remote operations reconnect.
+            key = "job-" + hashlib.sha256(f"closeout:{phase}:{attempt}".encode()).hexdigest()
+            old = self.find_job(key)
+            if old is None or old.state not in {"failed", "cancelled", "timed_out", "lost"}:
+                break
+            if not old.resources_released:
+                raise RuntimeError(f"Job {key} still has an unresolved resource claim")
+            attempt += 1
+        if key in self.jobs:
+            info = self.jobs[key]
+        else:
+            folder = self.c.store.root / "finalization"
+            folder.mkdir(exist_ok=True)
+            output = (
+                folder / "output"
+                if candidate is None
+                else (self.c.store.root / "execution-outputs" / key)
             )
-            self.c.save()
-        self.manager.scheduling_enabled = self.c.state["status"] == "running"
-        record = self.manager.submit(spec, job_id=key)
-        if not verification:
-            self.publish_execution(record)
-        self.c.store.event("job_submitted", agent_id=agent_id, job=self.public(record))
-        return ToolResult(self.public(record))
+            output.mkdir(parents=True, exist_ok=True)
+            workspace = await self._workspace(key, candidate.candidate_id) if candidate else folder
+            values = {"output": str(output), "workspace": str(workspace), "phase": phase}
+            values = {name: values[name] for name in command.parameters}
+            spec = command.bind(
+                values,
+                cwd=str(workspace),
+                agent_id="rsi",
+                verification=str(bool(candidate)).lower(),
+            )
+            env = (
+                {"RSI_CANDIDATE_SELECTION": str(folder / "candidate-selection.json")}
+                if (candidate is None)
+                else {}
+            )
+            if cutoff is not None:
+                env["RSI_EXPLORATION_FINISHED_AT"] = str(cutoff)
+            spec = self._bind_spec(
+                spec,
+                candidate_id=candidate.candidate_id if candidate else None,
+                verification=candidate is not None,
+                phase=phase,
+                extra_env=env,
+            )
+            info = ResearchJob(
+                "rsi",
+                str(output),
+                spec,
+                now(),
+                candidate_id=candidate.candidate_id if candidate else None,
+                verification=candidate is not None,
+                phase=phase,
+                completion=True,
+                public_output_subdir=command.public_output_subdir,
+            )
+        self.manager.scheduling_enabled = True
+        record = self._submit_record(key, info)
+        while not record.terminal:
+            await asyncio.sleep(0.1)
+            self.manager.poll()
+            record = self.manager.get(key)
+        if record.state != "succeeded" or not record.resources_released:
+            raise RuntimeError(f"{command.name} 未完成（{record.state}），请查看作业 {key}")
+        if info.verification:
+            result = self._verification_result(record)
+            if result.status != "succeeded":
+                self.save()
+                raise RuntimeError(result.error or "可信验证未完成")
+        info.processed = True
+        self.save()
+        return info
+
+    def _verification_result(self, record: JobRecord) -> VerifiedResult:
+        info = self.jobs[record.job_id]
+        assert self.read_verification is not None
+        assert info.candidate_id is not None and info.phase != "prepare"
+        candidate = self.c.store.get("candidates", info.candidate_id, CandidateSnapshot)
+        result_path = self.c.store.root / "verifications" / f"{record.job_id}.json"
+        if result_path.exists():
+            result = self.c.store.get("verifications", record.job_id, VerifiedResult)
+        else:
+            try:
+                result = self.read_verification(record, candidate, info.phase)
+            except Exception as exc:
+                result = VerifiedResult(
+                    record.job_id,
+                    candidate.candidate_id,
+                    self.c.store.contract_digest(),
+                    now(),
+                    "infra_error",
+                    phase=info.phase,
+                    simulated=self.simulated,
+                    error=(f"Trusted verifier could not read result: {type(exc).__name__}: {exc}"),
+                )
+            if result.result_id != record.job_id or result.candidate_id != candidate.candidate_id:
+                raise ValueError("Verifier returned the wrong job or candidate identity")
+            if result.simulated != self.simulated or result.phase != info.phase:
+                raise ValueError("Verifier returned the wrong simulation mode or phase")
+            if record.state != "succeeded" and result.status == "succeeded":
+                raise ValueError("Failed execution cannot produce a successful verification")
+            self.c.store.record_verification(result)
+        ref = self.c.store.paths.reference(result_path)
+        run = self.c.store.run()
+        baseline_id = self.c.state.baseline_candidate_id
+        baseline = (
+            self.c.store.get("candidates", baseline_id, CandidateSnapshot) if baseline_id else None
+        )
+        if (
+            baseline is not None
+            and candidate.content == baseline.content
+            and result.phase == "search"
+            and result.status == "succeeded"
+            and result.passed
+            and result.score is not None
+        ):
+            run.baseline_result_ref = ref
+        if (
+            result.phase == "final"
+            and result.status == "succeeded"
+            and result.passed
+            and not self.c.store.is_withdrawn(candidate.candidate_id)
+        ):
+            run.final_result_ref = ref
+        self.c.store.save_run(run)
+        self.c.store.consider_best(result.result_id, simulated_run=self.simulated)
+        info.result, info.result_ref = result, ref
+        return result
 
     def publish_execution(self, record: JobRecord) -> dict[str, Any]:
         """Publish a shareable receipt now, then finalize the same reference once.
@@ -577,16 +774,16 @@ class ResearchExecution:
         Verifier results keep their separate trusted publication boundary.
         """
         info = self.jobs[record.job_id]
-        assert not info["verification"]
+        assert not info.verification
         path = self.c.store.root / "executions" / f"{record.job_id}.json"
         value = json.loads(path.read_text()) if path.exists() else None
         # Legacy execution records were only published after completion.
         if value is None or (not value.get("terminal", True) and record.terminal):
             value = {
-                "agent_id": info["agent_id"],
-                "iteration_id": info["iteration_id"],
+                "agent_id": info.agent_id,
+                "iteration_id": info.iteration_id,
                 "job_id": record.job_id,
-                "created_at": info["created_at"],
+                "created_at": info.created_at,
                 "observed_at": now(),
                 "simulated": self.simulated,
                 "exit_code": record.exit_code,
@@ -596,7 +793,7 @@ class ResearchExecution:
             }
             self.c.store.put("executions", record.job_id, value, immutable=False)
         ref = self.c.store.paths.reference(path)
-        self.c.link_reference(info["agent_id"], ref, iteration_id=info["iteration_id"])
+        self.c.link_reference(info.agent_id, ref, iteration_id=info.iteration_id)
         return {**value, "uri": ref.uri}
 
     def public(self, record: JobRecord) -> dict[str, Any]:
@@ -604,19 +801,19 @@ class ResearchExecution:
         path = self.c.store.root / "executions" / f"{record.job_id}.json"
         return {
             "job_id": record.job_id,
-            "agent_id": info["agent_id"],
-            "iteration_id": info.get("iteration_id"),
+            "agent_id": info.agent_id,
+            "iteration_id": info.iteration_id,
             "command_name": record.spec.metadata.get("command_template"),
             # Only caller-supplied data arguments are public. Never publish the
             # operator's argv, environment, frozen paths or private verifier inputs.
             # Legacy records have no parameters; do not infer them from argv.
-            "parameters": info.get("parameters"),
-            "candidate_id": info.get("candidate_id"),
-            "source_job_id": info.get("source_job_id"),
-            "published_candidate_id": info.get("published_candidate_id"),
-            "verification_job_id": info.get("verification_job_id"),
-            "publication_error": info.get("publication_error"),
-            "phase": info.get("phase") if info["verification"] else None,
+            "parameters": info.parameters,
+            "candidate_id": info.candidate_id,
+            "source_job_id": info.source_job_id,
+            "published_candidate_id": info.published_candidate_id,
+            "verification_job_id": info.verification_job_id,
+            "publication_error": info.publication_error,
+            "phase": info.phase if info.verification else None,
             "state": record.state,
             "gpu_ids": list(record.assigned_gpu_ids),
             "created_at": record.created_at,
@@ -625,13 +822,13 @@ class ResearchExecution:
             "exit_code": record.exit_code,
             "error": record.error,
             "simulated": record.spec.backend == "mock",
-            "verification": info["verification"],
+            "verification": info.verification,
             "public_files_available": record.state == "succeeded"
-            and (not info["verification"] or info.get("public_output_subdir") is not None),
-            "result": info.get("result"),
+            and (not info.verification or info.public_output_subdir is not None),
+            "result": self.c.store.job_result(info),
             **(
                 {"uri": self.c.store.paths.reference(path).uri, "record_id": record.job_id}
-                if not info["verification"] and path.is_file()
+                if not info.verification and path.is_file()
                 else {}
             ),
         }
@@ -640,11 +837,11 @@ class ResearchExecution:
         result = self.public(record)
         info = self.jobs[record.job_id]
         # Run-wide status access does not grant access to another branch's files.
-        if not info["verification"] and agent_id in {"rsi", info["agent_id"]}:
-            progress = read_progress(Path(info["output"]))
+        if not info.verification and agent_id in {"rsi", info.agent_id}:
+            progress = read_progress(Path(info.output))
             if progress is not None:
                 result["progress"] = progress
-            if record.state in {"failed", "timed_out", "lost"} and not info.get("feedback"):
+            if record.state in {"failed", "timed_out", "lost"} and not info.feedback:
                 # Supply already-readable failure evidence with the status instead
                 # of requiring another model/tool round trip to discover it.
                 with suppress(OSError):
@@ -658,9 +855,9 @@ class ResearchExecution:
                             "text": raw.decode(errors="replace"),
                             "truncated": offset > 0,
                         }
-        if info.get("feedback") and (info["verification"] or agent_id in {"rsi", info["agent_id"]}):
+        if info.feedback and (info.verification or agent_id in {"rsi", info.agent_id}):
             result["feedback"] = {
-                **info["feedback"],
+                **info.feedback,
                 "record_id": effect_id("feedback", record.job_id),
             }
         return result
@@ -670,18 +867,14 @@ class ResearchExecution:
         saved = self.c.store.root / "materials" / (effect_id("feedback", record.job_id) + ".json")
         if saved.exists():
             ref = self.c.store.paths.reference(saved)
-            info["feedback"] = {**json.loads(saved.read_text()), "uri": ref.uri}
-            self.c.link_reference(info["agent_id"], ref, iteration_id=info["iteration_id"])
+            info.feedback = {**json.loads(saved.read_text()), "uri": ref.uri}
+            self.c.link_reference(info.agent_id, ref, iteration_id=info.iteration_id)
             return
-        name = info.get("feedback_file", "feedback.json")
-        subdir = (
-            info.get("public_output_subdir")
-            if info["verification"]
-            else info.get("output_subdir", ".")
-        )
+        name = info.feedback_file
+        subdir = info.public_output_subdir if info.verification else info.output_subdir
         if not name or subdir is None:
             return
-        root = Path(info["output"])
+        root = Path(info.output)
         source = root / subdir
         try:
             path = source / safe_relative(name)
@@ -698,8 +891,8 @@ class ResearchExecution:
                 return
             with path.open() as stream:
                 text = stream.read(FEEDBACK_CHARS + 1)
-            value = {
-                "agent_id": info["agent_id"],
+            value: dict[str, Any] = {
+                "agent_id": info.agent_id,
                 "job_id": record.job_id,
                 "path": name,
                 "content": text[:FEEDBACK_CHARS],
@@ -707,31 +900,20 @@ class ResearchExecution:
                 "job_state": record.state,
             }
             ref = self.c.store.put("materials", effect_id("feedback", record.job_id), value)
-            info["feedback"] = {**value, "uri": ref.uri}
-            self.c.link_reference(info["agent_id"], ref, iteration_id=info["iteration_id"])
+            info.feedback = {**value, "uri": ref.uri}
+            self.c.link_reference(info.agent_id, ref, iteration_id=info.iteration_id)
         except (OSError, ValueError, UnicodeError):
             # Missing/binary feedback must not hide the job's real terminal state.
             return
 
-    @staticmethod
-    def waiters(info: dict[str, Any]) -> dict[str, Any]:
-        # Existing runs recorded only the owner's subscription. Preserve it on upgrade.
-        if "waiters" not in info:
-            info["waiters"] = (
-                {info["agent_id"]: {"iteration_id": info["iteration_id"], "notified": False}}
-                if info.get("waiting")
-                else {}
-            )
-        return info["waiters"]  # type: ignore[no-any-return]
-
     def notify_completion(self, record: JobRecord) -> None:
         info = self.jobs[record.job_id]
-        for agent_id, subscription in self.waiters(info).items():
-            if subscription["notified"]:
+        for agent_id, subscription in info.waiters.items():
+            if subscription.notified:
                 continue
             actor = self.c.actor(agent_id)
             node_active = agent_id == "rsi" or any(
-                n.iteration_id == subscription["iteration_id"] and n.state == IterationState.RUNNING
+                n.iteration_id == subscription.iteration_id and n.state == IterationState.RUNNING
                 for n in actor.iterations
             )
             if actor.state in {AgentState.STOPPED, AgentState.FAILED} or not node_active:
@@ -739,7 +921,7 @@ class ResearchExecution:
             # A later message/turn can change wait_reason without cancelling a subscription.
             # enqueue is idempotent, including a crash before notified is saved.
             key = "job:" + record.job_id
-            if agent_id != info["agent_id"]:
+            if agent_id != info.agent_id:
                 key += ":" + agent_id
             text = (
                 "作业已完成，以下是执行结果与已发布反馈。继续当前任务；需要细节时再读日志。\n"
@@ -748,11 +930,11 @@ class ResearchExecution:
             with suppress(FileNotFoundError):
                 # Older notifications can have a different JSON field order after reload.
                 text = self.c.store.get("messages", effect_id("message", key), ResearchMessage).text
-            if info.get("result", {}).get("uri"):
+            if info.result_ref is not None:
                 self.c.link_reference(
                     agent_id,
-                    RecordRef(info["result"]["uri"]),
-                    iteration_id=subscription["iteration_id"],
+                    info.result_ref,
+                    iteration_id=subscription.iteration_id,
                 )
             self.c.enqueue(
                 "system",
@@ -760,7 +942,7 @@ class ResearchExecution:
                 text,
                 key=key,
             )
-            subscription["notified"] = True
+            subscription.notified = True
             self.save()
 
     async def publish_candidate(self, record: JobRecord) -> None:
@@ -770,10 +952,10 @@ class ResearchExecution:
         remains feedback only; it cannot supply a trusted score.
         """
         info = self.jobs[record.job_id]
-        subdir = info.get("auto_verify_output")
+        subdir = info.auto_verify_output
         if subdir is None or record.state != "succeeded":
             return
-        output = Path(info["output"])
+        output = Path(info.output)
         source = output if subdir == "." else output / safe_relative(subdir)
         if not source.resolve().is_relative_to(output.resolve()):
             raise ValueError("Configured artifact path escapes job output")
@@ -786,23 +968,23 @@ class ResearchExecution:
         if not candidate_path.exists():
             await self.c.store.snapshot(
                 source,
-                agent_id=info["agent_id"],
+                agent_id=info.agent_id,
                 description="作业产物：" + record.job_id,
-                parent_candidate_id=info.get("candidate_id"),
+                parent_candidate_id=info.candidate_id,
                 candidate_id=candidate_id,
-                scope_base_candidate_id=self.c.state["seed_candidate_id"],
+                scope_base_candidate_id=self.c.state.seed_candidate_id,
             )
         self.c.link_reference(
-            info["agent_id"],
+            info.agent_id,
             self.c.store.paths.reference(candidate_path),
-            iteration_id=info["iteration_id"],
+            iteration_id=info.iteration_id,
         )
-        info["published_candidate_id"] = candidate_id
+        info.published_candidate_id = candidate_id
         self.save()
-        if self.c.state["status"] != "running":
+        if self.c.state.status != "running":
             return
         result = await self.submit(
-            info["agent_id"],
+            info.agent_id,
             ToolCall(
                 name="verify_candidate",
                 arguments={"candidate_id": candidate_id, "phase": "search"},
@@ -811,9 +993,9 @@ class ResearchExecution:
             source_job_id=record.job_id,
         )
         job_id = result.output["job_id"]
-        self.jobs[job_id]["iteration_id"] = info["iteration_id"]
-        self.jobs[job_id]["automatic"] = True
-        info["verification_job_id"] = job_id
+        self.jobs[job_id].iteration_id = info.iteration_id
+        self.jobs[job_id].automatic = True
+        info.verification_job_id = job_id
         self.save()
 
     async def poll(self) -> bool:
@@ -823,9 +1005,9 @@ class ResearchExecution:
     async def _poll(self) -> bool:
         # A crash after the intent is stored but before manager.submit is safe:
         # the job has a stable identity and immutable input snapshot.
-        verify_calls = sum(bool(info["verification"]) for info in self.jobs.values())
-        if self.c.state["verify_calls"] != verify_calls:
-            self.c.state["verify_calls"] = verify_calls
+        verify_calls = sum(bool(info.verification) for info in self.jobs.values())
+        if self.c.state.verify_calls != verify_calls:
+            self.c.state.verify_calls = verify_calls
             self.c.save()
         limits = self.c.store.brief().limits
         self.manager.gpu_ids, self.manager.max_jobs = limits.gpu_ids, limits.max_jobs
@@ -834,32 +1016,34 @@ class ResearchExecution:
         # each job's owner separately reloads every archived research node per job.
         actors = {actor.agent_id: actor for actor in self.c.actors()} if self.jobs else {}
         for key, info in self.jobs.items():
-            actor_stopped = actors[info["agent_id"]].state == AgentState.STOPPED
+            actor_stopped = actors[info.agent_id].state == AgentState.STOPPED
             if self.find_job(key) is None:
-                self.manager.submit(decode(JobSpec, info["spec"]), job_id=key)
+                self.manager.submit(info.spec, job_id=key)
             must_cancel = (
-                (actor_stopped and not info.get("automatic"))
-                or self.c.state["status"] in {"stopped", "succeeded", "failed"}
-                or self.c.state.get("budget_stop_reason") == "Run wall-time budget exhausted"
+                (actor_stopped and not info.automatic)
+                or self.c.state.status in {"stopped", "succeeded", "failed"}
+                or self.c.state.budget_stop_reason == "Run wall-time budget exhausted"
             )
             if must_cancel and not self.manager.get(key).terminal:
                 self.manager.cancel(key)
-        self.manager.scheduling_enabled = self.c.state["status"] == "running"
+        self.manager.scheduling_enabled = self.c.state.status == "running"
         records = self.manager.poll()
         if limits.max_effective_seconds is not None:
             timer = EffectiveTime(self.c.state)
             for record in records:
-                info = self.jobs.get(record.job_id)
-                if info is None or info["verification"]:
+                if record.job_id not in self.jobs:
+                    continue
+                info = self.jobs[record.job_id]
+                if info.verification:
                     continue
                 timer.queue(
-                    info["agent_id"],
+                    info.agent_id,
                     "local:" + record.job_id,
                     record.created_at,
                     record.started_at or record.finished_at,
                 )
-                if name := info.get("queue_timing_file"):
-                    receipt = Path(info["output"]) / safe_relative(name)
+                if name := info.queue_timing_file:
+                    receipt = Path(info.output) / safe_relative(name)
                     if receipt.is_file():
                         remote = json.loads(receipt.read_text())
                         end = remote.get("started_at") or remote.get("finished_at")
@@ -867,91 +1051,31 @@ class ResearchExecution:
                             # A stale queued receipt cannot outlive its local execution.
                             end = min(end or record.finished_at, record.finished_at)
                         timer.queue(
-                            info["agent_id"],
+                            info.agent_id,
                             "remote:" + record.job_id,
                             remote["created_at"],
                             end,
                         )
         for record in records:
-            info = self.jobs.get(record.job_id)
-            if info is None or not record.terminal:
+            if record.job_id not in self.jobs or not record.terminal:
                 continue
-            if info["processed"]:
+            info = self.jobs[record.job_id]
+            if info.completion:
+                continue
+            if info.processed:
                 # Result persistence and message delivery are separate durable effects.
                 self.notify_completion(record)
                 continue
-            if info["verification"]:
-                assert self.read_verification is not None
-                candidate = self.c.store.get("candidates", info["candidate_id"], CandidateSnapshot)
-                result_path = self.c.store.root / "verifications" / f"{record.job_id}.json"
-                if result_path.exists():
-                    result = self.c.store.get("verifications", record.job_id, VerifiedResult)
-                else:
-                    try:
-                        result = self.read_verification(record, candidate, info["phase"])
-                    except Exception as exc:
-                        result = VerifiedResult(
-                            record.job_id,
-                            candidate.candidate_id,
-                            self.c.store.contract_digest(),
-                            now(),
-                            "infra_error",
-                            phase=info["phase"],
-                            simulated=self.simulated,
-                            error=(
-                                f"Trusted verifier could not read result: "
-                                f"{type(exc).__name__}: {exc}"
-                            ),
-                        )
-                    if (
-                        result.result_id != record.job_id
-                        or result.candidate_id != candidate.candidate_id
-                    ):
-                        raise ValueError("Verifier returned the wrong job or candidate identity")
-                    if result.simulated != self.simulated or result.phase != info["phase"]:
-                        raise ValueError("Verifier returned the wrong simulation mode or phase")
-                    if record.state != "succeeded" and result.status == "succeeded":
-                        raise ValueError(
-                            "Failed execution cannot produce a successful verification"
-                        )
-                    self.c.store.record_verification(result)
-                ref = self.c.store.paths.reference(result_path)
-                run = self.c.store.run()
-                baseline_id = self.c.state.get("baseline_candidate_id")
-                baseline = (
-                    self.c.store.get("candidates", baseline_id, CandidateSnapshot)
-                    if baseline_id
-                    else None
-                )
-                if (
-                    baseline is not None
-                    and candidate.content == baseline.content
-                    and result.phase == "search"
-                    and result.status == "succeeded"
-                    and result.passed
-                    and result.score is not None
-                ):
-                    run.baseline_result_ref = ref
-                if (
-                    result.phase == "final"
-                    and result.status == "succeeded"
-                    and result.passed
-                    and not self.c.store.is_withdrawn(candidate.candidate_id)
-                ):
-                    run.final_result_ref = ref
-                self.c.store.save_run(run)
-                self.c.store.consider_best(result.result_id, simulated_run=self.simulated)
-                info["result"] = {**encode(result), "uri": ref.uri}
+            if info.verification:
+                self._verification_result(record)
             else:
                 # Job exit state is evidence. Training stdout is never a score.
-                info["result"] = self.publish_execution(record)
+                info.execution_result = self.publish_execution(record)
+                info.result_ref = RecordRef(str(info.execution_result["uri"]))
                 if self.simulated and record.state == "succeeded":
                     # A visible fixture, never a fabricated checkpoint or real score.
                     output = (
-                        self.c.store.root
-                        / "execution-outputs"
-                        / record.job_id
-                        / info.get("output_subdir", ".")
+                        self.c.store.root / "execution-outputs" / record.job_id / info.output_subdir
                     )
                     write_json(
                         output / "simulation.json",
@@ -961,10 +1085,11 @@ class ResearchExecution:
                             "description": "Execution fixture: no training or GPU work performed",
                         },
                     )
+            assert info.result_ref is not None
             self.c.link_reference(
-                info["agent_id"],
-                RecordRef(info["result"]["uri"]),
-                iteration_id=info["iteration_id"],
+                info.agent_id,
+                info.result_ref,
+                iteration_id=info.iteration_id,
             )
             self.publish_feedback(record)
             try:
@@ -972,12 +1097,13 @@ class ResearchExecution:
             except Exception as exc:
                 # Scoring/publication failure must not discard useful experiment
                 # feedback or strand its owner. It stays visible and can be retried.
-                info["publication_error"] = f"{type(exc).__name__}: {exc}"
+                info.publication_error = f"{type(exc).__name__}: {exc}"
             self.notify_completion(record)
-            info["processed"] = True
+            info.processed = True
             self.save()
-            self.c.store.event("job_completed", agent_id=info["agent_id"], job=self.public(record))
+            self.c.store.event("job_completed", agent_id=info.agent_id, job=self.public(record))
         return any(not self.manager.get(key).terminal for key in self.jobs)
 
     def close(self, *, cancel: bool = False) -> None:
         self.manager.close(preserve_running=not cancel)
+        self.closed = True

@@ -73,26 +73,18 @@ verification contract.
 
 ## Web workbench
 
-Start or reuse a background workbench from the repository root:
+Start the workbench from the repository root:
 
 ```bash
-uv run --env-file .env --locked python run.py --type web
+uv run --env-file .env --locked rsi workbench --port 8197
 ```
 
 Open **http://127.0.0.1:8197**, create a research session, and discuss the task, environment,
 resource limits, and target with the Interaction agent. Once started, the task and collaboration
 configuration are frozen, while progress and evidence remain visible throughout the run.
 
-Use `--port 8200` for another port or `--data-root /path/to/data` for another data directory. A
-compatible running workbench is reused; an unrelated service on the selected port causes a clear
-error and is never stopped or replaced. Background logs and PID files are stored under
-`<data-root>/runtime/`.
-
-For a foreground process that stops with Ctrl+C, run:
-
-```bash
-uv run --env-file .env --locked rsi workbench --port 8197
-```
+Use `--port 8200` for another port or `--data-root /path/to/data` for another data directory.
+The workbench runs in the foreground and stops cleanly with Ctrl+C.
 
 `rsi`, `rsi web`, and `rsi workbench` all start the same foreground workbench. New workbenches,
 `rsi research`, and `rsi preflight` resolve their data directory in this order:
@@ -122,13 +114,17 @@ does not modify the collaboration state.
 With access to the `et15` SSH host and a deployed GPUQ, start the default KernelBench research run:
 
 ```bash
-uv run --env-file .env --locked python run.py --type demo
+uv run --env-file .env --locked python examples/kernelbench_artifacts/run.py
 ```
 
 The launcher starts or reuses the workbench and runs four independent researchers on L3P10 with
 the v0.2.2 coordination profile. Exploration runs for one hour with unlimited submissions. At the
 end, the system freezes the best candidate, performs an independent final verification, and
 archives the result. Closing the browser or launch terminal does not stop the background run.
+
+The task launcher reuses a compatible workbench when one is already running. An unrelated service
+on the selected port causes a clear error and is never stopped or replaced. Background logs and
+PID files are stored under `<data-root>/runtime/`.
 
 The [KernelBench guide](examples/kernelbench_artifacts/README.md) documents environment checks,
 recovery, task selection, submission budgets, and recorded results. For the fixed three-task,

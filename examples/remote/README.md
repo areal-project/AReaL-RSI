@@ -8,14 +8,15 @@
 `~/.envarena/config.toml`，不会写入研究配置。
 
 ```bash
-uv run --env-file .env --locked python -m areal_rsi.adapters.benchmark_research prepare \
-  --benchmark lcb --arena-config examples/remote/livecodebench.yaml \
+uv run --env-file .env --locked rsi examples prepare livecodebench \
+  --arena-config examples/remote/livecodebench.yaml \
   --directory .rsi/lcb-research/setup
 uv run --env-file .env --locked rsi research \
   --config .rsi/lcb-research/setup/research.json --data-root .rsi/lcb-research
 ```
 
-两条命令分别准备配置与通过 ResearchApp 启动研究。Web 同样可以导入生成的配置。
+`rsi examples` 可查看当前完整可运行的示例。两条命令分别准备配置与通过 ResearchApp
+启动研究；Web 同样可以导入生成的配置。
 使用默认 v0.2.2 pass@k 协调配置，固定 1 名研究员；研究员执行 TRAIN 基线诊断
 （diagnostic）及新候选正式评测（search），系统在探索到时后冻结最佳候选并独立执行
 VALIDATE（final）。默认探索时限 1200 秒，可用 `--time-limit` 调整，最终复测另计。

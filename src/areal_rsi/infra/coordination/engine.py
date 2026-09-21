@@ -220,6 +220,7 @@ class ResearchEngine:
         return {
             "run_id": c.store.run_id,
             "status": c.state.status,
+            "goal": encode(c.state.goal),
             "simulated": c.state.simulated,
             "brief": encode(c.store.brief()),
             "seed_candidate_id": c.state.seed_candidate_id,
@@ -386,7 +387,11 @@ class ResearchEngine:
                 c.end_turn(agent_id)
         except asyncio.CancelledError:
             actor = c.actor(agent_id)
-            if actor.state not in {AgentState.STOPPED, AgentState.FAILED}:
+            if c.state.status in {"succeeded", "completed"}:
+                actor.state, actor.wait_reason = AgentState.STOPPED, "completed"
+                c.save_actor(actor)
+                c.end_turn(agent_id)
+            elif actor.state not in {AgentState.STOPPED, AgentState.FAILED}:
                 paused = c.state.status == "paused"
                 actor.state = AgentState.PAUSED if paused else AgentState.WAITING
                 actor.wait_reason = "run_paused" if paused else "worker_interrupted"

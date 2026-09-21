@@ -1583,3 +1583,30 @@ button.primary.destructive { background: var(--red); }
 .graph-column-headings { position: sticky; top: 0; height: 50px; margin-bottom: -50px; z-index: 5; pointer-events: none; background: #f6f8f5ed; backdrop-filter: blur(8px); border-bottom: 1px solid #e5ebe2; }
 .graph-column-headings .agent-lane-heading { position: absolute; top: 0; height: 50px; padding: 10px 14px; }
 .graph-column-headings .agent-monogram { flex-basis: 25px; }
+
+.goal-context { padding: 22px; margin-bottom: 18px; border-left: 4px solid var(--green); }
+.goal-context h2 { margin: 4px 0; }
+.goal-context h3 { font-size: 13px; color: var(--muted); margin: 18px 0 7px; }
+.goal-context p, .goal-context li { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
+.goal-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+.goal-context ul { margin: 0; padding-left: 20px; }
+.goal-footer { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between;
+  border-top: 1px solid var(--line); padding-top: 14px; margin-top: 18px; color: var(--muted); font-size: 12px; }
+@media (max-width: 760px) { .goal-columns { grid-template-columns: 1fr; gap: 0; } }
+
+.goal-context .status.blocked { color: var(--amber); background: #fff4db; }
+.goal-context .status.active { color: var(--green); background: var(--green-light); }
+
+.goal-history { padding: 22px; margin-bottom: 18px; }
+
+.goal-progress { list-style: none; padding: 0; line-height: 1.7; }
+.goal-progress > li { padding: 18px 0; overflow-wrap: anywhere; }
+.goal-progress > li + li { border-top: 1px solid var(--line); }
+.progress-message { max-width: 85ch; }
+.progress-message p { margin: 0 0 14px; white-space: pre-wrap; }
+.progress-message h3 { margin: 16px 0 10px; font-size: 15px; }
+.progress-message ul, .progress-message ol { margin: 0 0 14px; padding-left: 24px; }
+.progress-message li + li { margin-top: 6px; }
+.progress-message > :last-child { margin-bottom: 0; }
+.progress-message code { background: var(--paper); border-radius: 4px; padding: 2px 4px; }
+.progress-message pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 14px 0; }

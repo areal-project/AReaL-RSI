@@ -389,7 +389,9 @@ class ResearchRuntime:
                     {
                         "type": "tool_started" if kind == "tool.started" else "tool_completed",
                         "name": data.get("name", "native"),
-                        "call_id": data.get("callId"),
+                        "call_id": f"{event.get('runId', '')}:"
+                        f"{data.get('callId', event.get('eventId'))}",
+
                     }
                 )
 
@@ -402,8 +404,12 @@ class ResearchRuntime:
             context = (
                 recovery_state
                 if recovering or (fresh_session and "backend_handoff" in recovery_state)
-                else {"budget": recovery_state["budget"]}
-                if "budget" in recovery_state
+                else {
+                    key: recovery_state[key]
+                    for key in ("budget", "goal", "brief")
+                    if key in recovery_state and (key != "brief" or recovery_state.get("goal"))
+                }
+                if "budget" in recovery_state or "goal" in recovery_state
                 else {}
             )
             if context:

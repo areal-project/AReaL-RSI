@@ -403,3 +403,109 @@ test('agent timeline grows down and shares use distinct reserved rows with inspe
   const paths = [...ui.$('graph-canvas').querySelectorAll('.peer-sharing')].map((path) => path.getAttribute('d'));
   assert.equal(new Set(paths).size, 2);
 });
+
+test('pass1 goal context updates while running and clears when switching to passk', async (t) => {
+  const a = run('a', 'running');
+  a.collaboration = {...a.collaboration, mode: 'pass1', label: 'RSI pass1'};
+  a.brief.instructions = '修复失败测试，保持 API 不变';
+  a.agents = [{agent_id: 'rsi', state: 'running'}];
+  a.goal = {status: 'active', summary: '已定位失败', current_step: '修复实现',
+    next_steps: ['运行测试'], acceptance: ['全部测试通过'], evidence: [], blocker: '',
+    revision: 1, updated_at: '2026-09-21T10:00:00Z'};
+  const records = {a, b: run('b')};
+  const ui = await setup(t, records, (path) => {
+    if (path.endsWith('/cancel')) {
+      a.status = 'paused';
+      a.agents[0] = {agent_id: 'rsi', state: 'waiting', wait_reason: 'user_cancelled'};
+      return response(a);
+    }
+    if (path === '/api/bootstrap') return response({csrf_token: 'test', default_model_settings: defaults,
+      collaboration_catalog: {...collaborationCatalog, modes: [...collaborationCatalog.modes, {id: 'pass1', label: 'RSI pass1'}],
+        presets: [...collaborationCatalog.presets, {id: 'pass1', label: 'RSI pass1', mode: 'pass1', modules: []}]},
+      default_collaboration: {mode: 'passk', modules: []}, models: []});
+  });
+  assert.equal(ui.$('goal-context').hidden, false);
+  assert.equal(ui.$('goal-current-step').textContent, '修复实现');
+  assert.match(ui.$('chat-input-label').textContent, /RSI Agent/);
+  assert.match(ui.$('chat-feedback').textContent, /正在执行目标/);
+  assert.equal(ui.$('cancel-turn').hidden, false);
+  ui.input('chat-input', '保留草稿');
+  ui.$('chat-input').setSelectionRange(0, 2);
+  ui.$('chat-input').dispatchEvent(new ui.window.KeyboardEvent('keydown', {key: 'c', ctrlKey: true, bubbles: true, cancelable: true}));
+  assert.equal(ui.calls.filter((call) => call.path.endsWith('/cancel')).length, 0);
+  ui.$('chat-input').setSelectionRange(4, 4);
+  ui.$('chat-input').dispatchEvent(new ui.window.KeyboardEvent('keydown', {key: 'c', ctrlKey: true, bubbles: true, cancelable: true}));
+  await settle();
+  assert.equal(ui.calls.filter((call) => call.path.endsWith('/cancel')).length, 1);
+  assert.match(ui.$('chat-feedback').textContent, /当前执行已取消/);
+  assert.equal(ui.$('chat-input').value, '保留草稿');
+  assert.equal(ui.$('cancel-turn').hidden, true);
+  a.status = 'running'; a.agents[0] = {agent_id: 'rsi', state: 'running'};
+  await ui.poll();
+  a.events.push({sequence: 121, kind: 'assistant_output', agent_id: 'rsi',
+    data: {text: '已定位视觉输入限制 <script>unsafe</script>'}});
+  a.goal_turns = [{number: 1, status: 'running', started_at: '2026-09-21T10:00:00Z', inputs: []}];
+  a.messages.push({message_id: 'followup', sender: 'user', recipient: 'rsi', text: '使用远程目录', created_at: '2026-09-21T10:01:00Z'});
+  await ui.poll();
+  assert.match(ui.$('chat-feedback').textContent, /已定位视觉输入限制/);
+  assert.equal(ui.$('chat-feedback').querySelector('script'), null);
+  assert.match(ui.$('chat-feedback').textContent, /补充消息仍在排队/);
+  a.goal_turns[0].inputs = [...a.messages];
+  await ui.poll();
+  assert.doesNotMatch(ui.$('chat-feedback').textContent, /补充消息仍在排队/);
+  a.goal = {...a.goal, status: 'blocked', summary: '等待条件', blocker: '<script>缺少依赖</script>', revision: 2};
+  await ui.poll();
+  assert.equal(ui.$('goal-status').textContent, '等待解除阻塞');
+  assert.match(ui.$('goal-blocker').textContent, /缺少依赖/);
+  assert.equal(ui.$('goal-blocker').querySelector('script'), null);
+  a.goal = {...a.goal, status: 'completed', summary: '验收完成', blocker: '', evidence: ['pytest: 通过'], revision: 3};
+  a.status = 'succeeded'; a.worker_alive = false;
+  await ui.poll();
+  assert.equal(ui.$('goal-status').textContent, '目标完成');
+  assert.match(ui.$('goal-evidence').textContent, /pytest: 通过/);
+  ui.switchRun('b'); await settle();
+  assert.equal(ui.$('goal-context').hidden, true);
+  assert.doesNotMatch(ui.$('chat-feedback').textContent, /已定位视觉输入限制/);
+  ui.$('new-run').click();
+  ui.$('create-collaboration-mode-trigger').click();
+  [...ui.$('create-collaboration-mode-options').querySelectorAll('[role="option"]')].find((item) => item.textContent.includes('RSI pass1')).click();
+  assert.equal(ui.$('create-message').required, true);
+  assert.equal(ui.$('create-submit').textContent, '开始目标');
+  assert.match(ui.$('create-description').textContent, /一个 Agent/);
+});
+
+
+test('goal progress streams across turns without exposing round boundaries', async (t) => {
+  const a = run('a', 'running');
+  a.collaboration = {...a.collaboration, mode: 'pass1'};
+  const turn = (number, status = 'completed') => ({number, status,
+    started_at: '2026-09-21T10:00:00Z', brief: {objective: '修复代码', instructions: '保持 API'},
+    inputs: [{sender: 'user', text: '本轮输入 ' + number}],
+    context_before: {summary: '开始前快照'}, context_after: {summary: '当前进展'},
+    output: ['开始检查'], tokens_before: 10, tokens_after: 20, tools_completed: 1});
+  a.goal_turns = [turn(3, 'running')]; a.goal_turns_next = 3; a.goal_turns_total = 3;
+  const ui = await setup(t, {a}, (path) => path.includes('goal_before=3')
+    ? response({...a, goal_turns: [turn(2), turn(1)], goal_turns_next: null}) : null);
+  assert.equal(ui.$('goal-turn-list').querySelector('details'), null);
+  assert.equal(ui.$('runtime-turn-count').parentElement.hidden, true);
+  a.goal_turns[0].output[0] = '已**定位问题**。\n\n接下来验证。\n\n- 检查 `loss`\n- 运行测试\n\n```python\nprint(42)\n\nprint(43)\n```';
+  await ui.poll();
+  const message = ui.$('goal-turn-list').firstElementChild;
+  assert.equal(message.querySelectorAll('p').length, 2);
+  assert.equal(message.querySelector('strong').textContent, '定位问题');
+  assert.equal(message.querySelectorAll('ul > li').length, 2);
+  assert.match(message.querySelector('pre').textContent, /print\(42\)\n\nprint\(43\)/);
+  a.goal_turns[0].output.push('<script>新进展</script>');
+  a.goal_turns[0].context_after = {summary: '验证通过'};
+  await ui.poll();
+  assert.match(ui.$('goal-turn-list').textContent, /新进展/);
+  assert.equal(ui.$('goal-turn-list').querySelector('script'), null);
+  assert.doesNotMatch(ui.$('goal-turn-list').textContent, /exec_command/);
+  assert.doesNotMatch(ui.$('goal-turn-list').textContent, /快照|回合|本轮输入/);
+  ui.$('goal-load-older').click(); await settle();
+  assert.equal(ui.$('goal-turn-list').children.length, 4);
+  assert.equal(ui.$('goal-load-older').hidden, true);
+  assert.equal(ui.$('goal-turn-list').lastElementChild.textContent, '<script>新进展</script>');
+  await ui.poll();
+  assert.equal(ui.$('goal-turn-list').children.length, 4);
+});

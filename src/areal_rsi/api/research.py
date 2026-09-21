@@ -395,6 +395,55 @@ class EffectiveClock:
 
 
 @dataclass(slots=True)
+class GoalContext:
+    """Public working context, distinct from a model's private reasoning/history."""
+
+    status: Literal["active", "blocked", "completed"] = "active"
+    summary: str = ""
+    current_step: str = ""
+    next_steps: list[str] = field(default_factory=list)
+    acceptance: list[str] = field(default_factory=list)
+    evidence: list[str] = field(default_factory=list)
+    blocker: str = ""
+    updated_at: str = ""
+    revision: int = 0
+
+
+@dataclass(slots=True)
+class GoalToolCall:
+    call_id: str
+    name: str
+    started_at: str
+    before_output: int
+    status: Literal["running", "completed", "failed", "interrupted"] = "running"
+    finished_at: str | None = None
+    arguments: str = ""
+    result: str = ""
+
+
+@dataclass(slots=True)
+class GoalTurn:
+    """One Agent execution, possibly containing multiple model and tool calls."""
+
+    number: int
+    started_at: str
+    brief: TaskBrief
+    inputs: list[ResearchMessage]
+    context_before: GoalContext | None
+    tokens_before: int
+    context_after: GoalContext | None = None
+    tokens_after: int = 0
+    status: Literal["running", "completed", "blocked", "failed", "interrupted"] = "running"
+    finished_at: str | None = None
+    output: list[str] = field(default_factory=list)
+    tools: list[GoalToolCall] = field(default_factory=list)
+    last_tool: str | None = None
+    tool_running: bool = False
+    tools_completed: int = 0
+    error: str | None = None
+
+
+@dataclass(slots=True)
 class CoordinationState:
     """Durable scheduling state. JSON is decoded once when a run is opened."""
 
@@ -414,6 +463,8 @@ class CoordinationState:
     started_at: str | None = None
     waiting_for_user: list[UserQuestion] = field(default_factory=list)
     finalization: CompletionRecord | None = None
+    goal: GoalContext | None = None
+    goal_turn_count: int = 0
     intake: IntakeState = field(default_factory=IntakeState)
     effective_time: EffectiveClock | None = None
     turn_failures: dict[str, TurnFailure] = field(default_factory=dict)

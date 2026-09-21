@@ -17,10 +17,11 @@ from typing import Any, Literal, overload
 
 from areal_rsi.api.control import ArtifactDownload, JsonAction, validate_request
 from areal_rsi.api.interfaces import ResearchAgentRuntime
-from areal_rsi.api.records import ResearchRun
+from areal_rsi.api.records import AgentState, ResearchRun
 from areal_rsi.api.research import (
     CandidateSnapshot,
     EvidenceRecord,
+    GoalContext,
     IntakeState,
     ResearchMessage,
     TaskBrief,
@@ -188,6 +189,9 @@ class ResearchSystem:
             raise ValueError("协作方式须为名称")
         modules = selected_modules(mode, modules)
         config.mode, config.collaboration_modules = mode, modules
+        if mode == "pass1":
+            config.brief.limits.max_agents = 1
+            config.metadata.setdefault("auto_resume", True)
         config.__post_init__()
 
     async def set_collaboration(self, run_id: str, values: dict[str, Any]) -> None:
@@ -207,10 +211,23 @@ class ResearchSystem:
                 config = self.config(c)
                 config.brief = c.store.brief()
                 self.select_collaboration(config, values)
+            if config.mode == "pass1" and config.brief.objective in {
+                "新的研究",
+                "新研究",
+            }:
+                dialogue = sorted(
+                    (m for m in c.store.records("messages", ResearchMessage) if m.sender == "user"),
+                    key=lambda m: m.created_at,
+                )
+                if dialogue:
+                    config.brief.objective = dialogue[0].text
+                    config.brief.instructions = "\n\n".join(m.text for m in dialogue)
             # Budget changes in the preset must also reach the displayed brief.
             run = c.store.run()
             run.brief_ref = c.store.put("briefs", new_id("collaboration"), config.brief)
             run.plan.max_iterations = config.brief.limits.max_nodes
+            run.plan.goal = config.brief.objective
+            run.plan.research_agent_count = config.brief.limits.max_agents
             c.store.save_run(run)
             previous = self.config(c)
             if (previous.mode, previous.collaboration_modules) != (
@@ -218,9 +235,12 @@ class ResearchSystem:
                 config.collaboration_modules,
             ):
                 # The native session freezes its collaboration and tool configuration.
-                self._reset_interaction_session(c)
+                self._reset_agent_session(c, "rsi" if config.mode == "pass1" else "interaction")
             write_json(c.store.root / "coordination/config.json", config.public())
             c.state.mode = config.mode
+            c.state.goal = GoalContext(updated_at=now()) if config.mode == "pass1" else None
+            if config.mode == "pass1":
+                c.state.intake = IntakeState()
             c.save()
             c.store.event(
                 "collaboration_updated",
@@ -247,7 +267,7 @@ class ResearchSystem:
             # cancellation. Reload them instead of replacing the whole config.
             config = self.config(c)
             if any(settings[field] != getattr(config, field) for field in MODEL_FIELDS):
-                self._reset_interaction_session(c)
+                self._reset_agent_session(c, "rsi" if config.mode == "pass1" else "interaction")
             for field, value in settings.items():
                 setattr(config, field, value)
             config.pin_model_settings()
@@ -267,9 +287,9 @@ class ResearchSystem:
                 await self.attach(c)
 
     @staticmethod
-    def _reset_interaction_session(c: Coordinator) -> None:
+    def _reset_agent_session(c: Coordinator, agent_id: str) -> None:
         """Keep intake dialogue when a frozen runtime or tool schema changes."""
-        actor = c.actor("interaction")
+        actor = c.actor(agent_id)
         actor.session_id = new_id("session")
         dialogue = sorted(
             (
@@ -280,10 +300,7 @@ class ResearchSystem:
             key=lambda item: item.created_at,
         )
         write_json(
-            c.store.paths.agent("interaction")
-            / "sessions"
-            / actor.session_id
-            / "backend-handoff.json",
+            c.store.paths.agent(agent_id) / "sessions" / actor.session_id / "backend-handoff.json",
             {
                 "previous_dialogue": [
                     {"sender": item.sender, "text": item.text} for item in dialogue
@@ -342,9 +359,12 @@ class ResearchSystem:
                 await self._create(params, run_id, creation_digest)
             if message := str(params.get("message", "")).strip():
                 previous = self.coordinator(run_id)
-                if previous.state.status == "planned":
+                if previous.state.status == "planned" and previous.state.mode == "pass1":
+                    await self.start(run_id)
+                elif previous.state.status == "planned":
                     await self.send_message(
-                        run_id, message,
+                        run_id,
+                        message,
                         message_id=params.get("message_id") or "initial-" + creation_digest,
                     )
             return await self.detail(run_id)
@@ -386,6 +406,15 @@ class ResearchSystem:
             )
         if "collaboration" in params:
             self.select_collaboration(config, params["collaboration"])
+        if config.mode == "pass1":
+            if conversation:
+                objective = str(params.get("objective") or params.get("message") or "").strip()
+                if not objective:
+                    raise ValueError("RSI pass1 需要明确目标")
+                config.brief.objective = objective
+                config.brief.instructions = str(params.get("instructions") or objective)
+            conversation = False
+            config.metadata.setdefault("auto_resume", True)
         config.pin_model_settings()
         selected_modules(config.mode, config.collaboration_modules)
         if "model_settings" in params:
@@ -416,6 +445,8 @@ class ResearchSystem:
         c = Coordinator.create(self.root, config.brief, simulated=simulated, run_id=run_id)
         c.state.creation_digest = creation_digest
         c.state.mode = config.mode
+        if config.mode == "pass1":
+            c.state.goal = GoalContext(updated_at=now())
         c.save()
         if key:
             self.save_credentials(c, config, key)
@@ -831,15 +862,32 @@ class ResearchSystem:
             c.interrupt_completion(str(exc)[:500])
 
     async def detail(
-        self, run_id: str, after: int = 0, *, event_limit: int | None = None
+        self,
+        run_id: str,
+        after: int = 0,
+        *,
+        event_limit: int | None = None,
+        goal_before: int | None = None,
+        goal_limit: int = 20,
     ) -> dict[str, Any]:
-        validate_request("detail", {"run_id": run_id, "after": after, "event_limit": event_limit})
+        validate_request(
+            "detail",
+            {
+                "run_id": run_id,
+                "after": after,
+                "event_limit": event_limit,
+                "goal_before": goal_before,
+                "goal_limit": goal_limit,
+            },
+        )
         c = self._visible_coordinator(run_id)
         active = self.active.get(run_id)
         return research_detail(
             c,
             after=after,
             event_limit=event_limit,
+            goal_before=goal_before,
+            goal_limit=goal_limit,
             model_settings=self.model_settings(c),
             collaboration=self.collaboration_settings(c),
             worker_alive=bool(active and not active.task.done()) or self.worker_elsewhere(c),
@@ -890,9 +938,39 @@ class ResearchSystem:
                 reply_to=reply_to,
                 recipient=recipient,
             )
-            active = await self.attach(c)
-            active.engine.wake()
+            if c.state.mode == "pass1" and c.state.status == "planned":
+                brief = c.store.brief()
+                if brief.objective in {"新的研究", "新研究"}:
+                    brief.objective = brief.instructions = text.strip()
+                    run = c.store.run()
+                    run.brief_ref = c.store.put("briefs", new_id("goal"), brief)
+                    run.plan.goal = brief.objective
+                    c.store.save_run(run)
+                await self._start(c, None)
+            else:
+                if (
+                    c.state.mode == "pass1" and c.state.status == "paused"
+                    and c.actor("rsi").wait_reason == "user_cancelled"
+                ):
+                    c.resume()
+                active = await self.attach(c)
+                active.engine.wake()
         return {"run_id": c.store.run_id, "message_id": message_id, "status": c.state.status}
+
+    async def cancel(self, run_id: str) -> dict[str, Any]:
+        async with self.control(run_id, "cancel") as c:
+            if c.state.mode != "pass1" or c.state.status not in {"running", "paused"}:
+                raise ValueError("Only an active pass1 goal can be cancelled")
+            if c.state.status == "running":
+                c.pause()
+            active = self.active.get(c.store.run_id)
+            if active:
+                await active.engine.tick()
+            c.end_turn("rsi")
+            actor = c.actor("rsi")
+            actor.state, actor.wait_reason = AgentState.WAITING, "user_cancelled"
+            c.save_actor(actor)
+        return await self.detail(c.store.run_id)
 
     async def pause(self, run_id: str) -> dict[str, Any]:
         async with self.control(run_id, "pause") as c:
@@ -917,6 +995,10 @@ class ResearchSystem:
             if c.state.status not in {"planned", "running", "paused", "stopped"}:
                 raise ValueError("This run cannot be resumed")
             c.state.user_stopped = False
+            if c.state.goal is not None and c.state.goal.status == "blocked":
+                c.state.goal.status, c.state.goal.blocker = "active", ""
+                c.state.goal.updated_at = now()
+                c.state.goal.revision += 1
             c.save()
             if self.config(c).needs_finalization and completion:
                 active = await self.attach(c)
@@ -934,13 +1016,20 @@ class ResearchSystem:
     async def retry_agent(self, run_id: str, agent_id: str) -> dict[str, Any]:
         async with self.control(run_id, "retry") as c:
             c.retry_agent(agent_id)
+            if c.state.goal is not None and agent_id == "rsi":
+                c.state.goal.status, c.state.goal.blocker = "active", ""
+                c.state.goal.updated_at = now()
+                c.state.goal.revision += 1
+                c.save()
             active = await self.attach(c)
             active.engine.wake()
         return await self.detail(c.store.run_id)
 
     async def stop(self, run_id: str, *, reason: str = "Stopped by user") -> dict[str, Any]:
         async with self.control(run_id, "stop") as c:
-            if c.completion is not None and c.completion.status == "completed":
+            if c.state.status == "completed" or (
+                c.completion is not None and c.completion.status == "completed"
+            ):
                 return await self.detail(c.store.run_id)
             c.state.user_stopped = True
             c.stop(reason)
@@ -1088,6 +1177,7 @@ class ResearchSystem:
             "chat": self.send_message,
             "start": self.start,
             "pause": self.pause,
+            "cancel": self.cancel,
             "resume": self.resume,
             "retry": self.retry_agent,
             "stop": self.stop,

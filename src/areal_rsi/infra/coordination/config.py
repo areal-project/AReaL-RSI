@@ -88,6 +88,8 @@ class ResearchConfig:
             self.base_url, self.model, self.reasoning_effort,
             self.max_output_tokens, self.context_window_tokens, self.backend,
         )
+        if self.mode == "pass1" and self.brief.limits.max_agents != 1:
+            raise ValueError("RSI pass1 uses exactly one agent; max_agents must be 1")
         if self.mode == "passk":
             limits = self.brief.limits
             if any(

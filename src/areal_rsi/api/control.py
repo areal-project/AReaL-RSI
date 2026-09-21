@@ -13,7 +13,7 @@ from jsonschema import Draft202012Validator
 Json = dict[str, Any]
 JsonAction = Literal[
     "recover", "bootstrap", "list", "create", "detail", "delete", "chat",
-    "model-settings", "collaboration", "start", "pause", "resume", "retry", "stop",
+    "model-settings", "collaboration", "start", "pause", "cancel", "resume", "retry", "stop",
 ]
 
 
@@ -66,8 +66,10 @@ ACTIONS: dict[str, Json] = {
     "detail": _run({
         "after": {"type": "integer", "minimum": 0},
         "event_limit": {"type": ["integer", "null"], "minimum": 1, "maximum": 1000},
+        "goal_before": {"type": ["integer", "null"], "minimum": 1},
+        "goal_limit": {"type": "integer", "minimum": 1, "maximum": 50},
     }),
-    **{name: _run() for name in ("start", "pause", "resume", "delete")},
+    **{name: _run() for name in ("start", "pause", "cancel", "resume", "delete")},
     "stop": _run({"reason": _STRING}),
     "chat": _run({
         "text": {"type": "string", "minLength": 1, "maxLength": 12000},

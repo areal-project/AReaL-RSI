@@ -13,6 +13,7 @@ from areal_rsi.api.records import RecordRef, ResearchRun
 from areal_rsi.api.research import (
     CandidateSnapshot,
     EvidenceRecord,
+    GoalTurn,
     ResearchMessage,
     ResearchReport,
 )
@@ -232,6 +233,8 @@ def research_detail(
     *,
     after: int = 0,
     event_limit: int | None = None,
+    goal_before: int | None = None,
+    goal_limit: int = 20,
     model_settings: dict[str, Any],
     collaboration: dict[str, Any],
     worker_alive: bool,
@@ -425,8 +428,16 @@ def research_detail(
                     iteration_id=report_record.iteration_id,
                     data={**event.data, "report_id": report_record.report_id},
                 )
+    turn_files = sorted((c.store.root / "goal-turns").glob("*.json"), reverse=True)
+    turn_count = len(turn_files)
+    if goal_before is not None:
+        turn_files = [path for path in turn_files if int(path.stem) < goal_before]
+    turns = [c.store.get("goal-turns", path.stem, GoalTurn) for path in turn_files[:goal_limit]]
     return {
         **summary,
+        "goal_turns": encode(turns),
+        "goal_turns_total": turn_count,
+        "goal_turns_next": turns[-1].number if len(turn_files) > goal_limit else None,
         "objective": c.store.brief().objective,
         "communications": communications(c.store, all_messages, nodes, jobs, delivered),
         "nodes": nodes,

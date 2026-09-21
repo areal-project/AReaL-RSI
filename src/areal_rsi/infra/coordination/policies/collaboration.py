@@ -39,6 +39,12 @@ class CollaborationModule:
 
 
 MODES = {
+    "pass1": {
+        "id": "pass1",
+        "label": "RSI pass1",
+        "version": "1",
+        "description": "单 Agent 持续推进目标，支持中途指导，实时保存目标上下文。",
+    },
     "passk": {
         "id": "passk",
         "label": "纯 pass@k",
@@ -84,7 +90,7 @@ MODULES: dict[str, CollaborationModule] = {
 
 
 def presets() -> list[dict[str, Any]]:
-    choices = [{**mode, "mode": mode["id"], "modules": []} for mode in MODES.values()]
+    choices = [{**MODES["passk"], "mode": "passk", "modules": []}]
     choices.insert(
         1,
         {
@@ -104,6 +110,7 @@ def presets() -> list[dict[str, Any]]:
             "description": MODULES["leader_guidance_v022"].description,
         }
     )
+    choices.append({**MODES["pass1"], "mode": "pass1", "modules": []})
     return choices
 
 
@@ -141,6 +148,14 @@ def build_plan(mode: str, modules: tuple[str, ...] = ()) -> CollaborationPlan:
     from areal_rsi.infra.coordination.policies.passk import PassKActions, PassKEngine
 
     ordered = selected_modules(mode, modules)
+    if mode == "pass1":
+        from areal_rsi.infra.coordination.policies.pass1 import (
+            PROMPT,
+            Pass1Actions,
+            Pass1Engine,
+        )
+
+        return CollaborationPlan(Pass1Actions, Pass1Engine, PROMPT, PROMPT)
     plan = CollaborationPlan(
         PassKActions, PassKEngine, PASSK_RESEARCH_PROMPT, PASSK_RSI_PROMPT, True
     )

@@ -126,14 +126,35 @@ def _brief(value: Any) -> Json:
     return result
 
 
+def _goal(value: Any) -> Json | None:
+    return _fields(value, "status summary current_step next_steps acceptance evidence "
+                         "blocker updated_at revision") if isinstance(value, dict) else None
+
+
 def public_detail(value: Json) -> Json:
     """Only named product-facing records pass; never config, sessions or raw traces."""
     result = _fields(
         value,
-        "run_id objective status simulated plan started_at finished_at event_cursor "
+        "run_id objective status simulated plan runtime_turns started_at finished_at event_cursor "
         "worker_alive waiting_for_user budget_stop_reason execution_setup",
     )
     result["brief"] = _brief(value.get("brief"))
+    result["goal"] = _goal(value.get("goal"))
+    result["goal_turns_total"] = value.get("goal_turns_total", 0)
+    result["goal_turns_next"] = value.get("goal_turns_next")
+    result["goal_turns"] = [
+        {
+            **_fields(turn, "number started_at finished_at status output last_tool tool_running "
+                            "tools_completed error tokens_before tokens_after"),
+            "brief": _brief(turn.get("brief")),
+            "inputs": [_fields(message, "message_id sender text created_at")
+                       for message in turn.get("inputs", [])],
+            "context_before": _goal(turn.get("context_before")),
+            "context_after": _goal(turn.get("context_after")),
+
+        }
+        for turn in value.get("goal_turns", []) if isinstance(turn, dict)
+    ]
     result["finalization"] = _fields(
         value.get("finalization"), "status error exploration_finished_at target_reached"
     )
@@ -164,7 +185,7 @@ def public_detail(value: Json) -> Json:
     result["budget"] = _fields(
         value.get("budget"),
         "model_calls runtime_turns api_attempts total_tokens verify_calls "
-        "reserved_tokens elapsed_seconds clock",
+        "reserved_tokens elapsed_seconds remaining_wall_seconds deadline_at clock",
     )
     if isinstance(value.get("budget", {}).get("researchers"), dict):
         result["budget"]["researchers"] = {
@@ -253,7 +274,7 @@ def public_detail(value: Json) -> Json:
         entry = _fields(event, "sequence kind created_at agent_id iteration_id")
         entry["data"] = _fields(
             event.get("data"),
-            "reason direction title instruction completion_criteria parent_iteration_id "
+            "reason summary direction title instruction completion_criteria parent_iteration_id "
             "report_id evidence_id candidate_id job_id status text message_id sender recipient "
             "reply_to resumed simulated request_id model reasoning_effort "
             "attempt error_code delay_seconds next_retry_at",
@@ -455,6 +476,9 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                     if not 1 <= limit <= 1000:
                         raise ValueError("事件数量须为 1 到 1000")
                     params["event_limit"] = limit
+                for name in ("goal_before", "goal_limit"):
+                    if name in query:
+                        params[name] = int(query[name][0])
                 raw = self.server.invoke("detail", params)
                 if not isinstance(raw, dict):
                     raise TypeError("Invalid backend detail result")

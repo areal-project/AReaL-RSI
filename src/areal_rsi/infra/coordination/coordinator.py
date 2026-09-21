@@ -83,7 +83,6 @@ class Coordinator:
             finally:
                 handle.close()
 
-
     @classmethod
     def create(
         cls,
@@ -372,8 +371,10 @@ class Coordinator:
                 if recipient is not None and recipient != question.agent_id:
                     raise ValueError("回复必须发送给原提问者")
                 recipient = question.agent_id
-        recipient = recipient or "interaction"
-        if recipient == "rsi" and self.state.started_at is None:
+        recipient = recipient or ("rsi" if self.state.mode == "pass1" else "interaction")
+        if self.state.mode == "pass1" and recipient != "rsi":
+            raise ValueError("RSI pass1 的消息应发给 RSI Agent")
+        if recipient == "rsi" and self.state.started_at is None and self.state.mode != "pass1":
             raise ValueError("研究尚未开始，请先与 Interaction 确认需求")
         message_id = self.enqueue("user", recipient, text, key=key, reply_to=reply_to)
         if previous is None and self.actor(recipient).state == AgentState.FAILED:
@@ -382,6 +383,10 @@ class Coordinator:
             self.retry_agent(recipient)
         # The archived reply is authoritative if a process stopped between these writes.
         self.state.waiting_for_user = self.user_questions()
+        if self.state.goal is not None and previous is None:
+            self.state.goal.status, self.state.goal.blocker = "active", ""
+            self.state.goal.updated_at = now()
+            self.state.goal.revision += 1
         self.save()
         return message_id
 
@@ -395,13 +400,15 @@ class Coordinator:
         run = self.store.run()
         run.state, run.started_at = RunState.RUNNING, self.state.started_at
         self.store.save_run(run)
-        self.enqueue(
-            "interaction",
-            "rsi",
-            "开始本次研究，以下是用户目标与约束：\n"
-            + json.dumps(encode(self.store.brief()), ensure_ascii=False),
-            key="initial",
-        )
+        if self.state.mode != "pass1" or not self.state.inboxes.get("rsi"):
+            self.enqueue(
+                "interaction",
+                "rsi",
+                "开始本次研究，以下是用户目标与约束：\n"
+                + json.dumps(encode(self.store.brief()), ensure_ascii=False),
+                key="initial",
+            )
+        self.save()
         self.store.event("run_started")
 
     def pending(self) -> list[str]:
@@ -1133,6 +1140,7 @@ class Coordinator:
         return {
             "run_id": run.run_id,
             "mode": self.state.mode or "collaborative",
+            "goal": encode(self.state.goal),
             "runtime_turns": self.state.runtime_turns,
             "status": self.state.status,
             "brief": encode(self.store.brief()),

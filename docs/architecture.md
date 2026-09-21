@@ -38,7 +38,7 @@ areal_rsi/
 ## 编排与执行
 
 Interaction、RSI 和 Research Agents 的角色 prompt 位于 `infra/agents/`，均由同一个
-`ResearchRuntime` 执行。所有新研究都使用 pass@k，固定启动 k 名独立研究员；
+`ResearchRuntime` 执行。pass@k 研究固定启动 k 名独立研究员；
 纯 pass@k 中 RSI 只监督，leader guidance 模块增加证据共享和非阻塞建议，
 不增加、替换或停止研究员。它们共用消息、节点、作业和验证记录，探索停止后
 由系统执行最终复测，不存在另一套固定轮次实验调度器。
@@ -283,3 +283,18 @@ LLM 推理会话属于 runtime，不能把这些名字都叫“执行”就合�
 例如待回复报告先形成 `PendingReportReply`，只有输出给 UI 时才编码；作业通知队列直接
 保存 `JobEvent` 对象。新增固定字段应先更新契约，再通过 Mypy 检查所有调用点，不能以
 `Any`、`get()` 默认值或字典兼容包装绕过约束。
+
+### RSI pass1
+
+`mode=pass1` 复用现有 ResearchEngine、Runtime 与持久会话，普通回合结束后继续推进目标。
+`coordination/policies/pass1.py` 提供单 Agent 工具和调度策略，不使用 Codex 原生 goal，
+不增加 Runtime wheel 补丁。blocked 等待用户补充，已完成/暂停/停止不会自动续跑。
+
+`GoalContext` 定义公开目标上下文；`GoalTurn` 保存每次 Agent 执行的输入、TaskBrief、
+起始/结束上下文、公开执行说明、工具状态和用量。记录存放于 run 的 `goal-turns/`，
+只更新当前回合；已结束回合保持其当时的上下文。重启后发现未关闭的旧回合时标记为中断。
+控制 API detail 使用 goal_before/goal_limit 分页读取回合，默认最新 20 条，单页最多 50 条。
+Web 将各回合的公开执行说明合并为连续进展流，实时更新当前进度、工具状态和验收记录。
+页面不展示回合编号或起止快照，更早进展按需加载；不读取模型私有推理或认证数据。
+
+模式名为 RSI pass1，配置标识为 `mode=pass1`。

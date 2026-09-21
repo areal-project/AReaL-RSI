@@ -153,7 +153,9 @@ def test_http_selection_and_historical_read_only_projection(tmp_path: Path) -> N
         bootstrap = client.request("/api/bootstrap")
         client.token = bootstrap["csrf_token"]
         assert bootstrap["default_collaboration"]["modules"] == list(DEFAULT_MODULES)
-        assert [m["id"] for m in bootstrap["collaboration_catalog"]["modes"]] == ["passk"]
+        assert {m["id"] for m in bootstrap["collaboration_catalog"]["modes"]} == {
+            "passk", "pass1"
+        }
         assert "leader_guidance" in {m["id"] for m in bootstrap["collaboration_catalog"]["modules"]}
         assert bootstrap["collaboration_catalog"]["presets"][1]["modules"] == ["leader_guidance"]
         assert bootstrap["collaboration_catalog"]["presets"][2]["modules"] == list(DEFAULT_MODULES)

@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from areal_rsi.api.control import validate_record
 from areal_rsi.api.records import EvolutionTarget
 from areal_rsi.api.research import TaskBrief
 from areal_rsi.infra.config import ResearchConnection, validate_base_url
@@ -204,12 +205,13 @@ class ResearchConfig:
 def config_from_dict(value: dict[str, Any]) -> ResearchConfig:
     if "api_key" in value:
         raise ValueError("Use api_key_env; credentials must not be saved in research configuration")
-    selected_modules(value.get("mode", "passk"), value.get("collaboration_modules", ()))
     if "research_prompt_variant" in value:
         raise ValueError("research_prompt_variant 已移除；Prompt 由协作配置选择")
     unknown = set(value) - ResearchConfig.__dataclass_fields__.keys()
     if unknown:
         raise ValueError("Unknown research configuration fields: " + ", ".join(sorted(unknown)))
+    validate_record(ResearchConfig, value)
+    selected_modules(value.get("mode", "passk"), value.get("collaboration_modules", ()))
     try:
         config: ResearchConfig = decode(ResearchConfig, value)
     except KeyError as exc:

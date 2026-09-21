@@ -126,6 +126,8 @@ class ResearchRuntime:
         definitions: Sequence[Json],
         handler: ToolHandler,
         agent_id: str,
+        advertised_tools: Sequence[Json] | None = None,
+        environment: Mapping[str, str] | None = None,
     ) -> Conversation:
         role = self.role_for(agent_id)
         kind = self.settings.select(role)["kind"]
@@ -209,67 +211,68 @@ class ResearchRuntime:
         server = await asyncio.start_server(
             serve, "127.0.0.1", previous_bridge.get("port", 0), limit=2**20
         )
-        content = FileContentStore(directory / "content")
-        runtime = PackageAgentRuntime(
-            directory,
-            content,
-            FileTrajectoryStore(directory / "trajectories", content),
-            settings=self.settings,
-            role=role,
-            base_url=self.connection.runtime_base_url,
-            api_key=self.config.api_key(),
-            timeout=86400,
-            max_tokens=self.config.max_output_tokens,
-            dsh_root=Path(
-                os.environ.get("RSI_RUNTIME_CACHE", str(Path.home() / ".cache/areal-rsi"))
-            ),
-        )
-        prompt_path = directory / "system-prompt.json"
-        if prompt_path.exists():
-            prompt = json.loads(prompt_path.read_text())["prompt"]
-        else:
-            write_json(prompt_path, {"prompt": prompt}, immutable=True)
-        model = ModelVersion(
-            "research-model",
-            self.connection.model,
-            await content.put_text(self.connection.model),
-            now(),
-        )
-        spec = AgentSpec(
-            agent_id,
-            "areal-agent-runtime@v1",
-            model,
-            prompt_templates=(await content.put_text(prompt),),
-            tools=("bash@v1", "editor@v1"),
-        )
-        bridge = {
-            "port": server.sockets[0].getsockname()[1],
-            "token": token,
-            "tools": [
-                {
-                    "name": tool["name"],
-                    "description": tool.get("description", ""),
-                    "inputSchema": tool["parameters"],
-                }
-                for tool in definitions
-            ],
-        }
-        from areal_rsi.infra.coordination.policies.collaboration import build_plan
-
-        plan = build_plan(self.config.mode, self.config.collaboration_modules)
-        allow_web = self.allow_web_access and not (plan.supervisor_only and agent_id == "rsi")
-        codex_config = {
-            "model_reasoning_effort": self.connection.reasoning_effort,
-            "web_search": "live" if allow_web else "disabled",
-            "features.multi_agent": False,
-            "agents.enabled": False,
-            "features.goals": False,
-            "features.standalone_web_search": allow_web,
-            "model_providers.rsi.supports_standalone_web_search": allow_web,
-        }
-        if self.config.context_window_tokens is not None:
-            codex_config["model_context_window"] = self.config.context_window_tokens
+        runtime: PackageAgentRuntime | None = None
         try:
+            content = FileContentStore(directory / "content")
+            runtime = PackageAgentRuntime(
+                directory,
+                content,
+                FileTrajectoryStore(directory / "trajectories", content),
+                settings=self.settings,
+                role=role,
+                base_url=self.connection.runtime_base_url,
+                api_key=self.config.api_key(),
+                timeout=86400,
+                max_tokens=self.config.max_output_tokens,
+                dsh_root=Path(
+                    os.environ.get("RSI_RUNTIME_CACHE", str(Path.home() / ".cache/areal-rsi"))
+                ),
+            )
+            prompt_path = directory / "system-prompt.json"
+            if prompt_path.exists():
+                prompt = json.loads(prompt_path.read_text())["prompt"]
+            else:
+                write_json(prompt_path, {"prompt": prompt}, immutable=True)
+            model = ModelVersion(
+                "research-model",
+                self.connection.model,
+                await content.put_text(self.connection.model),
+                now(),
+            )
+            spec = AgentSpec(
+                agent_id,
+                "areal-agent-runtime@v1",
+                model,
+                prompt_templates=(await content.put_text(prompt),),
+                tools=("bash@v1", "editor@v1"),
+            )
+            bridge = {
+                "port": server.sockets[0].getsockname()[1],
+                "token": token,
+                "tools": [
+                    {
+                        "name": tool["name"],
+                        "description": tool.get("description", ""),
+                        "inputSchema": tool["parameters"],
+                    }
+                    for tool in (definitions if advertised_tools is None else advertised_tools)
+                ],
+            }
+            from areal_rsi.infra.coordination.policies.collaboration import build_plan
+
+            plan = build_plan(self.config.mode, self.config.collaboration_modules)
+            allow_web = self.allow_web_access and not (plan.supervisor_only and agent_id == "rsi")
+            codex_config = {
+                "model_reasoning_effort": self.connection.reasoning_effort,
+                "web_search": "live" if allow_web else "disabled",
+                "features.multi_agent": False,
+                "agents.enabled": False,
+                "features.goals": False,
+                "features.standalone_web_search": allow_web,
+                "model_providers.rsi.supports_standalone_web_search": allow_web,
+            }
+            if self.config.context_window_tokens is not None:
+                codex_config["model_context_window"] = self.config.context_window_tokens
             session = await runtime.open(
                 spec,
                 workspace_root=str(workspace),
@@ -282,11 +285,13 @@ class ResearchRuntime:
                     else self.connection.effective_context_window_tokens
                 ),
                 codex_config=codex_config if kind == "codex-cli" else None,
+                environment=environment,
             )
         except BaseException:
             server.close()
             await server.wait_closed()
-            await runtime.close()
+            if runtime is not None:
+                await runtime.close()
             raise
         connection = Conversation(runtime, session, server, handler)
         self.conversations[directory] = connection
@@ -340,6 +345,8 @@ class ResearchRuntime:
                 tools,
                 handler,
                 (recovery_state or {}).get("agent_id", "research-agent"),
+                advertised_tools=advertised_tools,
+                environment=environment,
             )
         connection.call_namespace = json.dumps(
             [

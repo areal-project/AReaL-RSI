@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import types
+from dataclasses import MISSING, dataclass, fields, is_dataclass
+from enum import Enum
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, get_args, get_origin, get_type_hints
 
 from jsonschema import Draft202012Validator
 
@@ -111,3 +113,54 @@ def http_command(action: str, params: Json, *, run_id: str | None = None) -> Jso
         value = {**params, "run_id": run_id}
     validate_request(action, value)
     return value
+
+
+def _type_schema(kind: Any) -> Json:
+    """Validate fixed contracts; extensible Any/JSON payloads stay at their boundary."""
+    origin, args = get_origin(kind), get_args(kind)
+    if origin is types.UnionType:
+        return {"anyOf": [_type_schema(item) for item in args]}
+    if origin is Literal:
+        return {"enum": list(args)}
+    if isinstance(kind, type) and issubclass(kind, Enum):
+        return {"enum": [item.value for item in kind]}
+    if isinstance(kind, type) and is_dataclass(kind):
+        hints = get_type_hints(kind)
+        return _object(
+            {item.name: _type_schema(hints[item.name]) for item in fields(kind)},
+            tuple(
+                item.name
+                for item in fields(kind)
+                if item.default is MISSING and item.default_factory is MISSING
+            ),
+        )
+    if origin in (list, tuple):
+        if origin is tuple and len(args) > 1 and args[-1] is not Ellipsis:
+            return {
+                "type": "array",
+                "prefixItems": [_type_schema(item) for item in args],
+                "minItems": len(args),
+                "maxItems": len(args),
+            }
+        return {"type": "array", "items": _type_schema(args[0])}
+    if origin is dict:
+        return {"type": "object", "additionalProperties": _type_schema(args[1])}
+    primitive = {
+        str: "string",
+        int: "integer",
+        float: "number",
+        bool: "boolean",
+        type(None): "null",
+    }
+    return {"type": primitive[kind]} if kind in primitive else {}
+
+
+_RECORD_VALIDATORS: dict[type[Any], Draft202012Validator] = {}
+
+def validate_record(kind: type[Any], value: Any) -> None:
+    if kind not in _RECORD_VALIDATORS:
+        _RECORD_VALIDATORS[kind] = Draft202012Validator(_type_schema(kind))
+    error = next(_RECORD_VALIDATORS[kind].iter_errors(value), None)
+    if error is not None:
+        location = ".".join(str(part) for part in error.absolute_path) or "request"
+        raise ValueError(f"Invalid {kind.__name__} {location}: {error.validator}")

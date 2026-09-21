@@ -73,7 +73,10 @@ class FileRunStore(FileRecords):
         return self.paths(run_id).state
 
     def ids(self) -> list[str]:
-        identifiers = {p.parent.name for p in self.root.glob("*/run.json")}
+        identifiers = {
+            p.parent.name for p in self.root.glob("*/run.json")
+            if not (p.parent / ".creating").exists()
+        }
         return sorted(safe_name(identifier) for identifier in identifiers)
 
     def save(self, key: str, value: Any, *, immutable: bool = True) -> None:

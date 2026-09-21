@@ -7,7 +7,6 @@ run execution, concurrency, API budgets, cancellation and resuming deliveries.
 from __future__ import annotations
 
 import asyncio
-import fcntl
 import hashlib
 import json
 import os
@@ -17,7 +16,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import IO, Any
+from typing import Any
 
 from areal_rsi.api.interfaces import (
     AgentRuntimeError,
@@ -26,14 +25,14 @@ from areal_rsi.api.interfaces import (
     ToolHandler,
 )
 from areal_rsi.api.records import AgentState
-from areal_rsi.api.research import AgentActivity, CoordinationState, ResearchMessage, RuntimeUsage
+from areal_rsi.api.research import AgentActivity, ResearchMessage, RuntimeUsage
 from areal_rsi.infra.agents.communication import INTEGRITY_PROMPT
 from areal_rsi.infra.agents.interaction.prompt import PROMPT as INTERACTION_PROMPT
 from areal_rsi.infra.agents.research.passk_prompt import PROMPT as RESEARCH_PROMPT
 from areal_rsi.infra.agents.rsi.passk_prompt import PROMPT as RSI_PROMPT
 from areal_rsi.infra.coordination.coordinator import Coordinator
 from areal_rsi.infra.coordination.effective_time import EffectiveTime
-from areal_rsi.infra.storage.files import decode, encode, now, write_json
+from areal_rsi.infra.storage.files import encode, now, write_json
 
 Json = dict[str, Any]
 TickHook = Callable[[], Awaitable[bool | None]]
@@ -78,7 +77,7 @@ class ResearchEngine:
             raise ValueError("Concurrency and polling interval must be positive")
         self.tick_hook, self.poll_interval, self.clock = tick_hook, poll_interval, clock
         self._tasks: dict[str, asyncio.Task[None]] = {}
-        self._lock_file: IO[str] | None = None
+        self._owns_run = False
         self._tick_lock = asyncio.Lock()
         self._wake = asyncio.Event()
         self._jobs_pending = False
@@ -93,23 +92,15 @@ class ResearchEngine:
         self._wake.set()
 
     def _acquire(self) -> None:
-        if self._lock_file is not None:
+        if self._owns_run:
             self._initialize_effective_time()
             return
-        path = self.coordinator.store.paths.execution_lock
-        path.parent.mkdir(parents=True, exist_ok=True)
-        handle = path.open("a+")
         try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.coordinator.acquire()
         except BlockingIOError:
-            handle.close()
             raise AgentRuntimeError("Another live worker owns this run's execution lock") from None
-        self._lock_file = handle
+        self._owns_run = True
         try:
-            # A previous owner may have advanced state since this object was created.
-            self.coordinator.state = decode(
-                CoordinationState, json.loads(self.coordinator.path.read_text())
-            )
             self.effective = None
             self._initialize_effective_time()
             self.coordinator.store.event("worker_started", pid=os.getpid())
@@ -119,12 +110,9 @@ class ResearchEngine:
 
     def _release_ownership(self) -> None:
         self.effective = None
-        if self._lock_file is not None:
-            handle, self._lock_file = self._lock_file, None
-            try:
-                fcntl.flock(handle, fcntl.LOCK_UN)
-            finally:
-                handle.close()
+        if self._owns_run:
+            self._owns_run = False
+            self.coordinator.release()
 
     def _initialize_effective_time(self) -> None:
         # Intake can change the budget while this worker already owns the lock.

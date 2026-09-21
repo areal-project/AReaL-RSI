@@ -100,3 +100,90 @@ def test_direct_stop_and_dispatch_share_operator_reason(tmp_path: Path) -> None:
         await system.close()
 
     asyncio.run(scenario())
+
+
+def test_partial_creation_can_retry_without_publishing_an_incomplete_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from runtime_fakes import ActionRuntime
+
+    from areal_rsi.api.research import ResearchMessage
+    from areal_rsi.infra import research
+    from areal_rsi.infra.storage.files import write_json as persist
+
+    async def scenario() -> None:
+        system = ResearchSystem(
+            tmp_path, config=ResearchConfig(TaskBrief("test", "test")),
+            runtime_factory=lambda _: ActionRuntime("wait"),
+        )
+        request = {"run_id": "retry-create"}
+
+        def fail_config(path: Path, *args: Any, **kwargs: Any) -> None:
+            if path.name == "config.json":
+                raise OSError("disk full")
+            persist(path, *args, **kwargs)
+
+        try:
+            with monkeypatch.context() as patch:
+                patch.setattr(research, "write_json", fail_config)
+                with pytest.raises(OSError, match="disk full"):
+                    await system.create(request)
+            assert (await system.list_runs())["runs"] == []
+            result = await system.create(request)
+            assert result["status"] == "planned"
+            assert (await system.create(request))["run_id"] == result["run_id"]
+            with pytest.raises(ValueError, match="不同"):
+                await system.create({**request, "objective": "different"})
+            message_request = {"run_id": "initial-message", "message": "Investigate this"}
+            await system.create(message_request)
+            await system.stop("initial-message")
+            assert (await system.create(message_request))["status"] == "stopped"
+            messages = system.coordinator("initial-message").store.records(
+                "messages", ResearchMessage
+            )
+            assert len([message for message in messages if message.sender == "user"]) == 1
+        finally:
+            await system.close()
+
+    asyncio.run(scenario())
+
+
+def test_control_ownership_rejects_other_clients_before_mutation(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        first = ResearchSystem(tmp_path, config=ResearchConfig(TaskBrief("test", "test")))
+        second = ResearchSystem(tmp_path)
+        try:
+            await first.create({"run_id": "shared"})
+            async with first.control("shared", "chat") as c:
+                before = c.path.read_bytes()
+                with pytest.raises(ValueError, match="another live process"):
+                    await second.stop("shared")
+                assert c.path.read_bytes() == before
+                c.user_message("first", key="first")
+            async with second.control("shared", "chat") as c:
+                c.user_message("second", key="second")
+                assert len(c.state.inboxes["interaction"]) == 2
+        finally:
+            await first.close()
+            await second.close()
+
+    asyncio.run(scenario())
+
+
+def test_invalid_nested_configuration_is_a_client_error(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        system = ResearchSystem(tmp_path)
+        for config in (
+            {"brief": {"objective": 123, "instructions": "test"}},
+            {"brief": {"objective": "test", "instructions": "test"}, "commands": [{}]},
+            {
+                "brief": {"objective": "test", "instructions": "test"},
+                "model_settings_pinned": "false",
+            },
+        ):
+            with pytest.raises(ValueError, match="Invalid ResearchConfig"):
+                await system.create({"config": config})
+        assert not (tmp_path / "runs").exists()
+
+    asyncio.run(scenario())

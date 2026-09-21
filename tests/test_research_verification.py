@@ -460,7 +460,13 @@ meta = job['spec']['metadata']
                 pytest.raises(BlockingIOError),
             ):
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            await asyncio.wait_for(active.task, 10)
+            # Native tool waiters may deliver a late poll during final verification.
+            # Final jobs must survive both cancellation and scheduler reconciliation.
+            async with asyncio.timeout(10):
+                while not active.task.done():
+                    await active.execution.poll()
+                    await asyncio.sleep(0.01)
+            await active.task
             assert c.state.finalization is not None
             assert c.state.finalization.status == "completed"
             final_ref = c.store.run().final_result_ref

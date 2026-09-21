@@ -8,8 +8,8 @@ import hashlib
 import json
 import os
 import shutil
-from collections.abc import Awaitable, Callable
-from contextlib import suppress
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -55,7 +55,7 @@ from areal_rsi.infra.coordination.tools.web import register_sources
 from areal_rsi.infra.coordination.views import research_detail, research_list
 from areal_rsi.infra.execution import JobManager, JobRecord
 from areal_rsi.infra.runtime.research_runtime import ResearchRuntime
-from areal_rsi.infra.storage.files import decode, encode, new_id, now, write_json
+from areal_rsi.infra.storage.files import decode, encode, new_id, now, write_bytes, write_json
 from areal_rsi.infra.storage.runs import FileRunStore
 
 
@@ -87,8 +87,21 @@ class ResearchSystem:
         self.active: dict[str, ActiveResearch] = {}
         self._run_locks: dict[str, asyncio.Lock] = {}
 
-    def run_lock(self, c: Coordinator) -> asyncio.Lock:
-        return self._run_locks.setdefault(c.store.run_id, asyncio.Lock())
+    @asynccontextmanager
+    async def control(self, run_id: str, action: str) -> AsyncIterator[Coordinator]:
+        async with self._run_locks.setdefault(run_id, asyncio.Lock()):
+            c = self._visible_coordinator(run_id)
+            try:
+                c.acquire()
+            except BlockingIOError:
+                raise ValueError("This run is controlled by another live process") from None
+            try:
+                if action != "stop" and action != "delete":
+                    config = self.config(c)
+                    selected_modules(config.mode, config.collaboration_modules)
+                yield c
+            finally:
+                c.release()
 
     def worker_elsewhere(self, c: Coordinator) -> bool:
         local = self.active.get(c.store.run_id)
@@ -178,9 +191,7 @@ class ResearchSystem:
         config.__post_init__()
 
     async def set_collaboration(self, run_id: str, values: dict[str, Any]) -> None:
-        c = self._control_coordinator(run_id, "collaboration")
-        async with self.run_lock(c):
-            c = self.coordinator(c.store.run_id)
+        async with self.control(run_id, "collaboration") as c:
             if not self.collaboration_settings(c)["editable"]:
                 raise ValueError("研究已经开始，协作配置已锁定；请新建研究进行消融对比")
             config = self.config(c)
@@ -191,6 +202,7 @@ class ResearchSystem:
                 active.task.cancel()
                 await asyncio.gather(active.task, return_exceptions=True)
                 active.execution.close(cancel=False)
+                await active.engine.close()
                 self.active.pop(c.store.run_id, None)
                 config = self.config(c)
                 config.brief = c.store.brief()
@@ -219,10 +231,8 @@ class ResearchSystem:
                 await self.attach(c)
 
     async def set_model_settings(self, run_id: str, values: dict[str, Any]) -> None:
-        c = self._control_coordinator(run_id, "model-settings")
-        settings, key = self.parse_model_settings({"backend": self.config(c).backend, **values})
-        async with self.run_lock(c):
-            c = self.coordinator(c.store.run_id)
+        async with self.control(run_id, "model-settings") as c:
+            settings, key = self.parse_model_settings({"backend": self.config(c).backend, **values})
             if not self.model_settings(c)["editable"]:
                 raise ValueError("研究已经开始，模型设置已锁定；暂停或停止后也不能修改")
             active = self.active.get(c.store.run_id)
@@ -231,6 +241,7 @@ class ResearchSystem:
                 await asyncio.gather(active.task, return_exceptions=True)
                 # Cancellation before serve() starts never reaches its finally.
                 active.execution.close(cancel=False)
+                await active.engine.close()
                 self.active.pop(c.store.run_id, None)
             # An Interaction tool may have updated other config fields before
             # cancellation. Reload them instead of replacing the whole config.
@@ -304,18 +315,42 @@ class ResearchSystem:
 
     async def create(self, params: dict[str, Any]) -> dict[str, Any]:
         validate_request("create", params)
-        supplied = params.get("config")
-        run_id = params.get("run_id")
+        if "config" in params:
+            config_from_dict(params["config"])
+        run_id = params.get("run_id") or new_id("research")
         creation_digest = hashlib.sha256(json.dumps(params, sort_keys=True).encode()).hexdigest()
-        if run_id:
-            from areal_rsi.infra.storage.files import safe_name
-
-            safe_name(run_id)
-            if (self.root / "runs" / run_id / "run.json").exists():
+        directory = self.root / "runs" / run_id
+        lock = self.root / "runtime" / "creation-locks" / (run_id + ".lock")
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        with lock.open("a+") as handle:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise ValueError("该研究正在创建，请稍后重试同一请求") from None
+            pending = directory / ".creating"
+            if pending.exists():
+                if pending.read_text() != creation_digest:
+                    raise ValueError("该 run_id 已用于不同的创建请求")
+                # No worker may attach until publication. Rebuild only this
+                # uncommitted creation; shared content remains content-addressed.
+                await asyncio.to_thread(shutil.rmtree, directory)
+            if (directory / "run.json").exists():
                 previous = self.coordinator(run_id)
                 if previous.state.creation_digest != creation_digest:
                     raise ValueError("该 run_id 已用于不同的创建请求")
-                return await self.detail(run_id)
+            else:
+                await self._create(params, run_id, creation_digest)
+            if message := str(params.get("message", "")).strip():
+                previous = self.coordinator(run_id)
+                if previous.state.status == "planned":
+                    await self.send_message(
+                        run_id, message,
+                        message_id=params.get("message_id") or "initial-" + creation_digest,
+                    )
+            return await self.detail(run_id)
+
+    async def _create(self, params: dict[str, Any], run_id: str, creation_digest: str) -> None:
+        supplied = params.get("config")
         conversation = bool(
             params.get(
                 "conversation",
@@ -323,9 +358,6 @@ class ResearchSystem:
             )
         )
         simulated = False if conversation else bool(params.get("simulated", self.allow_simulation))
-        message = str(params.get("message", "")).strip()
-        if len(message) > 12000:
-            raise ValueError("消息不能超过 12000 字")
         if simulated and not self.allow_simulation:
             raise ValueError("Restart with simulation enabled to create simulated runs")
         if supplied is not None:
@@ -378,6 +410,9 @@ class ResearchSystem:
             issues = validate_execution(config)
             if issues:
                 raise ValueError("；".join(issues))
+        directory = self.root / "runs" / run_id
+        directory.mkdir(parents=True, exist_ok=True)
+        write_bytes(directory / ".creating", creation_digest.encode())
         c = Coordinator.create(self.root, config.brief, simulated=simulated, run_id=run_id)
         c.state.creation_digest = creation_digest
         c.state.mode = config.mode
@@ -425,16 +460,9 @@ class ResearchSystem:
                     limitations="Simulated task traces; no real task-model performance measured",
                 ),
             )
-        if message:
-            await self.call(
-                "chat",
-                {
-                    "run_id": c.store.run_id,
-                    "text": message,
-                    "message_id": params.get("message_id") or new_id("user"),
-                },
-            )
-        return await self.detail(c.store.run_id)
+        if message := str(params.get("message", "")).strip():
+            c.user_message(message, key=params.get("message_id") or "initial-" + creation_digest)
+        (directory / ".creating").unlink()
 
     async def _seed(self, c: Coordinator, config: ResearchConfig) -> None:
         if config.seed_dir and not c.state.seed_candidate_id:
@@ -447,9 +475,8 @@ class ResearchSystem:
             c.save()
 
     async def start(self, run_id: str, confirmation_message_id: str | None = None) -> None:
-        c = self._control_coordinator(run_id, "start")
-        async with self.run_lock(c):
-            await self._start(self.coordinator(c.store.run_id), confirmation_message_id)
+        async with self.control(run_id, "start") as c:
+            await self._start(c, confirmation_message_id)
 
     async def _start(self, c: Coordinator, confirmation_message_id: str | None) -> None:
         if c.state.status != "planned":
@@ -592,126 +619,149 @@ class ResearchSystem:
             return existing
         if existing:
             existing.execution.close()
-        config = self.config(c)
-        if c.state.started_at:
-            config.validate_clock()
-        plan = build_plan(config.mode, config.collaboration_modules)
-        frozen = c.store.root / "coordination/collaboration.json"
-        if frozen.exists() and json.loads(frozen.read_text()) != manifest(
-            config.mode, config.collaboration_modules
-        ):
-            raise ValueError("协作实现与启动时冻结的版本不同；请使用原版本恢复或新建研究")
-        runtime = self.runtime_factory(config)
-        if c.state.status == "planned" and config.model_settings_revision:
-            actor = c.actor("interaction")
-            session = (
-                c.store.paths.agent("interaction")
-                / "sessions"
-                / (actor.session_id or "interaction")
-            )
-            await runtime.reconfigure_session(session, config.model_settings_revision)
-        from areal_rsi.infra.coordination.policies.passk import stop_on_target
-
-        c.state.mode = config.mode
-        c.save()
-        actions = plan.actions(c)
-        await actions.initialize_workspace("rsi")
-        register_sources(
-            actions,
-            enabled=config.backend != "codex" and config.metadata.get("allow_web_access", True),
-        )
-        execution = ResearchExecution(
-            actions,
-            commands={item.name: item for item in config.commands},
-            verifier=config.verifier,
-            read_verification=self._verification_reader(c, config),
-            simulated=c.state.simulated,
-            mock_duration=0.2,
-            execution_env=config.execution_env,
-        )
-        execution.instructions = str(config.metadata.get("execution_instructions", ""))
-        ResearchIntake(
-            actions,
-            repository=self.repository,
-            start=lambda message: self.start(c.store.run_id, message),
-            freeze_execution=lambda: self.freeze_execution(c),
-        )
-
-        async def poll() -> bool:
-            current = self.active[c.store.run_id].config
-            if (
-                (current.finalizer or current.mode == "passk")
-                and c.state.status == "paused"
-                and c.state.budget_stop_reason == "Run wall-time budget exhausted"
+            await existing.engine.close()
+        c.acquire()
+        runtime: ResearchAgentRuntime | None = None
+        execution: ResearchExecution | None = None
+        engine: ResearchEngine | None = None
+        attached = False
+        try:
+            config = self.config(c)
+            if c.state.started_at:
+                config.validate_clock()
+            plan = build_plan(config.mode, config.collaboration_modules)
+            frozen = c.store.root / "coordination/collaboration.json"
+            if frozen.exists() and json.loads(frozen.read_text()) != manifest(
+                config.mode, config.collaboration_modules
             ):
-                # The engine pauses at a hard budget. A configured closeout must
-                # still run without a user having to turn that pause into a stop.
-                c.stop("探索时间已到，停止研究并自动验证和归档已有产物")
-            if c.state.status == "stopped":
-                return False
-            pending = await execution.poll()
-            if current.mode == "passk":
-                stop_on_target(c)
-            return pending
+                raise ValueError("协作实现与启动时冻结的版本不同；请使用原版本恢复或新建研究")
+            runtime = self.runtime_factory(config)
+            if c.state.status == "planned" and config.model_settings_revision:
+                actor = c.actor("interaction")
+                session = (
+                    c.store.paths.agent("interaction")
+                    / "sessions"
+                    / (actor.session_id or "interaction")
+                )
+                await runtime.reconfigure_session(session, config.model_settings_revision)
+            from areal_rsi.infra.coordination.policies.passk import stop_on_target
 
-        engine = plan.engine(
-            c,
-            runtime,
-            lambda agent_id: ToolSet(
-                actions.definitions(agent_id, include_hidden=True),
-                actions.handler(agent_id),
-                tool_instructions(
-                    str(actions.workspace(agent_id).resolve()),
-                    backend=config.backend,
-                    supervisor_only=agent_id == "rsi" and plan.supervisor_only,
-                    extra=self.active[c.store.run_id].config.metadata.get(
-                        "agent_tool_instructions"
-                    ),
-                ),
-                actions.definitions(agent_id),
-                actions.workspace(agent_id),
-                config.execution_env,
-            ),
-            research_prompt=plan.research_prompt,
-            rsi_prompt=plan.rsi_prompt,
-            tick_hook=poll,
-        )
+            c.state.mode = config.mode
+            c.save()
+            actions = plan.actions(c)
+            await actions.initialize_workspace("rsi")
+            register_sources(
+                actions,
+                enabled=config.backend != "codex" and config.metadata.get("allow_web_access", True),
+            )
+            execution = ResearchExecution(
+                actions,
+                commands={item.name: item for item in config.commands},
+                verifier=config.verifier,
+                read_verification=self._verification_reader(c, config),
+                simulated=c.state.simulated,
+                mock_duration=0.2,
+                execution_env=config.execution_env,
+            )
+            execution.instructions = str(config.metadata.get("execution_instructions", ""))
+            ResearchIntake(
+                actions,
+                repository=self.repository,
+                start=lambda message: self.start(c.store.run_id, message),
+                freeze_execution=lambda: self.freeze_execution(c),
+            )
 
-        async def serve() -> None:
-            try:
-                await engine.serve()
+            async def poll() -> bool:
                 current = self.active[c.store.run_id].config
                 if (
-                    current.needs_finalization
-                    and c.state.status in {"stopped", "succeeded"}
-                    and not c.state.user_stopped
+                    (current.finalizer or current.mode == "passk")
+                    and c.state.status == "paused"
+                    and c.state.budget_stop_reason == "Run wall-time budget exhausted"
                 ):
-                    await self._complete_result(c, current, execution)
-                else:
-                    await execution.cancel_pending()
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                c.store.event("worker_error", error=str(exc))
-            finally:
+                    # The engine pauses at a hard budget. A configured closeout must
+                    # still run without a user having to turn that pause into a stop.
+                    c.stop("探索时间已到，停止研究并自动验证和归档已有产物")
+                if c.state.status == "stopped":
+                    return False
+                pending = await execution.poll()
+                if current.mode == "passk":
+                    stop_on_target(c)
+                return pending
+
+            engine = plan.engine(
+                c,
+                runtime,
+                lambda agent_id: ToolSet(
+                    actions.definitions(agent_id, include_hidden=True),
+                    actions.handler(agent_id),
+                    tool_instructions(
+                        str(actions.workspace(agent_id).resolve()),
+                        backend=config.backend,
+                        supervisor_only=agent_id == "rsi" and plan.supervisor_only,
+                        extra=self.active[c.store.run_id].config.metadata.get(
+                            "agent_tool_instructions"
+                        ),
+                    ),
+                    actions.definitions(agent_id),
+                    actions.workspace(agent_id),
+                    config.execution_env,
+                ),
+                research_prompt=plan.research_prompt,
+                rsi_prompt=plan.rsi_prompt,
+                tick_hook=poll,
+            )
+
+            async def serve() -> None:
                 try:
-                    if c.state.user_stopped:
+                    async with AsyncExitStack() as sessions:
+                        sessions.push_async_callback(runtime.close)
+                        if engine.interaction_runtime is not runtime:
+                            sessions.push_async_callback(engine.interaction_runtime.close)
+                        await engine.serve()
+                    # Native tool handlers are drained before completion takes over.
+                    current = self.active[c.store.run_id].config
+                    if (
+                        current.needs_finalization
+                        and c.state.status in {"stopped", "succeeded"}
+                        and not c.state.user_stopped
+                    ):
+                        await self._complete_result(c, current, execution)
+                    else:
                         await execution.cancel_pending()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    c.store.event("worker_error", error=str(exc))
                 finally:
                     try:
-                        execution.close()
-                        await engine.close()
+                        if c.state.user_stopped:
+                            await execution.cancel_pending()
                     finally:
                         try:
-                            await runtime.close()
+                            execution.close()
                         finally:
-                            if engine.interaction_runtime is not runtime:
-                                await engine.interaction_runtime.close()
+                            await engine.close()
 
-        task = asyncio.create_task(serve(), name="research:" + c.store.run_id)
-        active = ActiveResearch(c, config, actions, execution, engine, task)
-        self.active[c.store.run_id] = active
-        return active
+            engine._acquire()
+            task = asyncio.create_task(serve(), name="research:" + c.store.run_id)
+            active = ActiveResearch(c, config, actions, execution, engine, task)
+            self.active[c.store.run_id] = active
+            attached = True
+            return active
+        finally:
+            try:
+                if not attached:
+                    async with AsyncExitStack() as cleanup:
+                        if engine is not None:
+                            cleanup.push_async_callback(engine.close)
+                        if execution is not None:
+                            cleanup.callback(execution.close)
+                        if runtime is not None:
+                            cleanup.push_async_callback(runtime.close)
+                        if engine is not None and engine.interaction_runtime is not runtime:
+                            cleanup.push_async_callback(engine.interaction_runtime.close)
+            finally:
+                c.release()
 
     async def _complete_result(
         self,
@@ -797,36 +847,25 @@ class ResearchSystem:
         )
 
     async def delete(self, run_id: str) -> dict[str, Any]:
-        c = self._visible_coordinator(run_id)
-        async with self.run_lock(c):
-            c = self.coordinator(c.store.run_id)
+        async with self.control(run_id, "delete") as c:
             if c.state.status in {"running", "paused"} or (
                 c.completion is not None and c.completion.status == "running"
             ):
                 raise ValueError("研究仍在运行或暂停中，请先停止研究再删除")
-            if self.worker_elsewhere(c):
-                raise ValueError("研究由其他进程运行，请先停止该进程再删除")
             active = self.active.get(c.store.run_id)
             if active:
                 active.task.cancel()
                 await asyncio.gather(active.task, return_exceptions=True)
                 active.execution.close(cancel=True)
+                await active.engine.close()
                 self.active.pop(c.store.run_id, None)
-            # Hold the same lock as CLI workers until the directory leaves the
-            # run index. Reclaim files off the event loop after the atomic move.
-            c.store.paths.execution_lock.parent.mkdir(parents=True, exist_ok=True)
-            with c.store.paths.execution_lock.open("a+") as handle:
-                try:
-                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except BlockingIOError:
-                    raise ValueError("研究由其他进程运行，请先停止该进程再删除") from None
-                manager = JobManager(c.store.root, auto_monitor=False, scheduling_enabled=False)
-                await asyncio.to_thread(manager.close, preserve_running=False)
-                if any(not record.resources_released for record in manager.records()):
-                    raise ValueError("作业资源释放尚未确认，暂时不能删除研究")
-                destination = self.root / ".deleting" / new_id("research")
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                c.store.root.rename(destination)
+            manager = JobManager(c.store.root, auto_monitor=False, scheduling_enabled=False)
+            await asyncio.to_thread(manager.close, preserve_running=False)
+            if any(not record.resources_released for record in manager.records()):
+                raise ValueError("作业资源释放尚未确认，暂时不能删除研究")
+            destination = self.root / ".deleting" / new_id("research")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            c.store.root.rename(destination)
             await asyncio.to_thread(shutil.rmtree, destination)
         return {"run_id": c.store.run_id, "status": "deleted"}
 
@@ -839,14 +878,12 @@ class ResearchSystem:
         reply_to: str | None = None,
         recipient: str | None = None,
     ) -> dict[str, Any]:
-        c = self._control_coordinator(run_id, "chat")
-        if self.config(c).mode == "passk" and c.state.started_at:
-            raise ValueError(
-                "passk researchers cannot receive intervention after launch; "
-                "create a new run to change the task"
-            )
-        async with self.run_lock(c):
-            c = self.coordinator(c.store.run_id)
+        async with self.control(run_id, "chat") as c:
+            if self.config(c).mode == "passk" and c.state.started_at:
+                raise ValueError(
+                    "passk researchers cannot receive intervention after launch; "
+                    "create a new run to change the task"
+                )
             message_id = c.user_message(
                 text,
                 key=message_id or new_id("user"),
@@ -858,18 +895,14 @@ class ResearchSystem:
         return {"run_id": c.store.run_id, "message_id": message_id, "status": c.state.status}
 
     async def pause(self, run_id: str) -> dict[str, Any]:
-        c = self._control_coordinator(run_id, "pause")
-        async with self.run_lock(c):
-            c = self.coordinator(c.store.run_id)
+        async with self.control(run_id, "pause") as c:
             c.pause()
             if c.store.run_id in self.active:
                 await self.active[c.store.run_id].engine.tick()
         return await self.detail(c.store.run_id)
 
     async def resume(self, run_id: str) -> dict[str, Any]:
-        c = self._control_coordinator(run_id, "resume")
-        async with self.run_lock(c):
-            c = self.coordinator(c.store.run_id)
+        async with self.control(run_id, "resume") as c:
             if (
                 self.config(c).mode == "passk"
                 and c.state.status == "stopped"
@@ -899,18 +932,14 @@ class ResearchSystem:
         return await self.detail(c.store.run_id)
 
     async def retry_agent(self, run_id: str, agent_id: str) -> dict[str, Any]:
-        c = self._control_coordinator(run_id, "retry")
-        async with self.run_lock(c):
-            c = self.coordinator(c.store.run_id)
+        async with self.control(run_id, "retry") as c:
             c.retry_agent(agent_id)
             active = await self.attach(c)
             active.engine.wake()
         return await self.detail(c.store.run_id)
 
     async def stop(self, run_id: str, *, reason: str = "Stopped by user") -> dict[str, Any]:
-        c = self._control_coordinator(run_id, "stop")
-        async with self.run_lock(c):
-            c = self.coordinator(c.store.run_id)
+        async with self.control(run_id, "stop") as c:
             if c.completion is not None and c.completion.status == "completed":
                 return await self.detail(c.store.run_id)
             c.state.user_stopped = True
@@ -921,6 +950,7 @@ class ResearchSystem:
                 await asyncio.gather(active.task, return_exceptions=True)
                 await active.execution.cancel_pending()
                 active.execution.close()
+                await active.engine.close()
             else:
                 manager = JobManager(c.store.root, auto_monitor=False, scheduling_enabled=False)
                 await asyncio.to_thread(manager.close, preserve_running=False)
@@ -928,20 +958,10 @@ class ResearchSystem:
 
     def _visible_coordinator(self, run_id: str) -> Coordinator:
         c = self.coordinator(run_id)
+        if (c.store.root / ".creating").exists():
+            raise ValueError("研究创建尚未完成，请重试原创建请求")
         if c.state.simulated and not self.allow_simulation:
             raise ValueError("该记录属于开发测试，请在独立的测试工作台查看")
-        return c
-
-    def _control_coordinator(self, run_id: str, action: str) -> Coordinator:
-        c = self._visible_coordinator(run_id)
-        if action not in {"export", "stop"}:
-            config = self.config(c)
-            selected_modules(config.mode, config.collaboration_modules)
-        if action != "export" and self.worker_elsewhere(c):
-            raise ValueError(
-                "This run is controlled by another live process. Close that worker "
-                "with Ctrl+C, then resume it here; viewing and export remain available."
-            )
         return c
 
     async def export(self, run_id: str, *, candidate_id: str | None = None) -> ArtifactDownload:
@@ -1082,4 +1102,5 @@ class ResearchSystem:
         await asyncio.gather(*(a.task for a in self.active.values()), return_exceptions=True)
         for active in self.active.values():
             active.execution.close(cancel=False)
+            await active.engine.close()
         self.active.clear()

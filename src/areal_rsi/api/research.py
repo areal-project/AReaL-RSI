@@ -439,3 +439,16 @@ class CoordinationState:
     archived_chat_message_ids: list[str] = field(default_factory=list)
     # Opaque historical request receipts, used only to project legacy counters.
     model_requests: dict[str, JsonObject] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.status not in {
+            "planned",
+            "running",
+            "paused",
+            "stopped",
+            "succeeded",
+            "completed",
+            "failed",
+            "cancelled",
+        }:
+            raise ValueError("Unknown coordination status")

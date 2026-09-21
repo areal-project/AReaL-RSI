@@ -490,7 +490,11 @@ class ResearchExecution:
             created_at=now(),
             spec=spec,
         )
-        self.manager.scheduling_enabled = self.c.state.status == "running"
+        self.manager.scheduling_enabled = self.c.state.status == "running" or (
+            self.c.completion is not None
+            and self.c.completion.status == "running"
+            and not self.c.state.user_stopped
+        )
         record = self._submit_record(key, info)
         if not verification:
             self.publish_execution(record)
@@ -1016,6 +1020,10 @@ class ResearchExecution:
         # each job's owner separately reloads every archived research node per job.
         actors = {actor.agent_id: actor for actor in self.c.actors()} if self.jobs else {}
         for key, info in self.jobs.items():
+            # Completion owns its submission and cancellation lifecycle. A native
+            # tool waiter can still poll after the exploration turn was stopped.
+            if info.completion:
+                continue
             actor_stopped = actors[info.agent_id].state == AgentState.STOPPED
             if self.find_job(key) is None:
                 self.manager.submit(info.spec, job_id=key)
@@ -1026,7 +1034,11 @@ class ResearchExecution:
             )
             if must_cancel and not self.manager.get(key).terminal:
                 self.manager.cancel(key)
-        self.manager.scheduling_enabled = self.c.state.status == "running"
+        self.manager.scheduling_enabled = self.c.state.status == "running" or (
+            self.c.completion is not None
+            and self.c.completion.status == "running"
+            and not self.c.state.user_stopped
+        )
         records = self.manager.poll()
         if limits.max_effective_seconds is not None:
             timer = EffectiveTime(self.c.state)

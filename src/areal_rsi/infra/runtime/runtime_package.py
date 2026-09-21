@@ -16,7 +16,7 @@ import shutil
 import signal
 import subprocess
 import sys
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -396,6 +396,7 @@ class PackageAgentRuntime:
         codex_config: dict[str, Any] | None = None,
         context_window_tokens: int | None = None,
         reasoning_effort: str | None = None,
+        environment: Mapping[str, str] | None = None,
     ) -> PackageSession:
         if agent.runtime not in {"areal-agent-runtime@v1", "deepseek-harness@v1"}:
             raise ValueError(f"Unknown RSI Runtime binding: {agent.runtime}")
@@ -512,6 +513,7 @@ class PackageAgentRuntime:
             if key
             in {"PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR"}
         }
+        env.update(environment or {})
         if self.settings.isolation == "linux-unrestricted":
             for name in (
                 "HTTP_PROXY",

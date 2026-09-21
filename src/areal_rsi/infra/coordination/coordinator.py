@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
+from areal_rsi.api.control import validate_record
 from areal_rsi.api.records import (
     AgentState,
     IterationState,
@@ -49,7 +51,38 @@ class Coordinator:
     def __init__(self, store: ResearchStore):
         self.store = store
         self.path = store.root / "coordination" / "state.json"
-        self.state: CoordinationState = decode(CoordinationState, json.loads(self.path.read_text()))
+        value = json.loads(self.path.read_text())
+        validate_record(CoordinationState, value)
+        self.state: CoordinationState = decode(CoordinationState, value)
+        self._ownership: IO[str] | None = None
+        self._owners = 0
+
+    def acquire(self) -> None:
+        """Controls and the local engine share one run owner, including during handoff."""
+        if self._ownership is None:
+            path = self.store.paths.execution_lock
+            path.parent.mkdir(parents=True, exist_ok=True)
+            handle = path.open("a+")
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                value = json.loads(self.path.read_text())
+                validate_record(CoordinationState, value)
+                self.state = decode(CoordinationState, value)
+            except BaseException:
+                handle.close()
+                raise
+            self._ownership = handle
+        self._owners += 1
+
+    def release(self) -> None:
+        self._owners -= 1
+        if self._owners == 0 and self._ownership is not None:
+            handle, self._ownership = self._ownership, None
+            try:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+            finally:
+                handle.close()
+
 
     @classmethod
     def create(

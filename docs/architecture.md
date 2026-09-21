@@ -240,6 +240,13 @@ LLM 推理会话属于 runtime，不能把这些名字都叫“执行”就合�
 `finalization.py` 已删除。研究结束时，ResearchSystem 只组织候选选择和可选验证；
 输入冻结、作业登记、等待及结果核验统一由 ResearchExecution 处理。
 执行锁与同一个 JobManager 持续持有到结果处理结束，不再在两个执行器之间交接。
+控制操作与本地 worker 共享 Coordinator 的执行权；获取执行权后重新读取状态，
+锁覆盖校验、修改和保存。进入最终验证前关闭原生会话、排空工具请求；迟到的探索轮询
+不提交或取消 completion 作业。
+
+创建过程使用 `.creating` 标记，在配置、起点和初始消息持久化后发布。未完成记录
+不出现在研究列表，也不能启动；同一请求重试只重建未发布的创建过程，已发布记录保持幂等。
+外部配置和协调状态在解码前按数据契约校验，JSON 扩展字段仍保留在协议边界。
 
 `api/research.py` 的 ResearchJob、JobWaiter、CompletionRecord 分别定义作业关联、
 完成订阅和结果处理状态。JSON 字典只在存储/对外投影处转换，作业索引由 ResearchStore

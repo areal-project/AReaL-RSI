@@ -322,7 +322,7 @@ def test_standard_uses_package_dsh_and_scoped_application_tools(
             if sys.platform == "darwin":
                 profile = tmp_path / "session/runtime/sandbox.sb"
                 assert '(allow network-outbound (remote ip "localhost:*"))' in profile.read_text()
-                assert '(deny file-write*)' in profile.read_text()
+                assert "(deny file-write*)" in profile.read_text()
             patch = json.loads((tmp_path / "session/runtime/research-model.patch.json").read_text())
             assert (
                 patch[0]["config"]["providers"]["rsi-responses"]["models"][0]["contextWindow"]
@@ -633,6 +633,120 @@ def test_linux_dsh_executes_workspace_shell(
             )
             assert result.text == "Done"
             assert "LINUX_WORKSPACE_OK" in json.dumps(model.requests[-1]["input"])
+        finally:
+            await runtime.close()
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        model.close()
+
+
+def test_failed_runtime_open_closes_listener(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from areal_rsi.infra.runtime import research_runtime
+
+    monkeypatch.setenv("RSI_API_KEY", "fixture")
+
+    async def scenario() -> None:
+        runtime = ResearchRuntime(ResearchConfig(TaskBrief("test", "test"), backend="codex"))
+        opened: list[asyncio.Server] = []
+        original = asyncio.start_server
+
+        async def capture(*args: Any, **kwargs: Any) -> asyncio.Server:
+            server = await original(*args, **kwargs)
+            opened.append(server)
+            return server
+
+        def fail_content(*args: Any, **kwargs: Any) -> None:
+            raise OSError("disk full")
+
+        async def handler(call: ToolCall) -> ToolResult:
+            raise AssertionError("not reached")
+
+        monkeypatch.setattr(asyncio, "start_server", capture)
+        monkeypatch.setattr(research_runtime, "FileContentStore", fail_content)
+        try:
+            with pytest.raises(OSError, match="disk full"):
+                await runtime._open(
+                    tmp_path / "session", tmp_path / "workspace", "test", [], handler, "rsi"
+                )
+            await runtime.close()
+            assert opened and not opened[0].is_serving()
+        finally:
+            for server in opened:
+                server.close()
+                await server.wait_closed()
+
+    asyncio.run(scenario())
+
+
+def test_native_runtime_honors_environment_and_advertised_tools(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RSI_API_KEY", "fixture")
+    model = ResponsesModel()
+
+    def output(request: dict[str, Any]) -> dict[str, Any]:
+        if any(item.get("type") == "function_call_output" for item in request["input"]):
+            return {
+                "id": "done",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "Done", "annotations": []}],
+            }
+        return {
+            "id": "env-call",
+            "type": "function_call",
+            "call_id": "env-call",
+            "name": "exec_command",
+            "status": "completed",
+            "arguments": json.dumps(
+                {
+                    "cmd": 'printf "%s" "$RSI_SMOKE_VALUE" > env-seen.txt; '
+                    'rsi-tools list > tools-seen.json'
+                }
+            ),
+        }
+
+    model.output = output
+
+    async def scenario() -> None:
+        runtime = ResearchRuntime(
+            ResearchConfig(
+                TaskBrief("test", "test"),
+                backend="codex",
+                base_url=model.url,
+                model_settings_pinned=True,
+            )
+        )
+
+        async def handler(call: ToolCall) -> ToolResult:
+            return ToolResult({})
+
+        workspace = tmp_path / "workspace"
+        visible = definition("get_state", "Read state")
+        hidden = definition("hidden_tool", "Callable but not advertised")
+        try:
+            await asyncio.wait_for(
+                runtime.turn(
+                    tmp_path / "session",
+                    system_prompt="Execute the requested command",
+                    user_message="Check environment",
+                    tools=[visible, hidden],
+                    advertised_tools=[visible],
+                    environment={"RSI_SMOKE_VALUE": "injected"},
+                    workspace=workspace,
+                    handler=handler,
+                ),
+                30,
+            )
+            assert (workspace / "env-seen.txt").read_text() == "injected"
+            exposed = json.loads((workspace / "tools-seen.json").read_text())
+            assert [tool["name"] for tool in exposed] == ["get_state"]
         finally:
             await runtime.close()
 

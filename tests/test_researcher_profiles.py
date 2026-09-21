@@ -1,17 +1,55 @@
 """Identity stays with a complete attempt, including session reconstruction."""
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
 from test_passk import ScriptedRuntime, configuration
 
 from areal_rsi.coordination.collaboration import build_plan
+from areal_rsi.coordination.config import load_config
 from areal_rsi.coordination.coordinator import Coordinator
 from areal_rsi.coordination.engine import ToolSet
 from areal_rsi.coordination.passk import launch
 from areal_rsi.modules.agent_runtime import TurnResult
 from areal_rsi.research_app import ResearchApp
+from areal_rsi.researcher_profiles import load_profiles
+
+
+def test_selected_assets_are_frozen_before_creation_and_survive_removal(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        directory = tmp_path / "profiles" / "mybench"
+        directory.mkdir(parents=True)
+        asset = directory / "structure.md"
+        asset.write_text("---\nname: Structure\nreminder: Check structure\n---\nOriginal prompt\n")
+        config = configuration(2)
+        config.collaboration_modules = ("leader_guidance", "problem_sharing", "researcher_profiles")
+        config.researcher_profile_ids = ("mybench/structure", "general")
+        config.researcher_profile_dir = "profiles"
+        path = tmp_path / "research.json"
+        path.write_text(json.dumps(config.public()))
+        app = ResearchApp(tmp_path / "data", config=load_config(path))
+        created = await app.create({})
+        c = app.coordinator(created["run_id"])
+        asset.unlink()
+        restored = app.config(c)
+        profiles = restored.metadata["researcher_profiles"]
+        assert [p["id"] for p in profiles] == ["mybench/structure", "general"]
+        assert profiles[0]["prompt"] == "Original prompt\n"
+        assert restored.researcher_profile_ids == config.researcher_profile_ids
+
+    asyncio.run(scenario())
+
+
+def test_profile_selection_rejects_missing_assets_and_wrong_team_size() -> None:
+    with pytest.raises(ValueError, match="Unknown researcher profile"):
+        load_profiles(["not-an-installed-profile"])
+    config = configuration(4)
+    config.collaboration_modules = ("leader_guidance", "problem_sharing", "researcher_profiles")
+    config.researcher_profile_ids = ("general",)
+    with pytest.raises(ValueError, match="one profile for each researcher"):
+        config.freeze_researcher_profiles()
 
 
 @pytest.mark.parametrize("extra", [(), ("objective_sharing",)])

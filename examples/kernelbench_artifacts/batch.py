@@ -17,7 +17,7 @@ from areal_rsi.base.storage import new_id, now, safe_name, write_json
 from areal_rsi.coordination.collaboration import build_plan, manifest, presets
 from areal_rsi.coordination.config import config_from_dict
 from areal_rsi.experiment_config import environment_scope
-from areal_rsi.prompts import load_prompt
+from areal_rsi.researcher_profiles import load_profiles
 from areal_rsi.ui.launch import WorkbenchClient
 
 HERE = Path(__file__).resolve().parent
@@ -60,40 +60,9 @@ def prepare_trial(item: tuple[dict[str, Any], dict[str, Any]]) -> dict[str, Any]
     config["api_key_env"] = base.api_key_env
     config["brief"]["objective"] = row["name"]
     if "researcher_profiles" in row["modules"]:
-        profile_root = HERE / "v0.2.1.2/profiles"
-        config["metadata"]["researcher_profiles"] = [
-            {
-                "id": "general",
-                "name": "综合研究员",
-                "reminder": "从任务与实验出发，自由选择方法，独立完成整题。",
-                "prompt": load_prompt("agents/research/profiles/general.md"),
-            },
-            *[
-                {
-                    "id": key,
-                    "name": name,
-                    "reminder": reminder,
-                    "prompt": (profile_root / f"{key}.md").read_text(),
-                }
-                for key, name, reminder in (
-                    (
-                        "algorithm",
-                        "算法与计算结构研究员",
-                        "优先从数学表达和计算组织寻找机会，验证整体收益。",
-                    ),
-                    (
-                        "memory",
-                        "数据布局与访存研究员",
-                        "优先观察数据搬运、布局与复用，验证整体收益。",
-                    ),
-                    (
-                        "execution",
-                        "GPU 执行与编译研究员",
-                        "优先观察 GPU 执行、资源占用和等待，验证整体收益。",
-                    ),
-                )
-            ],
-        ]
+        config["metadata"]["researcher_profiles"] = load_profiles(
+            ("general", "kernelbench/algorithm", "kernelbench/memory", "kernelbench/execution")
+        )
         if "profile_resources" in row["modules"]:
             from areal_rsi.coordination.profile_resources import load_resources
 
@@ -105,7 +74,7 @@ def prepare_trial(item: tuple[dict[str, Any], dict[str, Any]]) -> dict[str, Any]
                 directory = (
                     general
                     if profile["id"] == "general"
-                    else HERE / "v0.2.1.4/profiles" / profile["id"]
+                    else HERE / "v0.2.1.4/profiles" / profile["id"].rsplit("/", 1)[-1]
                 )
                 profile.update(load_resources(directory))
     write_json(path, config, immutable=True)

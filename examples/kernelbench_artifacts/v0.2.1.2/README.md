@@ -9,7 +9,7 @@
 
 默认并行启动 Astra / xhigh 的 L3P10、L2P71、L1P63。每题四名 researcher，各有一小时有效时间，不限提交次数。API 故障和 GPU 排队按现有计时规则扣除，正常推理、编译和 GPU 执行计时。
 
-身份依次为综合、算法与计算结构、数据布局与访存、GPU 执行与编译。通用身份位于 `src/areal_rsi/agents/research/profiles/general.md`，三份 KernelBench 身份位于本目录的 `profiles/`。启动时将完整身份冻结进研究配置；后续编辑文件不会改变已经启动的研究。
+身份依次为综合、算法与计算结构、数据布局与访存、GPU 执行与编译。现在从 `src/areal_rsi/resources/researcher_profiles/` 加载同样的人设正文；本目录的 `profiles/` 保留最初版本供查看。启动时将完整身份冻结进研究配置；后续编辑文件不会改变已经启动的研究。其他 bench 的资产生成和选择方式见[人设使用说明](../../researcher_profiles/README.md)。
 
 协作方式选择 `passk_guided_v0212`，沿用 v0.2.1.1 的报告、指导和问题经验共享限制。四人都研究完整题目，身份只影响研究偏好。
 

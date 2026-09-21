@@ -56,6 +56,8 @@ class ResearchConfig:
     brief: TaskBrief
     mode: str = "passk"
     collaboration_modules: tuple[str, ...] = ()
+    researcher_profile_ids: tuple[str, ...] = ()
+    researcher_profile_dir: str | None = None
     seed_dir: str | None = None
     backend: str = "standard"
     model: str = "gpt-5.6-luna"
@@ -121,6 +123,19 @@ class ResearchConfig:
             else os.environ.get("RSI_" + key.upper(), str(getattr(self, key)))
             for key in MODEL_FIELDS
         }
+
+    def freeze_researcher_profiles(self) -> None:
+        if not self.researcher_profile_ids:
+            return
+        from areal_rsi.researcher_profiles import load_profiles
+
+        if "researcher_profiles" not in self.collaboration_modules:
+            raise ValueError("Selecting identities requires the researcher_profiles module")
+        if len(self.researcher_profile_ids) != self.brief.limits.max_agents:
+            raise ValueError("Select one profile for each researcher, in launch order")
+        self.metadata["researcher_profiles"] = load_profiles(
+            self.researcher_profile_ids, self.researcher_profile_dir
+        )
 
     def pin_model_settings(self) -> None:
         for key, value in self.model_settings().items():
@@ -201,6 +216,11 @@ def archived_config(value: dict[str, Any]) -> ResearchConfig:
 
 def load_config(path: Path) -> ResearchConfig:
     config = config_from_dict(json.loads(path.read_text()))
+    if config.researcher_profile_dir is not None:
+        directory = Path(config.researcher_profile_dir).expanduser()
+        config.researcher_profile_dir = str(
+            (path.parent / directory).resolve() if not directory.is_absolute() else directory
+        )
     if config.seed_dir is not None:
         seed = Path(config.seed_dir).expanduser()
         config.seed_dir = str((path.parent / seed).resolve() if not seed.is_absolute() else seed)

@@ -45,7 +45,9 @@ class JudgeConfigTests(unittest.TestCase):
     def test_gateway_model_does_not_inherit_official_reasoning_level(self):
         self.assertEqual(grade.reasoning_options("gpt-5-nano"),
                          {"reasoning_effort": "minimal"})
-        self.assertEqual(grade.reasoning_options("gpt-5.6-terra"), {})
+        self.assertEqual(grade.reasoning_options("gpt-5.6-terra"),
+                         {"reasoning_effort": "low"})
+        self.assertEqual(grade.reasoning_options("custom-judge"), {})
 
     def test_frozen_rubrics_and_scoring_helpers_unchanged(self):
         original = WORK / "jailbreak_env/source/tasks/jailbreak-robustness/tests/grade.py"

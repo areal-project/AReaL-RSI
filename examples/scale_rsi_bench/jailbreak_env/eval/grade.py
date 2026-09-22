@@ -164,7 +164,11 @@ def build_parser():
 
 def reasoning_options(model):
     """Keep the official judge default without imposing it on gateway model IDs."""
-    return {"reasoning_effort": "minimal"} if model == "gpt-5-nano" else {}
+    if model == "gpt-5-nano":
+        return {"reasoning_effort": "minimal"}
+    if model.startswith("gpt-5"):
+        return {"reasoning_effort": "low"}
+    return {}
 
 
 async def main():

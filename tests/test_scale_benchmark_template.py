@@ -36,6 +36,16 @@ def test_scale_catalog_and_workbench_config(
     assert config.brief.limits.max_agents == 2
     assert [command.name for command in config.commands] == ["experiment"]
 
+    for benchmark in ("nanogpt", "opsd", "jailbreak", "swarm"):
+        run_id = f"research_{benchmark}_instructions"
+        prepare_config(tmp_path, repository, run_id, benchmark, max_jobs=1)
+        workspace = tmp_path / "runs" / run_id / "setup/benchmark-session/workspace"
+        instructions = (workspace / "instruction.md").read_text()
+        assert 'run_job(command_name="experiment"' in instructions
+        assert "cannot call `sbatch`" in instructions
+        if benchmark == "opsd":
+            assert (workspace / "eval_official.py").is_file()
+
     unlimited_ceiling = prepare_config(
         tmp_path,
         repository,

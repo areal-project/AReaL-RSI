@@ -164,6 +164,7 @@ def _linux_bwrap_command(
     readable: tuple[Path, ...],
     readonly_mounts: tuple[tuple[Path, Path], ...],
     worker: list[str],
+    process_identity: Path | None,
 ) -> list[str]:
     bwrap = shutil.which("bwrap")
     if bwrap is None:
@@ -229,6 +230,16 @@ def _linux_bwrap_command(
         | {destination for _, destination in executable_mounts}
         | {Path("/proc"), Path("/run"), workspace_alias}
     )
+    proc_view = ["--dir", "/proc", "--dir", "/proc/self"]
+    if process_identity is None:
+        proc_view.extend(["--ro-bind", "/proc/self", "/proc/self"])
+    else:
+        # Some hosts forbid mounting a private procfs in an unprivileged user
+        # namespace. A bind of the parent's /proc/self is intentionally narrow,
+        # but makes native children mistake the Python worker for themselves.
+        # Codex uses current_exe() to locate codex-code-mode-host beside its own
+        # binary, so give that native runtime a scoped, accurate executable view.
+        proc_view.extend(["--symlink", str(process_identity.resolve()), "/proc/self/exe"])
     command = [
         bwrap,
         "--unshare-user",
@@ -241,13 +252,7 @@ def _linux_bwrap_command(
         "/dev",
         "--dir",
         "/workspace",
-        "--dir",
-        "/proc",
-        "--dir",
-        "/proc/self",
-        "--ro-bind",
-        "/proc/self",
-        "/proc/self",
+        *proc_view,
         "--dir",
         "/run",
         "--tmpfs",
@@ -297,6 +302,7 @@ def sandbox_command(
     readonly_mounts: tuple[tuple[Path, Path], ...] = (),
     *,
     isolation: str = "sandbox",
+    process_identity: Path | None = None,
 ) -> list[str]:
     validate_isolation(isolation)
     worker = [
@@ -312,7 +318,9 @@ def sandbox_command(
             raise RuntimeError("Read-only workspace mounts require linux-bwrap isolation")
         return worker
     if isolation == "linux-bwrap":
-        return _linux_bwrap_command(directory, workspace, readable, readonly_mounts, worker)
+        return _linux_bwrap_command(
+            directory, workspace, readable, readonly_mounts, worker, process_identity
+        )
     if readonly_mounts:
         raise RuntimeError("Read-only workspace mounts require linux-bwrap isolation")
     if sys.platform != "darwin":
@@ -718,6 +726,9 @@ class PackageAgentRuntime:
             (Path(interpreter),) if interpreter else (),
             tuple(readonly_mounts),
             isolation=self.settings.isolation,
+            process_identity=(
+                Path(selection["config"]["codexBin"]) if selection["kind"] == "codex-cli" else None
+            ),
         )
         if research_tools is not None:
             # Fail before spending model calls if the agent's actual shell cannot

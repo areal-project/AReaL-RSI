@@ -17,7 +17,13 @@ from areal_rsi.coordination.config import ResearchConfig
 from areal_rsi.coordination.coordinator import Coordinator, effect_id
 from areal_rsi.coordination.engine import ToolSet
 from areal_rsi.coordination.jobs import ResearchExecution
-from areal_rsi.coordination.passk import PassKActions, PassKEngine, launch, stop_on_target
+from areal_rsi.coordination.passk import (
+    CLOSEOUT_MAX_RETRIES,
+    PassKActions,
+    PassKEngine,
+    launch,
+    stop_on_target,
+)
 from areal_rsi.execution import ApprovedCommand
 from areal_rsi.modules.agent_runtime import ToolCall, TurnResult
 from areal_rsi.research_app import ResearchApp
@@ -338,6 +344,81 @@ def test_all_attempts_continue_then_rsi_summarizes_at_original_deadline(tmp_path
                 message["recipient"] == "user" and "最佳实验 score=0.8" in message["text"]
                 for message in user_messages
             )
+        finally:
+            await engine.close()
+
+    asyncio.run(scenario())
+
+
+def test_failed_closeout_has_bounded_fallback_with_persisted_job_evidence(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        c, actions, agents = await setup(tmp_path, 1)
+        (c.store.root / "coordination/jobs.json").write_text(
+            json.dumps(
+                {
+                    "job-one": {
+                        "agent_id": agents[0],
+                        "created_at": "2026-01-01T00:00:00+00:00",
+                        "result": {"state": "succeeded"},
+                        "feedback": {
+                            "content": json.dumps({"status": {"metrics": {"heldout_ppl": 42.5}}})
+                        },
+                    }
+                }
+            )
+        )
+        clock = datetime.fromisoformat(c.state["started_at"]).timestamp() + 61
+        runtime = ScriptedRuntime()
+        engine = PassKEngine(
+            c,
+            runtime,
+            lambda a: ToolSet(actions.definitions(a), actions.handler(a)),
+            clock=lambda: clock,
+            poll_interval=0.01,
+        )
+        try:
+            engine._begin_closeout("Run wall-time budget exhausted")
+            supervisor = c.actor("rsi")
+            supervisor.state, supervisor.error = AgentState.FAILED, "runtime failed"
+            c.save_actor(supervisor)
+            c.state["passk_retries"] = {"rsi": {"count": CLOSEOUT_MAX_RETRIES, "at": None}}
+            c.save()
+            await engine.tick()
+            assert c.state["status"] == "succeeded"
+            closeout = c.state["passk_closeout"]
+            assert closeout["status"] == "completed"
+            assert "succeeded=1" in closeout["summary"]
+            assert "heldout_ppl=42.5" in closeout["summary"]
+            assert c.store.run().finished_at is not None
+            assert not runtime.calls
+        finally:
+            await engine.close()
+
+    asyncio.run(scenario())
+
+
+def test_closeout_deadline_finishes_even_when_supervisor_does_not_fail(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        c, actions, _ = await setup(tmp_path, 1)
+        clock = datetime.fromisoformat(c.state["started_at"]).timestamp() + 61
+        runtime = ScriptedRuntime()
+        engine = PassKEngine(
+            c,
+            runtime,
+            lambda a: ToolSet(actions.definitions(a), actions.handler(a)),
+            clock=lambda: clock,
+            poll_interval=0.01,
+        )
+        try:
+            engine._begin_closeout("Run wall-time budget exhausted")
+            c.state["passk_closeout"]["fallback_at"] = clock
+            c.save()
+            await engine.tick()
+            assert c.state["status"] == "succeeded"
+            assert c.state["passk_closeout"]["status"] == "completed"
+            assert not runtime.calls
         finally:
             await engine.close()
 

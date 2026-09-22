@@ -70,6 +70,32 @@ def test_linux_bwrap_hides_host_tree_and_keeps_workspace_writable(tmp_path: Path
     sys.platform != "linux" or not __import__("shutil").which("bwrap"),
     reason="Linux Bubblewrap integration",
 )
+def test_linux_bwrap_exposes_native_runtime_process_identity(tmp_path: Path) -> None:
+    session, workspace = tmp_path / "session", tmp_path / "workspace"
+    (session / "worker-code").mkdir(parents=True)
+    workspace.mkdir()
+    executable = Path(sys.executable).resolve()
+    command = sandbox_command(
+        session,
+        workspace,
+        (),
+        isolation="linux-bwrap",
+        process_identity=executable,
+    )
+    separator = len(command) - 1 - command[::-1].index("--")
+    probe = subprocess.run(
+        [*command[: separator + 1], "/bin/readlink", "/proc/self/exe"],
+        text=True,
+        capture_output=True,
+    )
+    assert probe.returncode == 0, probe.stderr
+    assert probe.stdout.strip() == str(executable)
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux" or not __import__("shutil").which("bwrap"),
+    reason="Linux Bubblewrap integration",
+)
 def test_linux_bwrap_overlays_readonly_workspace_file(tmp_path: Path) -> None:
     session, workspace = tmp_path / "session", tmp_path / "workspace"
     source, target = tmp_path / "published.jsonl", workspace / "data/pool.jsonl"

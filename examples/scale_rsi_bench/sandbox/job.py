@@ -84,30 +84,60 @@ def gpu_benchmark(
     if benchmark == "opsd":
         shell = (
             "set -euo pipefail; rm -rf /workspace/runs/rsi; "
-            "SEED=42 OUT_DIR=/workspace/runs/rsi bash /workspace/train_capped.sh; "
+            "SEED=42 OUT_DIR=/workspace/runs/rsi bash /rsi/benchmark/train_capped.sh; "
             "ckpt=/workspace/runs/rsi/capped_seed42/checkpoint-100; "
-            "bash /workspace/dev_eval.sh \"$ckpt\" /workspace/dev_result.json"
+            "python /rsi/benchmark/eval_official.py --base_model /opt/models/Qwen3-1.7B "
+            '--checkpoint_path "$ckpt" --data_file /opt/eval_assets/aime24.json '
+            "--output_file /workspace/dev_result.json --seed 20260610 "
+            "--data_parallel_size 4 --val_n 12 --num_problems 30"
         )
-        command = ["bash", str(root / "run.sh"), "bash", "-lc", shell]
+        commands = [(["bash", str(root / "run.sh"), "bash", "-lc", shell], environment)]
         patterns = ("dev_result.json", "runs/rsi/**/trainer_state.json", "submission/recipe.env")
     elif benchmark == "jailbreak":
-        shell = (
+        generation = (
             "set -euo pipefail; bash /workspace/train.sh; "
-            "bash /workspace/dev_eval.sh /workspace/submission/checkpoint /workspace/dev_result"
+            "mkdir -p /workspace/dev_result; "
+            "python /opt/eval_src/generate.py --base /opt/models/Qwen3-8B "
+            "--checkpoint /workspace/submission/checkpoint "
+            "--data /opt/eval_data/dev_split.jsonl "
+            "--output /workspace/dev_result/responses.jsonl --tensor-parallel-size 1"
         )
-        command = ["bash", str(root / "run.sh"), "bash", "-lc", shell]
+        grading = (
+            "set -euo pipefail; python /opt/eval_src/grade.py "
+            "--data /opt/eval_data/dev_split.jsonl "
+            "--responses /workspace/dev_result/responses.jsonl "
+            "--output /workspace/dev_result/score.json"
+        )
+        untrusted_environment = {
+            key: value
+            for key, value in environment.items()
+            if key
+            not in {
+                "OPENAI_API_KEY",
+                "OPENAI_BASE_URL",
+                "JAILBREAK_JUDGE_MODEL",
+                "JAILBREAK_JUDGE_CONCURRENCY",
+            }
+        }
+        judge_environment = {**environment, "RSI_GPUS": "0", "RSI_CPUS": "4", "RSI_MEM": "16G"}
+        commands = [
+            (["bash", str(root / "run.sh"), "bash", "-lc", generation], untrusted_environment),
+            (["bash", str(root / "run.sh"), "bash", "-lc", grading], judge_environment),
+        ]
         patterns = ("dev_result/score.json", "submission/*.json", "train.sh")
     elif benchmark == "swarm":
         shell = (
             "set -euo pipefail; cd /workspace/methods/main; python optimize.py; "
             "mkdir -p /workspace/submission; cp graph.json /workspace/submission/graph.json; "
-            "python /workspace/selfcheck.py | tee /workspace/selfcheck.log"
+            "python /rsi/scripts/eval_visible.py "
+            "--graph /workspace/submission/graph.json | tee /workspace/selfcheck.log"
         )
-        command = ["bash", str(root / "run.sh"), "serve", "bash", "-lc", shell]
+        commands = [(["bash", str(root / "run.sh"), "serve", "bash", "-lc", shell], environment)]
         patterns = ("submission/graph.json", "selfcheck.log", "methods/main/optimize.py")
     else:
         raise ValueError(f"Unsupported benchmark: {benchmark}")
-    run(command, env=environment)
+    for command, command_environment in commands:
+        run(command, env=command_environment)
     return {"state": "COMPLETED", "files": copy_matches(workspace, output, patterns)}
 
 
@@ -123,9 +153,7 @@ def main() -> None:
     if args.benchmark == "nanogpt":
         summary = nanogpt(workspace, output, args.runtime_root.resolve())
     else:
-        summary = gpu_benchmark(
-            args.benchmark, workspace, output, args.runtime_root.resolve()
-        )
+        summary = gpu_benchmark(args.benchmark, workspace, output, args.runtime_root.resolve())
     (output / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
 
 

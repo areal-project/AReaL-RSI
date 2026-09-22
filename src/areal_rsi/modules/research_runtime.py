@@ -64,6 +64,7 @@ class Conversation:
     stop_reason: str | None = None
     calls: set[asyncio.Task[Any]] = field(default_factory=set)
     call_namespace: str = ""
+    catalog: dict[str, Json] = field(default_factory=dict)
 
 
 class ResearchRuntime:
@@ -148,9 +149,9 @@ class ResearchRuntime:
                 if connection.stop_reason:
                     raise ValueError("本回合已经结束，请停止调用工具并给出简短回复")
                 name = request["name"]
-                if name not in catalog:
+                if name not in connection.catalog:
                     raise ValueError("Tool is not available to this agent")
-                validate(request["arguments"], catalog[name]["parameters"])
+                validate(request["arguments"], connection.catalog[name]["parameters"])
                 # Native adapters may restart their call sequence each delivery.
                 # Scope durable receipts to the session and delivery, retaining
                 # stable identities when the same delivery resumes after a crash.
@@ -282,7 +283,7 @@ class ResearchRuntime:
             server.close()
             await server.wait_closed()
             raise
-        connection = Conversation(runtime, session, server, handler)
+        connection = Conversation(runtime, session, server, handler, catalog=catalog)
         self.conversations[directory] = connection
         return connection
 
@@ -343,6 +344,20 @@ class ResearchRuntime:
                 message_id if message_id is not None else secrets.token_hex(16),
             ]
         )
+        connection.catalog = {tool["name"]: tool for tool in tools}
+        manifest = session_dir / "runtime/research-tools.json"
+        if manifest.exists():
+            bridge = json.loads(manifest.read_text())
+            bridge["tools"] = [
+                {
+                    "name": tool["name"],
+                    "description": tool.get("description", ""),
+                    "inputSchema": tool["parameters"],
+                }
+                for tool in tools
+            ]
+            manifest.write_text(json.dumps(bridge))
+            manifest.chmod(0o600)
         connection.handler, connection.sink = handler, event_sink
         connection.incoming, connection.stop_reason = incoming_messages, None
         usage: Json = {}

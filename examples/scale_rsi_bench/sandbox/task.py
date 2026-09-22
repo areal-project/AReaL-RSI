@@ -41,7 +41,11 @@ def build_config(
             "先读 instruction.md。不要读取或猜测其他运行记录。"
         ),
         "execution_instructions": (
-            "用 experiment 提交一次完整开发实验；每次提交会使用当前 Agent 工作区的不可变快照。"
+            "本地沙箱没有 GPU，且禁止直接执行 sbatch、srun 或训练入口。"
+            "先调用 get_commands，再调用 run_job(command_name='experiment', "
+            "parameters_json='{}', wait=true) 提交完整开发实验；"
+            "宿主桥会冻结当前工作区并提交 Slurm。作业运行时使用 job_status 或 "
+            "wait_for_job 等待原作业，不要重复提交。"
         ),
         "workspace_readonly_mounts": [],
     }

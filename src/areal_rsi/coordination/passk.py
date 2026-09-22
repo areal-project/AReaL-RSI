@@ -50,7 +50,19 @@ RSI_PROMPT = """你是 RSI Agent，负责启动并监督 {{max_agents}} 个 Rese
 """
 
 SUPERVISOR_TOOLS = [
-    definition("start_researchers", "一次启动固定数量的独立研究员，每人获得相同的完整任务。"),
+    {
+        "type": "function",
+        "name": "start_researchers",
+        "description": "一次启动配置中固定数量的独立研究员，每人获得相同的完整任务。"
+        "count 可省略；提供时必须等于当前配置。",
+        "parameters": {
+            "type": "object",
+            "properties": {"count": {"type": "integer", "minimum": 1}},
+            "required": [],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
     definition("get_state", "查看研究员的进展、报告、正式成绩与剩余时间。"),
     definition(
         "continue_researcher",
@@ -73,6 +85,8 @@ PROGRESS_TOOL = definition(
     references=REFERENCES,
 )
 CONTINUE_MESSAGE = "研究尚未结束，还有时间和资源。请继续独立探索并验证你的方案。"
+CLOSEOUT_MAX_RETRIES = 3
+CLOSEOUT_FALLBACK_SECONDS = 10 * 60
 
 ALLOWED_TOOLS = {
     "get_state",
@@ -176,6 +190,7 @@ class PassKActions(ResearchActions):
     def state(self, agent_id: str) -> dict[str, Any]:
         c = self.c
         if agent_id == "rsi":
+            jobs = _job_evidence(c)
             return {
                 "run_id": c.store.run_id,
                 "agent_id": "rsi",
@@ -192,6 +207,7 @@ class PassKActions(ResearchActions):
                         "needs_continue": needs_continue(c, actor.agent_id),
                         "best": self.state(actor.agent_id)["best"],
                         "latest_report": c.state.get("passk_reports", {}).get(actor.agent_id),
+                        "experiments": jobs.get(actor.agent_id, {"counts": {}, "recent": []}),
                     }
                     for actor in c.store.run().research_agents
                 ],
@@ -239,6 +255,9 @@ class PassKActions(ResearchActions):
 
     async def _apply(self, agent_id: str, key: str, name: str, args: dict[str, Any]) -> ToolResult:
         if name == "start_researchers":
+            expected = self.c.store.brief().limits.max_agents
+            if args.get("count", expected) != expected:
+                raise ValueError(f"This pass@k run requires exactly {expected} researchers")
             await launch(self.c, self)
             return ToolResult(self.state("rsi"))
         if name == "continue_researcher":
@@ -257,21 +276,7 @@ class PassKActions(ResearchActions):
             summary = args["summary"].strip()
             if not summary:
                 raise ValueError("最终总结不能为空")
-            self.c.state["passk_closeout"].update(status="completed", summary=summary)
-            self.c.state["status"] = "succeeded"
-            self.c.state["waiting_for_user"] = []
-            supervisor = self.c.actor("rsi")
-            supervisor.state, supervisor.wait_reason = (
-                AgentState.STOPPED,
-                "passk: summary completed",
-            )
-            self.c.save_actor(supervisor)
-            self.c.save()
-            run = self.c.store.run()
-            run.state, run.finished_at = RunState.SUCCEEDED, now()
-            self.c.store.save_run(run)
-            self.c.enqueue("rsi", "user", summary, key=key)
-            self.c.store.event("run_completed", summary=summary, closeout="passk")
+            _complete_closeout(self.c, summary, key=key)
             return ToolResult({"completed": True}, stop=True, reason="completed")
         if name == "submit_report":
             return ToolResult(self.progress(agent_id, key, args["message"], args["references"]))
@@ -396,6 +401,100 @@ def stop_on_target(c: Coordinator) -> None:
         c.store.save_run(run)
 
 
+def _job_evidence(c: Coordinator) -> dict[str, dict[str, Any]]:
+    """Return compact, persisted experiment evidence for closeout."""
+    path = c.store.root / "coordination" / "jobs.json"
+    if not path.exists():
+        return {}
+    try:
+        jobs = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for job_id, info in jobs.items():
+        if not isinstance(info, dict) or not isinstance(info.get("agent_id"), str):
+            continue
+        agent_id = info["agent_id"]
+        state = str((info.get("result") or {}).get("state") or "running")
+        entry = result.setdefault(agent_id, {"counts": {}, "recent": []})
+        entry["counts"][state] = entry["counts"].get(state, 0) + 1
+        metrics: dict[str, Any] = {}
+        feedback = info.get("feedback") or {}
+        try:
+            payload = json.loads(feedback.get("content", "{}"))
+            raw = payload.get("status", payload).get("metrics", {})
+            metrics = {
+                key: value
+                for key, value in raw.items()
+                if isinstance(value, (int, float, bool)) and not isinstance(value, str)
+            }
+        except (AttributeError, TypeError, ValueError):
+            pass
+        entry["recent"].append(
+            {
+                "job_id": job_id,
+                "state": state,
+                "candidate_id": info.get("candidate_id"),
+                "created_at": info.get("created_at"),
+                "metrics": metrics,
+            }
+        )
+    for entry in result.values():
+        entry["recent"] = sorted(
+            entry["recent"], key=lambda item: str(item.get("created_at") or "")
+        )[-5:]
+    return result
+
+
+def _fallback_closeout_summary(c: Coordinator) -> str:
+    evidence = _job_evidence(c)
+    lines = [
+        "研究时间已到。RSI 模型收尾连续失败，平台已根据持久化实验记录生成兜底汇总。",
+        "以下成绩来自现有实验脚本反馈，不是平台可信正式验证结果。",
+    ]
+    reports = c.state.get("passk_reports", {})
+    for actor in c.store.run().research_agents:
+        item = evidence.get(actor.agent_id, {"counts": {}, "recent": []})
+        counts = item["counts"]
+        count_text = "、".join(f"{state}={count}" for state, count in sorted(counts.items()))
+        lines.append(f"- {actor.direction or actor.agent_id}：实验 {count_text or '0'}。")
+        report = reports.get(actor.agent_id)
+        if report and report.get("message"):
+            lines.append("  最后报告：" + str(report["message"])[:1000])
+        successful = [job for job in item["recent"] if job["state"] == "succeeded"]
+        for job in successful[-3:]:
+            metric_text = "、".join(
+                f"{name}={value}" for name, value in sorted(job["metrics"].items())
+            )
+            lines.append(
+                f"  成功实验 {job['job_id']}"
+                + (f"：{metric_text}" if metric_text else "（未发布标量指标）")
+            )
+    return "\n".join(lines)
+
+
+def _complete_closeout(c: Coordinator, summary: str, *, key: str) -> None:
+    closeout = c.state.get("passk_closeout")
+    if not closeout or closeout.get("status") == "completed":
+        return
+    closeout.update(status="completed", summary=summary)
+    c.state["status"] = "succeeded"
+    c.state["waiting_for_user"] = []
+    supervisor = c.actor("rsi")
+    supervisor.state, supervisor.wait_reason, supervisor.error = (
+        AgentState.STOPPED,
+        "passk: summary completed",
+        None,
+    )
+    c.save_actor(supervisor)
+    c.save()
+    run = c.store.run()
+    run.state, run.finished_at = RunState.SUCCEEDED, now()
+    c.store.save_run(run)
+    c.enqueue("rsi", "user", summary, key=key)
+    c.store.event("run_completed", summary=summary, closeout="passk")
+
+
 class PassKEngine(ResearchEngine):
     def _begin_closeout(self, reason: str) -> None:
         c = self.coordinator
@@ -408,6 +507,7 @@ class PassKEngine(ResearchEngine):
             "status": "pending",
             "reason": reason,
             "started_at": now(),
+            "fallback_at": self.clock() + CLOSEOUT_FALLBACK_SECONDS,
         }
         c.state["budget_stop_reason"] = reason
         c.save()
@@ -434,11 +534,48 @@ class PassKEngine(ResearchEngine):
         if c.state["status"] == "running" and reason is not None:
             self._begin_closeout(reason)
         if c.state["status"] == "running" and self._wall_reason() is None:
+            closeout = c.state.get("passk_closeout")
+            retry = c.state.get("passk_retries", {}).get("rsi", {})
+            if (
+                closeout
+                and closeout["status"] == "pending"
+                and (
+                    (
+                        c.actor("rsi").state == AgentState.FAILED
+                        and retry.get("count", 0) >= CLOSEOUT_MAX_RETRIES
+                    )
+                    or self.clock() >= closeout.get("fallback_at", float("inf"))
+                )
+            ):
+                _complete_closeout(c, _fallback_closeout_summary(c), key="passk-closeout-fallback")
+                return await super().tick()
+            if (
+                closeout
+                and closeout["status"] == "pending"
+                and "rsi" not in c.state["active"]
+                and not c.state["inboxes"].get("rsi")
+                and self.clock() >= closeout.get("retry_at", 0)
+            ):
+                attempt = closeout.get("retry_count", 0) + 1
+                closeout.update(retry_count=attempt, retry_at=self.clock() + 60)
+                c.save()
+                c.enqueue(
+                    "system",
+                    "rsi",
+                    "收尾尚未完成。请调用 get_state 汇总现有报告，然后使用 finish_research "
+                    "提交最终总结；不要继续研究或提交实验。",
+                    key=f"passk-closeout-retry:{attempt}",
+                )
             retries = c.state.setdefault("passk_retries", {})
             for actor in (c.actor("rsi"), *c.store.run().research_agents):
                 if actor.state != AgentState.FAILED:
                     continue
                 entry = retries.setdefault(actor.agent_id, {"count": 0, "at": None})
+                if actor.agent_id == "rsi" and closeout and entry["count"] >= CLOSEOUT_MAX_RETRIES:
+                    _complete_closeout(
+                        c, _fallback_closeout_summary(c), key="passk-closeout-fallback"
+                    )
+                    return await super().tick()
                 if entry["at"] is None:
                     entry["at"] = self.clock() + min(60, 2 ** min(entry["count"] + 1, 6))
                     c.save()

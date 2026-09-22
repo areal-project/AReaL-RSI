@@ -28,6 +28,7 @@ if [[ ${RSI_RESTRICTED:-0} == 1 ]]; then
            --bind "$(readlink -f -- "$ROOT/config.sh"):/rsi/config.sh:ro"
            --bind "$ROOT/.venv:/rsi/.venv:ro"
            --bind "$ROOT/assets:/opt/eval_assets:ro" --bind "$ROOT/eval_src:/opt/eval_src:ro"
+           --bind "$ROOT/workspace/data:/opt/eval_data:ro"
            --bind "$ROOT/nltk_data:/opt/nltk_data:ro"
            --bind "$ROOT/cache/huggingface:/opt/hf_cache:ro")
     inside=/rsi/scripts/inside.sh

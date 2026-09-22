@@ -19,6 +19,12 @@ if [[ $RSI_ROOT == /rsi ]]; then
     export PATH="/tmp/rsi-bin:/rsi/.venv/bin:$PATH"
     export HF_DATASETS_CACHE=/tmp/hf-datasets
     mkdir -p /tmp/rsi-bin "$HF_DATASETS_CACHE"
+    # Keep the trusted dataset cache read-only while placing datasets' lock files
+    # in writable job-local storage. Completed cache directories are symlinked in.
+    for dataset_cache in /opt/hf_cache/datasets/*; do
+        [[ -e $dataset_cache ]] || continue
+        ln -s "$dataset_cache" "$HF_DATASETS_CACHE/$(basename -- "$dataset_cache")"
+    done
     cat > /tmp/rsi-bin/accelerate <<'EOF'
 #!/bin/sh
 exec /rsi/.venv/bin/python /rsi/.venv/bin/accelerate "$@"

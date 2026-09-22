@@ -22,6 +22,18 @@ SCALE_BENCHMARKS = {
     "swarm": ("swarm_env", "agent-swarm-optimization", "Agent Swarm Optimization"),
 }
 
+WEB_SUBMISSION_NOTE = """
+
+## This deployment's experiment submission
+
+This workspace has no local GPU and cannot call `sbatch`, `srun`, `salloc`, or
+`scancel`. Do not probe local CUDA/TRL availability or run the training launcher
+directly. Call `get_commands`, then call
+`run_job(command_name="experiment", parameters_json="{}", wait=true)`. The host
+bridge snapshots this workspace and submits the benchmark's fixed Slurm recipe.
+Use `job_status` or `wait_for_job` for that job; do not submit a duplicate.
+"""
+
 
 def runtime_root(repository: Path) -> Path:
     return Path(os.environ.get("RSI_WORK_ROOT", repository.parent / "scale_rsi_bench")).resolve()
@@ -81,7 +93,12 @@ def create_session(benchmark: str, output: Path, root: Path) -> Path:
             workspace / "repo",
             ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"),
         )
-        for name in ("train_baseline.sh", "train_capped.sh", "dev_eval.sh"):
+        for name in (
+            "train_baseline.sh",
+            "train_capped.sh",
+            "dev_eval.sh",
+            "eval_official.py",
+        ):
             _copy(task / "environment/workspace" / name, workspace / name)
         _copy(task / "environment/paper.pdf", workspace / "paper.pdf")
         (workspace / "submission").mkdir(exist_ok=True)
@@ -99,6 +116,8 @@ def create_session(benchmark: str, output: Path, root: Path) -> Path:
     else:
         _copy(task / "environment/workspace", workspace)
         (workspace / "submission").mkdir(exist_ok=True)
+    instruction = workspace / "instruction.md"
+    instruction.write_text(instruction.read_text().rstrip() + WEB_SUBMISSION_NOTE + "\n")
     (output / "session.json").write_text(
         json.dumps(
             {
@@ -179,7 +198,11 @@ def build_config(
                 "先读 instruction.md。不要读取或猜测其他运行记录。"
             ),
             "execution_instructions": (
-                "用 experiment 提交一次完整开发实验；每次提交会使用当前 Agent 工作区的不可变快照。"
+                "本地沙箱没有 GPU，且禁止直接执行 sbatch、srun 或训练入口。"
+                "先调用 get_commands，再调用 run_job(command_name='experiment', "
+                "parameters_json='{}', wait=true) 提交完整开发实验；"
+                "宿主桥会冻结当前工作区并提交 Slurm。作业运行时使用 job_status 或 "
+                "wait_for_job 等待原作业，不要重复提交。"
             ),
             "workspace_readonly_mounts": session_data["public_mounts"],
         },

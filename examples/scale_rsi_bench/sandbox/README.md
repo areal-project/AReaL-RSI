@@ -31,7 +31,16 @@ Direct `sbatch`, `srun`, `salloc` and `scancel` are deliberately hidden. A Slurm
 job does not inherit Bubblewrap's mount namespace and would otherwise be able to
 read private benchmark history. Benchmark submission must go through a scoped
 host bridge that accepts a fixed benchmark action and snapshots only this
-session's submission.
+session's submission. Interactive Codex sessions start that bridge automatically:
+
+```bash
+rsi-submit
+rsi-submit status
+```
+
+The first command snapshots and submits the current workspace. The second reads
+the active or most recent result. Completed public feedback appears under
+`/workspace/feedback/<submission-id>/`.
 
 ## Run as an RSI research task
 

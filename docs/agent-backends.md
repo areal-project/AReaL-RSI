@@ -63,7 +63,7 @@ DSH 通过 Runtime 的 ToolProvider 插件调用 RSI 工具；Codex/Hermes 通�
 
 ## 隔离边界
 
-默认 `sandbox` 模式下，每个会话有独立工作区、原生运行目录和 macOS
+macOS 默认的 `sandbox` 模式下，每个会话有独立工作区、原生运行目录和 macOS
 `sandbox-exec` 子进程，隐藏评测数据和其他研究员工作区不向子进程开放。
 
 worker 只复制执行所需的模块，禁止读取完整 RSI 包中的评测答案；
@@ -80,7 +80,7 @@ Codex 在 macOS 沙箱中使用进程专属的 HTTPS CONNECT 通道，避免依�
 CA 证书使用 `SSL_CERT_FILE`，未配置时使用 certifi；实现见
 [runtime_network.py](../src/areal_rsi/infra/runtime/runtime_network.py)。
 
-可信 Linux 服务器可在启动工作台前显式设置：
+Linux 自动使用 `linux-unrestricted`，无需配置；也可在启动工作台前显式设置覆盖默认值：
 
 ```dotenv
 RSI_RUNTIME_ISOLATION=linux-unrestricted
@@ -93,7 +93,8 @@ RSI_RUNTIME_ISOLATION=linux-unrestricted
 命令保留 60 秒超时和输出上限，长时间训练应由现有脚本异步提交。
 它不提供文件、进程或网络隔离；Agent 拥有工作台启动用户的权限，root 启动即拥有 root
 权限，也能访问该用户可读的其他研究目录、凭据文件和隐藏评测数据。仅用于可信研究，
-不能用于要求答案隔离的评测。环境变量默认是 `sandbox`，Linux 不会自动降级。
+不能用于要求答案隔离的评测。未设置环境变量时按系统选择默认值；显式配置优先，
+例如 Linux 上显式指定 `sandbox` 仍会报告不支持 macOS 沙箱。
 修改后须重启工作台；这是操作员环境配置，不能由模型的研究配置启用。
 RSI 管理任务和正式验证，Runtime 管理推理、工具、
 上下文压缩及供应商重试；不会把 Runtime 当成外壳再运行自定义 harness。

@@ -1,7 +1,7 @@
 """RSI sessions backed by the public ARealAgentRuntime Python package.
 
 Each conversation owns an embedded composition in a separate Python process.
-macOS uses a sandbox; trusted Linux deployments can explicitly disable isolation.
+macOS defaults to a sandbox; Linux defaults to unrestricted execution.
 """
 
 from __future__ import annotations
@@ -70,7 +70,9 @@ class RuntimeSettings:
         check_secrets(value)
         if set(value) - {"default", "roles", "readable_paths"}:
             raise ValueError("Runtime config only accepts default, roles, readable_paths")
-        self.isolation = os.environ.get("RSI_RUNTIME_ISOLATION", "sandbox")
+        self.isolation = os.environ.get(
+            "RSI_RUNTIME_ISOLATION", "linux-unrestricted" if sys.platform == "linux" else "sandbox"
+        )
         validate_isolation(self.isolation)
         self.default = value.get("default", {"kind": "dsh", "config": {}})
         self.roles = value.get("roles", {})

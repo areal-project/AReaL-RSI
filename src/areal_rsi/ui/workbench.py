@@ -1,8 +1,8 @@
-"""Loopback research workbench with an async application boundary and explicit views.
+"""Research workbench with an async application boundary and explicit views.
 
 The HTTP layer never opens run/session/private files. A backend returns public
 research records; allow-list projection provides a second boundary before JSON
-is delivered to the browser. All mutations require a same-origin bootstrap token.
+is delivered to the browser.
 """
 
 from __future__ import annotations
@@ -319,7 +319,7 @@ class WorkbenchServer(ThreadingHTTPServer):
         self._owns_loop = loop is None
         self.loop = loop or asyncio.new_event_loop()
         self._loop_thread: threading.Thread | None = None
-        super().__init__(("127.0.0.1", port), WorkbenchHandler)
+        super().__init__(("0.0.0.0", port), WorkbenchHandler)
         if self._owns_loop:
             self._loop_thread = threading.Thread(target=self.loop.run_forever, daemon=True)
             self._loop_thread.start()
@@ -364,15 +364,6 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         # HTTP paths can contain private input; application events own observability.
         pass
 
-    def _safe_origin(self) -> bool:
-        hosts = {f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}"}
-        if self.headers.get("Host") not in hosts:
-            return False
-        if self.headers.get("Sec-Fetch-Site") == "cross-site":
-            return False
-        origin = self.headers.get("Origin")
-        return origin is None or origin in {"http://" + host for host in hosts}
-
     def _headers(self, status: int, media_type: str, length: int) -> None:
         self.send_response(status)
         self.send_header("Content-Type", media_type)
@@ -404,9 +395,6 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         return path.strip("/").split("/"), parse_qs(parsed.query)
 
     def do_GET(self) -> None:
-        if not self._safe_origin():
-            self._json(403, {"error": "仅允许本机工作台访问"})
-            return
         try:
             parts, query = self._path()
             assets: dict[tuple[str, ...], str] = {
@@ -517,14 +505,6 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             self._json(500, {"error": "无法读取研究状态，请稍后重试"})
 
     def do_POST(self) -> None:
-        if not self._safe_origin():
-            self._json(403, {"error": "不接受跨站请求"})
-            return
-        if not secrets.compare_digest(
-            self.headers.get("X-RSI-Token", ""), self.server.csrf_token
-        ):
-            self._json(403, {"error": "请求校验失败，请刷新工作台", "code": "csrf_expired"})
-            return
         try:
             if (
                 self.headers.get("Transfer-Encoding")

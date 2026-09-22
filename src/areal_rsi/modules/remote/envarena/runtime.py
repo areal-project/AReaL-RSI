@@ -444,7 +444,7 @@ class ArenaVerifier:
             0 if failed else score,
             {"execution_failed": float(failed), "weight": float(weight)},
             str(arena["feedback"]),
-            # Publish collected outputs as files in the workflow's evidence bundle.
+            # Publish collected outputs as files in the evaluation evidence.
             attachments=tuple(
                 decode(ContentRef, artifact["content"])
                 for artifact in arena.get("artifact_refs", [])

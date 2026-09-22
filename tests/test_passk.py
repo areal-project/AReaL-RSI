@@ -31,7 +31,6 @@ def configuration(k: int = 3, seconds: float = 60) -> ResearchConfig:
             ResearchLimits(
                 max_agents=k,
                 max_nodes=None,
-                max_model_calls=None,
                 max_total_tokens=None,
                 max_verify_calls=None,
                 max_wall_seconds=seconds,
@@ -119,9 +118,7 @@ def test_continuous_wait_is_cancellable(tmp_path: Path) -> None:
                     "submit",
                 )
             )
-            wait = asyncio.create_task(
-                execution.wait_for_result(agent, submitted.output["job_id"])
-            )
+            wait = asyncio.create_task(execution.wait_for_result(agent, submitted.output["job_id"]))
             await asyncio.sleep(0.1)
             assert not wait.done()
             wait.cancel()
@@ -232,9 +229,10 @@ def test_independent_records_jobs_and_identical_snapshots(tmp_path: Path) -> Non
 class ScriptedRuntime:
     backend = "standard"
 
-    def __init__(self) -> None:
+    def __init__(self, leader_busy: bool = False) -> None:
         self.calls: list[str] = []
         self.cancelled: set[str] = set()
+        self.leader_busy = leader_busy
 
     def for_interaction(self) -> ScriptedRuntime:
         return self
@@ -256,6 +254,8 @@ class ScriptedRuntime:
         self.calls.append(agent)
         assert agent != "interaction"
         if agent == "rsi":
+            if self.leader_busy:
+                await asyncio.Event().wait()
             handler = kwargs["handler"]
             state = await handler(ToolCall("get_state", {}, f"state-{len(self.calls)}"))
             if not state.output["started_researchers"]:
@@ -280,13 +280,16 @@ class ScriptedRuntime:
         raise AssertionError("unreachable")
 
 
-def test_all_attempts_continue_and_cancel_at_original_deadline(tmp_path: Path) -> None:
+@pytest.mark.parametrize("leader_busy", [False, True])
+def test_all_attempts_continue_and_cancel_at_original_deadline(
+    tmp_path: Path, leader_busy: bool
+) -> None:
     async def scenario() -> None:
         c, actions, agents = await setup(tmp_path)
         original = c.state["started_at"]
         await launch(c, actions)
         assert len(c.store.run().research_agents) == 3
-        runtime = ScriptedRuntime()
+        runtime = ScriptedRuntime(leader_busy)
         clock = datetime.fromisoformat(original).timestamp()
         engine = PassKEngine(
             c,
@@ -386,7 +389,7 @@ def test_workbench_mode_stops_and_rejects_intervention(tmp_path: Path) -> None:
 
 def test_mode_validation_prevents_shared_budget_interference() -> None:
     config = configuration()
-    for name in ("max_model_calls", "max_total_tokens", "max_verify_calls"):
+    for name in ("max_total_tokens", "max_verify_calls"):
         setattr(config.brief.limits, name, 10)
         with pytest.raises(ValueError, match="unlimited"):
             ResearchConfig(**{**encode(config), "brief": config.brief})
@@ -528,3 +531,15 @@ def test_kernelbench_verification_uses_only_own_attempt_receipts(tmp_path: Path)
     assert score == 1.2 and metrics["L3P10_submissions"] == 1
     assert evidence["L3P10"]["matching_evaluations"] == 1
     assert "peer" not in json.dumps(evidence)
+
+
+def test_leader_budget_preserves_native_model_input_contract(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        c, actions, agents = await setup(tmp_path, 1)
+        c.state["runtime_turns"] = 7
+        # Keep native-turn diagnostics, without adding them to model-visible budgets.
+        assert c.summary()["runtime_turns"] == 7
+        for agent in ["rsi", *agents]:
+            assert "runtime_turns" not in actions.state(agent)["budget"]
+
+    asyncio.run(scenario())

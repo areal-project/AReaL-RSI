@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, TypeVar, cast
 from urllib.parse import unquote, urlsplit
 
-from areal_rsi.api.base import ExperimentRun, RecordRef
+from areal_rsi.api.base import RecordRef, ResearchRun
 from areal_rsi.api.research import (
     CandidateSnapshot,
     EvidenceRecord,
@@ -71,13 +71,13 @@ class ResearchStore:
             for p in sorted((self.root / safe_name(category)).glob("*.json"))
         ]
 
-    def run(self) -> ExperimentRun:
-        run = self.runs.get(self.run_id, ExperimentRun)
+    def run(self) -> ResearchRun:
+        run = self.runs.get(self.run_id, ResearchRun)
         if run is None:
             raise FileNotFoundError(self.run_id)
         return run
 
-    def save_run(self, run: ExperimentRun) -> None:
+    def save_run(self, run: ResearchRun) -> None:
         self.runs.save(self.run_id, run, immutable=False)
 
     def brief(self) -> TaskBrief:
@@ -204,6 +204,7 @@ class ResearchStore:
             or uri.netloc != self.run_id
             or uri.query
             or uri.fragment
+            or len(path.parts) != 2
             or path.parts[0] not in allowed
         ):
             raise ValueError("Reference is outside this run's public research records")

@@ -8,8 +8,10 @@ const source = (name) => readFileSync(new URL(name, assets), 'utf8');
 const defaults = {base_url: 'https://4ipic.com', model: 'gpt-6-astra', reasoning_effort: 'xhigh', has_credentials: true};
 const collaborationCatalog = {modes: [
   {id: 'passk', label: '纯 pass@k', version: '1', description: '独立探索，RSI 只监督继续。'},
-  {id: 'collaborative', label: '旧版协作流程', version: '1', description: '原有完整协作流程。'},
-], modules: []};
+], modules: [{id: 'leader_guidance', label: 'RSI 协调', version: '3', modes: ['passk'], requires: [], conflicts: []}], presets: [
+  {id: 'passk', label: '纯 pass@k', mode: 'passk', modules: []},
+  {id: 'passk_guided', label: 'pass@k + RSI 协调', mode: 'passk', modules: ['leader_guidance']},
+]};
 const settle = async () => { for (let i = 0; i < 6; i++) await new Promise((resolve) => setImmediate(resolve)); };
 const response = (value, ok = true) => ({ok, status: ok ? 200 : 503, json: async () => structuredClone(value)});
 function run(id, status = 'planned') {
@@ -25,7 +27,8 @@ async function setup(t, records, handler, savedStorage = {}) {
   const window = new Window({url: 'http://localhost:8198/', settings: {disableJavaScriptFileLoading: true, disableCSSFileLoading: true}});
   t.after(() => window.happyDOM.close());
   for (const [key, value] of Object.entries(savedStorage)) window.localStorage.setItem(key, value);
-  window.setInterval = () => 0;
+  const timers = new Map();
+  window.setInterval = (callback, ms) => { timers.set(ms, callback); return 0; };
   const calls = [];
   window.fetch = async (path, options = {}) => {
     calls.push({path, options, body: options.body ? JSON.parse(options.body) : null});
@@ -40,13 +43,14 @@ async function setup(t, records, handler, savedStorage = {}) {
   window.document.write(source('index.html'));
   window.HTMLElement.prototype.scrollTo = function ({left = 0, top = 0}) { this.scrollLeft = left; this.scrollTop = top; };
   window.HTMLElement.prototype.scrollIntoView = function () {};
-  window.eval(source('dropdown.js') + '\n' + source('app.js'));
+  window.eval(source('dropdown.js') + '\n' + source('research-graph.js') + '\n' + source('app.js'));
   await settle();
   const $ = (id) => window.document.getElementById(id);
   const switchRun = (id) => [...$('run-list').querySelectorAll('button')].find((button) => button.textContent.includes(`研究 ${id}`)).click();
   const input = (id, value) => { $(id).value = value; $(id).dispatchEvent(new window.Event('input', {bubbles: true})); };
   const submit = (id) => $(id).dispatchEvent(new window.Event('submit', {bubbles: true, cancelable: true}));
-  return {window, $, calls, switchRun, input, submit};
+  const poll = async () => { await timers.get(1500)(); await settle(); };
+  return {window, $, calls, switchRun, input, submit, poll};
 }
 
 test('research groups collapse, persist across navigation and reload, and share mobile selection', async (t) => {
@@ -101,7 +105,7 @@ test('collaboration selection saves before start, stays per run, and locks histo
   const ui = await setup(t, records, (path, options) => {
     if (path === '/api/runs/a/collaboration' && options.method === 'POST') {
       const selection = JSON.parse(options.body);
-      records.a.collaboration = {...selection, label: '旧版协作流程', editable: true, manifest: null};
+      records.a.collaboration = {...selection, label: 'pass@k + RSI 协调', editable: true, manifest: null};
       return Promise.resolve(response(records.a));
     }
   });
@@ -116,22 +120,24 @@ test('collaboration selection saves before start, stays per run, and locks histo
   assert.match(ui.$('collaboration-summary').textContent, /已锁定/);
   assert.match(ui.$('collaboration-status').textContent, /历史研究/);
   ui.switchRun('a'); await settle();
-  assert.match(ui.$('collaboration-mode-trigger').textContent, /旧版协作/);
+  assert.match(ui.$('collaboration-mode-trigger').textContent, /RSI 协调/);
   ui.submit('collaboration-form'); await settle();
-  assert.deepEqual(ui.calls.find((call) => call.path.endsWith('/collaboration')).body, {mode: 'collaborative', modules: []});
+  assert.deepEqual(ui.calls.find((call) => call.path.endsWith('/collaboration')).body, {mode: 'passk', modules: ['leader_guidance']});
   assert.equal(ui.$('save-collaboration').disabled, true);
   ui.$('reuse-collaboration').click();
-  assert.match(ui.$('create-collaboration-mode-trigger').textContent, /旧版协作/);
+  assert.match(ui.$('create-collaboration-mode-trigger').textContent, /RSI 协调/);
 });
 
 test('creation sends the selected recipe and registered modules appear without frontend edits', async (t) => {
   let submitted;
   const records = {a: run('a')};
   const module = {id: 'test_evidence', label: '测试模块', version: '1', description: '仅测试注册入口', modes: ['passk'], requires: [], conflicts: []};
+  const presets = [...collaborationCatalog.modes.map((mode) => ({...mode, mode: mode.id, modules: []})),
+    {id: 'guided', label: 'pass@k + RSI 协调', mode: 'passk', modules: [module.id]}];
   const ui = await setup(t, records, (path, options) => {
     if (path === '/api/bootstrap') return Promise.resolve(response({
       csrf_token: 'test', default_model_settings: defaults, models: [],
-      collaboration_catalog: {...collaborationCatalog, modules: [module]},
+      collaboration_catalog: {...collaborationCatalog, modules: [module], presets},
       default_collaboration: {mode: 'passk', modules: []},
     }));
     if (path === '/api/runs' && options.method === 'POST') {
@@ -143,10 +149,55 @@ test('creation sends the selected recipe and registered modules appear without f
   ui.$('new-run').click();
   assert.match(ui.$('create-collaboration-mode-trigger').textContent, /pass@k/);
   assert.equal(ui.$('create-collaboration-mode-options').closest('dialog'), ui.$('create-dialog'));
-  const checkbox = ui.$('create-collaboration-modules').querySelector('input');
-  checkbox.click();
+  ui.$('create-collaboration-mode-trigger').click();
+  ui.$('create-collaboration-mode-options').querySelectorAll('[role="option"]')[1].click();
+  assert.equal(ui.$('create-collaboration-modules').querySelector('input').checked, true);
   ui.submit('create-form'); await settle();
   assert.deepEqual(submitted.collaboration, {mode: 'passk', modules: ['test_evidence']});
+});
+
+test('new studies default to v0.2.2 and can select v0.2.1 with its original modules', async (t) => {
+  const base = {id: 'leader_guidance', label: 'RSI 协调', version: '3', modes: ['passk'], requires: []};
+  const prompt = {id: 'leader_guidance_v022', label: 'v0.2.2 Leader Prompt', version: '1', modes: ['passk'], requires: [base.id]};
+  const presets = [
+    {id: 'passk', label: '纯 pass@k', mode: 'passk', modules: []},
+    {id: 'passk_guided', label: 'v0.2.1 · pass@k + RSI 协调', mode: 'passk', modules: [base.id]},
+    {id: 'passk_guided_v022', label: 'v0.2.2 · pass@k + RSI 协调', mode: 'passk', modules: [base.id, prompt.id]},
+  ];
+  const records = {a: run('a')};
+  const ui = await setup(t, records, (path, options) => {
+    if (path === '/api/bootstrap') return Promise.resolve(response({
+      csrf_token: 'test', default_model_settings: defaults, models: [],
+      collaboration_catalog: {modes: [collaborationCatalog.modes[0]], modules: [base, prompt], presets},
+      default_collaboration: {mode: 'passk', modules: [base.id, prompt.id]},
+    }));
+    if (path === '/api/runs' && options.method === 'POST') {
+      records.new = run('new');
+      return Promise.resolve(response(records.new));
+    }
+  });
+  ui.$('new-run').click();
+  assert.match(ui.$('create-collaboration-mode-trigger').textContent, /v0\.2\.2/);
+  assert.equal(ui.$('create-collaboration-modules').querySelector('input').disabled, true);
+  ui.$('create-collaboration-mode-trigger').click();
+  ui.$('create-collaboration-mode-options').querySelectorAll('[role="option"]')[1].click();
+  assert.match(ui.$('create-collaboration-mode-trigger').textContent, /v0\.2\.1/);
+  ui.submit('create-form'); await settle();
+  assert.deepEqual(ui.calls.find((call) => call.path === '/api/runs' && call.options.method === 'POST').body.collaboration,
+    {mode: 'passk', modules: [base.id]});
+});
+
+test('retired collaboration stays viewable without execution or reuse controls', async (t) => {
+  const record = run('archived', 'paused');
+  record.collaboration = {mode: 'collaborative', modules: [], label: '旧版协作（仅供查看）', supported: false, editable: false};
+  record.model_settings.editable = false;
+  const ui = await setup(t, {archived: record});
+  assert.equal(ui.$('objective').textContent, '研究 archived');
+  for (const id of ['start', 'pause', 'resume', 'reuse-collaboration']) assert.equal(ui.$(id).hidden, true);
+  assert.equal(ui.$('stop').hidden, false);
+  assert.equal(ui.$('chat-input').disabled, true);
+  assert.equal(ui.$('collaboration-mode-trigger').disabled, true);
+  assert.match(ui.$('collaboration-summary').textContent, /仅供查看/);
 });
 
 test('switching runs uses cached views and rejects a late response from the previous run', async (t) => {
@@ -225,7 +276,27 @@ test('progress reports do not stop node clocks; stopped nodes show best and full
   card.click();
   assert.match(ui.$('node-panel').textContent, /本轮历时 59 分 33 秒/);
   assert.match(ui.$('node-panel').textContent, /结束时尚未送达 RSI/);
-  assert.match(ui.$('node-panel').textContent, /本节点最佳有效成绩/);
+  assert.match(ui.$('node-panel').textContent, /本次探索最佳有效成绩/);
+});
+
+test('personal effective budget stays separate from setup time and refreshes without a new report', async (t) => {
+  const record = run('a', 'running');
+  record.started_at = '2026-09-18T09:00:00Z';
+  record.agents.push({agent_id: 'researcher', direction: '独立探索', state: 'running'});
+  record.nodes = [{iteration_id: 'node1', agent_id: 'researcher', state: 'running', created_at: record.started_at}];
+  const budget = {started_at: '2026-09-18T09:29:00Z', effective_seconds: 1680, limit_seconds: 3600,
+    remaining_effective_seconds: 1920, gpu_queue_seconds: 0, api_wait_seconds: 0};
+  record.budget = {clock: 'baseline-active-v1', researchers: {researcher: budget}};
+  const ui = await setup(t, {a: record});
+  const card = () => ui.$('graph-canvas').querySelector('[data-node="node1"]');
+  assert.match(card().textContent, /有效 28.0 \/ 60 分钟/);
+  card().click();
+  assert.match(ui.$('node-panel').textContent, /剩余 32.0 分钟/);
+  assert.equal(ui.$('node-panel').querySelector('[data-elapsed-start]').dataset.elapsedStart, budget.started_at);
+  budget.effective_seconds += 60; budget.remaining_effective_seconds -= 60;
+  await ui.poll();
+  assert.match(card().textContent, /有效 29.0 \/ 60 分钟/);
+  assert.match(ui.$('node-panel').textContent, /剩余 31.0 分钟/);
 });
 
 test('chat displays pending messages, reuses their IDs on retry, then waits for the agent', async (t) => {
@@ -296,4 +367,39 @@ test('creation configures the first conversation and modal dropdowns stay intera
   assert.equal(ui.$('create-dialog').open, false);
   assert.equal(ui.$('create-api-key').value, '');
   assert.equal(ui.$('objective').textContent, '研究 new');
+});
+
+test('agent timeline grows down and shares use distinct reserved rows with inspectable provenance', async (t) => {
+  const record = run('graph', 'stopped');
+  record.finished_at = '2026-09-18T10:00:00Z';
+  record.agents = [{agent_id: 'rsi', state: 'stopped'}, ...['a', 'b', 'c'].map((id) => ({agent_id: id, direction: `研究员 ${id}`, state: 'stopped'}))];
+  record.nodes = ['a', 'b', 'c'].map((id) => ({iteration_id: `node-${id}`, agent_id: id, created_at: '2026-09-18T09:00:00Z', state: 'cancelled', reports: []}));
+  const reference = {agent_id: 'a', uri: 'run://graph/reports/report-a.json', summary: '原始发现'};
+  record.communications = [
+    {message_id: 'share1', sender: 'rsi', recipient: 'c', created_at: '2026-09-18T09:10:00Z', text: '独立验证 A 的发现', sources: [reference], references: [{uri: reference.uri}], delivery_status: 'delivered'},
+    {message_id: 'share2', sender: 'rsi', recipient: 'b', created_at: '2026-09-18T09:10:01Z', text: '另一条可尝试的建议', sources: [reference], references: [{uri: reference.uri}], delivery_status: 'pending'},
+    {message_id: 'advice', sender: 'rsi', recipient: 'b', created_at: '2026-09-18T09:11:00Z', text: '没有明确来源的建议', sources: [], references: [], delivery_status: 'delivered'},
+  ];
+  const ui = await setup(t, {graph: record});
+  assert.equal(ui.$('node-count').textContent, '3');
+  assert.equal(ui.$('graph-canvas').querySelectorAll('.agent-lane').length, 4);
+  assert.equal(ui.$('graph-canvas').querySelectorAll('.peer-sharing').length, 2);
+  assert.equal(ui.$('graph-canvas').querySelectorAll('.leader-advice').length, 1);
+  const event = (id) => ui.$('graph-canvas').querySelector(`[data-event="message:${id}"]`);
+  assert.ok(parseFloat(event('share1').style.top) < parseFloat(event('share2').style.top));
+  assert.ok(parseFloat(event('share2').style.top) < parseFloat(event('advice').style.top));
+  // No intermediate agent card occupies the cross-lane route's row.
+  const y = parseFloat(event('share1').style.top);
+  assert.equal([...ui.$('graph-canvas').querySelectorAll('.timeline-event')].filter((card) => parseFloat(card.style.top) === y).length, 1);
+  event('share1').click();
+  assert.equal(ui.$('graph-detail').hidden, false);
+  assert.match(ui.$('graph-detail').textContent, /原始发现/);
+  assert.match(ui.$('graph-detail').textContent, /run:\/\/graph\/reports\/report-a.json/);
+  event('share2').click();
+  assert.match(ui.$('graph-detail').textContent, /结束时未送达/);
+  ui.$('graph-sharing').click();
+  assert.equal(ui.$('graph-canvas').querySelectorAll('.event-start').length, 0);
+  assert.equal(ui.$('graph-canvas').querySelectorAll('.event-share').length, 2);
+  const paths = [...ui.$('graph-canvas').querySelectorAll('.peer-sharing')].map((path) => path.getAttribute('d'));
+  assert.equal(new Set(paths).size, 2);
 });

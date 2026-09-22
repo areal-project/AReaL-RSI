@@ -15,6 +15,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from areal_rsi.base.paths import data_root
 from areal_rsi.base.storage import new_id, safe_name, write_json
 
 REPOSITORY = Path(__file__).resolve().parents[3]
@@ -73,12 +74,12 @@ def ensure_workbench(port: int, root: Path | None = None) -> tuple[WorkbenchClie
             info = client.bootstrap()
         except (OSError, ValueError) as exc:
             raise ValueError(f"端口 {port} 已被占用，无法复用：{exc}") from None
-        if root is not None and Path(info["data_root"]).resolve() != root.resolve():
+        if root is not None and Path(info["data_root"]).resolve() != data_root(root):
             raise ValueError(
                 "已有 RSI 工作台使用另一个数据目录；省略 --data-root 复用它，或指定其他端口"
             )
         return client, info
-    directory = (root or Path(os.environ.get("RSI_DATA_ROOT") or ".rsi/research-lab")).resolve()
+    directory = data_root(root)
     runtime = directory / "runtime"
     runtime.mkdir(parents=True, exist_ok=True)
     log = runtime / f"workbench-{port}.log"
@@ -106,7 +107,7 @@ def ensure_workbench(port: int, root: Path | None = None) -> tuple[WorkbenchClie
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="启动 RSI 工作台或 KernelBench 八题 demo")
+    parser = argparse.ArgumentParser(description="启动 RSI 工作台或 KernelBench 单题 pass@k demo")
     parser.add_argument("--type", choices=("web", "demo"), default="web")
     parser.add_argument("--port", type=int, default=8197)
     parser.add_argument("--data-root", type=Path, help="新服务的数据目录；复用时必须一致")

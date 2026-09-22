@@ -11,11 +11,13 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from areal_rsi.api.base import AgentState, RecordRef, RunState
-from areal_rsi.api.research import CandidateSnapshot, EvidenceRecord, TaskBrief, VerifiedResult
+from areal_rsi.api.research import CandidateSnapshot, EvidenceRecord, VerifiedResult
 from areal_rsi.base.storage import decode, encode, now, safe_name, safe_relative, write_json
+from areal_rsi.coordination.brief_tool import brief_tool, updated_brief
+from areal_rsi.coordination.config import config_from_dict
 from areal_rsi.coordination.coordinator import Coordinator, effect_id
 from areal_rsi.coordination.views import model_state, record_preview
-from areal_rsi.modules.responses import ToolCall, ToolHandler, ToolResult
+from areal_rsi.modules.agent_runtime import ToolCall, ToolHandler, ToolResult
 
 STRING = {"type": "string"}
 RECORD_CATEGORIES = (
@@ -252,14 +254,6 @@ INTERACTION = [
         message=STRING,
     ),
     definition("ask_user", "向用户提出简短的问题，然后结束本回合。", question=STRING),
-    definition(
-        "update_brief",
-        "启动前更新需求。先读取 get_state；brief_json 包含"
-        "objective、instructions、limits 和可为空的"
-        "verification，保留未修改字段。verification 的字段为 metric、direction、target、"
-        "description、identity；详细任务与评测要求写进 instructions 或 description。",
-        brief_json=STRING,
-    ),
 ]
 
 
@@ -316,6 +310,7 @@ class ResearchActions:
             tool
             for tool in [
                 *common,
+                *([brief_tool(self.c.state.get("mode", "passk"))] if role == "interaction" else []),
                 *{"rsi": RSI, "interaction": INTERACTION, "research": RESEARCH}[role],
                 *(tool for tool, _, roles in self.extras.values() if role in roles),
             ]
@@ -768,17 +763,21 @@ class ResearchActions:
         if name == "update_brief":
             if c.state["status"] != "planned":
                 raise ValueError("Hard constraints are frozen after start; discuss a new run")
-            brief = decode(TaskBrief, json.loads(args["brief_json"]))
+            brief = updated_brief(c.state.get("mode", "passk"), c.store.brief(), args)
+            config_path = c.store.root / "coordination" / "config.json"
+            config = None
+            if "intake" in c.state:
+                config = json.loads(config_path.read_text())
+                config["brief"] = encode(brief)
+                # Validate the combined configuration before changing any durable record.
+                config_from_dict(config)
             run = c.store.run()
             run.brief_ref = c.store.put("briefs", key, brief)
             run.plan.goal = brief.objective
             run.plan.max_iterations = brief.limits.max_nodes
             run.plan.research_agent_count = brief.limits.max_agents
             c.store.save_run(run)
-            if "intake" in c.state:
-                config_path = c.store.root / "coordination" / "config.json"
-                config = json.loads(config_path.read_text())
-                config["brief"] = encode(brief)
+            if config is not None:
                 write_json(config_path, config)
                 c.state["intake"].update(status="discussing", prepared_at=None)
                 c.save()

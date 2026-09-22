@@ -1,7 +1,7 @@
 """RSI sessions backed by the public ARealAgentRuntime Python package.
 
-Each conversation owns an embedded composition in a sandboxed Python process.
-The process boundary protects RSI's hidden evaluation data from native tools.
+Each conversation owns an embedded composition in a separate Python process.
+macOS uses a sandbox; trusted Linux deployments can explicitly disable isolation.
 """
 
 from __future__ import annotations
@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
+import ipaddress
 import json
 import os
 import shutil
@@ -19,9 +20,13 @@ from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
+
+import certifi
 
 from areal_rsi.api.base import AgentSpec, Trajectory, TrajectoryRef
 from areal_rsi.base.storage import FileContentStore, FileTrajectoryStore, new_id, now, safe_name
+from areal_rsi.modules.runtime_network import HttpsTunnel
 
 
 class RuntimeSettings:
@@ -59,9 +64,11 @@ class RuntimeSettings:
         check_secrets(value)
         if set(value) - {"default", "roles", "readable_paths"}:
             raise ValueError("Runtime config only accepts default, roles, readable_paths")
+        self.isolation = os.environ.get("RSI_RUNTIME_ISOLATION", "sandbox")
+        validate_isolation(self.isolation)
         self.default = value.get("default", {"kind": "dsh", "config": {}})
         self.roles = value.get("roles", {})
-        if set(self.roles) - {"rsi-agent", "research-agent", "task-agent"}:
+        if set(self.roles) - {"rsi-agent", "research-agent", "task-agent", "interaction-agent"}:
             raise ValueError("Unknown Runtime role")
         self.readable_paths = tuple(
             Path(p).expanduser().resolve() for p in value.get("readable_paths", [])
@@ -69,39 +76,17 @@ class RuntimeSettings:
         provenance = Path(__file__).parents[1] / "resources/runtime/provenance.json"
         self.identity = hashlib.sha256(
             json.dumps(
-                {"runtime": value, "state_backend": "rsi-runtime-journal-v1", "event_sinks": []},
+                {
+                    "runtime": value,
+                    **({"isolation": self.isolation} if self.isolation != "sandbox" else {}),
+                    "state_backend": "rsi-runtime-journal-v1",
+                    "event_sinks": [],
+                },
                 sort_keys=True,
             ).encode()
             + provenance.read_bytes()
         ).hexdigest()
 
-    @classmethod
-    def from_environment(cls) -> RuntimeSettings:
-        from areal_rsi.experiment_config import configured_research_harness
-
-        path = os.environ.get("RSI_RUNTIME_CONFIG")
-        value = json.loads(Path(path).expanduser().read_text()) if path else {}
-        harness = configured_research_harness()
-        if harness:
-            if not isinstance(value, dict):
-                raise ValueError("Runtime config must be an object")
-            roles = value.setdefault("roles", {})
-            if not isinstance(roles, dict):
-                raise ValueError("Runtime roles must be an object")
-            for role in ("rsi-agent", "research-agent"):
-                selected = roles.get(role, value.get("default", {}))
-                # Preserve backend-specific settings only when the selected kind matches.
-                if isinstance(selected, dict) and selected.get("kind") == harness:
-                    selected = copy.deepcopy(selected)
-                else:
-                    selected = {"kind": harness, "config": {}}
-                config = selected.setdefault("config", {})
-                if not isinstance(config, dict):
-                    raise ValueError("Runtime backend config must be an object")
-                if harness == "codex-cli":
-                    config.setdefault("modelProtocol", "responses")
-                roles[role] = selected
-        return cls(value)
 
     def select(self, role: str) -> dict[str, Any]:
         role = "research-agent" if role.startswith("research-agent-") else role
@@ -129,14 +114,39 @@ class RuntimeSettings:
         return result
 
 
+def validate_isolation(mode: str) -> None:
+    if mode not in {"sandbox", "linux-unrestricted"}:
+        raise ValueError("RSI_RUNTIME_ISOLATION must be sandbox or linux-unrestricted")
+    if mode == "linux-unrestricted" and sys.platform != "linux":
+        raise RuntimeError("linux-unrestricted mode is only supported on Linux")
+
+
 def sandbox_command(
     directory: Path,
     workspace: Path,
     readable: tuple[Path, ...],
     executable_aliases: tuple[Path, ...] = (),
+    local_ports: tuple[int, ...] | None = (),
+    service_ports: tuple[int, ...] = (),
+    *,
+    isolation: str = "sandbox",
 ) -> list[str]:
+    validate_isolation(isolation)
+    worker = [
+        sys.executable,
+        "-I",
+        "-c",
+        "import runpy,sys;sys.path.insert(0,sys.argv.pop(1));"
+        "runpy.run_module('areal_rsi.modules.runtime_worker',run_name='__main__')",
+        str(directory / "worker-code"),
+    ]
+    if isolation == "linux-unrestricted":
+        return worker
     if sys.platform != "darwin":
-        raise RuntimeError("RSI package worker currently requires macOS sandbox-exec")
+        raise RuntimeError(
+            "Agent sandbox requires macOS sandbox-exec; on trusted Linux hosts explicitly set "
+            "RSI_RUNTIME_ISOLATION=linux-unrestricted (no filesystem or process isolation)"
+        )
     # Installed packages are readable, experiment data is not. No source checkout is granted.
     roots = {
         directory.resolve(),
@@ -145,14 +155,42 @@ def sandbox_command(
         Path(sys.base_prefix).resolve(),
         Path(sys.executable).resolve().parent,
         *readable,
+        *(
+            Path(p)
+            for p in (
+                "/System",
+                "/usr",
+                "/bin",
+                "/sbin",
+                "/Library",
+                "/opt/homebrew",
+                "/private/etc",
+                "/private/var/db/timezone",
+                "/dev",
+            )
+        ),
     }
     profile = [
         "(version 1)",
         "(allow default)",
-        '(deny file-read* (subpath "/Users") (subpath "/private/tmp") '
-        '(subpath "/private/var/folders"))',
+        "(deny file-read*)",
+        '(allow file-read* (literal "/"))',
+        '(allow file-read-metadata (literal "/etc") (literal "/var") (literal "/tmp"))',
         "(deny file-write*)",
+        "(deny network-outbound)",
+        '(allow network-outbound (remote ip "*:80") (remote ip "*:443"))',
+        # Native shell tools must not bypass run-scoped tools through the
+        # workbench, another agent's bridge, or a local filesystem service.
+        '(allow network-outbound (literal "/private/var/run/mDNSResponder"))',
+        '(deny mach-lookup (global-name "com.apple.SystemConfiguration.configd"))',
     ]
+    for port in service_ports:
+        profile.append(f'(allow network-outbound (remote ip "*:{port}"))')
+    profile.append('(deny network-outbound (remote ip "localhost:*"))')
+    if local_ports is None:
+        profile.append('(allow network-outbound (remote ip "localhost:*"))')
+    for port in local_ports or ():
+        profile.append(f'(allow network-outbound (remote ip "localhost:{port}"))')
     for path in sorted(roots):
         profile.append(f"(allow file-read* (subpath {json.dumps(str(path))}))")
     # The installed RSI package includes benchmark/verifier code and hidden
@@ -185,12 +223,7 @@ def sandbox_command(
         "/usr/bin/sandbox-exec",
         "-f",
         str(target),
-        sys.executable,
-        "-I",
-        "-c",
-        "import runpy,sys;sys.path.insert(0,sys.argv.pop(1));"
-        "runpy.run_module('areal_rsi.modules.runtime_worker',run_name='__main__')",
-        str(directory / "worker-code"),
+        *worker,
     ]
 
 
@@ -278,7 +311,9 @@ class PackageSession:
             bindings = self.directory / "run-bindings.json"
             if bindings.exists():
                 self.run_ids = json.loads(bindings.read_text())
-            events, _snapshots = read_journal(self.directory / "data/state")
+            events, _snapshots = read_journal(
+                self.directory / "data/state", boundary=self.directory
+            )
             self.events = [
                 event.model_dump(mode="json", by_alias=True)
                 for run_id in self.run_ids
@@ -343,6 +378,7 @@ class PackageAgentRuntime:
         self.agent_directories = agent_directories
         self.mcp_registry: dict[str, dict[str, Any]] = {}
         self.sessions: set[PackageSession] = set()
+        self.https_tunnel = HttpsTunnel(base_url)
 
     async def open(
         self,
@@ -353,6 +389,7 @@ class PackageAgentRuntime:
         research_tools: dict[str, Any] | None = None,
         codex_config: dict[str, Any] | None = None,
         context_window_tokens: int | None = None,
+        reasoning_effort: str | None = None,
     ) -> PackageSession:
         if agent.runtime not in {"areal-agent-runtime@v1", "deepseek-harness@v1"}:
             raise ValueError(f"Unknown RSI Runtime binding: {agent.runtime}")
@@ -379,6 +416,8 @@ class PackageAgentRuntime:
             "runtime_storage.schema.json",
             "runtime_tools.py",
             "runtime_tools.schema.json",
+            "runtime_workspace.py",
+            "runtime_workspace.schema.json",
         ):
             shutil.copyfile(Path(__file__).parent / name, modules / name)
         workspace = Path(workspace_root).resolve() if workspace_root else directory / "workspace"
@@ -419,6 +458,7 @@ class PackageAgentRuntime:
             raise ValueError(f"Unknown MCP servers: {missing_mcp}")
         config = {
             "runtime": selection,
+            "isolation": self.settings.isolation,
             "directory": str(directory),
             "workspace": str(workspace),
             "agent_id": agent.agent_id,
@@ -449,6 +489,8 @@ class PackageAgentRuntime:
             tool_manifest = directory / "research-tools.json"
             tool_manifest.write_text(json.dumps(research_tools))
             tool_manifest.chmod(0o600)
+        if reasoning_effort is not None:
+            config["reasoning_effort"] = reasoning_effort
         if codex_config is not None:
             config["codex_config"] = codex_config
         if context_window_tokens is not None:
@@ -463,6 +505,22 @@ class PackageAgentRuntime:
             if key
             in {"PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR"}
         }
+        if self.settings.isolation == "linux-unrestricted":
+            for name in (
+                "HTTP_PROXY",
+                "HTTPS_PROXY",
+                "ALL_PROXY",
+                "NO_PROXY",
+                "http_proxy",
+                "https_proxy",
+                "all_proxy",
+                "no_proxy",
+            ):
+                if name in os.environ:
+                    env[name] = os.environ[name]
+            # Node's native fetch needs an explicit opt-in to use these proxies.
+            env["NODE_USE_ENV_PROXY"] = "1"
+            env["SHELL"] = "/bin/bash"
         auth_name = selection.get("config", {}).get("authTokenEnv")
         if auth_name:
             if auth_name not in os.environ:
@@ -486,22 +544,67 @@ class PackageAgentRuntime:
             RSI_RUNTIME_KEY=self.api_key,
             DSH_TELEMETRY_DISABLED="1",
         )
+        if self.settings.isolation == "sandbox":
+            # A desktop/system proxy could relay requests into other run services.
+            env.update(HTTP_PROXY="", HTTPS_PROXY="", ALL_PROXY="", NO_PROXY="*")
         interpreter = selection.get("config", {}).get("python")
+        if interpreter:
+            # A trusted backend may use a different Python installation. Its
+            # stdlib/shared library must be readable as well as its venv.
+            prefixes = json.loads(await asyncio.to_thread(
+                subprocess.check_output,
+                [interpreter, "-I", "-c",
+                 "import sys,json;print(json.dumps([sys.prefix,sys.base_prefix]))"],
+                text=True, timeout=10,
+            ))
+            readable.extend(Path(prefix).resolve() for prefix in prefixes)
+        local_ports = [research_tools["port"]] if research_tools is not None else []
+        if selection["kind"] == "codex-cli" and self.settings.isolation == "sandbox":
+            # Native TLS/DNS cannot rely on macOS user services inside this
+            # file sandbox. Keep TLS verification and the network boundary.
+            port = await self.https_tunnel.start()
+            local_ports.append(port)
+            env.pop("HTTP_PROXY", None)
+            env.pop("ALL_PROXY", None)
+            env["HTTPS_PROXY"] = f"http://127.0.0.1:{port}"
+            env["NO_PROXY"] = "localhost,127.0.0.1,::1"
+            env.setdefault("SSL_CERT_FILE", certifi.where())
+        service_ports: list[int] = []
+        endpoint = urlsplit(self.base_url)
+        services = [
+            (endpoint.hostname, endpoint.port or (443 if endpoint.scheme == "https" else 80))
+        ]
+        if selection["kind"] == "remote":
+            remote = selection["config"]
+            services.append((remote["host"], remote["port"]))
+        for host, port in services:
+            try:
+                local = ipaddress.ip_address(host or "").is_loopback
+            except ValueError:
+                local = host == "localhost"
+            (local_ports if local else service_ports).append(port)
         command = sandbox_command(
             directory,
             workspace,
             tuple(readable),
             (Path(interpreter),) if interpreter else (),
+            None if selection["kind"] in {"dsh", "claude-code", "claude-agent-sdk"}
+            else tuple(local_ports),
+            tuple(service_ports),
+            isolation=self.settings.isolation,
         )
         if research_tools is not None:
             # Fail before spending model calls if the agent's actual shell cannot
             # write heredocs/tempfiles or resolve its scoped task-tool command.
+            shell_command = (
+                ["/bin/bash", "-ec"]
+                if self.settings.isolation == "linux-unrestricted"
+                else [*command[:3], "/bin/zsh", "-lec"]
+            )
             probe = await asyncio.to_thread(
                 subprocess.run,
                 [
-                    *command[:3],
-                    "/bin/zsh",
-                    "-lec",
+                    *shell_command,
                     "python - <<'PY'\nimport tempfile\n"
                     "with tempfile.TemporaryFile() as f:\n    f.write(b'ok')\nPY\n"
                     "rsi-tools list >/dev/null",
@@ -533,3 +636,4 @@ class PackageAgentRuntime:
 
     async def close(self) -> None:
         await asyncio.gather(*(session.finish() for session in tuple(self.sessions)))
+        await self.https_tunnel.close()

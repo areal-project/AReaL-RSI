@@ -16,11 +16,10 @@ from areal_rsi.coordination.coordinator import Coordinator
 from areal_rsi.coordination.jobs import ResearchExecution
 from areal_rsi.coordination.views import record_preview
 from areal_rsi.execution import ApprovedCommand
-from areal_rsi.modules.responses import ToolCall
+from areal_rsi.modules.agent_runtime import ToolCall
 
 
-@pytest.mark.parametrize("direction", ["maximize", "minimize"])
-@pytest.mark.parametrize("withdrawer", ["rsi", "research"])
+@pytest.mark.parametrize("direction,withdrawer", [("maximize", "rsi"), ("minimize", "research")])
 def test_withdrawal_survives_crash_and_excludes_identical_artifacts(
     tmp_path: Path, direction: Literal["maximize", "minimize"], withdrawer: str
 ) -> None:

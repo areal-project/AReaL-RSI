@@ -33,7 +33,9 @@ Codex 自身不自动采用仓库 `.env`；先确认其 provider 使用你指定
 ## 窗口二：AReaL-RSI TUI
 
 本机 `.env` 的 `RSI_RESEARCH_CONFIG` 已选择
-`.rsi/past-bench/research-hermes-30rounds-v003.json`。重新启动 `./tui` 后粘贴：
+`.rsi/past-bench/research-hermes-30rounds-v003.json`。使用
+`rsi research --config .rsi/past-bench/research-hermes-30rounds-v003.json` 启动；
+以下为旧 TUI 对话记录：
 
 ```text
 现在启动 AReaL-RSI 组实验：使用已准备的 research-hermes-30rounds-v003.json 配置，优化完整 Hermes Harness 在 PAST-Bench 上的表现，完成 30 个不同候选的有效 search 评测，再对冻结的最佳版本做一次 final 确认。请实际调用研究启动工具，不要只给计划，也不要用交互助手代替 Research Agent 手工优化。

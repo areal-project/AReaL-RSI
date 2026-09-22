@@ -26,7 +26,6 @@ def comparison_config(lock: Path, version: Path) -> dict[str, Any]:
     config.brief.objective = "完成 30 轮 Hermes Harness 优化并独立确认 PAST-Bench 表现"
     config.brief.instructions = Path(__file__).with_name("comparison.md").read_text()
     config.brief.limits.max_nodes = 64
-    config.brief.limits.max_model_calls = 4000
     config.brief.limits.max_total_tokens = 50_000_000
     config.brief.limits.max_verify_calls = 38
     config.brief.limits.max_wall_seconds = 172800

@@ -48,10 +48,9 @@ def parser() -> argparse.ArgumentParser:
         "--instructions-file", type=Path, help="Additional user guidance as UTF-8 text"
     )
     result.add_argument("--max-agents", type=int, help="Default: 1")
-    result.add_argument("--max-nodes", type=integer_limit, default=12)
-    result.add_argument("--max-model-calls", type=integer_limit, default=200)
-    result.add_argument("--max-total-tokens", type=integer_limit, default=2_000_000)
-    result.add_argument("--max-verify-calls", type=integer_limit, default=6)
+    result.add_argument("--max-nodes", type=integer_limit, default=None)
+    result.add_argument("--max-total-tokens", type=integer_limit, default=None)
+    result.add_argument("--max-verify-calls", type=integer_limit, default=None)
     result.add_argument("--max-jobs", type=integer_limit, default=1)
     result.add_argument("--max-wall-seconds", type=seconds_limit, default=14400)
     result.add_argument("--base-url", default="https://4ipic.com")
@@ -139,6 +138,13 @@ def describe(
 
 
 def build_config(args: argparse.Namespace) -> ResearchConfig:
+    if any(
+        getattr(args, field) is not None
+        for field in ("max_total_tokens", "max_verify_calls")
+    ):
+        raise ValueError("pass@k 不支持调用次数、Token 或验证次数上限；请使用 --max-wall-seconds")
+    if args.max_wall_seconds is None and args.target is None:
+        raise ValueError("请设置 --max-wall-seconds 或 --target")
     operator_path = absolute_path(args.operator, "--operator")
     executable = absolute_path(args.python, "--python")  # Preserve the venv symlink path.
     if not os.access(executable, os.X_OK):
@@ -184,7 +190,6 @@ def build_config(args: argparse.Namespace) -> ResearchConfig:
     limits = ResearchLimits(
         max_agents=args.max_agents if args.max_agents is not None else 1,
         max_nodes=args.max_nodes,
-        max_model_calls=args.max_model_calls,
         max_total_tokens=args.max_total_tokens,
         max_verify_calls=args.max_verify_calls,
         max_jobs=args.max_jobs,
@@ -265,7 +270,7 @@ def build_config(args: argparse.Namespace) -> ResearchConfig:
         "用 read_job_output_file 查看公开摘要、目标代码与轨迹；这些材料不要写进候选 harness。"
         "从轨迹提取通用改进，安排有针对性的研究，并用可信验证器测量固定候选。"
         "search/final 的原始题目与轨迹不公开。目标模型使用现有 DSH 沙箱；"
-        "默认起点未配置 GPU 开发工具。由 RSI 决定何时进行独立的 final 确认。"
+        "默认起点未配置 GPU 开发工具。探索结束后，系统对最佳候选进行独立的 final 确认。"
     )
     metric = "fast_1"
     if args.instructions_file:
@@ -299,6 +304,7 @@ def build_config(args: argparse.Namespace) -> ResearchConfig:
         metadata={
             "template": example,
             "simulation_only": False,
+            "time_limit_scope": "exploration",
             "evaluate_seed_as_baseline": True,
             "verification_identity": {"adapter": example, "phases": pinned},
             "operator_config": str(operator_path),

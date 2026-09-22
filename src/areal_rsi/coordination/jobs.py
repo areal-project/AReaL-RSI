@@ -16,9 +16,10 @@ from areal_rsi.api.research import CandidateSnapshot, ResearchMessage, VerifiedR
 from areal_rsi.base.storage import decode, encode, now, safe_relative, write_json
 from areal_rsi.coordination.actions import STRING, ResearchActions, definition
 from areal_rsi.coordination.coordinator import effect_id
+from areal_rsi.coordination.effective_time import EffectiveTime
 from areal_rsi.execution import ApprovedCommand, JobManager, JobRecord, JobSpec
 from areal_rsi.execution.progress import read_progress
-from areal_rsi.modules.responses import ToolCall, ToolHandler, ToolResult
+from areal_rsi.modules.agent_runtime import ToolCall, ToolHandler, ToolResult
 
 VerificationReader = Callable[[JobRecord, CandidateSnapshot, str], VerifiedResult]
 INLINE_INSTRUCTIONS_CHARS = 8000
@@ -590,6 +591,7 @@ class ResearchExecution:
             "output_subdir": command.output_subdir,
             "public_output_subdir": command.public_output_subdir,
             "feedback_file": command.feedback_file,
+            "queue_timing_file": command.queue_timing_file,
             "auto_verify_output": command.auto_verify_output if not verification else None,
             "created_at": now(),
             "spec": encode(spec),
@@ -980,6 +982,32 @@ class ResearchExecution:
                 self.manager.cancel(key)
         self.manager.scheduling_enabled = self.c.state["status"] == "running"
         records = self.manager.poll()
+        if limits.max_effective_seconds is not None:
+            timer = EffectiveTime(self.c.state)
+            for record in records:
+                info = self.jobs.get(record.job_id)
+                if info is None or info["verification"]:
+                    continue
+                timer.queue(
+                    info["agent_id"],
+                    "local:" + record.job_id,
+                    record.created_at,
+                    record.started_at or record.finished_at,
+                )
+                if name := info.get("queue_timing_file"):
+                    receipt = Path(info["output"]) / safe_relative(name)
+                    if receipt.is_file():
+                        remote = json.loads(receipt.read_text())
+                        end = remote.get("started_at") or remote.get("finished_at")
+                        if record.finished_at is not None:
+                            # A stale queued receipt cannot outlive its local execution.
+                            end = min(end or record.finished_at, record.finished_at)
+                        timer.queue(
+                            info["agent_id"],
+                            "remote:" + record.job_id,
+                            remote["created_at"],
+                            end,
+                        )
         for record in records:
             info = self.jobs.get(record.job_id)
             if info is None or not record.terminal:

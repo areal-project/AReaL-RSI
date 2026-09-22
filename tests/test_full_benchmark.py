@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from runtime_fakes import CallbackRuntime
 
 from areal_rsi.api.research import ResearchLimits, TaskBrief, VerificationContract, VerifiedResult
 from areal_rsi.base.storage import now, write_json
@@ -20,7 +21,7 @@ from areal_rsi.coordination.coordinator import Coordinator
 from areal_rsi.coordination.jobs import ResearchExecution
 from areal_rsi.coordination.verification import read_trusted_result
 from areal_rsi.execution import ApprovedCommand
-from areal_rsi.modules.responses import ResponsesConfig, ResponsesRuntime, ToolCall
+from areal_rsi.modules.agent_runtime import ToolCall, TurnResult
 from areal_rsi.research_app import ResearchApp
 
 
@@ -350,8 +351,6 @@ def test_failed_baseline_pauses_without_automatic_retry(tmp_path: Path) -> None:
 
 
 def test_app_imports_baseline_before_any_model_turn(tmp_path: Path) -> None:
-    from test_research_intake import IdleTransport
-
     async def scenario() -> None:
         seed = tmp_path / "seed"
         seed.mkdir()
@@ -394,17 +393,15 @@ def test_app_imports_baseline_before_any_model_turn(tmp_path: Path) -> None:
         assert config.metadata["full_baseline_source"] == str(tmp_path / "baseline.json")
         requests: list[bool] = []
 
-        class Transport(IdleTransport):
-            async def request(self, config: Any, payload: Any, sink: Any) -> dict[str, Any]:
-                requests.append(bool(c.state.get("full_baseline_ready")))
-                return await super().request(config, payload, sink)
+        async def turn(session: Path, delivery: dict[str, Any]) -> TurnResult:
+            requests.append(bool(c.state.get("full_baseline_ready")))
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
 
         app = ResearchApp(
             tmp_path / "data",
             config=config,
-            runtime_factory=lambda _: ResponsesRuntime(
-                ResponsesConfig(base_url="https://example.test", api_key="test"), Transport()
-            ),
+            runtime_factory=lambda _: CallbackRuntime(turn),
         )
         try:
             detail = await app.create({})

@@ -49,13 +49,14 @@ class AgentConfig:
         for source in (self.prompt, self.skills):
             if source and not Path(source).is_absolute():
                 raise ValueError("Direct API research method paths must be absolute")
-        from areal_rsi.agents.research.prompt import PROMPT as RESEARCH_PROMPT
-        from areal_rsi.agents.rsi.prompt import PROMPT as RSI_PROMPT
+        from areal_rsi.coordination.collaboration import build_plan
+
+        plan = build_plan("passk")
 
         result = MethodSnapshot(
             prompt=default_prompt
             if default_prompt is not None
-            else {"research": RESEARCH_PROMPT, "rsi": RSI_PROMPT}[role]
+            else {"research": plan.research_prompt, "rsi": plan.rsi_prompt}[role]
         )
         total = 0
 

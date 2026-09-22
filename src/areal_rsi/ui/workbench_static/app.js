@@ -32,6 +32,7 @@ const state = {
   graphRunId: null,
   graphZoom: 1,
   graphAllJobs: false,
+  graphCollaborationOnly: false,
   detailNodeId: null,
   refreshSequence: 0,
   latestAppliedSequence: 0,
@@ -43,7 +44,7 @@ const state = {
   modelFormRun: null,
   modelSavingRun: null,
   collaborationCatalog: {modes: [], modules: []},
-  defaultCollaboration: {mode: "collaborative", modules: []},
+  defaultCollaboration: {mode: "passk", modules: []},
   collaborationDrafts: new Map(),
   collaborationSavingRun: null,
 };
@@ -80,25 +81,34 @@ const effortDropdown = new WorkbenchDropdown($("reasoning-effort"), {
   label: "推理强度",
   onChange: (value) => { modelDraft().reasoning_effort = value; renderModelSettings(); },
 });
-const backendOptions = [{value: "standard", text: "standard"}, {value: "codex", text: "codex"}];
+const backendOptions = [{value: "standard", text: "standard"}, {value: "codex", text: "codex"}, {value: "runtime", text: "Runtime 配置"}];
 const backendDropdown = new WorkbenchDropdown($("agent-backend"), {
   label: "Agent 后端", onChange: (value) => { modelDraft().backend = value; renderModelSettings(); },
 });
 
 const collaborationDropdown = new WorkbenchDropdown($("collaboration-mode"), {
   label: "基础流程", onChange: (mode) => {
-    state.collaborationDrafts.set(state.runId, {mode, modules: []});
+    state.collaborationDrafts.set(state.runId, selectCollaborationPreset(mode));
     renderCollaboration();
   },
 });
 const createCollaborationDropdown = new WorkbenchDropdown($("create-collaboration-mode"), {
   label: "协作方式", onChange: (mode) => {
-    state.createCollaboration = {mode, modules: []};
+    state.createCollaboration = selectCollaborationPreset(mode);
     renderCreateCollaboration();
   },
 });
 function collaborationSelection(value) {
   return {mode: value.mode, modules: [...(value.modules || [])].sort()};
+}
+function collaborationPresets() {
+  return state.collaborationCatalog.presets || state.collaborationCatalog.modes.map((mode) => ({...mode, mode: mode.id, modules: []}));
+}
+function selectCollaborationPreset(id) {
+  return collaborationSelection(collaborationPresets().find((preset) => preset.id === id));
+}
+function matchingCollaborationPreset(selection) {
+  return collaborationPresets().find((preset) => JSON.stringify(collaborationSelection(preset)) === JSON.stringify(collaborationSelection(selection)));
 }
 function collaborationChanged() {
   const draft = state.collaborationDrafts.get(state.runId), saved = state.run?.collaboration;
@@ -106,8 +116,9 @@ function collaborationChanged() {
 }
 function renderCollaborationFields(prefix, dropdown, selection, disabled, onChange) {
   const catalog = state.collaborationCatalog;
-  dropdown.update(catalog.modes.map((mode) => ({value: mode.id, text: mode.label})), selection.mode, disabled);
-  $(`${prefix}description`).textContent = catalog.modes.find((mode) => mode.id === selection.mode)?.description || "";
+  const preset = matchingCollaborationPreset(selection);
+  dropdown.update(collaborationPresets().map((item) => ({value: item.id, text: item.label})), preset?.id || selection.mode, disabled);
+  $(`${prefix}description`).textContent = preset?.description || catalog.modes.find((mode) => mode.id === selection.mode)?.description || "";
   const container = $(`${prefix}modules`);
   container.replaceChildren();
   const modules = catalog.modules.filter((module) => module.modes.includes(selection.mode));
@@ -118,10 +129,13 @@ function renderCollaborationFields(prefix, dropdown, selection, disabled, onChan
     input.type = "checkbox";
     input.value = module.id;
     input.checked = selection.modules.includes(module.id);
-    input.disabled = disabled;
+    input.disabled = disabled || modules.some((item) => selection.modules.includes(item.id) && (item.requires || []).includes(module.id));
     input.addEventListener("change", () => {
       const selected = new Set(selection.modules);
-      if (input.checked) selected.add(module.id); else selected.delete(module.id);
+      if (input.checked) {
+        selected.add(module.id);
+        for (const dependency of module.requires || []) selected.add(dependency);
+      } else selected.delete(module.id);
       onChange({mode: selection.mode, modules: [...selected].sort()});
     });
     const description = element("span", "", `${module.label} · v${module.version}`);
@@ -141,7 +155,12 @@ function renderCollaboration() {
   if (!saved.editable) state.collaborationDrafts.delete(state.runId);
   const draft = state.collaborationDrafts.get(state.runId) || collaborationSelection(saved);
   const disabled = !saved.editable || !!state.collaborationSavingRun || state.busy;
-  $("collaboration-summary").textContent = [saved.label || saved.mode, ...(saved.modules || []), saved.editable ? "启动前可修改" : "已锁定"].join(" · ");
+  const currentVersion = !saved.manifest || (saved.manifest.modules || []).every((recorded) =>
+    state.collaborationCatalog.modules.some((module) => module.id === recorded.id && module.version === recorded.version));
+  const label = currentVersion
+    ? matchingCollaborationPreset(saved)?.label || [saved.label || saved.mode, ...(saved.modules || [])].join(" + ")
+    : `${saved.mode} · 历史协作版本`;
+  $("collaboration-summary").textContent = [label, saved.editable ? "启动前可修改" : "已锁定"].join(" · ");
   renderCollaborationFields("collaboration-", collaborationDropdown, draft, disabled, (selection) => {
     state.collaborationDrafts.set(state.runId, selection); renderCollaboration();
   });
@@ -151,6 +170,7 @@ function renderCollaboration() {
       element("p", "muted", `${id} · ${recorded.has(id) ? `v${recorded.get(id)}` : "历史版本未记录"}`))
       : [element("p", "muted", "未启用附加模块。")]) );
   }
+  $("reuse-collaboration").hidden = saved.supported === false;
   $("save-collaboration").hidden = !saved.editable;
   $("save-collaboration").disabled = disabled || !collaborationChanged();
   $("save-collaboration").textContent = state.collaborationSavingRun === state.runId ? "保存中…" : "保存协作配置";
@@ -358,6 +378,8 @@ function elapsed(start, end, className = "") {
   return text;
 }
 function nodeTimes(run, node) {
+  const budget = run.budget?.researchers?.[node.agent_id];
+  if (budget?.started_at) return [budget.started_at, budget.finished_at || run.finished_at];
   const start = node.created_at || node.assignment?.created_at;
   const end = (!activeNode(node) ? node.updated_at || node.report?.created_at : null) || run.finished_at;
   return [start, end];
@@ -658,33 +680,20 @@ function render() {
   $("stop").hidden = !["planned", "running", "paused"].includes(run.status)
     && run.finalization?.status !== "running";
   $("stop").textContent = run.status === "planned" ? "结束对话" : "停止";
+  if (run.collaboration?.supported === false) {
+    for (const id of ["start", "pause", "resume"]) $(id).hidden = true;
+  }
   $("delete-run").disabled = state.busy || state.sending.has(run.run_id) || !!state.modelSavingRun;
   $("delete-run").title = deletionBlocked(run) ? "请先停止研究再删除" : "删除这项研究的本地记录";
   $("best-score").textContent = score(run.best?.score);
-  $("best-caption").textContent = run.best
-    ? `${run.brief?.verification?.metric || "验证分数"} · 探索阶段最佳`
-    : "尚无可比较的验证结果";
-  replace(
-    "baseline-score",
-    document.createTextNode(score(run.baseline?.score)),
-    element("i", "", "/"),
-    document.createTextNode(score(run.final?.score)),
-  );
-  $("baseline-caption").textContent = run.baseline
-    ? "起点结果 / 最终确认"
-    : "起点未评测 / 最终确认";
-  const nodes = run.nodes || [];
-  $("node-count").textContent = integer(nodes.length);
-  $("node-caption").textContent =
-    `${nodes.filter((node) => node.state === "completed").length} 已完成 · ${(run.agents || []).filter((agent) => agent.direction).length} 个研究方向`;
-  $("model-count").textContent =
-    `${integer(run.budget?.model_calls ?? 0)} / ${budgetLimit(run.brief?.limits?.max_model_calls)}`;
-  $("token-count").textContent =
-    `${integer(run.budget?.total_tokens ?? 0)} tokens${run.budget?.reserved_tokens ? ` · ${integer(run.budget.reserved_tokens)} 已预留` : ""}`;
+  $("final-score").textContent = score(run.final?.score);
+  const researchers = ResearchGraph.researchers(run);
+  $("node-count").textContent = integer(researchers.length);
+  $("runtime-turn-count").textContent = integer(run.budget?.runtime_turns ?? 0);
   $("plan").textContent =
     run.plan || "研究开始后，RSI 会在这里说明当前方向和下一步。";
   $("plan").classList.toggle("muted", !run.plan);
-  $("score-metric").hidden = $("baseline-metric").hidden = !run.brief?.verification;
+  $("score-metric").hidden = $("final-metric").hidden = !run.brief?.verification;
   $("metrics").classList.toggle("without-score", !run.brief?.verification);
   $("run-elapsed").replaceChildren(elapsed(run.started_at, run.finished_at));
   renderIntake(run);
@@ -698,7 +707,7 @@ function render() {
   renderEvents();
   const target = renderReplyTarget(run);
   renderAgentErrors(run);
-  const ended = !["planned", "running", "paused"].includes(run.status);
+  const ended = run.collaboration?.supported === false || !["planned", "running", "paused"].includes(run.status);
   const responding = (run.agents || []).find((agent) => agent.agent_id === target.recipient);
   $("chat-input").disabled = ended;
   $("send-message").disabled = ended || state.sending.has(run.run_id) || target.stale;
@@ -791,7 +800,7 @@ function renderAgentErrors(run) {
     block.append(element("strong", "", `${agentName(agent.agent_id)} 暂时无法继续`),
       element("p", "", agent.error || "调用失败，请检查模型服务与网络。"));
     const retry = element("button", "secondary", "处理后重试");
-    retry.disabled = !["planned", "running"].includes(run.status);
+    retry.disabled = run.collaboration?.supported === false || !["planned", "running"].includes(run.status);
     retry.addEventListener("click", () => control("retry", { agent_id: agent.agent_id }));
     block.append(retry);
     return block;
@@ -914,182 +923,203 @@ function renderDirections(run) {
   );
 }
 
+function graphAgentName(run, id) {
+  if (id === "rsi") return "RSI Agent";
+  const index = ResearchGraph.researchers(run).indexOf(id);
+  return index >= 0 ? `Researcher ${index + 1}` : agentName(id);
+}
+
 function renderGraph(run) {
-  // Jobs are display objects, not persisted ResearchIterations or research outcomes.
-  const nodes = [...(run.nodes || []), ...(run.jobs || []).filter((job) => state.graphAllJobs || activeJob(job)).map((job) => ({
-    iteration_id: `job:${job.job_id}`, agent_id: job.agent_id, state: job.status,
-    parent_iteration_id: job.iteration_id, title: jobTitle(job), job,
-  }))];
-  const active = nodes.filter((node) => node.job ? activeJob(node.job) : activeNode(node));
-  $("graph-count").textContent = `${run.nodes?.length || 0} 个研究节点 · ${run.jobs?.length || 0} 个作业 · ${active.length} 个待执行 / 进行中`;
-  $("graph-active").hidden = !active.length;
-  $("graph-jobs").textContent = state.graphAllJobs ? "收起已结束作业" : "显示全部作业";
+  const model = ResearchGraph.model(run, {allJobs: state.graphAllJobs, collaborationOnly: state.graphCollaborationOnly});
+  const layout = ResearchGraph.layout(model);
+  const researchers = ResearchGraph.researchers(run);
+  const sharing = (run.communications || []).filter((m) => m.sender === "rsi" && ResearchGraph.sharedFrom(m).length);
+  $("graph-count").textContent = `${researchers.length} 名研究员 · ${sharing.length} 次有来源的共享 · ${run.jobs?.length || 0} 个作业`;
+  $("graph-jobs").textContent = state.graphAllJobs ? "收起普通作业" : "显示全部作业";
   $("graph-jobs").setAttribute("aria-pressed", String(state.graphAllJobs));
+  $("graph-sharing").setAttribute("aria-pressed", String(state.graphCollaborationOnly));
   const selected = state.selected.get(run.run_id);
-  const signature = JSON.stringify([
-    run.run_id,
-    nodes,
-    run.edges,
-    run.agents?.map((agent) => [agent.agent_id, agent.direction, agent.state, agent.wait_reason]),
-    run.agent_activity,
-    selected,
-  ]);
+  const signature = JSON.stringify([run.run_id, run.nodes, run.jobs, run.communications, run.edges,
+    run.agents, run.agent_activity, run.budget?.researchers, selected, state.graphAllJobs, state.graphCollaborationOnly]);
   if (signature === state.graphSignature) return;
   state.graphSignature = signature;
-  const viewport = $("graph-viewport");
-  let scroll = { left: viewport.scrollLeft, top: viewport.scrollTop };
+  const viewport = $("graph-viewport"), canvas = $("graph-canvas");
+  let scroll = {left: viewport.scrollLeft, top: viewport.scrollTop};
   if (state.graphRunId !== run.run_id) {
-    try {
-      scroll = JSON.parse(
-        localStorage.getItem(`rsi.workbench.viewport.${run.run_id}`),
-      ) || { left: 0, top: 0 };
-    } catch {
-      scroll = { left: 0, top: 0 };
-    }
+    try { scroll = JSON.parse(localStorage.getItem(`rsi.workbench.viewport.v2.${run.run_id}`)) || {left: 0, top: 0}; }
+    catch { scroll = {left: 0, top: 0}; }
     state.graphRunId = run.run_id;
-    const savedZoom = Number(localStorage.getItem(`rsi.workbench.zoom.${run.run_id}`));
-    state.graphZoom = savedZoom > 0 ? Math.max(.2, Math.min(2, savedZoom)) : 1;
+    const saved = Number(localStorage.getItem(`rsi.workbench.zoom.v2.${run.run_id}`));
+    state.graphZoom = saved > 0 ? Math.max(.2, Math.min(2, saved)) : Math.min(1, Math.max(.8, (viewport.clientWidth || layout.width) / layout.width));
   }
   const focused = document.activeElement?.dataset.node;
-  const canvas = $("graph-canvas");
   canvas.replaceChildren();
-  canvas.hidden = !nodes.length;
-  $("graph-empty").hidden = !!nodes.length;
-  if (!nodes.length) {
+  $("graph-column-headings").replaceChildren();
+  $("graph-column-headings").hidden = !model.lanes.length;
+  canvas.hidden = !model.lanes.length;
+  $("graph-empty").hidden = !!model.lanes.length;
+  if (!model.lanes.length) {
     $("graph-surface").style.width = $("graph-surface").style.height = "0px";
+    $("graph-detail").hidden = true;
+    $("graph-active").hidden = true;
     return;
   }
-  const byId = new Map(nodes.map((node) => [node.iteration_id, node]));
-  const agents = [...new Set(nodes.map((node) => node.agent_id))].sort((a, b) => a === b ? 0 : a === "rsi" ? -1 : b === "rsi" ? 1 : 0);
-
-  const positions = new Map();
-  function depth(node, visited = new Set()) {
-    if (!node?.parent_iteration_id || visited.has(node.iteration_id)) return 0;
-    visited.add(node.iteration_id);
-    return Math.min(
-      100,
-      1 + depth(byId.get(node.parent_iteration_id), visited),
-    );
-  }
-  let widest = 1;
-  agents.forEach((agentId, row) => {
-    const direction =
-      (agentId === "rsi" ? "RSI 历史作业" : run.agents?.find((agent) => agent.agent_id === agentId)?.direction) ||
-      agentName(agentId);
-    const lane = element("div", "graph-lane", direction);
-    lane.title = direction;
-    lane.style.top = `${row * 204 + 20}px`;
+  const palette = ["#788296", "#547b6b", "#527f9b", "#9c7843", "#87709d", "#a96e74"];
+  const shortName = (id) => id === "rsi" ? "RSI" : `R${researchers.indexOf(id) + 1}`;
+  const laneX = (id) => layout.left + model.lanes.indexOf(id) * layout.laneWidth;
+  model.lanes.forEach((id, index) => {
+    const owner = run.agents?.find((a) => a.agent_id === id);
+    const nodes = (run.nodes || []).filter((n) => n.agent_id === id);
+    const node = nodes.at(-1);
+    const lane = element("div", "agent-lane");
+    lane.dataset.agent = id;
+    Object.assign(lane.style, {left: `${laneX(id)}px`, width: `${layout.laneWidth - 10}px`, height: `${layout.height - 12}px`});
+    const header = element("div", "agent-lane-heading");
+    header.dataset.x = laneX(id);
+    header.dataset.width = layout.laneWidth - 10;
+    header.style.setProperty("--agent-color", palette[index % palette.length]);
+    header.append(element("span", "agent-monogram", shortName(id)), element("strong", "", graphAgentName(run, id)));
+    $("graph-column-headings").append(header);
+    const rail = element("div", "agent-rail");
+    rail.style.top = `${layout.top - 16}px`;
+    lane.append(rail);
     canvas.append(lane);
-    let nextColumn = 0, attempt = 0;
-    nodes
-      .filter((node) => node.agent_id === agentId)
-      .sort((a, b) => {
-        // Place an execution immediately after the iteration that submitted it.
-        const order = (node) => node.job?.iteration_id
-          ? nodes.findIndex((n) => n.iteration_id === node.job.iteration_id) + 0.5
-          : nodes.indexOf(node);
-        return order(a) - order(b);
-      })
-      .forEach((node) => {
-        const column = Math.max(nextColumn, depth(node));
-        nextColumn = column + 1;
-        widest = Math.max(widest, column + 1);
-        const position = { x: 24 + column * 246, y: row * 204 + 46 };
-        positions.set(node.iteration_id, position);
-        const ongoing = node.job ? activeJob(node.job) : activeNode(node);
-        const button = element(
-          "button",
-          `graph-node ${node.job ? "execution-node" : ""} ${ongoing ? "active-node" : ""} ${selected === node.iteration_id ? "selected" : ""}`,
-        );
-        button.dataset.node = node.iteration_id;
-        button.style.left = `${position.x}px`;
-        button.style.top = `${position.y}px`;
-        const top = element("div", "node-top");
-        top.append(element("span", "", node.job ? "执行作业" : `研究 ${++attempt}`), badge(node.state));
-        button.append(
-          top,
-          element(
-            "h3",
-            "",
-            node.title || node.assignment?.instruction || "研究尝试",
-          ),
-        );
-        if (node.job) {
-          button.append(element("p", "node-progress", progressText(node.job) || node.job.progress?.stage || "查看执行状态"), progressBar(node.job));
-        } else if (ongoing) {
-          const owner = run.agents?.find((agent) => agent.agent_id === node.agent_id);
-          button.append(element("p", "node-progress", owner?.state === "running" ? agentAction(run, owner) : owner ? agentStatus(run, owner) : "执行本轮任务"));
-        }
-        if (typeof node.verification?.score === "number")
-          button.append(
-            element(
-              "p",
-              "node-score",
-              `最佳 ${nodeScore(run, node)}`,
-            ),
-          );
-        if (!node.job && !node.verification && run.brief?.verification)
-          button.append(element("p", "node-score muted", "暂无有效成绩"));
-        if (!node.job)
-          button.append(element("p", "node-reports", `${nodeReports(node).length} 份报告`));
-        const [started, finished] = node.job ? [node.job.started_at || node.job.created_at, node.job.finished_at || run.finished_at] : nodeTimes(run, node);
-        const timing = element("div", "node-timing");
-        timing.append(document.createTextNode("历时 "), elapsed(started, finished));
-        button.append(timing);
-        button.setAttribute(
-          "aria-pressed",
-          String(selected === node.iteration_id),
-        );
-        button.addEventListener("click", () => selectWork(run, node.iteration_id));
-        canvas.append(button);
-      });
+    const ongoing = node && activeNode(node);
+    const button = element(node ? "button" : "div", `agent-summary ${node ? "graph-node" : "leader-summary"} ${ongoing ? "active-node" : ""} ${selected === node?.iteration_id ? "selected" : ""}`);
+    Object.assign(button.style, {left: `${laneX(id) + 20}px`, top: "60px"});
+    const top = element("div", "node-top");
+    top.append(element("span", "", "当前状态"), badge(owner?.state || node?.state));
+    button.append(top);
+    if (node) {
+      button.dataset.node = node.iteration_id;
+      button.append(element("h3", "", run.collaboration?.mode === "passk" ? "独立探索" : owner?.direction || node.title || `第 ${nodes.length} 轮探索`));
+      if (node.verification) button.append(element("p", "node-score", `最佳 ${nodeScore(run, node)}`));
+      else if (run.brief?.verification) button.append(element("p", "node-score muted", "暂无有效成绩"));
+      if (ongoing) button.append(element("p", "node-progress", owner ? agentAction(run, owner) : "探索中"));
+      button.append(element("p", "node-reports", `${nodes.reduce((sum, n) => sum + nodeReports(n).length, 0)} 份报告 · ${(run.jobs || []).filter((job) => job.agent_id === id).length} 个作业`));
+      const [started, finished] = nodeTimes(run, node), budget = run.budget?.researchers?.[id];
+      const timing = element("div", "node-timing");
+      if (budget) {
+        timing.textContent = `有效 ${(budget.effective_seconds / 60).toFixed(1)} / ${(budget.limit_seconds / 60).toFixed(0)} 分钟`;
+        timing.title = `剩余 ${(budget.remaining_effective_seconds / 60).toFixed(1)} 分钟；实际历时 ${duration(started, finished)}`;
+      } else timing.append(document.createTextNode("历时 "), elapsed(started, finished));
+      button.append(timing);
+      button.setAttribute("aria-pressed", String(selected === node.iteration_id));
+      button.addEventListener("click", () => selectWork(run, node.iteration_id));
+    } else {
+      const outbound = (run.communications || []).filter((m) => m.sender === id);
+      button.append(element("p", "leader-number", `${outbound.length} 次指导`), element("p", "node-reports", `${sharing.length} 次引用同伴经验`));
+    }
+    canvas.append(button);
   });
-  const edges = [...(run.edges || [])];
-  for (const node of nodes)
-    if (
-      node.parent_iteration_id &&
-      !edges.some(
-        (edge) =>
-          edge.source === node.parent_iteration_id &&
-          edge.target === node.iteration_id,
-      )
-    )
-      edges.push({
-        source: node.parent_iteration_id,
-        target: node.iteration_id,
-        kind: node.job ? "execution" : "parent",
-      });
-  for (const edge of edges) {
-    const source = positions.get(edge.source),
-      target = positions.get(edge.target);
-    if (!source || !target || edge.source === edge.target) continue;
-    const x1 = source.x + 214,
-      y1 = source.y + 65,
-      x2 = target.x,
-      y2 = target.y + 65;
-    const line = element(
-      "div",
-      `graph-edge ${["reference", "merge", "execution"].includes(edge.kind) ? edge.kind : "parent"}`,
-    );
-    Object.assign(line.style, {
-      left: `${x1}px`,
-      top: `${y1}px`,
-      width: `${Math.hypot(x2 - x1, y2 - y1)}px`,
-      transform: `rotate(${Math.atan2(y2 - y1, x2 - x1)}rad)`,
+  const axis = element("div", "graph-time-label", "时间 ↓");
+  Object.assign(axis.style, {left: "14px", top: `${layout.top - 34}px`}); canvas.append(axis);
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.classList.add("sharing-routes");
+  svg.setAttribute("width", layout.width); svg.setAttribute("height", layout.height);
+  const seenRows = new Set();
+  const selectMessage = (message) => {
+    state.selected.set(run.run_id, `message:${message.message_id}`);
+    renderGraph(run);
+  };
+  for (const entry of layout.entries) {
+    if (!seenRows.has(entry.row)) {
+      seenRows.add(entry.row);
+      const tick = element("div", "graph-time-tick", time(entry.at));
+      tick.style.top = `${entry.y + 13}px`; canvas.append(tick);
+    }
+    const id = entry.message ? `message:${entry.message.message_id}` : entry.job ? entry.id : entry.node?.iteration_id;
+    const active = entry.job && activeJob(entry.job);
+    const button = element("button", `timeline-event event-${entry.kind} ${entry.job && (state.graphAllJobs || active) ? "graph-node execution-node" : ""} ${active ? "active-node" : ""} ${selected === id ? "selected" : ""}`);
+    button.dataset.node = id;
+    button.dataset.event = entry.id;
+    Object.assign(button.style, {left: `${entry.x}px`, top: `${entry.y}px`});
+    const kind = {start: "开始探索", report: "汇报 RSI", advice: "RSI 建议", share: "经 RSI 共享", job: entry.improves ? "个人新最佳" : entry.job ? jobTitle(entry.job) : "执行作业"}[entry.kind];
+    const heading = element("div", "event-heading");
+    heading.append(element("span", "event-kind", kind), element("span", "event-time", time(entry.at)));
+    button.append(heading);
+    let title = entry.title;
+    if (entry.job?.result?.score != null) title = `${score(entry.job.result.score)}${run.brief?.verification?.metric === "speedup" ? "×" : ""} · ${entry.job.result.passed ? "验证通过" : "未通过正确性"}`;
+    if (entry.kind === "share") title = `${entry.sources.map(shortName).join("、")} → ${shortName(entry.agent)} · ${title}`;
+    button.append(element("p", "event-preview", title));
+    if (entry.message) {
+      const delivered = entry.message.delivery_status === "delivered";
+      button.append(element("span", `event-delivery ${delivered ? "" : "pending"}`, delivered ? "已送达" : run.finished_at ? "结束时未送达" : "等待送达"));
+      button.addEventListener("click", () => selectMessage(entry.message));
+    } else button.addEventListener("click", () => selectWork(run, id));
+    button.setAttribute("aria-pressed", String(selected === id));
+    button.title = `${kind} · ${time(entry.at)}\n${title}`;
+    canvas.append(button);
+    entry.sources.forEach((source, index) => {
+      const sx = laneX(source) + layout.laneWidth / 2;
+      const tx = entry.x + (sx > entry.x ? 192 : 0);
+      const y = entry.y + 46 + (index - (entry.sources.length - 1) / 2) * Math.min(7, 24 / entry.sources.length);
+      const d = `M ${sx} ${y} C ${sx + (tx - sx) * .4} ${y - 18}, ${sx + (tx - sx) * .6} ${y + 18}, ${tx} ${y}`;
+      const path = document.createElementNS(svg.namespaceURI, "path");
+      path.setAttribute("d", d);
+      path.setAttribute("class", `sharing-route ${entry.kind === "share" ? "peer-sharing" : "leader-advice"} ${selected === id ? "selected" : ""}`);
+      path.dataset.message = entry.message?.message_id || "";
+      const tip = document.createElementNS(svg.namespaceURI, "title");
+      tip.textContent = `${graphAgentName(run, source)} → ${graphAgentName(run, entry.agent)}${entry.kind === "share" ? " · 经 RSI 共享" : ""}`;
+      path.append(tip); svg.append(path);
+      const arrow = document.createElementNS(svg.namespaceURI, "path");
+      const sign = sx < tx ? -1 : 1;
+      arrow.setAttribute("d", `M ${tx + sign * 6} ${y - 4} L ${tx} ${y} L ${tx + sign * 6} ${y + 4}`);
+      arrow.setAttribute("class", `sharing-arrow${entry.kind === "share" ? "" : " advice-arrow"}`); svg.append(arrow);
+      const origin = element("button", "share-origin", entry.kind === "share" ? `${shortName(source)} 的经验` : "RSI 建议");
+      Object.assign(origin.style, {left: `${sx - 48}px`, top: `${entry.y + 13}px`});
+      origin.title = tip.textContent;
+      if (entry.message) origin.addEventListener("click", () => selectMessage(entry.message));
+      else origin.addEventListener("click", () => selectWork(run, entry.node.iteration_id));
+      canvas.append(origin);
     });
-    line.setAttribute("aria-hidden", "true");
-    line.title =
-      edge.label || (edge.kind === "parent" ? "继续探索" : edge.kind === "execution" ? "执行作业" : "引用 / 合并经验");
-    canvas.prepend(line);
   }
-  canvas.style.width = `${widest * 246 + 22}px`;
-  canvas.style.height = `${agents.length * 204 + 16}px`;
+  canvas.prepend(svg);
+  if (!layout.entries.length) {
+    const empty = element("p", "graph-no-events", state.graphCollaborationOnly ? "暂无协作记录" : "暂无研究进展");
+    empty.style.top = `${layout.top}px`; canvas.append(empty);
+  }
+  canvas.style.width = `${layout.width}px`; canvas.style.height = `${layout.height}px`;
+  $("graph-active").hidden = !canvas.querySelector(".active-node");
+  renderGraphDetail(run, selected);
   applyGraphZoom();
-  viewport.scrollTo({ left: scroll.left, top: scroll.top });
-  if (focused)
-    [...canvas.querySelectorAll("button")]
-      .find((button) => button.dataset.node === focused)
-      ?.focus({ preventScroll: true });
+  viewport.scrollTo(scroll);
+  if (focused) [...canvas.querySelectorAll("[data-node]")].find((button) => button.dataset.node === focused)?.focus({preventScroll: true});
+}
+
+function renderGraphDetail(run, selected) {
+  const message = (run.communications || []).find((m) => `message:${m.message_id}` === selected);
+  const panel = $("graph-detail"); panel.hidden = !message;
+  if (!message) return;
+  const header = element("div", "sharing-detail-heading");
+  const sources = ResearchGraph.sharedFrom(message);
+  const title = message.sender === "rsi" && sources.length
+    ? `${sources.map((id) => graphAgentName(run, id)).join("、")} → ${graphAgentName(run, message.recipient)} · 经 RSI 共享`
+    : `${graphAgentName(run, message.sender)} → ${graphAgentName(run, message.recipient)}`;
+  header.append(element("h3", "", title), element("span", "muted", `${time(message.created_at)} · ${message.delivery_status === "delivered" ? "已送达" : run.finished_at ? "结束时未送达" : "等待送达"}`));
+  const close = element("button", "quiet", "收起详情");
+  close.addEventListener("click", () => { state.selected.delete(run.run_id); renderGraph(run); }); header.append(close);
+  const body = element("div", "sharing-detail-body");
+  const text = element("section", "sharing-message");
+  text.append(element("h4", "", message.sender === "rsi" ? "RSI 的原始建议" : "原始汇报"), element("p", "preserve", message.text)); body.append(text);
+  const evidence = element("section", "sharing-evidence");
+  evidence.append(element("h4", "", "引用来源"));
+  if (!message.references?.length) evidence.append(element("p", "muted", "无"));
+  for (const ref of message.references || []) {
+    const source = message.sources?.find((s) => s.uri === ref.uri);
+    const item = element("details", "sharing-source");
+    const category = {reports: "进展汇报", materials: "实验记录", candidates: "候选版本", verifications: "验证结果", executions: "执行记录", evidence: "研究发现", assignments: "任务说明"}[ref.uri.split("/").at(-2)] || "原始记录";
+    item.append(element("summary", "", source ? `${graphAgentName(run, source.agent_id)} · ${category}${source.created_at ? ` · ${time(source.created_at)}` : ""}` : category));
+    const reportId = ref.uri.split("/").at(-1)?.replace(/\.json$/, "");
+    const reportNode = source && run.nodes?.find((n) => nodeReports(n).some((r) => r.report_id === reportId));
+    const report = reportNode && nodeReports(reportNode).find((r) => r.report_id === reportId);
+    const original = report?.message || source?.summary;
+    if (original) item.append(element("p", "preserve", original));
+    item.append(element("p", "record-ref", ref.uri));
+    evidence.append(item);
+  }
+  body.append(evidence);
+  panel.replaceChildren(header, body);
 }
 
 function section(title, value) {
@@ -1160,14 +1190,15 @@ function renderNode(run) {
   const node = run.nodes?.find(
     (item) => item.iteration_id === state.selected.get(run.run_id),
   );
-  const signature = JSON.stringify([run.run_id, run.finished_at, node]);
+  const budget = run.budget?.researchers?.[node?.agent_id];
+  const signature = JSON.stringify([run.run_id, run.finished_at, node, budget]);
   if (signature === state.detailSignature) return;
   state.detailSignature = signature;
   if (!node) {
     const blank = element("div", "empty-detail");
     blank.append(
       element("span", "empty-symbol", "↖"),
-      element("h3", "", "选择一个研究节点或作业"),
+      element("h3", "", "选择研究员或时间线事件"),
       element("p", "", "查看任务、执行进度、研究报告与结果。"),
     );
     replace("node-panel", blank);
@@ -1184,11 +1215,13 @@ function renderNode(run) {
   );
   const [started, finished] = nodeTimes(run, node);
   const timing = element("p", "detail-timing");
-  timing.append(document.createTextNode("本轮历时 "), elapsed(started, finished));
+  if (budget) timing.append(element("span", "", `有效时间 ${(budget.effective_seconds / 60).toFixed(1)} / ${(budget.limit_seconds / 60).toFixed(0)} 分钟，剩余 ${(budget.remaining_effective_seconds / 60).toFixed(1)} 分钟；`));
+  timing.append(document.createTextNode(budget ? "实际历时 " : "本轮历时 "), elapsed(started, finished));
+  if (budget) timing.append(element("small", "muted", `GPU 排队 ${(budget.gpu_queue_seconds / 60).toFixed(1)} 分钟 · API 故障等待 ${(budget.api_wait_seconds / 60).toFixed(1)} 分钟`));
   if (started) timing.append(element("small", "muted", `开始 ${new Date(timestamp(started)).toLocaleString("zh-CN")}${finished ? ` · 结束 ${new Date(timestamp(finished)).toLocaleString("zh-CN")}` : " · 进行中"}`));
   const blocks = [heading, timing, assignmentDetails(run, node)];
   if (node.verification)
-    blocks.push(section("本节点最佳有效成绩", `${nodeScore(run, node)} · 探索阶段正式验证`));
+    blocks.push(section("本次探索最佳有效成绩", `${nodeScore(run, node)} · 探索阶段正式验证`));
   blocks.push(reportHistory(run, node));
   const jobs = (run.jobs || []).filter((job) => job.iteration_id === node.iteration_id);
   if (jobs.length) {
@@ -1260,7 +1293,7 @@ function renderJobDetail(run, job) {
   if (typeof job.result?.score === "number") blocks.push(section("正式验证结果", score(job.result.score)));
   if (job.candidate_id) blocks.push(section("评测版本", job.candidate_id));
   if (job.iteration_id) {
-    const parent = element("button", "quiet", "查看所属研究节点 →");
+    const parent = element("button", "quiet", "查看所属研究任务 →");
     parent.addEventListener("click", () => selectWork(run, job.iteration_id));
     blocks.push(parent);
   }
@@ -1382,10 +1415,10 @@ function renderBrief(run) {
   const rows = [
     ["同时存活研究员上限", limits.max_agents],
     ["节点上限", budgetLimit(limits.max_nodes)],
-    ["模型调用上限", budgetLimit(limits.max_model_calls)],
     ["Token 上限", budgetLimit(limits.max_total_tokens)],
     ["验证次数上限", budgetLimit(limits.max_verify_calls)],
     ["研究时长上限", limits.max_wall_seconds === null ? "不限" : `${budgetLimit(limits.max_wall_seconds)} 秒`],
+    ...(limits.max_effective_seconds != null ? [["每名研究员有效时间上限", `${limits.max_effective_seconds / 60} 分钟`]] : []),
     ["作业并发上限", budgetLimit(limits.max_jobs)],
     ["GPU", limits.gpu_ids?.join(", ") || "尚未配置"],
     ["允许修改", limits.allowed_paths?.join(", ") || "待确认"],
@@ -1394,6 +1427,10 @@ function renderBrief(run) {
   ];
   for (const [key, value] of rows)
     grid.append(element("dt", "", key), element("dd", "", value ?? "—"));
+  for (const [agentId, budget] of Object.entries(run.budget?.researchers || {})) {
+    grid.append(element("dt", "", `${agentId} · 有效时间`), element("dd", "",
+      `${(budget.effective_seconds / 60).toFixed(1)} / ${(budget.limit_seconds / 60).toFixed(0)} 分钟；GPU 排队 ${(budget.gpu_queue_seconds / 60).toFixed(1)} 分钟，API 故障等待 ${(budget.api_wait_seconds / 60).toFixed(1)} 分钟`));
+  }
   blocks.push(grid);
   if (verification?.description)
     blocks.push(section("验证条件", verification.description));
@@ -1671,6 +1708,11 @@ $("graph-active").addEventListener("click", () => {
 function applyGraphZoom() {
   const canvas = $("graph-canvas"), surface = $("graph-surface");
   canvas.style.transform = `scale(${state.graphZoom})`;
+  $("graph-column-headings").style.width = `${parseFloat(canvas.style.width || 0) * state.graphZoom}px`;
+  for (const heading of $("graph-column-headings").children) {
+    heading.style.left = `${Number(heading.dataset.x) * state.graphZoom}px`;
+    heading.style.width = `${Number(heading.dataset.width) * state.graphZoom}px`;
+  }
   surface.style.width = `${parseFloat(canvas.style.width || 0) * state.graphZoom}px`;
   surface.style.height = `${parseFloat(canvas.style.height || 0) * state.graphZoom}px`;
   $("graph-reset").textContent = `${Math.round(state.graphZoom * 100)}%`;
@@ -1685,16 +1727,17 @@ function zoomGraph(value, point) {
   state.graphZoom = Math.max(.2, Math.min(2, value));
   applyGraphZoom();
   viewport.scrollTo({left: x * state.graphZoom - anchor.x, top: y * state.graphZoom - anchor.y});
-  if (state.runId) localStorage.setItem(`rsi.workbench.zoom.${state.runId}`, String(state.graphZoom));
+  if (state.runId) localStorage.setItem(`rsi.workbench.zoom.v2.${state.runId}`, String(state.graphZoom));
 }
 $("graph-reset").addEventListener("click", () => zoomGraph(1));
 $("graph-zoom-in").addEventListener("click", () => zoomGraph(state.graphZoom * 1.2));
 $("graph-zoom-out").addEventListener("click", () => zoomGraph(state.graphZoom / 1.2));
 $("graph-fit").addEventListener("click", () => {
   const canvas = $("graph-canvas"), viewport = $("graph-viewport");
-  zoomGraph(Math.min(1, viewport.clientWidth / (parseFloat(canvas.style.width) || 1), viewport.clientHeight / (parseFloat(canvas.style.height) || 1)));
+  zoomGraph(Math.min(1, viewport.clientWidth / (parseFloat(canvas.style.width) || 1)));
   viewport.scrollTo({left: 0, top: 0});
 });
+$("graph-sharing").addEventListener("click", () => { state.graphCollaborationOnly = !state.graphCollaborationOnly; if (state.run) renderGraph(state.run); });
 $("graph-jobs").addEventListener("click", () => { state.graphAllJobs = !state.graphAllJobs; if (state.run) renderGraph(state.run); });
 $("graph-expand").addEventListener("click", () => {
   const expanded = $("graph-viewport").classList.toggle("expanded");
@@ -1731,7 +1774,7 @@ $("graph-viewport").addEventListener(
   () => {
     if (state.runId)
       localStorage.setItem(
-        `rsi.workbench.viewport.${state.runId}`,
+        `rsi.workbench.viewport.v2.${state.runId}`,
         JSON.stringify({
           left: $("graph-viewport").scrollLeft,
           top: $("graph-viewport").scrollTop,
@@ -1808,7 +1851,7 @@ async function bootstrap() {
   state.models = config.models || [];
   state.defaultModelSettings = config.default_model_settings || {};
   state.collaborationCatalog = config.collaboration_catalog || {modes: [], modules: []};
-  state.defaultCollaboration = config.default_collaboration || {mode: "collaborative", modules: []};
+  state.defaultCollaboration = config.default_collaboration || {mode: "passk", modules: []};
 }
 
 async function boot() {

@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 import threading
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -27,6 +29,11 @@ class ResponsesModel:
     def __init__(self) -> None:
         self.requests: list[dict[str, Any]] = []
         self.force_tool = False
+        self.tool_name = "rsi_mcp_probe"
+        self.tool_arguments = {"expression": "6 * 7"}
+        self.fail_requests = 0
+        self.fail_after_tool = 0
+        self.output: Callable[[dict[str, Any]], dict[str, Any]] | None = None
         self.entered = threading.Event()
         self.release = threading.Event()
         self.release.set()
@@ -36,8 +43,21 @@ class ResponsesModel:
             def do_POST(self) -> None:
                 request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 owner.requests.append(request)
+                if owner.fail_requests:
+                    owner.fail_requests -= 1
+                    self.send_response(503)
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    self.wfile.write(b'{"error":{"message":"temporarily unavailable"}}')
+                    return
                 owner.entered.set()
                 owner.release.wait(20)
+                if owner.fail_after_tool and any(
+                    item.get("type") == "function_call_output" for item in request["input"]
+                ):
+                    owner.fail_after_tool -= 1
+                    self.send_error(503, "Temporary fixture outage")
+                    return
                 message: dict[str, Any] = {
                     "id": "msg_fixture",
                     "type": "message",
@@ -50,15 +70,21 @@ class ResponsesModel:
                 if owner.force_tool and not any(
                     x.get("type") == "function_call_output" for x in request["input"]
                 ):
-                    tool = next(t for t in request["tools"] if "rsi_mcp_probe" in t["name"])
+                    tool = next(
+                        t
+                        for t in request["tools"]
+                        if owner.tool_name in t["name"].replace(".", "_")
+                    )
                     output = {
                         "id": "fc_probe",
                         "type": "function_call",
                         "call_id": "probe",
                         "name": tool["name"],
-                        "arguments": '{"expression":"6 * 7"}',
+                        "arguments": json.dumps(owner.tool_arguments),
                         "status": "completed",
                     }
+                if owner.output is not None:
+                    output = owner.output(request)
                 events: list[dict[str, Any]] = [
                     {
                         "type": "response.created",
@@ -80,13 +106,13 @@ class ResponsesModel:
                         {
                             "type": "response.function_call_arguments.delta",
                             "output_index": 0,
-                            "item_id": "fc_probe",
+                            "item_id": output["id"],
                             "delta": output["arguments"],
                         },
                         {
                             "type": "response.function_call_arguments.done",
                             "output_index": 0,
-                            "item_id": "fc_probe",
+                            "item_id": output["id"],
                             "arguments": output["arguments"],
                         },
                     ]
@@ -95,7 +121,7 @@ class ResponsesModel:
                         {
                             "type": "response.output_item.added",
                             "output_index": 0,
-                            "item": {**message, "content": []},
+                            "item": {**output, "content": []},
                         },
                         {
                             "type": "response.content_part.added",
@@ -109,14 +135,14 @@ class ResponsesModel:
                             "output_index": 0,
                             "content_index": 0,
                             "item_id": "msg_fixture",
-                            "delta": "Done",
+                            "delta": output["content"][0]["text"],
                         },
                         {
                             "type": "response.output_text.done",
                             "output_index": 0,
                             "content_index": 0,
                             "item_id": "msg_fixture",
-                            "text": "Done",
+                            "text": output["content"][0]["text"],
                         },
                     ]
                 events += [
@@ -159,12 +185,9 @@ class ResponsesModel:
         self.thread.join()
 
 
-@pytest.mark.parametrize("allow_web,context_window", [(True, None), (False, 64000)])
 def test_codex_native_tools_history_resume_and_usage(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    allow_web: bool,
-    context_window: int | None,
 ) -> None:
     monkeypatch.setenv("RSI_API_KEY", "fixture")
     model = ResponsesModel()
@@ -176,8 +199,8 @@ def test_codex_native_tools_history_resume_and_usage(
             base_url=model.url,
             model="gpt-5.6-luna",
             model_settings_pinned=True,
-            context_window_tokens=context_window,
-            metadata={"allow_web_access": allow_web},
+            context_window_tokens=64000,
+            metadata={"allow_web_access": True},
         )
         runtime = ResearchApp._runtime(config)
         assert isinstance(runtime, ResearchRuntime)
@@ -192,7 +215,7 @@ def test_codex_native_tools_history_resume_and_usage(
         session = tmp_path / "session"
         binding = None
         try:
-            for i in range(3):
+            for i in range(2):
                 result = await asyncio.wait_for(
                     runtime.turn(
                         session,
@@ -210,35 +233,35 @@ def test_codex_native_tools_history_resume_and_usage(
                 assert result.text == "Done"
                 current = json.loads((session / "runtime/session-binding.json").read_text())
                 native_config = (session / "runtime/codex-home/config.toml").read_text()
-                assert ("model_context_window = 64000" in native_config) == bool(context_window)
+                assert "model_context_window = 64000" in native_config
                 if binding:
                     assert current == binding
                 binding = current
                 assert runtime.has_session(session)
-                if i == 1:
-                    await runtime.close()  # The third turn must recover the same native thread.
-                replay = await runtime.turn(
-                    session,
-                    system_prompt="Complete without tools",
-                    user_message=f"Remember turn {i}",
-                    message_id=f"message-{i}",
-                    tools=[definition("get_state", "Read your state")],
-                    handler=handle,
-                    workspace=tmp_path / "workspace",
-                    event_sink=emit,
-                )
-                assert replay == result, "A committed delivery must not start another model turn"
-            assert len(model.requests) == 3
+                if i == 0:
+                    await runtime.close()  # Continue on the same native thread after restart.
+            replay = await runtime.turn(
+                session,
+                system_prompt="Complete without tools",
+                user_message="Remember turn 1",
+                message_id="message-1",
+                tools=[definition("get_state", "Read your state")],
+                handler=handle,
+                workspace=tmp_path / "workspace",
+                event_sink=emit,
+            )
+            assert replay == result, "A committed delivery must not start another model turn"
+            assert len(model.requests) == 2
             assert "Remember turn 0" in json.dumps(model.requests[-1]["input"])
             for i, request in enumerate(model.requests):
                 inputs = json.dumps(request["input"])
-                assert ("recovery-only-task" in inputs) == (i == 2)
-                assert 'remaining' in inputs
+                assert ("recovery-only-task" in inputs) == (i == 1)
+                assert "remaining" in inputs
             for request in model.requests:
                 tools = json.dumps(request.get("tools", [])) + json.dumps(
                     [item for item in request["input"] if item.get("type") == "additional_tools"]
                 )
-                assert ("web__run" in tools or "web_search" in tools) == allow_web
+                assert "web__run" in tools or "web_search" in tools
                 assert "exec_command" in tools and "apply_patch" in tools
                 assert "spawn_agent" not in tools and "create_goal" not in tools
                 assert request["reasoning"]["effort"] == "xhigh"
@@ -298,12 +321,15 @@ def test_standard_uses_package_dsh_and_scoped_application_tools(
             assert "42" in json.dumps(model.requests[-1]["input"])
             assert model.requests[0]["reasoning"]["effort"] == "xhigh"
             assert runtime.configuration()["harness"] == "dsh"
-            patch = json.loads(
-                (tmp_path / "session/runtime/research-model.patch.json").read_text()
+            if sys.platform == "darwin":
+                profile = tmp_path / "session/runtime/sandbox.sb"
+                assert '(allow network-outbound (remote ip "localhost:*"))' in profile.read_text()
+                assert '(deny file-write*)' in profile.read_text()
+            patch = json.loads((tmp_path / "session/runtime/research-model.patch.json").read_text())
+            assert (
+                patch[0]["config"]["providers"]["rsi-responses"]["models"][0]["contextWindow"]
+                == 96000
             )
-            assert patch[0]["config"]["providers"]["rsi-responses"]["models"][0][
-                "contextWindow"
-            ] == 96000
         finally:
             await runtime.close()
 
@@ -313,6 +339,7 @@ def test_standard_uses_package_dsh_and_scoped_application_tools(
         model.close()
 
 
+@pytest.mark.skipif(os.uname().sysname != "Darwin", reason="macOS sandbox-exec policy")
 def test_tool_capability_and_workspace_sandbox_survive_restart(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -378,9 +405,26 @@ def test_tool_capability_and_workspace_sandbox_survive_restart(
 
             async def sink(event: dict[str, Any]) -> None:
                 delivered.append(event)
+                if event["type"] == "message_injected":
+                    pending[:] = [x for x in pending if x["message_id"] != event["message_id"]]
 
-            connection.handler, connection.sink = wait_handler, sink
+            connection.sink = sink
             connection.incoming = lambda: pending
+            output = await invoke(
+                bridge, {"name": "get_state", "arguments": {}, "call_id": "receive"}
+            )
+            assert output["incoming_messages"] == [
+                {"message_id": "job-completed", "text": "job result"}
+            ]
+            async with asyncio.timeout(2):
+                while pending:
+                    await asyncio.sleep(0.01)
+            again = await invoke(bridge, {"name": "get_state", "arguments": {}, "call_id": "again"})
+            assert again == "own-state"
+            assert sum(e["type"] == "message_injected" for e in delivered) == 1
+            pending.append({"message_id": "late-job", "text": "late result"})
+            delivered.clear()
+            connection.handler = wait_handler
             output = await invoke(bridge, {"name": "get_state", "arguments": {}, "call_id": "wait"})
             assert output["turn_finished"] and "incoming_messages" not in output
             assert not any(e["type"] == "message_injected" for e in delivered)
@@ -404,11 +448,9 @@ def test_tool_capability_and_workspace_sandbox_survive_restart(
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("disconnect", [False, True])
-def test_cancellation_stops_package_worker_and_keeps_canonical_history(
+def test_disconnection_stops_package_worker_and_keeps_canonical_history(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    disconnect: bool,
 ) -> None:
     monkeypatch.setenv("RSI_API_KEY", "fixture")
     model = ResponsesModel()
@@ -445,15 +487,10 @@ def test_cancellation_stops_package_worker_and_keeps_canonical_history(
                         await task
                     await asyncio.sleep(0.02)
             process = runtime.conversations[session].session.process
-            if disconnect:
-                assert process.stdin is not None
-                process.stdin.close()  # Same EOF as losing the coordinator process.
-                with pytest.raises(RuntimeError, match="worker exited"):
-                    await asyncio.wait_for(task, 15)
-            else:
-                task.cancel()
-                with pytest.raises(asyncio.CancelledError):
-                    await task
+            assert process.stdin is not None
+            process.stdin.close()  # Same EOF as losing the coordinator process.
+            with pytest.raises(RuntimeError, match="worker exited"):
+                await asyncio.wait_for(task, 15)
             assert process.returncode is not None
             events, _ = read_journal(session / "runtime/data/state")
             assert any(event.type == "run.cancelled" for event in events)
@@ -510,7 +547,8 @@ def test_native_codex_passk_launches_independent_attempts_and_stops_on_result(
             runtime = active.engine.runtime
             assert isinstance(runtime, ResearchRuntime)
             assert len(runtime.conversations) == 4
-            assert len({item.session.process.pid for item in runtime.conversations.values()}) == 4
+            processes = [item.session.process for item in runtime.conversations.values()]
+            assert len({process.pid for process in processes}) == 4
             for request in model.requests:
                 state = json.dumps(request["input"], ensure_ascii=False)
                 if "负责启动并监督" in state:
@@ -536,11 +574,68 @@ def test_native_codex_passk_launches_independent_attempts_and_stops_on_result(
             c.store.consider_best(result.result_id)
             await asyncio.wait_for(active.task, 15)
             assert c.state["status"] == "succeeded"
+            assert all(process.returncode is not None for process in processes)
             assert c.state["passk_target"]["result"]["candidate_id"] == candidate.candidate_id
             assert list(c.store.paths.agent("rsi").glob("sessions/*/runtime/request.json"))
             assert c.state["total_tokens"] > 0
         finally:
             await app.close()
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        model.close()
+
+
+@pytest.mark.skipif(
+    os.environ.get("RSI_TEST_NATIVE_HARNESSES") != "1",
+    reason="Opt in to native DSH installation",
+)
+def test_linux_dsh_executes_workspace_shell(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sys
+
+    if sys.platform != "linux":
+        pytest.skip("Linux unrestricted mode")
+    monkeypatch.setenv("RSI_RUNTIME_ISOLATION", "linux-unrestricted")
+    monkeypatch.setenv("RSI_API_KEY", "fixture")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("LINUX_WORKSPACE_OK")
+    model = ResponsesModel()
+    model.force_tool = True
+    model.tool_name = "workspace_run"
+    model.tool_arguments = {"argv": ["/bin/bash", "-c", 'cat "$1"', "bash", str(outside)]}
+
+    async def scenario() -> None:
+        runtime = ResearchRuntime(
+            ResearchConfig(
+                TaskBrief("test", "test"),
+                base_url=model.url,
+                model="fixture",
+                model_settings_pinned=True,
+            )
+        )
+
+        async def handle(call: ToolCall) -> ToolResult:
+            raise AssertionError("No application task tools expected")
+
+        try:
+            result = await asyncio.wait_for(
+                runtime.turn(
+                    tmp_path / "session",
+                    system_prompt="Run the command then finish",
+                    user_message="Test",
+                    tools=[],
+                    handler=handle,
+                    workspace=tmp_path / "workspace",
+                ),
+                120,
+            )
+            assert result.text == "Done"
+            assert "LINUX_WORKSPACE_OK" in json.dumps(model.requests[-1]["input"])
+        finally:
+            await runtime.close()
 
     try:
         asyncio.run(scenario())

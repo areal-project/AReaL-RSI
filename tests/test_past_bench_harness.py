@@ -209,7 +209,7 @@ def test_comparison_budget_model_and_version_binding(
 ) -> None:
     monkeypatch.syspath_prepend(str(Path(__file__).parents[1] / "examples/past_bench"))
     from areal_rsi.api.research import TaskBrief
-    from areal_rsi.coordination.config import ResearchConfig, config_from_dict
+    from areal_rsi.coordination.config import ResearchConfig
 
     versions, comparison = module("versions"), module("comparison")
     workspace, saved = candidate(tmp_path / "workspace"), tmp_path / "saved"
@@ -222,14 +222,13 @@ def test_comparison_budget_model_and_version_binding(
         lambda lock, source: ResearchConfig(brief=TaskBrief("fixture", ""), seed_dir=str(source)),
     )
     monkeypatch.setenv("RSI_MODEL", "different-model")
-    config = config_from_dict(
-        comparison.comparison_config(tmp_path / "lock", saved / "version.json")
-    )
-    assert config.model_settings()["model"] == "gpt-6-astra"
-    assert config.brief.limits.max_verify_calls == 32 + 6
-    assert config.brief.limits.max_nodes is not None and config.brief.limits.max_nodes >= 30
-    assert config.commands == ()
-    assert config.preflight is not None and "--preflight" in config.preflight.command
+    config = comparison.comparison_config(tmp_path / "lock", saved / "version.json")
+    assert config["model"] == "gpt-6-astra" and config["model_settings_pinned"]
+    assert config["brief"]["limits"]["max_verify_calls"] == 32 + 6
+    assert config["brief"]["limits"]["max_model_calls"] is None
+    assert config["brief"]["limits"]["max_nodes"] >= 30
+    assert config["commands"] == []
+    assert "--preflight" in config["preflight"]["command"]
     (saved / "harness/prompt.md").write_text("modified saved version")
     with pytest.raises(ValueError, match="Saved Harness version changed"):
         comparison.comparison_config(tmp_path / "lock", saved / "version.json")

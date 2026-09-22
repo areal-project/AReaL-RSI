@@ -48,9 +48,18 @@ def task_request(manifest: dict[str, Any], name: str, path: str, body: Any = Non
 
 
 def summarize(
-    job: dict[str, Any], external_used: int = 0, *, task_used: int | None = None
+    job: dict[str, Any],
+    external_used: int = 0,
+    *,
+    task_used: int | None = None,
+    manifest: dict[str, Any] | None = None,
+    task: str = "",
 ) -> dict[str, Any]:
     evaluation = job.get("evaluation") or {}
+    if manifest and manifest.get("search_scoring"):
+        from scoring import evaluation as project
+
+        evaluation = project(manifest, task, evaluation)
     speedup = evaluation.get("speedup", 0)
     correct = (
         job["kind"] == "eval" and evaluation.get("correct") is True and job["state"] == "succeeded"
@@ -238,7 +247,8 @@ def handle(manifest: dict[str, Any], request_data: dict[str, Any]) -> Any:
                             # the configured interpreter inside the GPU service.
                             "argv": [
                                 manifest.get("gpu_python", "/opt/.venv/bin/python"),
-                                "-u", "_rsi_diagnostic.py",
+                                "-u",
+                                "_rsi_diagnostic.py",
                             ],
                             "gpus": 1,
                             "timeout_s": 300,
@@ -258,7 +268,9 @@ def handle(manifest: dict[str, Any], request_data: dict[str, Any]) -> Any:
                 assert old["task_id"] == task["task_id"] and old["budget"] == budget
                 if old["kind"] != ("run" if diagnostic else "eval"):
                     raise ValueError("Submission ID reused for another operation")
-                return summarize(old, len(external), task_used=task_used)
+                return summarize(
+                    old, len(external), task_used=task_used, manifest=manifest, task=name
+                )
         if operation in {"job", "logs"}:
             if selected is None:
                 raise ValueError("Job lookup requires one task")
@@ -269,12 +281,20 @@ def handle(manifest: dict[str, Any], request_data: dict[str, Any]) -> Any:
             jobs = query("/jobs")
             if any(j["task_id"] != task["task_id"] or j["budget"] != budget for j in jobs):
                 raise ValueError("Unexpected task ownership or budget")
-            return summarize(job, len(external), task_used=len(jobs) + len(external))
+            return summarize(
+                job,
+                len(external),
+                task_used=len(jobs) + len(external),
+                manifest=manifest,
+                task=name,
+            )
         jobs = query("/jobs")
         if any(j["task_id"] != task["task_id"] or j["budget"] != budget for j in jobs):
             raise ValueError("Unexpected task ownership or budget")
         used = len(jobs) + len(external)
-        public = [summarize(j, len(external), task_used=used) for j in jobs]
+        public = [
+            summarize(j, len(external), task_used=used, manifest=manifest, task=name) for j in jobs
+        ]
         public.sort(key=lambda j: j["created_at"])
         if budget is not None and used > budget:
             raise ValueError("GPU submission cap was exceeded")

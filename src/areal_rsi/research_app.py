@@ -10,11 +10,10 @@ import os
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from areal_rsi.api.base import ExperimentRun
+from areal_rsi.api.base import ResearchRun
 from areal_rsi.api.research import (
     CandidateSnapshot,
     EvidenceRecord,
@@ -27,11 +26,19 @@ from areal_rsi.base.runs import FileRunStore
 from areal_rsi.base.storage import decode, encode, new_id, now, write_json
 from areal_rsi.coordination.actions import ResearchActions
 from areal_rsi.coordination.agent_tools import AgentTools
-from areal_rsi.coordination.collaboration import MODES, build_plan, catalog, manifest
+from areal_rsi.coordination.collaboration import (
+    DEFAULT_MODULES,
+    MODES,
+    build_plan,
+    catalog,
+    manifest,
+    selected_modules,
+)
 from areal_rsi.coordination.config import (
     MODEL_EFFORTS,
     MODEL_FIELDS,
     ResearchConfig,
+    archived_config,
     config_from_dict,
     validate_model_settings,
 )
@@ -97,15 +104,13 @@ class ResearchApp:
 
     @staticmethod
     def _runtime(config: ResearchConfig) -> AgentRuntime:
-        if not config.api_key():
-            raise ValueError(f"Set {config.api_key_env} before starting model agents")
         return ResearchRuntime(config)
 
     @staticmethod
     def _configure_agent_tools(active: ActiveResearch, config: ResearchConfig) -> None:
         active.tools.configure(config.metadata.get("agent_tool_instructions"))
         allow_web = config.metadata.get("allow_web_access", True)
-        register_sources(active.actions, enabled=config.backend == "standard" and allow_web)
+        register_sources(active.actions, enabled=config.backend != "codex" and allow_web)
         for runtime in (active.engine.runtime, active.engine.interaction_runtime):
             if isinstance(runtime, ResearchRuntime):
                 runtime.allow_web_access = allow_web
@@ -116,8 +121,8 @@ class ResearchApp:
         return Coordinator(ResearchStore(self.root, run_id))
 
     def config(self, c: Coordinator) -> ResearchConfig:
-        config: ResearchConfig = decode(
-            ResearchConfig, json.loads((c.store.root / "coordination" / "config.json").read_text())
+        config = archived_config(
+            json.loads((c.store.root / "coordination" / "config.json").read_text())
         )
         if not config.model_settings_pinned:
             # Legacy archives stored service defaults. Prefer the actual recorded
@@ -141,7 +146,9 @@ class ResearchApp:
         return {
             **config.model_settings(),
             "has_credentials": bool(config.api_key()),
-            "editable": c.state["status"] == "planned" and not c.state.get("started_at"),
+            "editable": config.mode in MODES
+            and c.state["status"] == "planned"
+            and not c.state.get("started_at"),
         }
 
     def collaboration_settings(self, c: Coordinator) -> dict[str, Any]:
@@ -151,8 +158,10 @@ class ResearchApp:
         return {
             "mode": config.mode,
             "modules": list(config.collaboration_modules),
-            "label": MODES[config.mode]["label"],
-            "editable": c.state["status"] == "planned"
+            "label": MODES.get(config.mode, {"label": "旧版协作（仅供查看）"})["label"],
+            "supported": config.mode in MODES,
+            "editable": config.mode in MODES
+            and c.state["status"] == "planned"
             and not c.state.get("started_at")
             and frozen is None,
             # Do not backfill current versions into historical experiments.
@@ -166,17 +175,7 @@ class ResearchApp:
         mode, modules = values["mode"], values["modules"]
         if not isinstance(mode, str):
             raise ValueError("协作方式须为名称")
-        from areal_rsi.coordination.collaboration import selected_modules
-
         modules = selected_modules(mode, modules)
-        if mode == "passk" and config.mode != "passk":
-            # This is part of the explicit pass@k preset, described in the UI.
-            # Preserve the user's wall-time, target, k and execution resources.
-            config.brief.limits.max_model_calls = None
-            config.brief.limits.max_total_tokens = None
-            config.brief.limits.max_verify_calls = None
-            config.brief.limits.max_nodes = None
-            config.max_model_calls_per_turn = None
         config.mode, config.collaboration_modules = mode, modules
         config.__post_init__()
 
@@ -203,6 +202,13 @@ class ResearchApp:
             run.brief_ref = c.store.put("briefs", new_id("collaboration"), config.brief)
             run.plan.max_iterations = config.brief.limits.max_nodes
             c.store.save_run(run)
+            previous = self.config(c)
+            if (previous.mode, previous.collaboration_modules) != (
+                config.mode,
+                config.collaboration_modules,
+            ):
+                # The native session freezes its collaboration and tool configuration.
+                self._reset_interaction_session(c)
             write_json(c.store.root / "coordination/config.json", config.public())
             c.state["mode"] = config.mode
             c.save()
@@ -232,33 +238,10 @@ class ResearchApp:
             # cancellation. Reload them instead of replacing the whole config.
             config = self.config(c)
             if any(settings[field] != getattr(config, field) for field in MODEL_FIELDS):
-                # Preserve the intake dialogue when switching runtimes before
-                # research starts; native session histories have different formats.
-                actor = c.actor("interaction")
-                actor.session_id = new_id("session")
-                c.save_actor(actor)
-                dialogue = sorted(
-                    (
-                        item
-                        for item in c.store.records("messages", ResearchMessage)
-                        if item.sender == "user" or item.recipient == "user"
-                    ),
-                    key=lambda item: item.created_at,
-                )
-                write_json(
-                    c.store.paths.agent("interaction")
-                    / "sessions"
-                    / actor.session_id
-                    / "backend-handoff.json",
-                    {
-                        "previous_dialogue": [
-                            {"sender": item.sender, "text": item.text} for item in dialogue
-                        ]
-                    },
-                )
+                self._reset_interaction_session(c)
             for field, value in settings.items():
                 setattr(config, field, value)
-            config.model_settings_pinned = True
+            config.pin_model_settings()
             config.model_settings_revision = new_id("model")
             if key:
                 self.save_credentials(c, config, key)
@@ -271,9 +254,34 @@ class ResearchApp:
             write_json(directory / "config.json", config.public())
             c.store.event("model_settings_updated", **settings)
             if active:
-                # Resume the same delivery and session, including an interrupted
-                # API retry. The attach path also handles a later process restart.
+                # Resume the pending delivery using the selected session.
                 await self.attach(c)
+
+    @staticmethod
+    def _reset_interaction_session(c: Coordinator) -> None:
+        """Keep intake dialogue when a frozen runtime or tool schema changes."""
+        actor = c.actor("interaction")
+        actor.session_id = new_id("session")
+        dialogue = sorted(
+            (
+                item
+                for item in c.store.records("messages", ResearchMessage)
+                if item.sender == "user" or item.recipient == "user"
+            ),
+            key=lambda item: item.created_at,
+        )
+        write_json(
+            c.store.paths.agent("interaction")
+            / "sessions"
+            / actor.session_id
+            / "backend-handoff.json",
+            {
+                "previous_dialogue": [
+                    {"sender": item.sender, "text": item.text} for item in dialogue
+                ]
+            },
+        )
+        c.save_actor(actor)
 
     @staticmethod
     def parse_model_settings(values: dict[str, Any]) -> tuple[dict[str, str], str]:
@@ -326,7 +334,7 @@ class ResearchApp:
             conversation = False
         elif self.default_config is None:
             config = (
-                ResearchConfig(TaskBrief("新的研究", ""))
+                ResearchConfig(TaskBrief("新的研究", ""), collaboration_modules=DEFAULT_MODULES)
                 if conversation
                 else example_config(
                     params.get("template", "kernelbench"), repository=self.repository
@@ -343,17 +351,20 @@ class ResearchApp:
             config.brief.limits.__post_init__()
         if config.metadata.get("simulation_only") and not simulated:
             raise ValueError(
-                "This template is for workflow simulation; configure real runners first"
+                "This template is for research simulation; configure real runners first"
             )
         if "collaboration" in params:
             self.select_collaboration(config, params["collaboration"])
         config.pin_model_settings()
+        selected_modules(config.mode, config.collaboration_modules)
         if "model_settings" in params:
             settings, key = self.parse_model_settings(params["model_settings"])
             for field, value in settings.items():
                 setattr(config, field, value)
         else:
             key = ""
+        config.pin_model_settings()
+        config.connection_settings()
         key = key or config.api_key()
         if not conversation and config.seed_dir and not Path(config.seed_dir).is_dir():
             raise FileNotFoundError(f"Seed directory does not exist: {config.seed_dir}")
@@ -389,7 +400,7 @@ class ResearchApp:
                     "agent_id": "rsi",
                     "simulated": True,
                     "shared": True,
-                    "description": "Synthetic development trajectory for workflow testing",
+                    "description": "Synthetic development trajectory for research testing",
                     "attempts": [
                         {
                             "failure": "Tail tile writes past output bounds",
@@ -449,8 +460,12 @@ class ResearchApp:
         if "intake" in c.state and c.state["intake"].get("status") != "ready":
             raise ValueError("请先与 Interaction 确认研究目标和执行条件")
         config = self.config(c)
+        selected_modules(config.mode, config.collaboration_modules)
         config.brief = c.store.brief()
         config.__post_init__()
+        config.validate_clock()
+        config.pin_model_settings()
+        config.connection_settings()
         write_json(c.store.root / "coordination" / "config.json", config.public())
         pending_setup = c.state.get("execution_setup") == "pending"
         # A complete operator configuration imported during intake needs no
@@ -461,7 +476,11 @@ class ResearchApp:
             and not validate_execution(config)
         )
         if config.mode == "passk" and pending_setup and not prepared_setup:
-            raise ValueError("passk requires the execution setup to be complete before starting")
+            issues = validate_execution(config)
+            raise ValueError(
+                "passk requires the execution setup to be complete before starting: "
+                + ("；".join(issues) if issues else "尚未登记实际执行命令")
+            )
         if "intake" in c.state and not pending_setup:
             issues = validate_execution(config)
             if issues:
@@ -488,7 +507,7 @@ class ResearchApp:
         )
         write_json(
             c.store.root / "coordination/collaboration.json",
-            manifest(config.mode, config.collaboration_modules, config.research_prompt_variant),
+            manifest(config.mode, config.collaboration_modules),
             immutable=True,
         )
         if "intake" in c.state:
@@ -584,10 +603,12 @@ class ResearchApp:
             existing.execution.close()
             await existing.tools.close()
         config = self.config(c)
-        plan = build_plan(config.mode, config.collaboration_modules, config.research_prompt_variant)
+        if c.state.get("started_at"):
+            config.validate_clock()
+        plan = build_plan(config.mode, config.collaboration_modules)
         frozen = c.store.root / "coordination/collaboration.json"
         if frozen.exists() and json.loads(frozen.read_text()) != manifest(
-            config.mode, config.collaboration_modules, config.research_prompt_variant
+            config.mode, config.collaboration_modules
         ):
             raise ValueError("协作实现与启动时冻结的版本不同；请使用原版本恢复或新建研究")
         runtime = self.runtime_factory(config)
@@ -607,7 +628,7 @@ class ResearchApp:
         await actions.initialize_workspace("rsi")
         register_sources(
             actions,
-            enabled=config.backend == "standard" and config.metadata.get("allow_web_access", True),
+            enabled=config.backend != "codex" and config.metadata.get("allow_web_access", True),
         )
         agent_tools = AgentTools(
             actions,
@@ -645,21 +666,6 @@ class ResearchApp:
                 # The engine pauses at a hard budget. A configured closeout must
                 # still run without a user having to turn that pause into a stop.
                 c.stop("探索时间已到，停止研究并自动验证和归档已有产物")
-            limit = current.brief.limits.max_wall_seconds
-            reserve = current.metadata.get("finalization_reserve_seconds", 0)
-            started = c.state.get("started_at")
-            if (
-                current.finalizer
-                and current.mode != "passk"
-                and limit
-                and reserve
-                and current.metadata.get("time_limit_scope", "total") == "total"
-                and started
-                and c.state["status"] == "running"
-            ):
-                elapsed = datetime.now().timestamp() - datetime.fromisoformat(started).timestamp()
-                if elapsed >= limit - reserve:
-                    c.stop("已到探索时间上限，预留剩余时间自动复测最佳版本")
             if c.state["status"] == "stopped":
                 execution.close(cancel=True)
                 return False
@@ -692,7 +698,7 @@ class ResearchApp:
                 execution.close(cancel=True)
                 current = self.active[c.store.run_id].config
                 if (
-                    current.finalizer
+                    current.needs_finalization
                     and c.state["status"] in {"stopped", "succeeded"}
                     and not c.state.get("user_stopped")
                 ):
@@ -881,6 +887,7 @@ class ResearchApp:
                         withdrawn[candidate_id] = c.store.is_withdrawn(candidate_id)
                     if withdrawn[candidate_id]:
                         continue
+                    jobs[-1]["search_eligible"] = True
                     for public_node in nodes:
                         if public_node["iteration_id"] == info.get("iteration_id"):
                             previous = public_node["verification"]
@@ -908,9 +915,12 @@ class ResearchApp:
                         iteration_id=report_record.iteration_id,
                         data={**event.data, "report_id": report_record.report_id},
                     )
+        from areal_rsi.ui.research_graph import communications
+
         return {
             **summary,
             "objective": c.store.brief().objective,
+            "communications": communications(c.store, all_messages, nodes, jobs, delivered),
             "nodes": nodes,
             "edges": edges,
             "messages": messages,
@@ -962,16 +972,13 @@ class ResearchApp:
                 manager.close(preserve_running=False)
                 destination = self.root / ".deleting" / new_id("research")
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                c.store.paths.legacy_state.unlink(missing_ok=True)
                 c.store.root.rename(destination)
             await asyncio.to_thread(shutil.rmtree, destination)
         return {"run_id": c.store.run_id, "status": "deleted"}
 
     async def call(self, action: str, params: dict[str, Any]) -> Any:
         if action == "recover":
-            for run in FileRunStore(self.root).list(ExperimentRun):
-                if run.plan.workflow != "research":
-                    continue
+            for run in FileRunStore(self.root).list(ResearchRun):
                 try:
                     c = self.coordinator(run.run_id)
                     config = self.config(c)
@@ -979,13 +986,14 @@ class ResearchApp:
                     continue
                 finalization = c.state.get("finalization") or {}
                 if (
-                    config.metadata.get("auto_resume")
+                    config.mode in MODES
+                    and config.metadata.get("auto_resume")
                     and c.state.get("started_at")
                     and not c.state.get("user_stopped")
                     and (
                         c.state["status"] == "running"
                         or (
-                            config.finalizer
+                            config.needs_finalization
                             and c.state["status"] in {"stopped", "succeeded"}
                             and finalization.get("status") not in {"completed", "failed"}
                         )
@@ -998,7 +1006,9 @@ class ResearchApp:
                         c.store.event("recovery_failed", error=type(exc).__name__)
             return {}
         if action == "bootstrap":
-            config = self.default_config or ResearchConfig(TaskBrief("新的研究", ""))
+            config = self.default_config or ResearchConfig(
+                TaskBrief("新的研究", ""), collaboration_modules=DEFAULT_MODULES
+            )
             return {
                 "service": "areal-rsi",
                 "api_version": 1,
@@ -1022,7 +1032,7 @@ class ResearchApp:
                 ],
             }
         if action == "list":
-            runs = FileRunStore(self.root).list(ExperimentRun)
+            runs = FileRunStore(self.root).list(ResearchRun)
             # Workbench organization is independent of frozen experiment records.
             group_file = self.root / "workbench-groups.json"
             groups = json.loads(group_file.read_text())["groups"] if group_file.exists() else []
@@ -1032,7 +1042,7 @@ class ResearchApp:
                 for run_id in group["run_ids"]
             }
 
-            def created_at(run: ExperimentRun) -> str:
+            def created_at(run: ResearchRun) -> str:
                 c = self.coordinator(run.run_id)
                 if c.state.get("created_at"):
                     return str(c.state["created_at"])
@@ -1057,8 +1067,7 @@ class ResearchApp:
                             "group": run_groups.get(r.run_id),
                         }
                         for r in runs
-                        if r.plan.workflow == "research"
-                        and (
+                        if (
                             self.allow_simulation
                             or not self.coordinator(r.run_id).state["simulated"]
                         )
@@ -1078,6 +1087,9 @@ class ResearchApp:
             )
         if action == "delete":
             return await self.delete(c)
+        if action not in {"export", "stop"}:
+            config = self.config(c)
+            selected_modules(config.mode, config.collaboration_modules)
         if action != "export" and self.worker_elsewhere(c):
             raise ValueError(
                 "This run is controlled by another live process. Close that worker "
@@ -1125,7 +1137,7 @@ class ResearchApp:
                     )
                 c.state.pop("user_stopped", None)
                 c.save()
-                if self.config(c).finalizer and c.state.get("finalization"):
+                if self.config(c).needs_finalization and c.state.get("finalization"):
                     if c.state["finalization"]["status"] == "completed":
                         raise ValueError("最终复测已完成；继续探索请新建研究")
                     active = await self.attach(c)

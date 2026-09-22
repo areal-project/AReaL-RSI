@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from test_collaboration_config import app_at
 
 from areal_rsi.api.base import RecordRef
 from areal_rsi.api.research import (
@@ -26,7 +27,7 @@ from areal_rsi.coordination.jobs import ResearchExecution
 from areal_rsi.coordination.store import ResearchStore
 from areal_rsi.coordination.verification import read_trusted_result
 from areal_rsi.execution import ApprovedCommand, JobRecord, JobSpec
-from areal_rsi.modules.responses import ToolCall
+from areal_rsi.modules.agent_runtime import ToolCall
 
 
 def test_command_parameter_help_survives_config_and_preserves_execution(tmp_path: Path) -> None:
@@ -373,5 +374,88 @@ def test_running_job_can_be_shared_and_reported_before_completion_after_recovery
                 assert "failure_log" not in status.output
         finally:
             runner.close(cancel=True)
+
+    asyncio.run(scenario())
+
+
+def test_verifier_only_run_automatically_confirms_best_candidate(tmp_path: Path) -> None:
+    script = tmp_path / "verify.py"
+    script.write_text("""import json, os, sys
+from pathlib import Path
+output, workspace, phase = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+assert phase == 'final' and (workspace/'answer').read_text() == 'best'
+assert os.environ['CUDA_VISIBLE_DEVICES'] == '0'
+job = json.loads((workspace.parents[2]/'jobs'/output.name/'job.json').read_text())
+meta = job['spec']['metadata']
+(output/'evaluation.json').write_text(json.dumps(dict(
+    status='completed', simulated=False, phase=phase, metric='quality', score=0.4,
+    metrics={'quality':0.4}, protocol_id='fixed', manifest_id='final',
+    candidate_id=meta['candidate_id'], candidate_digest=meta['candidate_digest'])))
+""")
+    config = ResearchConfig(
+        TaskBrief(
+            "Research",
+            "Improve answer",
+            verification=VerificationContract(
+                "quality", target=0.5, identity={"require_final_confirmation": True}
+            ),
+        ),
+        verifier=ApprovedCommand(
+            "verify",
+            (sys.executable, str(script), "{output}", "{workspace}", "{phase}"),
+            ("output", "workspace", "phase"),
+            gpu_count=1,
+        ),
+        metadata={
+            "time_limit_scope": "exploration",
+            "verification_identity": {
+                "adapter": "content",
+                "phases": {
+                    p: {"protocol_id": "fixed", "manifest_id": p} for p in ("search", "final")
+                },
+            },
+        },
+    )
+    config.brief.limits.gpu_ids = ("0",)
+
+    async def scenario() -> None:
+        app = app_at(tmp_path)
+        try:
+            detail = await app.create({"config": config.public()})
+            c = app.coordinator(detail["run_id"])
+            workspace = tmp_path / "candidate"
+            workspace.mkdir()
+            for text, score in (("fallback", 0.6), ("best", 0.9)):
+                (workspace / "answer").write_text(text)
+                candidate = await c.store.snapshot(workspace, agent_id="operator", description=text)
+                result = VerifiedResult(
+                    text,
+                    candidate.candidate_id,
+                    c.store.contract_digest(),
+                    now(),
+                    "succeeded",
+                    score=score,
+                    passed=True,
+                )
+                c.store.record_verification(result)
+                c.store.consider_best(result.result_id)
+            await app.start(c)
+            c = app.coordinator(detail["run_id"])
+            active = app.active[c.store.run_id]
+            await active.engine.tick()
+            assert c.state["status"] == "stopped", "Search alone must not declare success"
+            await asyncio.wait_for(active.task, 10)
+            assert c.state["finalization"]["status"] == "completed"
+            final_ref = c.store.run().final_result_ref
+            assert final_ref is not None
+            final = c.store.public_record(final_ref)
+            assert final["score"] == 0.4 and final["candidate_id"] == candidate.candidate_id
+            assert c.state["status"] == "stopped"
+            jobs = json.loads((c.store.root / "coordination/jobs.json").read_text())
+            assert len(jobs) == 1 and next(iter(jobs.values()))["phase"] == "final"
+            await app.call("recover", {})
+            assert len(list((c.store.root / "jobs").glob("*/job.json"))) == 1
+        finally:
+            await app.close()
 
     asyncio.run(scenario())

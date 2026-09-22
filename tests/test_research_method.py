@@ -11,7 +11,7 @@ from areal_rsi.coordination.actions import ResearchActions
 from areal_rsi.coordination.agent_config import AgentConfig, research_prompt, run_method
 from areal_rsi.coordination.config import ResearchConfig, config_from_dict, load_config
 from areal_rsi.coordination.coordinator import Coordinator
-from areal_rsi.modules.responses import ToolCall, ToolResult
+from areal_rsi.modules.agent_runtime import ToolCall, ToolResult
 from areal_rsi.research_app import ResearchApp
 
 
@@ -99,9 +99,11 @@ def test_skills_only_and_snapshot_integrity(tmp_path: Path) -> None:
     assert config.agents.research is not None
     method = AgentConfig(skills=config.agents.research.skills)
     method.freeze()
-    from areal_rsi.agents.research.prompt import PROMPT
+    from areal_rsi.coordination.collaboration import build_plan
 
-    assert research_prompt("default", method.snapshot).startswith(PROMPT)
+    assert research_prompt("default", method.snapshot).startswith(
+        build_plan("passk").research_prompt
+    )
     assert method.snapshot is not None
     method.snapshot.skills["check/SKILL.md"] = "tampered"
     with pytest.raises(ValueError, match="digest"):
@@ -190,19 +192,19 @@ def test_documented_example_loads() -> None:
     assert "dispatch/SKILL.md" in config.agents.rsi.snapshot.skills
 
 
-def test_skills_override_preserves_main_prompt_variant(tmp_path: Path) -> None:
+def test_skills_override_preserves_selected_collaboration_prompt(tmp_path: Path) -> None:
     from areal_rsi.coordination.collaboration import build_plan
 
     path = experiment(tmp_path / "method")
     path.write_text(
         "brief:\n  objective: Inspect\n  instructions: Report\n"
-        "research_prompt_variant: detailed\n"
+        "collaboration_modules: [leader_guidance]\n"
         "agents:\n  research:\n    skills: skills\n"
     )
     config = load_config(path)
     assert config.agents.research is not None
     assert config.agents.research.snapshot is not None
-    expected = build_plan(config.mode, config.collaboration_modules, "detailed")
+    expected = build_plan(config.mode, config.collaboration_modules)
     assert config.agents.research.snapshot.prompt == expected.research_prompt
 
 
@@ -229,8 +231,7 @@ def test_single_component_for_one_role_keeps_other_role_default(
     role: str,
     component: str,
 ) -> None:
-    from areal_rsi.agents.research.prompt import PROMPT as RESEARCH_PROMPT
-    from areal_rsi.agents.rsi.prompt import PROMPT as RSI_PROMPT
+    from areal_rsi.coordination.collaboration import build_plan
 
     source = tmp_path / "prompt.md"
     source.write_text("CUSTOM ROLE")
@@ -246,7 +247,8 @@ def test_single_component_for_one_role_keeps_other_role_default(
     config.agents.freeze()  # Same path as programmatic/API run creation.
     agent = getattr(config.agents, role)
     assert agent.snapshot is not None
-    default = {"research": RESEARCH_PROMPT, "rsi": RSI_PROMPT}[role]
+    plan = build_plan("passk")
+    default = {"research": plan.research_prompt, "rsi": plan.rsi_prompt}[role]
     assert agent.snapshot.prompt == ("CUSTOM ROLE" if component == "prompt" else default)
     assert agent.snapshot.skills == ({} if component == "prompt" else {"SKILL.md": "CUSTOM SKILL"})
     other = "research" if role == "rsi" else "rsi"

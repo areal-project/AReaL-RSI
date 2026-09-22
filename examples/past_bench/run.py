@@ -769,7 +769,6 @@ def research_config(lock_path: Path, seed: Path, *, target: float | None = None)
             ResearchLimits(
                 max_agents=1,
                 max_nodes=8,
-                max_model_calls=100,
                 max_verify_calls=4,
                 max_jobs=1,
                 max_wall_seconds=14400,

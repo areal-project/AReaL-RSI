@@ -1,10 +1,12 @@
+from pathlib import Path
+
 import pytest
 
 from areal_rsi.api.research import ResearchLimits, TaskBrief
 from areal_rsi.coordination.coordinator import Coordinator
 
 
-def test_resume_preserves_node_report_and_budget(tmp_path):
+def test_resume_preserves_node_report_and_budget(tmp_path: Path) -> None:
     c = Coordinator.create(tmp_path, TaskBrief("research", "", ResearchLimits(max_nodes=1)))
     c.start()
     agent = c.spawn(key="first", direction="A", instruction="complete quota")["agent_id"]

@@ -15,14 +15,16 @@ class ResearchLimits:
     max_agents: int = (
         1  # Simultaneously live researchers, including waiting; not lifetime creations.
     )
-    max_nodes: int | None = 20
-    max_model_calls: int | None = 200
-    max_total_tokens: int | None = 1_000_000
+    max_nodes: int | None = None
+    # Retained for configuration compatibility; execution rejects non-null caps.
+    max_model_calls: int | None = None
+    max_total_tokens: int | None = None
     max_wall_seconds: float | None = 14400
-    max_verify_calls: int | None = 20
+    max_verify_calls: int | None = None
     max_jobs: int | None = 1
     gpu_ids: tuple[str, ...] = ()
     allowed_paths: tuple[str, ...] = ("*",)
+    max_effective_seconds: float | None = None  # Per researcher; wall limit stays independent.
 
     def __post_init__(self) -> None:
         for name in (
@@ -31,6 +33,7 @@ class ResearchLimits:
             "max_model_calls",
             "max_total_tokens",
             "max_wall_seconds",
+            "max_effective_seconds",
             "max_verify_calls",
             "max_jobs",
         ):
@@ -43,7 +46,9 @@ class ResearchLimits:
                 raise ValueError(f"{name} must be positive")
             if not math.isfinite(value):
                 raise ValueError(f"{name} must be finite")
-            if name != "max_wall_seconds" and not isinstance(value, int):
+            if name not in {"max_wall_seconds", "max_effective_seconds"} and not isinstance(
+                value, int
+            ):
                 raise ValueError(f"{name} must be an integer")
         if len(set(self.gpu_ids)) != len(self.gpu_ids):
             raise ValueError("GPU identifiers must be unique")

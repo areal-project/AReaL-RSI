@@ -46,3 +46,14 @@ def test_editor_grant_does_not_authorize_shell(tmp_path: Path) -> None:
     value["tools"].append("bash@v1")
     config, _ = compile_config(value)
     assert "workspace.run" in config["toolBindings"][0]["toolNames"]
+
+
+def test_hermes_receives_research_model_settings(tmp_path: Path) -> None:
+    import json
+
+    value = request(tmp_path, "hermes")
+    value.update(mcp=[], reasoning_effort="low", context_window_tokens=96000)
+    compile_config(value)
+    native = json.loads((tmp_path / "hermes-home/config.yaml").read_text())
+    assert native["agent"]["reasoning_effort"] == "low"
+    assert native["model"]["context_length"] == 96000

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
+from areal_rsi.agents.communication import RUN_BOUNDARY_PROMPT
 from areal_rsi.coordination.actions import ResearchActions
 
 TOOL_PROMPT = """日常文件操作和命令执行使用 Runtime 提供的 workspace 工具。
@@ -40,19 +41,26 @@ class AgentTools:
 
     def configure(self, instructions: str | None) -> None:
         self.tool_prompt = (instructions + "\n" if instructions else "") + (
-            CODEX_TOOL_PROMPT if self.backend == "codex" else TOOL_PROMPT
+            CODEX_TOOL_PROMPT if self.backend == "codex" else (
+                "文件操作和命令执行使用当前后端的原生工具。RSI 工具调用方法见下方 Runtime 说明。\n"
+                "允许联网时使用 search_web / fetch_url；实验使用 run_job / wait_for_job。\n"
+                if self.backend == "runtime" else TOOL_PROMPT
+            )
         )
 
     def instructions(self, agent_id: str) -> str:
         if agent_id == "rsi" and self.supervisor_only:
             return (
+                RUN_BOUNDARY_PROMPT + "\n"
                 "先用 start_researchers 启动团队；用 get_state 查看进展，"
                 "用 continue_researcher 提醒已停下来的研究员继续。\n"
                 "没有需要处理的事项时用 wait 等待新报告。只使用这些监督工具。"
                 "RSI 工具的调用方法见下方 Runtime 说明。"
             )
         return (
-            self.tool_prompt
+            RUN_BOUNDARY_PROMPT
+            + "\n"
+            + self.tool_prompt
             + "\n你的默认工作区："
             + str(self.actions.workspace(agent_id).resolve())
         )

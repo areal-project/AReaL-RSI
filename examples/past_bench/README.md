@@ -162,37 +162,29 @@ configure 不启动研究或调用模型。完整模式允许编辑 `prompt.md` 
 内直接填写结果对象。缺少任务或身份不匹配会暂停，不会自动回退重跑。
 详见[全量评测规则](../../docs/full-benchmark-evaluation.md)。
 
-## 在 TUI 中一句话启动
+## 启动研究
 
-完成上述配置后，在 `.env` 中设置 `RSI_RESEARCH_CONFIG=/absolute/path/research.json`。
-通用 TUI 默认读取 `.rsi/research.json`，也可以将生成的配置保存到此位置。
-原 `RSI_PAST_BENCH_CONFIG` 不再使用；旧配置须通过新入口重新 prepare/configure。
-确保 Docker 已启动、研究模型和 operator 引用的凭证已加载，然后运行：
+完成上述配置、启动 Docker 并加载研究模型与 operator 引用的凭证后，使用生成的
+`research.json` 启动当前 ResearchApp：
 
 ```bash
-./tui
+uv run --env-file .env --locked rsi research --config /absolute/path/research.json
 ```
 
-在 TUI 中输入：**开始优化 Task Agent 在 PAST-Bench 上的表现。**
-
-Interaction 会调用 `rsi_research_start`，按已准备的配置直接启动，不再要求第二次确认。
-仅询问方法或要求计划不会启动。运行前检查协议、依赖、镜像、任务划分和凭证是否存在；
+可先运行 `rsi preflight --config /absolute/path/research.json` 检查当前研究运行时。
+适配器的 `preflight` 检查协议、依赖、镜像、任务划分和凭证是否存在；
 这不等于提前验证网络或模型接口可用。更改适配器后必须重新 prepare/configure。
 
 默认优化方法为：测量 seed baseline；围绕记忆筛选、检索、规则作用域、更新或迁移提出假设；
 修改提示词或 Hermes 实现；development 诊断、search 比较；最后冻结候选并全量复测。
 baseline 已向研究者公开，因此最终对比衡量的是已见 Benchmark 上的提升，不代表未见任务泛化。
 同时观察持久化开启和关闭的绝对得分，不通过降低关闭组成绩制造提升。
-默认预算为 1 个 Research Agent、最多 8 个节点、100 次研究模型调用、4 次验证调用、
+默认预算为 1 个 Research Agent、最多 8 个节点、4 次验证调用、
 1 个并行执行作业、4 小时。4 次验证需包含 baseline 和 final，不代表完整迭代 4 轮；
 development 诊断另外占用作业和时间预算。模型调用有实际费用。
 
-后台服务默认在 `127.0.0.1:8198`，可通过 `RSI_RESEARCH_PORT` 更换端口；研究数据位于
-`RSI_DATA_ROOT/research/`（未设置时为 `.rsi/research/`）。历史目录保留，不自动迁移已有研究。
-该入口自动启动独立工作台，退出 TUI 不会终止研究。返回链接可查看真实进度。
-可继续说“查看这次研究进度”“暂停这次研究”“继续这次研究”或“停止这次研究”。
-暂停不强杀已运行的评测，停止会取消作业。工具重试复用同一个 request_id，避免重复研究。
-更新代码或凭证后应重启专用工作台服务；已有研究保留自己的配置和候选快照。
+同一数据目录下可使用 `rsi research --resume <run_id>` 恢复研究；也可通过当前工作台
+查看进度及暂停/继续。历史 TUI 目录不会自动迁移。
 
 TUI 用 `rsi_research_status` / `rsi_research_control` 管理新版研究，不混用旧版
 `rsi_status` / `rsi_resume`。只有实际完成全量评测后才能报告全量成绩。

@@ -10,31 +10,24 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, patch
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from areal_rsi.api.base import (
     BenchmarkSplit,
     ContentRef,
-    EvolutionTarget,
-    ExperimentPlan,
     HarnessChange,
-    RunState,
-    TrajectoryRef,
     VerificationRequest,
     VerificationResult,
     VerificationStatus,
     VerifierSpec,
 )
-from areal_rsi.api.workflow import WorkflowContext
 from areal_rsi.base.storage import (
     FileContentStore,
-    FileMemory,
     FileTrajectoryStore,
     FileVersionManager,
     decode,
 )
-from areal_rsi.config import ModelConfigurationError
 from areal_rsi.modules.remote.envarena.benchmark import ArenaBenchmark
 from areal_rsi.modules.remote.envarena.client import (
     ArenaClient,
@@ -52,16 +45,12 @@ from areal_rsi.modules.remote.envarena.harness import (
     snapshot,
     validate_change,
 )
-from areal_rsi.modules.remote.envarena.research import ArenaResearchAgent
 from areal_rsi.modules.remote.envarena.runtime import (
     AmbiguousSubmission,
     ArenaEvaluation,
     ArenaHarnessRuntime,
     ArenaVerifier,
 )
-from areal_rsi.remote_app import RemoteApp
-from areal_rsi.ui.experiments import ExperimentController
-from areal_rsi.workflows.service import LocalExperimentService
 
 REF = {"key": "base", "version": "1.0.0"}
 
@@ -799,181 +788,12 @@ class RemoteTest(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaisesRegex(ValueError, "内容与请求不符"):
                     await self.client.ensure_version("benchmarks", "test", spec)
 
-    async def test_remote_app_separates_research_model_and_never_persists_credentials(self) -> None:
-        path = self.root / "app.yaml"
-        path.write_text(
-            "benchmark: base@1.0.0\nharness: base@1.0.0\nmodel: base@1.0.0\n"
-            "train_cases: [train-a]\nvalidate_cases: [validate]\nallowed_changes: [system_prompt]\n"
-        )
-        root = self.root / "app"
-        with (
-            patch.dict(
-                "os.environ",
-                {
-                    "RSI_MODEL": "research-model",
-                    "RSI_BASE_URL": "http://localhost:1/v1",
-                    "RSI_API_KEY": "local-test-secret",
-                    "ARENA_OPENAPI_TOKEN": "arena-test-secret",
-                    "RSI_ARENA_CONFIG": str(path),
-                },
-                clear=True,
-            ),
-            patch(
-                "areal_rsi.modules.remote.envarena.backend.ArenaClient", return_value=self.client
-            ),
-        ):
-            app = await RemoteApp.create(root, lambda _: None)
-            baseline = app.baseline
-            self.assertEqual(baseline.model.name, "remote-model")
-            self.assertEqual(app.rsi.model.name, "research-model")
-            self.assertEqual(app.rsi.target_model_name, "remote-model")
-            await app.close()
-            path.write_text(path.read_text() + "timeout_seconds: 6000\npoll_seconds: 1\n")
-            reopened = await RemoteApp.create(root, lambda _: None)
-            self.assertEqual(reopened.baseline, baseline)
-            await reopened.close()
-            self.assertEqual(len(list((root / "remote" / "observers").glob("*.json"))), 2)
-            path.write_text(path.read_text() + "max_parallel: 4\n")
-            with self.assertRaisesRegex(ValueError, "评测配置已改变"):
-                await RemoteApp.create(root, lambda _: None)
-        for file in root.rglob("*"):
-            if file.is_file():
-                for secret in (
-                    b"local-test-secret",
-                    b"arena-test-secret",
-                    b"secret-test-only",
-                    b"DO-NOT-LEAK-ORACLE",
-                ):
-                    self.assertNotIn(secret, file.read_bytes(), str(file))
-
-    async def test_remote_mcp_plan_binds_independent_agent_models_on_resume(self) -> None:
-        path = self.root / "app.yaml"
-        path.write_text(
-            "benchmark: base@1.0.0\nharness: base@1.0.0\nmodel: base@1.0.0\n"
-            "train_cases: [train-a]\nvalidate_cases: [validate]\nallowed_changes: [system_prompt]\n"
-        )
-        root = self.root / "app"
-        overrides = {
-            "rsi-agent": {"model": "controller-model"},
-            "research-agent": {"model": "research-model"},
-        }
-        with (
-            patch.dict(
-                "os.environ",
-                {
-                    "RSI_MODE": "remote",
-                    "RSI_TEACHER_MODEL": "default-model",
-                    "RSI_TEACHER_BASE_URL": "http://localhost:1/v1",
-                    "RSI_AGENT_MODELS": json.dumps(overrides),
-                    "RSI_RESEARCH_AGENT_COUNT": "2",
-                    "RSI_ARENA_CONFIG": str(path),
-                },
-                clear=True,
-            ),
-            patch(
-                "areal_rsi.modules.remote.envarena.backend.ArenaClient", return_value=self.client
-            ),
-        ):
-            record = await ExperimentController(root).plan("remote fixture", 1)
-            plan = decode(ExperimentPlan, record["plan"])
-            self.assertEqual(plan.research_agent_count, 2)
-            self.assertEqual(plan.config["target_model_name"], "remote-model")
-            app = await RemoteApp.create(root, lambda _: None)
-            try:
-                await app.bind_plan(plan)
-                self.assertEqual(app.agent_models["rsi-agent"].name, "controller-model")
-                self.assertEqual(app.agent_models["research-agent-1"].name, "research-model")
-                self.assertIs(
-                    app.agent_runtimes["research-agent-1"],
-                    app.agent_runtimes["research-agent-2"],
-                )
-                self.assertNotIn("task-agent", app.agent_runtimes)
-                baseline = app.baseline
-            finally:
-                await app.close()
-            overrides["research-agent"]["model"] = "different-research-model"
-            with patch.dict("os.environ", {"RSI_AGENT_MODELS": json.dumps(overrides)}):
-                changed = await RemoteApp.create(root, lambda _: None)
-                try:
-                    self.assertEqual(changed.baseline, baseline)
-                    with self.assertRaisesRegex(ModelConfigurationError, "research-agent-1"):
-                        await changed.bind_plan(plan)
-                finally:
-                    await changed.close()
-        self.assertEqual(len(self.client.jobs), 0)
-
     async def test_verifier_infra_failure_is_not_aggregated_as_zero_reward(self) -> None:
         result = VerificationResult(
             "task", "trace", None, None, {}, "", status=VerificationStatus.INFRA_ERROR
         )
         with self.assertRaisesRegex(ValueError, "Verifier 未成功完成"):
             await ArenaEvaluation().evaluate(self.solution, BenchmarkSplit.TRAIN, [result])
-
-    async def test_remote_runtime_roles_and_configuration_are_bound_to_plan(self) -> None:
-        path = self.root / "app.yaml"
-        path.write_text(
-            "benchmark: base@1.0.0\nharness: base@1.0.0\nmodel: base@1.0.0\n"
-            "train_cases: [train-a]\nvalidate_cases: [validate]\nallowed_changes: [system_prompt]\n"
-        )
-        runtime_path = self.root / "runtime.json"
-        runtime_path.write_text(
-            json.dumps(
-                {
-                    "default": {"kind": "fake"},
-                    "roles": {"research-agent": {"kind": "dsh"}},
-                }
-            )
-        )
-        root = self.root / "app"
-        with (
-            patch.dict(
-                "os.environ",
-                {
-                    "RSI_MODE": "remote",
-                    "RSI_TEACHER_MODEL": "shared-model",
-                    "RSI_TEACHER_BASE_URL": "http://localhost:1/v1",
-                    "RSI_RUNTIME_CONFIG": str(runtime_path),
-                    "RSI_ARENA_CONFIG": str(path),
-                    "RSI_RESEARCH_AGENT_COUNT": "2",
-                },
-                clear=True,
-            ),
-            patch(
-                "areal_rsi.modules.remote.envarena.backend.ArenaClient", return_value=self.client
-            ),
-        ):
-            app = await RemoteApp.create(root, lambda _: None)
-            try:
-                controller = app.agent_runtimes["rsi-agent"]
-                researcher = app.agent_runtimes["research-agent-1"]
-                self.assertEqual(controller.selection["kind"], "fake")
-                self.assertEqual(researcher.selection["kind"], "dsh")
-                self.assertIsNot(controller, researcher)
-                self.assertIs(researcher, app.agent_runtimes["research-agent-2"])
-                plan = ExperimentPlan(
-                    "runtime binding",
-                    "harness-evolution",
-                    app.service.context.benchmark.name,
-                    app.baseline.solution_id,
-                    EvolutionTarget.HARNESS,
-                    1,
-                    research_agent_count=2,
-                    config=app.model_plan_config(),
-                )
-                await app.bind_plan(plan)
-                with patch.object(researcher, "close", new_callable=AsyncMock) as close:
-                    await app.close()
-                    close.assert_awaited_once()
-            finally:
-                await app.close()
-            runtime_path.write_text(json.dumps({"default": {"kind": "fake"}}))
-            changed = await RemoteApp.create(root, lambda _: None)
-            try:
-                with self.assertRaisesRegex(ModelConfigurationError, "Runtime"):
-                    await changed.bind_plan(plan)
-            finally:
-                await changed.close()
-        self.assertEqual(len(self.client.jobs), 0)
 
     async def test_invalid_case_weights_are_rejected_without_changing_scoring(self) -> None:
         spec = self.client.versions["/benchmarks/base/versions/1.0.0"]["spec"]
@@ -1040,92 +860,6 @@ class RemoteTest(unittest.IsolatedAsyncioTestCase):
         spec["aggregation"]["failed_task_policy"] = "exclude"
         with self.assertRaisesRegex(ValueError, "评分语义"):
             await ArenaBenchmark(self.client, self.config).load()
-
-    async def test_complete_workflow_uses_three_batch_jobs_and_no_local_task_runtime(self) -> None:
-        session = AsyncMock()
-        session.finish.return_value = TrajectoryRef("research-trace")
-        research_runtime = Mock(mcp_registry={}, open=AsyncMock(return_value=session))
-        researcher = ArenaResearchAgent(
-            "research-agent-1",
-            research_runtime,
-            self.solution.model,
-            self.content,
-            FileMemory(self.root / "memory"),
-            self.versions,
-            self.root / "research",
-            file_tools_only=True,
-            evidence_access=lambda entry: entry.kind != "task",
-        )
-        researcher.allowed_changes = self.config.allowed_changes
-
-        async def reply(prompt: str) -> str:
-            workspace = Path(research_runtime.open.call_args.kwargs["workspace_root"])
-            index = json.loads((workspace / "train/index.json").read_text())
-            entries = index["files"]
-            self.assertFalse(any(entry["kind"] == "task" for entry in entries))
-            attachments = [entry for entry in entries if entry["kind"] == "attachment"]
-            self.assertEqual(len(attachments), 2)
-            for entry in attachments:
-                self.assertEqual(
-                    (workspace / "train" / entry["path"]).read_bytes(), b"generated source"
-                )
-            self.assertNotIn("actual answer", prompt)
-            self.assertNotIn("generated source", prompt)
-            self.assertFalse(list(workspace.rglob("task.json")))
-            spec = research_runtime.open.call_args.args[0]
-            self.assertFalse(spec.tools)
-            self.assertEqual(len(spec.mcp_servers), 1)
-            return json.dumps(
-                {
-                    "reason": "inspect evidence",
-                    "changes": {"system_prompt": {"append": "Check results."}},
-                }
-            )
-
-        session.send.side_effect = reply
-
-        class Rsi:
-            async def chat(self, message: str) -> str:
-                return "fixture"
-
-            async def prune(self, run: Any) -> tuple[str, ...]:
-                return ()
-
-        context = WorkflowContext(
-            self.content,
-            FileMemory(self.root / "memory"),
-            self.traces,
-            self.versions,
-            self.runtime,
-            Rsi(),
-            (researcher,),
-            self.benchmark,
-            self.verifier,
-            VerifierSpec("arena", "injected"),
-            ArenaEvaluation(),
-            self.builder,
-        )
-        service = LocalExperimentService(self.root, context, lambda _: None)
-        plan = ExperimentPlan(
-            "remote fixture",
-            "harness-evolution",
-            self.benchmark.name,
-            self.solution.solution_id,
-            EvolutionTarget.HARNESS,
-            1,
-            stop_when_goal_reached=False,
-        )
-        # Exercise the real remote proposal and common file-reader preparation;
-        # only model inference and candidate selection are replaced offline.
-        with patch.object(researcher, "select", AsyncMock(return_value=self.solution.solution_id)):
-            run = await service.start(plan)
-            finished = await service.tasks[run.run_id]
-        self.assertEqual(finished.state, RunState.SUCCEEDED, finished.error)
-        self.assertEqual(len(finished.research_agents[0].iterations), 1)
-        self.assertEqual(len(self.client.jobs), 3)
-        session.send.assert_awaited_once()
-        self.assertEqual(research_runtime.mcp_registry, {})
-        self.assertEqual(await service.resume(run.run_id), finished)
 
     async def test_config_resolves_source_job_envelope_and_disjoint_splits(self) -> None:
         self.client.jobs["source"] = {

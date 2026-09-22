@@ -42,13 +42,19 @@ class JudgeConfigTests(unittest.TestCase):
                 with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                     grade.build_parser().parse_args(REQUIRED)
 
+    def test_gateway_model_does_not_inherit_official_reasoning_level(self):
+        self.assertEqual(grade.reasoning_options("gpt-5-nano"),
+                         {"reasoning_effort": "minimal"})
+        self.assertEqual(grade.reasoning_options("gpt-5.6-terra"), {})
+
     def test_frozen_rubrics_and_scoring_helpers_unchanged(self):
         original = WORK / "jailbreak_env/source/tasks/jailbreak-robustness/tests/grade.py"
         before, after = ast.parse(original.read_text()), ast.parse(SCRIPT.read_text())
         def protocol(tree):
             return [ast.dump(node) for node in tree.body
                     if isinstance(node, ast.Assign) or
-                    (isinstance(node, ast.FunctionDef) and node.name not in ("build_parser", "positive_int"))]
+                    (isinstance(node, ast.FunctionDef) and node.name not in
+                     ("build_parser", "positive_int", "reasoning_options"))]
         self.assertEqual(protocol(before), protocol(after))
 
     def test_workspace_link_is_container_visible(self):
@@ -94,6 +100,7 @@ class JudgeConfigTests(unittest.TestCase):
                 asyncio.run(grade.main())
             result = json.loads((root / "out").read_text())
         self.assertEqual(seen[0]["model"], "custom-judge")
+        self.assertNotIn("reasoning_effort", seen[0])
         self.assertEqual(result["judge_model"], "custom-judge")
         self.assertEqual(result["judge_concurrency"], 2)
         self.assertFalse(result["official_score"])

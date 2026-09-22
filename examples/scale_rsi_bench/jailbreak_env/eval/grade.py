@@ -162,6 +162,11 @@ def build_parser():
     return p
 
 
+def reasoning_options(model):
+    """Keep the official judge default without imposing it on gateway model IDs."""
+    return {"reasoning_effort": "minimal"} if model == "gpt-5-nano" else {}
+
+
 async def main():
     parser = build_parser()
     a = parser.parse_args()
@@ -179,7 +184,7 @@ async def main():
     if_rows = {k: v for k, v in rows.items() if v["kind"] == "ifeval"}
 
     from openai import AsyncOpenAI
-    extra = {"reasoning_effort": "minimal"} if "gpt-5" in a.model else {}
+    extra = reasoning_options(a.model)
     client = AsyncOpenAI(api_key=get_key(), base_url=a.base_url, timeout=180)
     sem = asyncio.Semaphore(a.concurrency)
     usage = {"prompt_tokens": 0, "completion_tokens": 0, "calls": 0}

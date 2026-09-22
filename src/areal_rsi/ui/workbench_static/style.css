@@ -1610,3 +1610,18 @@ button.primary.destructive { background: var(--red); }
 .progress-message > :last-child { margin-bottom: 0; }
 .progress-message code { background: var(--paper); border-radius: 4px; padding: 2px 4px; }
 .progress-message pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 14px 0; }
+
+.agent-trace-controls { position: sticky; top: 0; z-index: 2; background: var(--panel, #fff); padding: 12px 0; border-bottom: 1px solid var(--line); }
+.agent-trace-controls button + button { margin-left: 8px; }
+.agent-diagnostics { margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #f5f8f7; }
+.agent-diagnostics p { margin: 6px 0 0; font-size: 12px; }
+.trace-stale { color: #956018; }
+.agent-trace { margin: 18px 0; }
+.trace-message { margin: 12px 0; padding-left: 12px; border-left: 2px solid #d6e4dc; }
+.trace-message.user_message { border-left-color: #6d947d; background: #f4f8f5; padding: 10px 12px; }
+.trace-message p { margin: 6px 0; overflow-wrap: anywhere; }
+.trace-tool { border: 1px solid var(--line); border-radius: 8px; margin: 8px 0; padding: 10px; }
+.trace-tool summary { cursor: pointer; overflow-wrap: anywhere; font-size: 12px; }
+.trace-code { white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; max-height: 320px; background: #f4f5f5; padding: 10px; font-size: 11px; line-height: 1.6; }
+.agent-trace-switcher { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; font-size: 12px; }
+.agent-trace-switcher select { flex: 1; min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: white; font: inherit; }

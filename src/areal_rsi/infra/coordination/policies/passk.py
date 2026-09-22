@@ -406,6 +406,7 @@ async def launch(c: Coordinator, actions: PassKActions) -> None:
         + brief.objective
         + "\n\n"
         + brief.instructions
+        + ("\n\n验收标准：\n" + "\n".join(brief.acceptance) if brief.acceptance else "")
     )
     for index in range(brief.limits.max_agents):
         result = c.spawn(

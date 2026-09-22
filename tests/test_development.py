@@ -77,6 +77,10 @@ def test_preparation_survives_restart_and_invalidates_changed_config(
                     await asyncio.sleep(.05)
             detail = public_detail(await app.detail("dev"))
             assert detail["preparation"]["status"] == "ready", detail["preparation"]
+            ready_job = detail["preparation"]["job_id"]
+            await app.prepare("dev", wait=True)
+            reused = app.coordinator("dev").state.preparation
+            assert reused is not None and reused.job_id == ready_job
             assert detail["preparation"]["checks"][0]["status"] == "passed"
             assert detail["budget"]["total_tokens"] == 0
             expected_limit = None if wall_seconds == "omitted" else wall_seconds
@@ -108,6 +112,8 @@ def test_preparation_survives_restart_and_invalidates_changed_config(
 def test_workspace_creation_uses_server_context_and_user_requirements(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from runtime_fakes import ActionRuntime
+
     from areal_rsi.api.research import TaskBrief
 
     monkeypatch.setenv("RSI_API_KEY", "fixture")
@@ -120,7 +126,7 @@ def test_workspace_creation_uses_server_context_and_user_requirements(
     (profiles / "project.json").write_text(json.dumps(registered))
 
     async def scenario() -> None:
-        app = ResearchSystem(tmp_path)
+        app = ResearchSystem(tmp_path, runtime_factory=lambda _: ActionRuntime())
         request = "Add login verification; preserve existing login; include regression tests."
         try:
             assert (await app.bootstrap())["workspace_ready"]
@@ -129,11 +135,13 @@ def test_workspace_creation_uses_server_context_and_user_requirements(
             assert c.state.preparation is not None
             assert c.state.preparation.setup.repository == "/operator/repo"
             assert c.state.preparation.setup.revision == "fixed"
-            assert c.state.preparation.setup.parallelism == 3
+            assert c.state.preparation.setup.parallelism == 1
             assert c.state.preparation.setup.wall_seconds is None
             assert c.state.preparation.setup.acceptance == request
             assert c.store.brief().instructions == request
-            assert c.state.status == "planned" and not app.active
+            assert c.state.status == "planned" and not c.store.run().research_agents
+            assert c.state.intake.status == "discussing"
+            assert c.state.preparation.job_id is None
             await app.create({"run_id": "single", "message": request, "use_workspace": True,
                               "wall_seconds": 3600,
                               "collaboration": {"mode": "passk", "modules": [], "max_agents": 1}})

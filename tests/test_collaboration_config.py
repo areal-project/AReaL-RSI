@@ -81,7 +81,13 @@ def test_selection_rebuilds_runtime_and_freezes_versions(
             assert active.engine.rsi_prompt == plan.rsi_prompt
             assert active.engine.research_prompt == plan.research_prompt
             assert "你的默认工作区" in active.engine.tools_factory("rsi").instructions
-            # Starting directly here avoids invoking a real Interaction agent.
+            # Record a complete intake before testing frozen collaboration identity.
+            brief = c.store.brief()
+            brief.objective = brief.instructions = "Review the task"
+            brief.acceptance = ["Provide an evidence-backed review"]
+            run = c.store.run()
+            run.brief_ref = c.store.put("briefs", "ready", brief)
+            c.store.save_run(run)
             c.state.intake.status = "ready"
             c.save()
             await system.start(c.store.run_id)

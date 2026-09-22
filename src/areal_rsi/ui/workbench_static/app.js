@@ -45,9 +45,10 @@ const state = {
   modelSavingRun: null,
   collaborationCatalog: {modes: [], modules: []},
   defaultCollaboration: {mode: "passk", modules: []},
-  collaborationDrafts: new Map(),
-  collaborationSavingRun: null,
   goalHistory: new Map(),
+  agentTraces: new Map(),
+  traceAvailable: false,
+  traceExpansion: new Set(),
 };
 const emptyChat = $("messages").firstElementChild.cloneNode(true);
 const mobileRunPicker = $("mobile-run-picker");
@@ -92,18 +93,6 @@ const authDropdown = new WorkbenchDropdown($("auth-mode"), {
   label: "认证方式", onChange: (value) => { modelDraft().auth_mode = value; modelDraft().api_key = ""; renderModelSettings(); },
 });
 
-const collaborationDropdown = new WorkbenchDropdown($("collaboration-mode"), {
-  label: "基础流程", onChange: (mode) => {
-    state.collaborationDrafts.set(state.runId, selectCollaborationPreset(mode));
-    renderCollaboration();
-  },
-});
-const createCollaborationDropdown = new WorkbenchDropdown($("create-collaboration-mode"), {
-  label: "协作方式", onChange: (mode) => {
-    state.createCollaboration = selectCollaborationPreset(mode);
-    renderCreateCollaboration();
-  },
-});
 function isSingleRun(run) {
   return run.collaboration?.mode === "pass1" ||
     (run.collaboration?.max_agents ?? run.brief?.limits?.max_agents) === 1;
@@ -112,78 +101,33 @@ function primaryAgent(run) {
   return (run.agents || []).find((agent) => !["rsi", "interaction"].includes(agent.agent_id))?.agent_id || "rsi";
 }
 function collaborationSelection(value) {
-  return {mode: value.mode, modules: [...(value.modules || [])].sort(), max_agents: value.max_agents ?? 2};
+  return {mode: value.mode, modules: [...(value.modules || [])].sort(), max_agents: value.max_agents ?? 1};
 }
-function collaborationPresets() {
-  return [
-    {id: "passk", mode: "passk", modules: [], max_agents: 2, label: "pass@k",
-      description: "多名研究员各自独立完成同一任务，不自动交流成果。你可以分别给予指导。"},
-    {id: "single", mode: "passk", modules: [], max_agents: 1, label: "pass@1",
-      description: "一个 Agent 持续完成任务，你可以随时补充要求或纠正方向。"},
-  ];
-}
-function selectCollaborationPreset(id) {
-  return {mode: "passk", modules: [], max_agents: id === "single" ? 1 : Math.max(2, state.defaultCollaboration.max_agents || 2)};
-}
-function matchingCollaborationPreset(selection) {
-  return selection.mode === "passk" ? collaborationPresets().find((preset) =>
-    (preset.max_agents === 1) === (selection.max_agents === 1)) : null;
-}
-function collaborationChanged() {
-  const draft = state.collaborationDrafts.get(state.runId), saved = state.run?.collaboration;
-  return !!draft && !!saved && JSON.stringify(collaborationSelection(draft)) !== JSON.stringify(collaborationSelection(saved));
-}
-function renderCollaborationFields(prefix, dropdown, selection, disabled) {
-  const preset = matchingCollaborationPreset(selection);
-  dropdown.update(collaborationPresets().map((item) => ({value: item.id, text: item.label})), preset?.id || selection.mode, disabled);
-  $(`${prefix}description`).textContent = selection.modules?.length
-    ? "此任务保留原有协作配置；重新选择 pass@k 将使用独立探索。"
-    : preset?.description || "此历史任务保留原配置。";
+function createCollaboration(value) {
+  return {mode: "passk", modules: [], max_agents: value?.max_agents ?? 1};
 }
 function renderCreateCollaboration() {
-  const pass1 = state.createCollaboration?.max_agents === 1;
   const development = !!state.workspaceReady;
-  $("create-description").textContent = development ? "描述要完成的事情、需要遵守的要求，以及怎样算完成。系统会使用当前项目准备任务。" : pass1 ? "输入目标，由一个 Agent 持续执行；进展会实时显示在页面中。" : "先选择模型，再与 Interaction 聊聊研究目标。";
+  $("create-description").textContent = "描述要完成的事情、需要遵守的要求，以及怎样算完成。";
   $("create-message-label").textContent = "你想完成什么";
-  $("create-message-hint").textContent = pass1 || development ? "（必填）" : "（可稍后聊）";
-  $("create-message").required = pass1 || development;
-  $("create-start-hint").textContent = development ? "准备好后即可开始；执行中也可以指导研究员或调整目标。" : pass1 ? "确认任务后开始，可随时暂停或补充指令。" : "开始研究前仍可修改配置。";
-  if (!state.creating) $("create-submit").textContent = development ? "创建任务" : pass1 ? "开始目标" : "创建研究";
-  renderCollaborationFields("create-collaboration-", createCollaborationDropdown, state.createCollaboration, state.creating);
+  $("create-message-hint").textContent = development ? "（必填）" : "（可稍后聊）";
+  $("create-message").required = development;
+  $("create-start-hint").textContent = "先确认任务和完成标准，再开始执行；你可以随时补充。";
+  if (!state.creating) $("create-submit").textContent = "创建任务";
 }
 function renderCollaboration() {
   const saved = state.run?.collaboration;
   $("collaboration-settings").hidden = !saved?.mode;
   if (!saved?.mode) return;
-  if (!saved.editable) state.collaborationDrafts.delete(state.runId);
-  const draft = state.collaborationDrafts.get(state.runId) || collaborationSelection(saved);
-  const disabled = !saved.editable || !!state.collaborationSavingRun || state.busy;
-  const label = (matchingCollaborationPreset(saved)?.label || "历史任务（仅供查看）") +
-    (saved.modules?.length ? " · 原有协作配置" : "");
-  $("collaboration-summary").textContent = [label, saved.editable ? "启动前可修改" : "已锁定"].join(" · ");
-  renderCollaborationFields("collaboration-", collaborationDropdown, draft, disabled);
+  $("collaboration-summary").textContent = saved.mode === "passk"
+    ? "pass@k" + (saved.modules?.length ? " · 原有协作配置" : "")
+    : "历史任务（仅供查看）";
+  $("collaboration-description").textContent = saved.modules?.length
+    ? "此任务保留创建时的协作配置。"
+    : "研究员独立完成任务，支持人工指导。";
+  $("collaboration-status").textContent = "";
   $("reuse-collaboration").hidden = saved.supported === false;
-  $("save-collaboration").hidden = !saved.editable;
-  $("save-collaboration").disabled = disabled || !collaborationChanged();
-  $("save-collaboration").textContent = state.collaborationSavingRun === state.runId ? "保存中…" : "保存协作配置";
-  $("collaboration-status").textContent = saved.editable
-    ? (collaborationChanged() ? "有未保存的修改，请保存后开始研究。" : "开始执行后，协作方式不再改变。")
-    : "历史研究：保留创建时的协作配置。";
 }
-$("collaboration-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  if (!state.run?.collaboration?.editable || state.collaborationSavingRun || !collaborationChanged()) return;
-  const runId = state.runId, selection = collaborationSelection(state.collaborationDrafts.get(runId));
-  state.collaborationSavingRun = runId;
-  renderCollaboration();
-  notice();
-  try {
-    await api(`/api/runs/${encodeURIComponent(runId)}/collaboration`, selection);
-    state.collaborationDrafts.delete(runId);
-    await refresh(true);
-  } catch (error) { notice(error.message); }
-  finally { state.collaborationSavingRun = null; renderCollaboration(); }
-});
 $("reuse-collaboration").addEventListener("click", () => openCreate("", state.run.collaboration));
 const effortLabels = {
   none: "无推理 · none", low: "低 · low", medium: "中 · medium",
@@ -447,7 +391,7 @@ function agentAction(run, agent) {
     update_plan: "调整研究计划", assign: "安排下一轮任务", message_researcher: "补充研究要求",
     wait: "等待后续消息", submit_report: "提交本轮报告"};
   return activity?.type === "tool_started" ? names[activity.tool] || `执行 ${activity.tool}`
-    : activity?.type === "tool_completed" ? `已完成${names[activity.tool] || activity.tool}，继续处理`
+    : activity?.type === "tool_completed" ? (activity.tool ? `已完成${names[activity.tool] || activity.tool}，继续处理` : "继续处理任务")
     : "模型正在处理任务";
 }
 function selectWork(run, id) {
@@ -661,6 +605,8 @@ async function refresh(force = false) {
       renderRuns();
     }
     render();
+    const selectedNode = run.nodes?.find((n) => n.iteration_id === state.selected.get(runId));
+    if (selectedNode && state.tab === "node") await loadAgentTrace(runId, selectedNode.agent_id);
     connected(true);
   } catch (error) {
     if (error.name === "AbortError" || state.runId !== runId) return;
@@ -687,7 +633,9 @@ function render() {
   const needsResume = run.worker_alive === false && (
     run.status === "running" || (run.status === "planned" && run.pending_agents?.length)
   );
-  $("run-status").textContent = run.preparation && run.status === "planned"
+  $("run-status").textContent = run.status === "planned" && run.intake?.status === "discussing"
+    && (!run.preparation || run.preparation.status === "pending") ? "确认需求中"
+    : run.preparation && run.status === "planned"
     ? ({pending: "等待准备", running: "准备中", cancelling: "正在取消准备", ready: "可以开始", failed: "准备失败"}[run.preparation.status])
     : run.finalization?.status === "running" ? "最终复测与归档中"
     : run.finalization?.status === "failed" ? "收尾失败 · 可恢复"
@@ -697,7 +645,7 @@ function render() {
     : run.status === "running" && run.execution_setup === "pending"
     ? "研究中 · 接入准备" : label(run.status);
   $("run-status").className = `status ${run.status}`;
-  $("start").hidden = run.status !== "planned" || (run.preparation ? run.preparation.status !== "ready" : (!isSingleRun(run) && run.intake?.status !== "ready"));
+  $("start").hidden = run.status !== "planned" || (run.intake?.status && run.intake.status !== "ready") || (run.preparation && run.preparation.status !== "ready");
   $("start").disabled = state.busy || run.agents?.some(
     (agent) => agent.agent_id === "interaction" && agent.state === "running",
   );
@@ -705,7 +653,8 @@ function render() {
   $("cancel-turn").hidden = !isSingleRun(run) || run.status !== "running";
   $("cancel-turn").disabled = state.busy;
   $("resume").hidden = run.status !== "paused" && !(run.status === "stopped" && run.started_at) && !needsResume;
-  $("resume").hidden ||= ["running", "completed"].includes(run.finalization?.status);
+  $("resume").hidden ||= ["running", "completed"].includes(run.finalization?.status)
+    || (run.collaboration?.mode === "passk" && run.status === "stopped" && !run.finalization?.status);
   $("resume").textContent = run.finalization?.status === "failed" ? "恢复收尾" : run.status === "stopped" ? "恢复研究" : needsResume
     ? (run.status === "planned" ? "继续对话" : "恢复执行") : "继续";
   $("stop").hidden = !["planned", "running", "paused"].includes(run.status)
@@ -732,8 +681,8 @@ function render() {
   $("score-metric").hidden = $("final-metric").hidden = !run.brief?.verification;
   $("metrics").classList.toggle("without-score", !run.brief?.verification);
   $("run-elapsed").replaceChildren(elapsed(run.started_at, run.finished_at));
-  $("revise-goal").hidden = !canGuide(run);
-  $("revise-goal").disabled = state.busy;
+  $("update-goal").hidden = !canGuide(run);
+  $("update-goal").disabled = state.busy;
   $("human-status").textContent = run.collaboration?.mode === "passk" ? `目标 v${(run.brief?.revision || 0) + 1}${run.human?.assisted ? " · 人工指导" : ""}` : "";
   renderPreparation(run);
   renderIntake(run);
@@ -749,7 +698,7 @@ function render() {
   renderAgentErrors(run);
   const ended = run.collaboration?.supported === false || !["planned", "running", "paused"].includes(run.status);
   const responding = (run.agents || []).find((agent) => agent.agent_id === target.recipient);
-  const fixedTask = run.preparation && run.status === "planned";
+  const fixedTask = run.preparation && run.status === "planned" && !run.intake?.status;
   $("chat-input").disabled = ended || fixedTask;
   $("send-message").disabled = ended || fixedTask || state.sending.has(run.run_id) || target.stale;
   $("chat-input-label").textContent = `向 ${agentName(target.recipient)} 发送消息`;
@@ -789,7 +738,8 @@ function renderGoal(run) {
   $("goal-activity").textContent = run.status === "running" && activity?.type === "tool_started" && activity.tool ? `正在执行：${activity.tool}` : "";
 
   for (const [field, empty] of [["next_steps", status === "completed" ? "目标已完成，无后续步骤" : status === "blocked" ? "等待补充条件后继续" : "等待整理下一步"], ["acceptance", "等待明确验收条件"], ["evidence", "尚无验收记录"]]) {
-    const items = Array.isArray(goal[field]) ? goal[field] : [];
+    const items = field === "acceptance" && !goal.acceptance?.length
+      ? (run.brief?.acceptance || []) : Array.isArray(goal[field]) ? goal[field] : [];
     const container = $("goal-" + field.replaceAll("_", "-"));
     const signature = JSON.stringify([items, status]);
     if (container.dataset.signature !== signature) {
@@ -827,7 +777,7 @@ function mergeGoalTurns(run, older = false) {
 function renderPreparation(run) {
   const prep = run.preparation;
   $("preparation").hidden = !prep;
-  const hideChat = !!prep && run.status === "planned";
+  const hideChat = !!prep && run.status === "planned" && !run.intake?.status;
   $("chat-tab").hidden = hideChat;
   if (hideChat && state.tab === "chat") switchTab("brief");
   if (!prep) return;
@@ -1000,7 +950,7 @@ function renderAgentErrors(run) {
 }
 
 function renderIntake(run) {
-  const preparing = run.status === "planned" && !run.preparation;
+  const preparing = run.status === "planned" && (!!run.intake?.status || !run.preparation);
   $("intake-overview").hidden = !preparing;
   $("node-tab").hidden = preparing && !run.nodes?.length;
   $("intake-status").textContent = run.intake?.status === "ready" ? "待你确认" : "整理中";
@@ -1382,6 +1332,7 @@ function reportHistory(run, node) {
   return block;
 }
 function renderNode(run) {
+  if (!state.selected.has(run.run_id) && run.nodes?.length) state.selected.set(run.run_id, run.nodes[0].iteration_id);
   const job = run.jobs?.find((item) => `job:${item.job_id}` === state.selected.get(run.run_id));
   if (job) {
     renderJobDetail(run, job);
@@ -1392,7 +1343,13 @@ function renderNode(run) {
   );
   const budget = run.budget?.researchers?.[node?.agent_id];
   const latest = run.preparation && [...state.events.values()].filter((event) => event.kind === "assistant_output" && event.agent_id === node?.agent_id).at(-1);
-  const signature = JSON.stringify([run.run_id, run.status, run.finished_at, node, budget, latest, run.human, state.busy]);
+  const traceKey = `${run.run_id}/${node?.agent_id}`;
+  if (node && state.tab === "node" && !state.agentTraces.has(traceKey)) loadAgentTrace(run.run_id, node.agent_id);
+  const trace = state.agentTraces.get(traceKey);
+  const signature = JSON.stringify([run.run_id, run.status, run.finished_at, node, budget, latest, run.human, state.busy,
+    run.worker_alive, run.agent_activity?.[node?.agent_id], run.goals?.[node?.agent_id],
+    run.agents?.find((a) => a.agent_id === node?.agent_id), run.jobs, [...(trace?.entries.values() || [])], trace?.loading, trace?.error, trace?.next,
+    Math.floor(Date.now() / 5000)]);
   if (signature === state.detailSignature) return;
   state.detailSignature = signature;
   if (!node) {
@@ -1410,7 +1367,7 @@ function renderNode(run) {
   state.detailNodeId = node.iteration_id;
   const heading = element("div", "detail-header");
   heading.append(
-    badge((run.human?.paused_agents || []).includes(node.agent_id) ? "paused" : node.state),
+    badge(node.goal?.status === "completed" ? "completed" : (run.human?.paused_agents || []).includes(node.agent_id) ? "paused" : node.state),
     element("h3", "", `${run.preparation ? "研发任务" : "本轮任务"} · ${agentName(node.agent_id)}`),
     element("p", "muted", node.iteration_id),
   );
@@ -1420,14 +1377,24 @@ function renderNode(run) {
   timing.append(document.createTextNode(budget ? "实际历时 " : "本轮历时 "), elapsed(started, finished));
   if (budget) timing.append(element("small", "muted", `GPU 排队 ${(budget.gpu_queue_seconds / 60).toFixed(1)} 分钟 · API 故障等待 ${(budget.api_wait_seconds / 60).toFixed(1)} 分钟`));
   if (started) timing.append(element("small", "muted", `开始 ${new Date(timestamp(started)).toLocaleString("zh-CN")}${finished ? ` · 结束 ${new Date(timestamp(finished)).toLocaleString("zh-CN")}` : " · 进行中"}`));
-  const blocks = [heading, timing, assignmentDetails(run, node)];
+  const picker = element("div", "agent-trace-switcher");
+  const pickerLabel = element("label", "", "查看研究员"); pickerLabel.htmlFor = "trace-researcher";
+  const select = element("select"); select.id = "trace-researcher";
+  const latestNodes = new Map((run.nodes || []).map((item) => [item.agent_id, item]));
+  for (const item of latestNodes.values()) {
+    const option = element("option", "", agentName(item.agent_id)); option.value = item.iteration_id; select.append(option);
+  }
+  select.value = node.iteration_id;
+  select.addEventListener("change", () => selectWork(state.run, select.value));
+  picker.append(pickerLabel, select);
+  const blocks = [picker, heading, timing, agentDiagnostics(run, node.agent_id)];
   if (node.goal) {
     blocks.push(section("本路目标状态", `${{active: "执行中", blocked: "等待补充条件", completed: "已完成"}[node.goal.status]} · ${node.goal.summary}`));
     if (node.goal.blocker) blocks.push(section("等待补充", node.goal.blocker));
     if (node.goal.evidence?.length) blocks.push(section("本路验收证据", node.goal.evidence.join("\n")));
   }
   if (canGuide(run)) {
-    const actions = element("section", "detail-section");
+    const actions = element("section", "detail-section agent-trace-controls");
     const guide = element("button", "primary", "指导这个 Agent");
     guide.addEventListener("click", () => {
       state.replyTargets.set(run.run_id, {value: node.agent_id, explicit: true});
@@ -1440,7 +1407,9 @@ function renderNode(run) {
     actions.append(guide, hold, element("p", "muted", "指导仅发给此研究员。暂停后可发送指导，再继续执行；已有作业请在作业详情中单独取消。"));
     blocks.push(actions);
   }
-  if (latest?.data?.text) {
+  blocks.push(renderAgentTrace(run, node.agent_id, trace));
+  blocks.push(assignmentDetails(run, node));
+  if (latest?.data?.text && !trace?.entries.size) {
     const progress = element("section", "detail-section progress-message");
     progress.append(element("h4", "", "最新执行说明"));
     appendProgressText(progress, latest.data.text);
@@ -1667,6 +1636,7 @@ function renderBrief(run) {
   const blocks = [
     section("研究目标", brief.objective || run.objective),
     section("给 RSI 的要求与建议", brief.instructions),
+    ...(brief.acceptance?.length ? [section("验收标准", brief.acceptance.join("\n"))] : []),
   ];
   const grid = element("dl", "brief-grid");
   const rows = [
@@ -1778,14 +1748,15 @@ function switchTab(tab) {
     $(`${name}-tab`).classList.toggle("selected", tab === name);
     $(`${name}-tab`).setAttribute("aria-selected", String(tab === name));
   }
+  if (tab === "node" && state.run) {
+    renderNode(state.run);
+    const node = state.run.nodes?.find((n) => n.iteration_id === state.selected.get(state.runId));
+    if (node) loadAgentTrace(state.runId, node.agent_id);
+  }
 }
 
 async function control(action, params = {}) {
   if (!state.runId || state.busy) return;
-  if (action === "start" && (collaborationChanged() || state.collaborationSavingRun)) {
-    notice("请先保存协作配置。");
-    return;
-  }
   if (action === "start" && (modelSettingsChanged() || state.modelSavingRun)) {
     notice("请先保存模型设置。");
     return;
@@ -1888,17 +1859,16 @@ async function createConversation(message = "", modelSettings, collaboration, wo
     await loadRuns();
     state.runId = null;
     await selectRun(result.run_id);
-    if (workspace?.use_workspace) await control("prepare");
-    switchTab(workspace?.use_workspace ? "brief" : "chat");
+    switchTab("chat");
     $("welcome-input").value = "";
-    if (!workspace?.use_workspace) $("chat-input").focus();
+    $("chat-input").focus();
   } catch (error) {
     $("create-error").textContent = error.message;
     $("create-error").hidden = false;
     notice(error.message);
   } finally {
     $("create-submit").disabled = false;
-    $("create-submit").textContent = state.createCollaboration?.max_agents === 1 ? "开始目标" : "创建研究";
+    $("create-submit").textContent = "创建任务";
     state.creating = false;
     $("new-run").disabled = $("mobile-new").disabled = $("welcome-send").disabled = false;
   }
@@ -1934,7 +1904,7 @@ function workspaceRequest() {
   return state.workspaceReady ? {use_workspace: true,
     wall_seconds: $("create-hours").value.trim() === "" ? null : Math.round(Number($("create-hours").value) * 3600)} : {};
 }
-function openCreate(message = "", collaboration = state.defaultCollaboration) {
+function openCreate(message = "", collaboration = null) {
   if (state.creating) return;
   const defaults = state.defaultModelSettings;
   $("create-base-url").value = defaults.base_url || "https://4ipic.com";
@@ -1951,7 +1921,7 @@ function openCreate(message = "", collaboration = state.defaultCollaboration) {
   createBackend.update(backendOptions, state.createBackend);
   state.createAuthMode = defaults.auth_mode || "api_key";
   updateCreateAuth();
-  state.createCollaboration = selectCollaborationPreset(collaboration.max_agents === 1 ? "single" : "passk");
+  state.createCollaboration = createCollaboration(collaboration);
   renderCreateCollaboration();
   updateCreateModels();
   $("create-dialog").showModal();
@@ -2147,6 +2117,7 @@ async function bootstrap() {
   $("workbench-caption").textContent = branch || "研究工作台";
   $("workbench-name").textContent = branch ? `研究空间 · ${branch}` : "研究空间";
   state.token = config.csrf_token;
+  state.traceAvailable = (config.capabilities || []).includes("agent-trace");
   state.models = config.models || [];
   state.defaultModelSettings = config.default_model_settings || {};
   state.workspaceReady = config.workspace_ready === true;
@@ -2188,28 +2159,199 @@ function canGuide(run) {
   return run.collaboration?.mode === "passk" && !!run.started_at && ["running", "paused"].includes(run.status) && !run.finalization?.status;
 }
 let goalDraft = null;
-$("revise-goal").addEventListener("click", () => {
+$("update-goal").addEventListener("click", () => {
   const run = state.run;
   goalDraft = {run_id: run.run_id, request_id: crypto.randomUUID(), expected_revision: run.brief?.revision || 0};
   $("revised-objective").value = run.brief?.objective || run.objective;
   $("revised-instructions").value = run.brief?.instructions || "";
+  $("revised-acceptance").value = (run.brief?.acceptance || []).join("\n");
   $("goal-verification-confirmation").hidden = !run.brief?.verification;
   $("goal-verification-confirmed").checked = false;
   $("goal-revision-label").textContent = `当前目标 v${goalDraft.expected_revision + 1}，提交为 v${goalDraft.expected_revision + 2}`;
-  $("revise-goal-error").textContent = "";
+  $("update-goal-error").textContent = "";
   $("goal-dialog").showModal();
 });
 $("close-goal-dialog").addEventListener("click", () => $("goal-dialog").close());
-$("revise-goal-form").addEventListener("submit", async (event) => {
+$("update-goal-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!goalDraft || $("submit-goal").disabled) return;
   const {run_id, ...identity} = goalDraft;
   $("submit-goal").disabled = true;
   try {
-    await api(`/api/runs/${encodeURIComponent(run_id)}/revise-goal`, {...identity, objective: $("revised-objective").value.trim(), instructions: $("revised-instructions").value.trim(), verification_confirmed: $("goal-verification-confirmed").checked});
+    await api(`/api/runs/${encodeURIComponent(run_id)}/update-goal`, {...identity, objective: $("revised-objective").value.trim(), instructions: $("revised-instructions").value.trim(), acceptance: $("revised-acceptance").value.split("\n").map(s => s.trim()).filter(Boolean), verification_confirmed: $("goal-verification-confirmed").checked});
     $("goal-dialog").close();
     await loadRuns();
     if (state.runId === run_id) await refresh(true);
-  } catch (error) { $("revise-goal-error").textContent = error.message; }
+  } catch (error) { $("update-goal-error").textContent = error.message; }
   finally { $("submit-goal").disabled = false; }
 });
+
+async function loadAgentTrace(runId, agentId, older = false) {
+  const key = `${runId}/${agentId}`;
+  let trace = state.agentTraces.get(key);
+  if (!trace) {
+    trace = {entries: new Map(), next: null, ready: false, loading: false, error: '', expanded: false};
+    state.agentTraces.set(key, trace);
+    if (state.agentTraces.size > 24) state.agentTraces.delete(state.agentTraces.keys().next().value);
+  }
+  if (!state.traceAvailable) {
+    trace.error = '当前服务尚未加载完整轨迹接口，需要重启工作台后查看。';
+    return;
+  }
+  if (trace.loading || (older && trace.next == null)) return;
+  trace.loading = true;
+  trace.error = '';
+  try {
+    const page = await api(`/api/runs/${encodeURIComponent(runId)}/trace?agent_id=${encodeURIComponent(agentId)}&limit=50${older ? `&before=${trace.next}` : ''}`);
+    if (page.agent_id !== agentId) throw new Error('轨迹接收者不匹配，请重试');
+    const entries = page.entries || [];
+    const previousLast = Math.max(0, ...trace.entries.keys());
+    const gap = !older && previousLast && entries.length && entries[0].sequence > previousLast;
+    if (gap) { trace.entries.clear(); trace.ready = false; }
+    if (!trace.ready || older) trace.next = page.next_before ?? null;
+    for (const entry of entries) trace.entries.set(entry.sequence, entry);
+    trace.ready = true;
+    trace.expanded ||= older;
+    if (!trace.expanded && trace.entries.size > 500) {
+      const keys = [...trace.entries.keys()].sort((a, b) => a - b);
+      for (const sequence of keys.slice(0, -500)) trace.entries.delete(sequence);
+      trace.next = Math.min(...trace.entries.keys());
+    }
+  } catch (error) { trace.error = error.message; }
+  finally {
+    trace.loading = false;
+    const node = state.run?.nodes?.find((n) => n.iteration_id === state.selected.get(runId));
+    if (state.runId === runId && node?.agent_id === agentId && state.tab === "node") {
+      const panel = $('node-panel');
+      if (!panel) return;
+      const height = panel.scrollHeight, top = panel.scrollTop;
+      renderNode(state.run);
+      if (older) panel.scrollTop = top + panel.scrollHeight - height;
+    }
+  }
+}
+
+function agentDiagnostics(run, agentId) {
+  const box = element('section', 'agent-diagnostics');
+  const agent = run.agents?.find((a) => a.agent_id === agentId);
+  const goal = run.goals?.[agentId] || run.nodes?.find((n) => n.agent_id === agentId)?.goal;
+  const activity = run.agent_activity?.[agentId] || {};
+  const tools = Object.values(activity.active_tools || {});
+  const job = run.jobs?.find((j) => j.agent_id === agentId && activeJob(j));
+  const paused = run.status === 'paused' || run.human?.paused_agents?.includes(agentId);
+  const terminal = ['stopped', 'succeeded', 'completed', 'failed', 'cancelled'].includes(run.status);
+  let phase = '等待调度', explanation = '', since = activity.started_at || activity.updated_at;
+  if (goal?.status === 'completed') phase = '已完成';
+  else if (terminal) phase = label(run.status);
+  else if (paused) { phase = '已暂停'; explanation = '可补充指导，再继续此研究员。'; }
+  else if (goal?.status === 'blocked') { phase = '等待你补充'; explanation = goal.blocker || ''; }
+  else if (run.worker_alive === false) { phase = '执行器未运行'; explanation = '当前未检测到执行 worker；可使用恢复执行。'; }
+  else if (agent?.state === 'failed') { phase = '执行异常'; explanation = agent.error || '查看下方失败记录。'; }
+  else if (job && (agent?.state === 'waiting' || tools.some((t) => t.name === 'wait_for_job'))) {
+    phase = ['queued', 'pending', 'starting'].includes(job.status) ? '作业排队中' : '等待作业完成';
+    explanation = job.progress?.message || job.progress_message || `作业 ${job.job_id}`;
+    since = job.started_at || job.created_at;
+  } else if (tools.length || activity.type === 'tool_started') {
+    phase = `执行工具：${tools.at(-1)?.name || activity.tool || '工具'}`;
+    explanation = tools.length > 1 ? `${tools.length} 个工具调用尚未返回。` : '已收到工具开始事件，正在等待返回。';
+    since = tools.at(-1)?.started_at || since;
+  } else if (activity.api_available === false) {
+    phase = '模型服务暂不可用'; explanation = '运行时报告连接不可用，等待自动重试或恢复。';
+  } else if (agent?.state === 'running') phase = '等待模型响应';
+  box.append(element('strong', '', phase));
+  if (since && !terminal && !paused && goal?.status !== 'completed') {
+    const line = element('p', 'muted', '当前阶段已持续 '); line.append(elapsed(since)); box.append(line);
+  }
+  if (explanation) box.append(element('p', '', explanation));
+  const last = activity.last_progress_at || activity.updated_at;
+  if (last) {
+    const line = element('p', 'muted', '最近活动距今 '); line.append(elapsed(last)); box.append(line);
+    const age = Date.now() - new Date(timestamp(last)).getTime();
+    if (!terminal && !paused && goal?.status !== 'completed' && goal?.status !== 'blocked' && age > 60000) {
+      box.append(element('p', 'trace-stale', '超过 1 分钟没有新活动。可能仍在等待模型或工具；仅凭时间不能判定卡死。'));
+    }
+  }
+  return box;
+}
+
+function readableToolText(text) {
+  if (!text) return '';
+  try {
+    const value = JSON.parse(text);
+    if (value && typeof value === 'object') {
+      if (typeof value.command === 'string') return `${value.cwd ? value.cwd + '\n' : ''}$ ${value.command}`;
+      if (typeof value.aggregatedOutput === 'string') return `${value.exitCode != null ? '退出码 ' + value.exitCode + '\n' : ''}${value.aggregatedOutput}`;
+      return JSON.stringify(value, null, 2);
+    }
+  } catch (_) {}
+  return text;
+}
+
+function renderAgentTrace(run, agentId, trace) {
+  const block = element('section', 'agent-trace');
+  block.append(element('h3', '', `${agentName(agentId)} · 执行轨迹`));
+  const key = `${run.run_id}/${agentId}`;
+  if (trace?.next != null) {
+    const more = element('button', 'quiet', '加载更早轨迹'); more.disabled = trace.loading;
+    more.addEventListener('click', () => loadAgentTrace(run.run_id, agentId, true)); block.append(more);
+  }
+  if (trace?.error) {
+    block.append(element('p', 'error', trace.error));
+    const retry = element('button', 'quiet', '重试加载');
+    retry.addEventListener('click', () => loadAgentTrace(run.run_id, agentId)); block.append(retry);
+  }
+  const events = [...(trace?.entries.values() || [])].sort((a, b) => a.sequence - b.sequence);
+  const calls = new Map(), items = [];
+  for (const entry of events) {
+    if (['tool_started', 'tool_completed'].includes(entry.kind)) {
+      let call = calls.get(entry.call_id);
+      if (!call) { call = {...entry, started_at: entry.started_at || (entry.kind === "tool_started" ? entry.created_at : null), finished_at: entry.kind === "tool_completed" ? entry.created_at : null}; calls.set(entry.call_id, call); items.push(call); }
+      else Object.assign(call, entry, {created_at: call.created_at,
+        arguments: entry.arguments || call.arguments, started_at: entry.started_at || call.started_at,
+        finished_at: entry.kind === "tool_completed" ? entry.created_at : call.finished_at});
+    } else {
+      if (['agent_suspended', 'agent_failed', 'agent_finished'].includes(entry.kind))
+        for (const call of calls.values()) if (call.status === 'running') { call.status = entry.kind === 'agent_finished' ? 'ended' : 'interrupted'; call.finished_at = entry.created_at; }
+      items.push(entry);
+    }
+  }
+  const titles = {assistant_output: '执行说明', user_message: '你的指导', agent_message: '研究员回复',
+    api_availability: '模型连接', goal_updated: '目标进展', agent_failed: '执行失败',
+    agent_suspended: '执行中断', agent_finished: '本轮结束', agent_running: '开始执行', job_submitted: '提交作业', job_completed: '作业返回'};
+  for (const entry of items) {
+    if (entry.call_id) {
+      const id = `${key}/${entry.call_id}`;
+      const row = element('details', 'trace-tool'); row.open = state.traceExpansion.has(id);
+      const status = {running: '尚未返回', completed: '已返回', failed: '失败', interrupted: '中断，未收到结果', ended: '本轮已结束，未记录返回', background: '已返回，后台执行中'}[entry.status] || entry.status;
+      const names = {exec_command: '执行命令', apply_patch: '修改代码', read_file: '读取文件', write_file: '写入文件', get_state: '读取任务状态', update_goal: '更新进度', save_candidate: '保存候选', wait_for_job: '等待作业'};
+      let preview = entry.arguments;
+      try { const args = JSON.parse(preview); preview = args.command || args.cmd || args.path || args.filename || args.patch || args.input || args.candidate_id || ''; } catch (_) {}
+      preview = typeof preview === 'string' ? preview.replace(/\s+/g, ' ').slice(0, 140) : '';
+      const summary = element('summary', '', `${names[entry.name] || entry.name}${preview ? ' · ' + preview : ''} · ${status} · ${time(entry.created_at)}`);
+      row.append(summary);
+      if (entry.started_at) {
+        const timing = element('p', 'muted', '调用耗时 ');
+        timing.append(elapsed(entry.started_at, entry.finished_at || undefined)); row.append(timing);
+      }
+      row.append(element('pre', 'trace-code', readableToolText(entry.arguments) || '历史记录未保存调用参数。'));
+      if (entry.result) row.append(element('pre', 'trace-code', readableToolText(entry.result)));
+      else if (entry.kind === 'tool_completed') row.append(element('p', 'muted', '此记录没有公开输出摘要。'));
+      row.addEventListener('toggle', () => {
+        if (!row.isConnected) return;
+        if (row.open) state.traceExpansion.add(id); else state.traceExpansion.delete(id);
+      });
+      block.append(row);
+    } else {
+      const row = element('article', `trace-message ${entry.kind}`);
+      row.append(element('small', 'muted', `${titles[entry.kind] || entry.kind} · ${time(entry.created_at)}`));
+      row.append(element('p', 'preserve', entry.text));
+      if (entry.job_id) {
+        const link = element('button', 'quiet', '查看作业与日志');
+        link.addEventListener('click', () => selectWork(run, `job:${entry.job_id}`)); row.append(link);
+      }
+      block.append(row);
+    }
+  }
+  if (!items.length) block.append(element('p', 'muted', trace?.loading ? '正在读取轨迹…' : '本页暂无公开执行记录，可加载更早记录。'));
+  return block;
+}

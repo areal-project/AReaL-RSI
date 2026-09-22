@@ -1,0 +1,115 @@
+"""Per-researcher public history, bounded paging and honest activity signals."""
+from __future__ import annotations
+
+import asyncio
+import json
+from pathlib import Path
+
+import pytest
+from runtime_fakes import ActionRuntime
+
+from areal_rsi.api.control import public_tool_text
+from areal_rsi.api.research import ResearchLimits, TaskBrief
+from areal_rsi.infra.coordination.coordinator import Coordinator
+from areal_rsi.infra.coordination.engine import ResearchEngine, ToolSet
+from areal_rsi.infra.coordination.policies.passk import PassKActions, launch
+from areal_rsi.infra.research import ResearchSystem
+from areal_rsi.ui.workbench import public_detail
+
+
+def test_agent_trace_is_scoped_paginated_and_read_only(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        c = Coordinator.create(tmp_path, TaskBrief("task", "task", ResearchLimits(max_agents=2)))
+        c.state.mode = "passk"
+        c.start()
+        await launch(c, PassKActions(c))
+        first, second = [a.agent_id for a in c.store.run().research_agents]
+        for index in range(7):
+            c.store.event("assistant_output", agent_id=first, text=f"first-{index}")
+            c.store.event("assistant_output", agent_id=second, text=f"second-{index}")
+        c.store.event("tool_completed", agent_id=first, name="exec_command", call_id="call",
+                      arguments='curl -H "Authorization: Bearer credential123" example.com',
+                      result={"api_key": "private-key", "output": "checked"}, status="failed")
+        c.store.event("goal_updated", agent_id=first, goal={"status": "completed"})
+        c.store.event("agent_suspended", agent_id=first, reason="worker_interrupted")
+        message = c.user_message("Only the first researcher", key="direct", recipient=first)
+        before = {p: p.read_bytes() for p in c.store.root.rglob("*.json")}
+        app = ResearchSystem(tmp_path)
+        try:
+            page = await app.trace(c.store.run_id, first, limit=3)
+            all_entries = list(page["entries"])
+            while page["next_before"] is not None:
+                page = await app.trace(c.store.run_id, first, before=page["next_before"], limit=3)
+                all_entries = page["entries"] + all_entries
+            sequences = [e["sequence"] for e in all_entries]
+            assert sequences == sorted(set(sequences))
+            texts = [e["text"] for e in all_entries]
+            assert all(f"first-{index}" in texts for index in range(7))
+            assert not any("second-" in text for text in texts)
+            assert "Only the first researcher" in texts
+            tool = next(e for e in all_entries if e["call_id"] == "call")
+            assert "credential123" not in tool["arguments"]
+            assert "private-key" not in tool["result"] and "checked" in tool["result"]
+            assert tool["status"] == "failed"
+            assert any(e["kind"] == "agent_finished" for e in all_entries)
+            peer = await app.trace(c.store.run_id, second)
+            assert "Only the first" not in str(peer)
+            assert message not in str(peer)
+            with pytest.raises(ValueError, match="不属于"):
+                await app.trace(c.store.run_id, "research_foreign")
+            with pytest.raises(ValueError):
+                await app.trace(c.store.run_id, first, limit=10000)
+            assert before == {p: p.read_bytes() for p in c.store.root.rglob("*.json")}
+        finally:
+            await app.close()
+    asyncio.run(scenario())
+
+
+def test_activity_tracks_concurrent_tools_and_api_wait_without_usage_heartbeats(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        c = Coordinator.create(tmp_path, TaskBrief("task", "task"))
+        actions = PassKActions(c)
+        engine = ResearchEngine(c, ActionRuntime(),
+                                lambda actor: ToolSet([], actions.handler(actor)))
+        try:
+            await engine._event("rsi", {"type": "tool_started", "name": "slow", "call_id": "a"})
+            await engine._event("rsi", {"type": "tool_started", "name": "fast", "call_id": "b"})
+            await engine._event("rsi", {"type": "tool_completed", "name": "fast", "call_id": "b"})
+            activity = c.state.agent_activity["rsi"]
+            assert list(activity.active_tools) == ["a"] and activity.tool == "slow"
+            previous = activity.last_progress_at
+            await engine._event("rsi", {"type": "runtime_usage", "event_id": "usage",
+                                        "usage": {"total_tokens": 1}})
+            assert activity.last_progress_at == previous
+            await engine._event("rsi", {"type": "api_availability", "available": False,
+                                        "timestamp": 100})
+            assert activity.api_available is False and activity.active_tools
+            await engine._event("rsi", {"type": "tool_completed", "name": "slow", "call_id": "a",
+                                        "status": "failed"})
+            assert not activity.active_tools
+            record = next(e for e in c.store.events() if e.kind == "tool_completed"
+                          and e.data.get("call_id") == "a")
+            assert record.data["started_at"]
+            assert any(e.kind == "api_availability" for e in c.store.events())
+            view = public_detail({"agent_activity": {"rsi": {
+                "type": activity.type, "updated_at": activity.updated_at,
+                "api_available": False, "active_tools": {}, "secret": "hidden"}}})
+            assert view["agent_activity"]["rsi"]["api_available"] is False
+            assert "secret" not in str(view)
+        finally:
+            await engine.close()
+    asyncio.run(scenario())
+
+
+def test_public_tool_excerpts_redact_and_bound_text() -> None:
+    value = public_tool_text({"env": {"TOKEN": "private"}, "command": "cat output.txt",
+                              "output": 'API_KEY="secret-value"\nAuthorization: Bearer abcdefghi'})
+    assert "private" not in value and "secret-value" not in value and "abcdefghi" not in value
+    assert "output.txt" in value
+    assert len(public_tool_text("x" * 10000, limit=100)) < 150
+    command = public_tool_text({"command": "printf 'api_key=hidden-secret\\n'; cat proof.txt"})
+    decoded = json.loads(command)
+    assert "hidden-secret" not in decoded["command"] and "proof.txt" in decoded["command"]
+    assert json.loads(public_tool_text(command)) == decoded

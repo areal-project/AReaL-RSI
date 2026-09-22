@@ -81,6 +81,8 @@ def brief_tool(mode: str) -> dict[str, Any]:
             {
                 "objective": {"type": "string", "description": "研究目标。"},
                 "instructions": {"type": "string", "description": "已确认的任务要求与必要原话。"},
+                "acceptance": {"type": "array", "items": {"type": "string", "minLength": 1},
+                               "description": "已确认的可检查完成条件；未知时为空并继续沟通。"},
                 "revision": {"type": "integer", "minimum": 0,
                              "description": "当前 brief 的版本号，原样保留，不得自行增加。"},
                 "limits": object_schema(limits),

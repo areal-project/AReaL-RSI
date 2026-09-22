@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -49,11 +51,28 @@ def digest(config: ResearchConfig) -> str:
     return hashlib.sha256(json.dumps(config.public(), sort_keys=True).encode()).hexdigest()
 
 
-def prepare(c: Coordinator, config: ResearchConfig) -> None:
+@contextmanager
+def preparation_manager(c: Coordinator, manager: JobManager | None = None,
+                        *, schedule: bool = False) -> Iterator[JobManager]:
+    """Intake shares its run's existing manager; operator-only preparation owns a temporary one."""
+    owned = manager is None
+    manager = manager or JobManager(c.store.root, auto_monitor=False)
+    previous = manager.scheduling_enabled
+    manager.scheduling_enabled = schedule
+    try:
+        yield manager
+    finally:
+        manager.scheduling_enabled = previous
+        if owned:
+            manager.close(preserve_running=True)
+
+
+def prepare(c: Coordinator, config: ResearchConfig, manager: JobManager | None = None) -> None:
     state = c.state.preparation
     if state is None or c.state.status != "planned":
         raise ValueError("只能预检尚未启动的研发任务")
-    if state.status in {"running", "cancelling"}:
+    if (state.status in {"running", "cancelling"}
+        or (state.status == "ready" and state.config_digest == digest(config))):
         return
     selected = profile(c.store.root.parent.parent, state.setup.profile_id)
     try:
@@ -76,32 +95,28 @@ def prepare(c: Coordinator, config: ResearchConfig) -> None:
     state.checks = [PreparationCheck("模型认证", "passed"),
                     PreparationCheck("执行环境", "running", "正在执行预检")]
     c.save()
-    manager = JobManager(c.store.root, auto_monitor=False)
     try:
-        manager.submit(JobSpec(command=command, cwd=str(directory),
-                               timeout_seconds=selected.timeout_seconds), job_id=state.job_id)
+        with preparation_manager(c, manager, schedule=True) as jobs:
+            jobs.submit(JobSpec(command=command, cwd=str(directory),
+                                timeout_seconds=selected.timeout_seconds), job_id=state.job_id)
     except Exception:
         state.status, state.error = "failed", "预检作业启动失败"
         c.save()
         raise
-    finally:
-        manager.close(preserve_running=True)
 
 
-def cancel(c: Coordinator) -> None:
+def cancel(c: Coordinator, manager: JobManager | None = None) -> None:
     state = c.state.preparation
     if state is None or not state.job_id or state.status not in {"running", "cancelling"}:
         raise ValueError("没有正在执行的预检")
-    manager = JobManager(c.store.root, auto_monitor=False, scheduling_enabled=False)
-    try:
-        manager.cancel(state.job_id)
-    finally:
-        manager.close(preserve_running=True)
+    with preparation_manager(c, manager) as jobs:
+        jobs.cancel(state.job_id)
     state.status, state.error = "cancelling", "正在取消预检并释放资源"
     c.save()
 
 
-def refresh(c: Coordinator, config: ResearchConfig) -> ResearchConfig:
+def refresh(c: Coordinator, config: ResearchConfig,
+            manager: JobManager | None = None) -> ResearchConfig:
     state = c.state.preparation
     if (state is not None and state.status == "ready" and c.state.status == "planned"
         and state.config_digest != digest(config)):
@@ -110,12 +125,9 @@ def refresh(c: Coordinator, config: ResearchConfig) -> ResearchConfig:
         c.save()
     if state is None or state.status not in {"running", "cancelling"} or not state.job_id:
         return config
-    manager = JobManager(c.store.root, auto_monitor=False, scheduling_enabled=False)
-    try:
-        manager.poll()
-        job = manager.get(state.job_id)
-    finally:
-        manager.close(preserve_running=True)
+    with preparation_manager(c, manager, schedule=True) as jobs:
+        jobs.poll()
+        job = jobs.get(state.job_id)
     directory = c.store.root / "preparation" / state.job_id
     report = directory / "checks.json"
     if report.exists() and state.status != "cancelling":
@@ -140,6 +152,7 @@ def refresh(c: Coordinator, config: ResearchConfig) -> ResearchConfig:
                 or prepared.mode != config.mode
                 or prepared.collaboration_modules != config.collaboration_modules
                 or prepared.brief.objective != config.brief.objective
+                or prepared.brief.acceptance != config.brief.acceptance
                 or prepared.brief.limits.max_agents != state.setup.parallelism
                 or prepared.brief.limits.max_wall_seconds != state.setup.wall_seconds):
                 raise ValueError("预检结果改变了用户选择的任务或执行条件")

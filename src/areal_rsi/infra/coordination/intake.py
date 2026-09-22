@@ -18,13 +18,19 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from areal_rsi.api.interfaces import ToolCall, ToolHandler, ToolResult
-from areal_rsi.api.research import ResearchMessage
+from areal_rsi.api.research import ResearchMessage, TaskBrief
 from areal_rsi.infra.coordination.config import ResearchConfig, archived_config, load_config
 from areal_rsi.infra.coordination.coordinator import Coordinator, effect_id
 from areal_rsi.infra.coordination.evaluation.verification import IDENTITY_FIELDS
 from areal_rsi.infra.coordination.tools.actions import STRING, ResearchActions, definition
 from areal_rsi.infra.execution import ApprovedCommand
 from areal_rsi.infra.storage.files import decode, encode, now, write_json
+
+JOB_RUNNER_REQUIRED = {
+    "type": "boolean",
+    "description": "是否必须使用登记的 run_job 训练/评测命令才能完成任务。"
+    "只需研究员原生文件编辑、终端或普通脚本能力时设 false；false 不表示不执行任务。",
+}
 
 
 def reject_credentials(value: Any) -> None:
@@ -150,6 +156,15 @@ def validate_execution(config: ResearchConfig) -> list[str]:
     return issues
 
 
+def missing_requirements(brief: TaskBrief) -> list[str]:
+    missing = []
+    if brief.objective in {"新的研究", "新研究"} or not brief.instructions.strip():
+        missing.append("任务描述")
+    if not brief.acceptance:
+        missing.append("验收标准")
+    return missing
+
+
 class ResearchIntake:
     def __init__(
         self,
@@ -158,19 +173,27 @@ class ResearchIntake:
         repository: Path,
         start: Callable[[str | None], Awaitable[None]],
         freeze_execution: Callable[[], Awaitable[None]] | None = None,
+        prepare_workspace: Callable[[], Awaitable[dict[str, Any]]] | None = None,
     ):
         self.actions, self.c, self.repository, self.start = actions, actions.c, repository, start
         self.freeze_execution = freeze_execution
+        self.prepare_workspace = prepare_workspace
+        if prepare_workspace is not None:
+            actions.register(
+                definition("prepare_workspace", "按当前已明确的需求准备关联工作区。"
+                           "等待持久化准备作业完成，不重复提交；失败后继续沟通或修正。"),
+                self.handler, roles={"interaction"},
+            )
         actions.register(
             definition(
                 "handoff_research",
                 "用户已经明确要求开始且需求已谈清时，直接将需求交给 RSI 并启动研究。"
                 "summary 简述目标、约束、评判方式和已知环境；confirmation_message_id 必须来自"
-                "当前真实用户消息。执行封装尚未完成时由 RSI 组织接入，"
-                "冻结验证配置前不启动正式作业。",
+                "当前真实用户消息。任务描述、验收标准或必要执行条件未明确时继续沟通，"
+                "人数未指定默认 1；准备齐全后再交接。",
                 summary=STRING,
                 confirmation_message_id=STRING,
-                execution_required={"type": "boolean"},
+                execution_required=JOB_RUNNER_REQUIRED,
             ),
             self.handler,
             roles={"interaction"},
@@ -228,10 +251,11 @@ class ResearchIntake:
             definition(
                 "prepare_research",
                 "需求谈清后保存给用户确认的简明总结，检查执行条件，然后等待用户。"
-                "execution_required 表示任务是否需要实际运行代码或实验；纯资料研究可以为 false。"
+                "execution_required 仅表示是否依赖登记的 run_job 命令；"
+                "原生文件编辑和终端任务设 false。"
                 "不强制要求 baseline、产物或数值 target。",
                 summary=STRING,
-                execution_required={"type": "boolean"},
+                execution_required=JOB_RUNNER_REQUIRED,
             ),
             definition(
                 "start_research",
@@ -286,6 +310,9 @@ class ResearchIntake:
             ),
             "execution_env": config.execution_env,
             "issues": validate_execution(config),
+            "missing_requirements": missing_requirements(config.brief),
+            "default_researcher_count": 1,
+            "workspace_preparation": encode(self.c.state.preparation),
             "target_key_configured": bool(os.environ.get("RSI_TARGET_API_KEY")),
             "research_model": config.model_settings()["model"],
             "research_reasoning_effort": config.model_settings()["reasoning_effort"],
@@ -357,6 +384,13 @@ class ResearchIntake:
         async def handle(call: ToolCall) -> ToolResult:
             if call.name == "get_setup":
                 return ToolResult(self.setup())
+            if call.name == "prepare_workspace":
+                if self.c.state.preparation is None or self.prepare_workspace is None:
+                    raise ValueError("当前未关联工作区，请先明确执行条件")
+                await self.prepare_workspace()
+                return ToolResult({"status": self.c.state.preparation.status,
+                                   "checks": encode(self.c.state.preparation.checks),
+                                   "error": self.c.state.preparation.error})
             if call.name == "handoff_research":
                 identifier = call.arguments["confirmation_message_id"]
                 if (
@@ -371,6 +405,8 @@ class ResearchIntake:
                 ):
                     raise ValueError("启动依据必须是当前回合真实用户的明确指令")
                 config = self.config()
+                if missing := missing_requirements(config.brief):
+                    raise ValueError("启动前还需要明确：" + "、".join(missing))
                 summary = call.arguments["summary"].strip()
                 if (
                     not summary
@@ -516,11 +552,7 @@ class ResearchIntake:
             if call.name == "prepare_research":
                 config = self.config()
                 issues = validate_execution(config)
-                if (
-                    config.brief.objective in {"新的研究", "新研究"}
-                    or not config.brief.instructions.strip()
-                ):
-                    issues.append("还需要明确研究目标和给 RSI 的要求")
+                issues.extend("还需要明确" + name for name in missing_requirements(config.brief))
                 if args["execution_required"] and not (config.commands or config.verifier):
                     issues.append("本任务需要执行实验，请先接入实际执行命令")
                 if issues:

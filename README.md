@@ -72,10 +72,12 @@ Codex 后端可选择“本地 Codex 登录”：无需填写 API key 或 API �
 uv run --env-file .env --locked rsi workbench --port 8197
 ```
 
-## 统一的 pass@1 / pass@k 执行
+## 统一的 pass@k 执行
 
 单路与多路使用同一套 researcher 工具、目标上下文、人工指导、完成和阻塞逻辑。
-新建任务选择 **pass@1** 或 **pass@k**；区别仅是独立研究员数量。
+前端统一使用 **pass@k**，不单独提供单路入口。Interaction 会先明确任务描述和验收标准，
+必要时进行多轮沟通；研究员数量可选，未指定默认 1，可在对话中要求多人。
+启动流程由内置 [rsi-intake skill](src/areal_rsi/resources/skills/rsi-intake/SKILL.md) 定义。
 配置统一为 `"mode": "passk", "collaboration_modules": []`，单路将
 `brief.limits.max_agents` 设为 `1`，多路设为需要的数量。
 

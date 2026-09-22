@@ -28,7 +28,7 @@ from areal_rsi.ui.workbench import public_detail
 async def start(root: Path) -> tuple[ResearchSystem, str, list[str]]:
     config = ResearchConfig(TaskBrief("Write a greeting", "Keep it short",
                             ResearchLimits(max_agents=2),
-                            VerificationContract("correct", target=1)))
+                            VerificationContract("correct", target=1), acceptance=["English only"]))
     app = ResearchSystem(root, config=config, runtime_factory=lambda _: ActionRuntime())
     detail = await app.create({"conversation": False})
     run_id = detail["run_id"]
@@ -116,10 +116,11 @@ def test_goal_revision_excludes_old_results_and_survives_restart(tmp_path: Path)
             active.execution.commands["probe"] = ApprovedCommand("probe", ("true",))
             job = await active.execution.submit(agents[1], ToolCall("run_job", {
                 "command_name": "probe", "parameters_json": "{}"}, "old-job"))
-            await app.revise_goal(run_id, "Write a bilingual greeting",
+            await app.update_goal(run_id, "Write a bilingual greeting",
                                   "Include English and Chinese",
-                                  "revision-one", 0)
+                                  "revision-one", 0, acceptance=["English and Chinese present"])
             assert c.store.brief().revision == 1
+            assert c.store.brief().acceptance == ["English and Chinese present"]
             assert c.store.run().best_result_ref is None
             assert not c.store.consider_best(result.result_id)
             assert active.actions.state(agents[0])["best"] is None
@@ -131,19 +132,30 @@ def test_goal_revision_excludes_old_results_and_survives_restart(tmp_path: Path)
                 assert (active.actions.workspace(agent) / "greeting.txt").read_text() == agent
                 guidance = active.actions.state(agent)["human_guidance"]
                 assert "bilingual" in guidance[-1]["text"]
+                assert "English and Chinese present" in guidance[-1]["text"]
             messages = len(c.store.records("messages", ResearchMessage))
-            await app.revise_goal(run_id, "Write a bilingual greeting",
+            await app.update_goal(run_id, "Write a bilingual greeting",
                                   "Include English and Chinese",
-                                  "revision-one", 0)
+                                  "revision-one", 0, acceptance=["English and Chinese present"])
             assert len(c.store.records("messages", ResearchMessage)) == messages
-            with pytest.raises(ValueError, match="其他页面"):
-                await app.revise_goal(run_id, "stale edit", "", "stale-request", 0)
             with pytest.raises(ValueError, match="不同内容"):
-                await app.revise_goal(run_id, "different", "", "revision-one", 0)
+                await app.update_goal(run_id, "Write a bilingual greeting",
+                                      "Include English and Chinese", "revision-one", 0,
+                                      acceptance=["Different acceptance"])
+            with pytest.raises(ValueError, match="Invalid update-goal"):
+                await app.update_goal(run_id, "New", "", "empty-acceptance", 1,
+                                      acceptance=[])
+            with pytest.raises(ValueError, match="其他页面"):
+                await app.update_goal(run_id, "stale edit", "", "stale-request", 0,
+                                      acceptance=["New check"])
+            with pytest.raises(ValueError, match="不同内容"):
+                await app.update_goal(run_id, "different", "", "revision-one", 0,
+                                      acceptance=["English and Chinese present"])
             await app.close()
             app = ResearchSystem(tmp_path, runtime_factory=lambda _: ActionRuntime())
             c = app.coordinator(run_id)
             assert app.config(c).brief.revision == 1
+            assert app.config(c).brief.acceptance == ["English and Chinese present"]
             assert c.state.human.goal_changes[0].previous.objective == "Write a greeting"
             assert c.state.human.goal_changes[0].applied
             detail = public_detail(await app.detail(run_id))
@@ -164,7 +176,8 @@ def test_interrupted_goal_change_resumes_from_intent(
                 raise OSError("interrupted write")
             monkeypatch.setattr(app, "_apply_goal_change", fail)
             with pytest.raises(OSError, match="interrupted"):
-                await app.revise_goal(run_id, "Revised goal", "New requirements", "revision", 0)
+                await app.update_goal(run_id, "Revised goal", "New requirements", "revision", 0,
+                                      acceptance=["New check"])
             assert app.coordinator(run_id).state.status == "paused"
             await app.close()
             app = ResearchSystem(tmp_path, runtime_factory=lambda _: ActionRuntime())
@@ -233,4 +246,47 @@ def test_late_success_keeps_its_original_goal_revision(tmp_path: Path) -> None:
             assert c.state.status == "succeeded"
         finally:
             runner.close(cancel=True)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("released", [True, False])
+def test_cancellation_waits_for_terminal_job_resource_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, released: bool,
+) -> None:
+    from dataclasses import replace
+
+    from areal_rsi.infra.coordination.coordinator import Coordinator
+    from areal_rsi.infra.coordination.evaluation.jobs import ResearchExecution
+    from areal_rsi.infra.execution import JobRecord, JobSpec
+
+    async def scenario() -> None:
+        c = Coordinator.create(tmp_path, TaskBrief("task", "task"))
+        execution = ResearchExecution(PassKActions(c))
+        record = JobRecord("probe", JobSpec(("true",), str(tmp_path)), "lost", 0, 0,
+                           resources_released=False)
+        polls = 0
+
+        def poll() -> list[JobRecord]:
+            nonlocal record, polls
+            polls += 1
+            if polls == 2 and released:
+                record = replace(record, resources_released=True)
+            return [record]
+
+        try:
+            with monkeypatch.context() as patch:
+                patch.setattr(execution.manager, "records", lambda: [record])
+                patch.setattr(execution.manager, "get", lambda _: record)
+                patch.setattr(execution.manager, "cancel", lambda _: record)
+                patch.setattr(execution.manager, "poll", poll)
+                if released:
+                    await execution.cancel_pending()
+                    assert polls == 2 and record.resources_released
+                else:
+                    with pytest.raises(RuntimeError, match="resources remain reserved"):
+                        await execution.cancel_pending()
+                    assert not record.resources_released
+        finally:
+            execution.close()
+
     asyncio.run(scenario())

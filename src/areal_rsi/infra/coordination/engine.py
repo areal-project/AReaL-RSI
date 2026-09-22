@@ -25,7 +25,7 @@ from areal_rsi.api.interfaces import (
     ToolHandler,
 )
 from areal_rsi.api.records import AgentState
-from areal_rsi.api.research import AgentActivity, ResearchMessage, RuntimeUsage
+from areal_rsi.api.research import AgentActivity, ResearchMessage, RunningTool, RuntimeUsage
 from areal_rsi.infra.agents.communication import INTEGRITY_PROMPT
 from areal_rsi.infra.agents.interaction.prompt import PROMPT as INTERACTION_PROMPT
 from areal_rsi.infra.agents.research.passk_prompt import PROMPT as RESEARCH_PROMPT
@@ -152,6 +152,16 @@ class ResearchEngine:
     async def _event(self, agent_id: str, event: Json) -> None:
         kind = event["type"]
         if kind == "api_availability":
+            c = self.coordinator
+            activity = c.state.agent_activity.setdefault(agent_id, AgentActivity(kind, None, now()))
+            changed = activity.api_available != event["available"]
+            activity.api_available = event["available"]
+            if changed:
+                activity.type, activity.updated_at = kind, now()
+                activity.started_at = activity.updated_at
+                c.save()
+                c.store.event(kind, agent_id=agent_id, available=event["available"])
+                self.wake()
             if self.effective is not None:
                 self.effective.availability(agent_id, event["available"], event["timestamp"])
                 self.coordinator.save()
@@ -179,10 +189,29 @@ class ResearchEngine:
                 if message.sender == "user":
                     c.state.human.received_messages.append(identifier)
                     c.save()
-        if kind in {"runtime_turn_started", "tool_started", "tool_completed"}:
-            self.coordinator.state.agent_activity[agent_id] = AgentActivity(
-                kind, event.get("name"), now()
+        if kind in {"runtime_turn_started", "tool_started", "tool_completed", "model_output"}:
+            activity = self.coordinator.state.agent_activity.setdefault(
+                agent_id, AgentActivity(kind, None, now())
             )
+            at = now()
+            activity.type, activity.updated_at = kind, at
+            activity.last_progress_at = at
+            if kind == "runtime_turn_started":
+                activity.active_tools.clear()
+                activity.started_at, activity.tool = at, None
+            elif kind == "tool_started":
+                key = event.get("call_id") or event.get("name", "tool")
+                activity.active_tools.setdefault(key, RunningTool(event.get("name", "tool"), at))
+                activity.started_at, activity.tool = at, event.get("name")
+            elif kind == "tool_completed":
+                key = event.get("call_id") or event.get("name", "tool")
+                previous_tool = activity.active_tools.pop(key, None)
+                if previous_tool:
+                    event = {**event, "started_at": previous_tool.started_at}
+                activity.started_at, activity.tool = at, None
+            if activity.active_tools:
+                current = next(reversed(activity.active_tools.values()))
+                activity.tool, activity.started_at = current.name, current.started_at
             self.coordinator.save()
         if kind == "message_injected":
             self.coordinator.receive_during_turn(agent_id, event["message_id"])

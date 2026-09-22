@@ -727,6 +727,11 @@ def test_native_runtime_honors_environment_and_advertised_tools(
         async def handler(call: ToolCall) -> ToolResult:
             return ToolResult({})
 
+        events: list[dict[str, Any]] = []
+
+        async def emit(event: dict[str, Any]) -> None:
+            events.append(event)
+
         workspace = tmp_path / "workspace"
         visible = definition("get_state", "Read state")
         hidden = definition("hidden_tool", "Callable but not advertised")
@@ -741,12 +746,19 @@ def test_native_runtime_honors_environment_and_advertised_tools(
                     environment={"RSI_SMOKE_VALUE": "injected"},
                     workspace=workspace,
                     handler=handler,
+                    event_sink=emit,
                 ),
                 30,
             )
             assert (workspace / "env-seen.txt").read_text() == "injected"
             exposed = json.loads((workspace / "tools-seen.json").read_text())
             assert [tool["name"] for tool in exposed] == ["get_state"]
+            started = next(e for e in events if e["type"] == "tool_started")
+            completed = next(e for e in events if e["type"] == "tool_completed")
+            assert "env-seen.txt" in started["arguments"]
+            assert started["status"] == "running"
+            assert completed["status"] == "completed"
+            assert json.loads(completed["result"])["exitCode"] == 0
         finally:
             await runtime.close()
 

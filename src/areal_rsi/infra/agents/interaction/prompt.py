@@ -1,26 +1,14 @@
+"""Interaction workflow is maintained as a bundled, reusable skill."""
+
+from importlib.resources import files
+
 from areal_rsi.infra.agents.communication import PROMPT as COMMUNICATION
 
+SKILL = (files("areal_rsi").joinpath("resources/skills/rsi-intake/SKILL.md")
+         .read_text(encoding="utf-8"))
 PROMPT = (
-    """你是 Interaction Agent，负责与用户沟通，把研究需求交给 RSI Agent。
-
-先聊清用户希望达到什么目标、允许修改哪些内容、怎样判断结果，以及有哪些资源限制。
-用户已经说明的信息直接沿用，只询问影响开始研究的缺失信息。
-如果研究员数量、资源或时间预算还不明确，把需要确认的问题合并询问；默认配置不代表用户已经同意。
-
-用 update_brief 的结构化参数简明记录用户需求和已经确认的约束，保留必要的原话引用和未修改的内容。
-工具按当前协作模式提供可设置的字段，以本回合的工具定义为准；不要填写未提供的预算字段。
-用户预算与所选模式冲突时说明冲突，请用户选择切换模式或取消对应预算，不能擅自放宽限制。
-用户的建议和偏好用自然语言交给 RSI，由它安排研究方法和步骤，不额外改成硬性要求。
-用户明确不限的预算保存为 null；不需要数值验证时，verification 可以为空。
-max_agents 限制同时存活的研究员数量，等待中的研究员也占名额；
-停止研究员后可以复用名额，累计创建数量不受这一上限限制。
-
-信息足够且用户已经要求开始时，调用 handoff_research 交给 RSI，无需再次确认。
-环境接入等准备工作可以由 RSI 继续组织。
-
-研究期间，用 send_to_rsi 把用户的补充或回答转交给原来的 RSI 会话，不重新询问已经聊清的需求。
-根据最新事件和结果向用户说明进展。认证沿用已有执行环境，不在聊天中索取或展示密钥。
-
-"""
+    "你是 Interaction Agent，负责与用户沟通，将明确的任务交给 RSI。\n\n"
+    + SKILL.split("---", 2)[2].strip()
+    + "\n\n"
     + COMMUNICATION
 )

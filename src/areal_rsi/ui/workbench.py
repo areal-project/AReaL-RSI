@@ -111,7 +111,7 @@ def _evidence(value: Any) -> Json:
 def _brief(value: Any) -> Json:
     if not isinstance(value, dict):
         return {}
-    result = _fields(value, "objective instructions revision")
+    result = _fields(value, "objective instructions revision acceptance")
     result["limits"] = _fields(
         value.get("limits"),
         "max_agents max_nodes max_total_tokens "
@@ -188,9 +188,11 @@ def public_detail(value: Json) -> Json:
     result["pending_agents"] = [a for a in value.get("pending_agents", []) if isinstance(a, str)]
     result["execution_blocker"] = _fields(value.get("execution_blocker"), "job_id error created_at")
     result["agent_activity"] = {
-        name: _fields(
-            activity, "type tool updated_at attempt error_code delay_seconds next_retry_at"
-        )
+        name: {**_fields(
+            activity, "type tool updated_at started_at last_progress_at api_available "
+                      "attempt error_code delay_seconds next_retry_at"
+        ), "active_tools": {key: _fields(tool, "name started_at")
+                            for key, tool in activity.get("active_tools", {}).items()}}
         for name, activity in value.get("agent_activity", {}).items()
         if isinstance(name, str) and isinstance(activity, dict)
     }
@@ -476,6 +478,23 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                         ]
                     },
                 )
+                return
+            if (len(parts) == 4 and parts[:2] == ["api", "runs"]
+                and IDENTIFIER.fullmatch(parts[2]) and parts[3] == "trace"):
+                trace_params: Json = {"run_id": parts[2],
+                                      "agent_id": query.get("agent_id", [""])[0]}
+                for name in ("before", "limit"):
+                    if name in query:
+                        trace_params[name] = int(query[name][0])
+                raw = self.server.invoke("trace", trace_params)
+                if not isinstance(raw, dict):
+                    raise TypeError("Invalid trace response")
+                self._json(200, {
+                    **_fields(raw, "agent_id next_before"),
+                    "entries": [_fields(entry, "sequence created_at kind text name call_id "
+                                        "arguments result status started_at job_id")
+                                for entry in raw.get("entries", [])],
+                })
                 return
             if len(parts) == 3 and parts[:2] == ["api", "runs"] and IDENTIFIER.fullmatch(parts[2]):
                 after = int(query.get("after", ["0"])[0])

@@ -85,7 +85,7 @@
             <button class="quiet danger" data-action="stop" id="stop">
               停止
             </button>
-            <button class="secondary" id="revise-goal" hidden>调整全局目标</button>
+            <button class="secondary" id="update-goal" hidden>调整全局目标</button>
             <span id="human-status" class="muted"></span>
             <button class="quiet danger" id="delete-run">删除研究</button>
             <button class="secondary" id="export-candidate" hidden>下载候选源码</button>
@@ -146,16 +146,14 @@
           </form>
         </details>
         <details class="card model-settings" id="collaboration-settings" hidden>
-          <summary><span>协作方式</span><span id="collaboration-summary" class="muted"></span></summary>
-          <form id="collaboration-form">
-            <label for="collaboration-mode-trigger">基础流程</label><div id="collaboration-mode"></div>
+          <summary><span>执行方式</span><span id="collaboration-summary" class="muted"></span></summary>
+          <div>
             <p id="collaboration-description" class="muted"></p>
             <div class="model-settings-footer">
               <p id="collaboration-status" class="muted" role="status"></p>
-              <button class="secondary" id="save-collaboration" type="submit">保存协作配置</button>
               <button class="quiet" id="reuse-collaboration" type="button">用此配置新建研究</button>
             </div>
-          </form>
+          </div>
         </details>
         <section class="metrics" id="metrics" aria-label="研究概览">
           <div class="metric" id="score-metric">
@@ -265,7 +263,7 @@
               >
                 需求与对话</button
               ><button id="node-tab" role="tab" aria-selected="false">
-                任务详情</button
+                执行轨迹</button
               ><button id="brief-tab" role="tab" aria-selected="false">
                 研究约束
               </button>
@@ -352,26 +350,26 @@
           <div><label for="create-model">模型名称</label><input id="create-model" required autocomplete="off" spellcheck="false" /><div id="create-model-preset"></div></div>
           <div><label for="create-effort-trigger">推理强度</label><div id="create-effort"></div></div>
         </div>
-        <label for="create-collaboration-mode-trigger">协作方式</label><div id="create-collaboration-mode"></div>
-        <p id="create-collaboration-description" class="muted"></p>
         </details>
         <p id="create-error" class="form-error" role="alert" hidden></p>
         <div class="model-settings-footer"><span class="muted" id="create-start-hint">开始研究前仍可修改配置。</span><button id="create-submit" class="primary" type="submit">创建研究</button></div>
       </form>
     </dialog>
     <dialog id="goal-dialog" class="create-dialog">
-      <form id="revise-goal-form">
+      <form id="update-goal-form">
         <h2>调整全局目标</h2>
         <p id="goal-revision-label" class="muted"></p>
         <label for="revised-objective">新的目标</label>
         <textarea id="revised-objective" rows="3" required maxlength="12000"></textarea>
+        <label for="revised-acceptance">完成标准（每行一项）</label>
+        <textarea id="revised-acceptance" rows="3" required maxlength="12000"></textarea>
         <label for="revised-instructions">任务要求</label>
         <textarea id="revised-instructions" rows="6" maxlength="12000"></textarea>
         <p>提交后暂停研究员并取消旧作业，保留各自代码，向所有研究员发送新目标。旧成绩保留为历史，新目标需重新验证。已暂停的研究员保持暂停。</p>
         <p>此处调整目标与任务要求，正式验收器、模型、数据集及预算保持原配置。新增要求仍需单独确认验证覆盖。</p>
         <label id="goal-verification-confirmation"><input type="checkbox" id="goal-verification-confirmed" /> 现有可信验收器仍完整覆盖修改后的目标</label>
         <p>未勾选时，新成绩可供参考，但不会自动认定新目标已完成。</p>
-        <p id="revise-goal-error" role="alert"></p>
+        <p id="update-goal-error" role="alert"></p>
         <button type="button" id="close-goal-dialog" class="secondary">取消</button>
         <button type="submit" id="submit-goal" class="primary">更新目标并通知所有研究员</button>
       </form>

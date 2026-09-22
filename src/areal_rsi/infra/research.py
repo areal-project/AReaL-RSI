@@ -45,7 +45,11 @@ from areal_rsi.infra.coordination.coordinator import Coordinator
 from areal_rsi.infra.coordination.engine import ResearchEngine, ToolSet
 from areal_rsi.infra.coordination.evaluation.jobs import ResearchExecution
 from areal_rsi.infra.coordination.evaluation.verification import read_trusted_result
-from areal_rsi.infra.coordination.intake import ResearchIntake, validate_execution
+from areal_rsi.infra.coordination.intake import (
+    ResearchIntake,
+    missing_requirements,
+    validate_execution,
+)
 from areal_rsi.infra.coordination.policies.collaboration import (
     DEFAULT_MODULES,
     MODES,
@@ -59,7 +63,7 @@ from areal_rsi.infra.coordination.presets import example_config
 from areal_rsi.infra.coordination.store import ResearchStore
 from areal_rsi.infra.coordination.tools.actions import ResearchActions
 from areal_rsi.infra.coordination.tools.web import register_sources
-from areal_rsi.infra.coordination.views import research_detail, research_list
+from areal_rsi.infra.coordination.views import agent_trace, research_detail, research_list
 from areal_rsi.infra.execution import JobManager, JobRecord
 from areal_rsi.infra.runtime.research_runtime import ResearchRuntime
 from areal_rsi.infra.storage.files import (
@@ -370,7 +374,7 @@ class ResearchSystem:
                     raise ValueError("该 run_id 已用于不同的创建请求")
             else:
                 await self._create(params, run_id, creation_digest)
-            if ("development" not in params and not params.get("use_workspace")
+            if ("development" not in params
                 and (message := str(params.get("message", "")).strip())):
                 previous = self.coordinator(run_id)
                 if previous.state.status == "planned":
@@ -420,7 +424,7 @@ class ResearchSystem:
             selected = development.default_profile(self.root, config)
             if selected is None:
                 raise ValueError("当前工作区尚未配置，请先说明要处理的项目")
-            count = params.get("collaboration", {}).get("max_agents", selected.defaults.parallelism)
+            count = params.get("collaboration", {}).get("max_agents", 1)
             setup = replace(selected.defaults,
                             acceptance=objective,
                             parallelism=count,
@@ -430,7 +434,7 @@ class ResearchSystem:
             setup = decode(DevelopmentSetup, params["development"])
             development.profile(self.root, setup.profile_id)
         if setup is not None:
-            conversation = False
+            conversation = bool(params.get("use_workspace"))
             objective = str(params.get("message", "")).strip()
             if not objective:
                 raise ValueError("请填写研发目标")
@@ -524,7 +528,7 @@ class ResearchSystem:
                     limitations="Simulated task traces; no real task-model performance measured",
                 ),
             )
-        if setup is None and (message := str(params.get("message", "")).strip()):
+        if (setup is None or conversation) and (message := str(params.get("message", "")).strip()):
             c.user_message(message, key=params.get("message_id") or "initial-" + creation_digest)
         (directory / ".creating").unlink()
 
@@ -542,10 +546,32 @@ class ResearchSystem:
         async with self.control(run_id, "start") as c:
             await self._start(c, confirmation_message_id)
 
-    async def prepare(self, run_id: str) -> dict[str, Any]:
+    async def prepare(self, run_id: str, *, wait: bool = False) -> dict[str, Any]:
         async with self.control(run_id, "prepare") as c:
-            config = development.refresh(c, self.config(c))
-            development.prepare(c, config)
+            active = self.active.get(run_id)
+            manager = active.execution.manager if active and not active.execution.closed else None
+            config = development.refresh(c, self.config(c), manager)
+            if c.state.preparation is not None and c.state.intake.status is not None:
+                if missing := missing_requirements(config.brief):
+                    raise ValueError("准备前还需要明确：" + "、".join(missing))
+                c.state.preparation.setup = replace(
+                    c.state.preparation.setup,
+                    acceptance="\n".join(config.brief.acceptance),
+                    parallelism=config.brief.limits.max_agents,
+                    wall_seconds=config.brief.limits.max_wall_seconds,
+                )
+                c.save()
+            development.prepare(c, config, manager)
+        while (wait and c.state.preparation
+               and c.state.preparation.status in {"running", "cancelling"}):
+            await asyncio.sleep(.1)
+            async with self.control(run_id, "prepare") as c:
+                if c.state.status != "planned":
+                    raise ValueError("当前任务已结束或开始执行")
+                active = self.active.get(run_id)
+                manager = (active.execution.manager
+                           if active and not active.execution.closed else None)
+                development.refresh(c, self.config(c), manager)
         return await self.detail(run_id)
 
     async def _start(self, c: Coordinator, confirmation_message_id: str | None) -> None:
@@ -554,8 +580,12 @@ class ResearchSystem:
         if c.state.intake.status is not None and c.state.intake.status != "ready":
             raise ValueError("请先与 Interaction 确认研究目标和执行条件")
         config = self.config(c)
+        if c.state.intake.status is not None and (missing := missing_requirements(c.store.brief())):
+            raise ValueError("启动前还需要明确：" + "、".join(missing))
         if c.state.preparation is not None:
-            config = development.refresh(c, config)
+            active = self.active.get(c.store.run_id)
+            manager = active.execution.manager if active and not active.execution.closed else None
+            config = development.refresh(c, config, manager)
             prepared = c.state.preparation
             if prepared.status != "ready" or prepared.config_digest != development.digest(config):
                 raise ValueError("执行配置尚未通过预检，请先预检后再启动")
@@ -745,6 +775,7 @@ class ResearchSystem:
                 repository=self.repository,
                 start=lambda message: self.start(c.store.run_id, message),
                 freeze_execution=lambda: self.freeze_execution(c),
+                prepare_workspace=lambda: self.prepare(c.store.run_id, wait=True),
             )
 
             async def poll() -> bool:
@@ -908,6 +939,16 @@ class ResearchSystem:
                 exc = TimeoutError("研究已到总时间上限；已验证的最佳版本仍保留")
             c.interrupt_completion(str(exc)[:500])
 
+    async def trace(
+        self, run_id: str, agent_id: str, before: int | None = None, limit: int = 50,
+    ) -> dict[str, Any]:
+        validate_request("trace", dict(run_id=run_id, agent_id=agent_id,
+                                       before=before, limit=limit))
+        result: dict[str, Any] = encode(agent_trace(
+            self._visible_coordinator(run_id), agent_id, before=before, limit=limit
+        ))
+        return result
+
     async def detail(
         self,
         run_id: str,
@@ -935,7 +976,10 @@ class ResearchSystem:
                 pass  # Another controller owns the transition; viewing stays read-only.
             else:
                 try:
-                    development.refresh(c, self.config(c))
+                    active = self.active.get(run_id)
+                    manager = (active.execution.manager
+                               if active and not active.execution.closed else None)
+                    development.refresh(c, self.config(c), manager)
                 finally:
                     c.release()
         active = self.active.get(run_id)
@@ -984,7 +1028,8 @@ class ResearchSystem:
         recipient: str | None = None,
     ) -> dict[str, Any]:
         async with self.control(run_id, "chat") as c:
-            if c.state.preparation is not None and c.state.status == "planned":
+            if (c.state.preparation is not None and c.state.status == "planned"
+                and c.state.intake.status is None):
                 raise ValueError("请先完成环境预检并启动研发；预检阶段不会启动对话 Agent")
             message_id = c.user_message(
                 text,
@@ -1062,7 +1107,8 @@ class ResearchSystem:
         c.state.passk_target = None
         text = (f"全局目标已更新为 v{change.brief.revision + 1}。以此覆盖旧任务中冲突的要求，"
                 "保留可复用代码；旧成绩仅作历史，需重新验证。先说明调整后的执行计划。\n\n"
-                + change.brief.objective + "\n\n" + change.brief.instructions)
+                + change.brief.objective + "\n\n" + change.brief.instructions
+                + "\n\n验收标准：\n" + "\n".join(change.brief.acceptance))
         for actor in c.store.run().research_agents:
             c.state.goals[actor.agent_id] = GoalContext(updated_at=now())
         recipients = list(c.store.run().research_agents)
@@ -1076,22 +1122,23 @@ class ResearchSystem:
         c.store.event("goal_revised", revision=change.brief.revision,
                       objective=change.brief.objective)
 
-    async def revise_goal(
+    async def update_goal(
         self, run_id: str, objective: str, instructions: str,
         request_id: str, expected_revision: int,
-        verification_confirmed: bool = False,
+        verification_confirmed: bool = False, *, acceptance: list[str],
     ) -> None:
-        validate_request("revise-goal", dict(run_id=run_id, objective=objective,
+        validate_request("update-goal", dict(run_id=run_id, objective=objective,
                          instructions=instructions, request_id=request_id,
                          expected_revision=expected_revision,
-                         verification_confirmed=verification_confirmed))
-        async with self.control(run_id, "revise-goal") as c:
+                         verification_confirmed=verification_confirmed, acceptance=acceptance))
+        async with self.control(run_id, "update-goal") as c:
             self._human_control(c)
             changes = c.state.human.goal_changes
             previous = next((x for x in changes if x.request_id == request_id), None)
             if previous:
                 if (previous.brief.objective != objective.strip()
                     or previous.brief.instructions != instructions.strip()
+                    or previous.brief.acceptance != acceptance
                     or previous.verification_confirmed != verification_confirmed
                     or previous.previous.revision != expected_revision):
                     raise ValueError("目标修改请求标识已用于不同内容")
@@ -1103,7 +1150,7 @@ class ResearchSystem:
             if previous is None and brief.revision != expected_revision:
                 raise ValueError("目标已被其他页面修改，请刷新后重试")
             revised = replace(brief, objective=objective.strip(), instructions=instructions.strip(),
-                              revision=expected_revision + 1)
+                              revision=expected_revision + 1, acceptance=list(acceptance))
             running = c.state.status == "running"
             if running:
                 c.pause()
@@ -1124,7 +1171,10 @@ class ResearchSystem:
     async def cancel(self, run_id: str) -> dict[str, Any]:
         async with self.control(run_id, "cancel") as c:
             if c.state.preparation is not None and c.state.status == "planned":
-                development.cancel(c)
+                active = self.active.get(run_id)
+                manager = (active.execution.manager
+                           if active and not active.execution.closed else None)
+                development.cancel(c, manager)
                 return await self.detail(run_id)
             self._human_control(c)
             if c.state.status == "running":
@@ -1334,7 +1384,7 @@ class ResearchSystem:
         return {
             "service": "areal-rsi",
             "api_version": 1,
-            "capabilities": ["configured-runs", "automatic-finalization"],
+            "capabilities": ["configured-runs", "automatic-finalization", "agent-trace"],
             "data_root": str(self.root),
             "default_model_settings": {
                 **config.model_settings(),
@@ -1385,10 +1435,11 @@ class ResearchSystem:
             "bootstrap": self.bootstrap,
             "list": self.list_runs,
             "detail": self.detail,
+            "trace": self.trace,
             "delete": self.delete,
             "chat": self.send_message,
             "agent-control": self.set_agent_paused,
-            "revise-goal": self.revise_goal,
+            "update-goal": self.update_goal,
             "cancel-job": self.cancel_job,
             "start": self.start,
             "prepare": self.prepare,

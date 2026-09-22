@@ -86,12 +86,15 @@ class TaskBrief:
     limits: ResearchLimits = field(default_factory=ResearchLimits)
     verification: VerificationContract | None = None
     revision: int = 0
+    acceptance: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.objective.strip():
             raise ValueError("Research objective must not be empty")
         if self.revision < 0:
             raise ValueError("Goal revision must be nonnegative")
+        if any(not isinstance(item, str) or not item.strip() for item in self.acceptance):
+            raise ValueError("验收标准须为非空文字列表")
         if self.verification is not None and not isinstance(
             self.verification, VerificationContract
         ):
@@ -330,10 +333,42 @@ class RetryBackoff:
 
 
 @dataclass(slots=True)
+class RunningTool:
+    name: str
+    started_at: str
+
+
+@dataclass(slots=True)
 class AgentActivity:
     type: str
     tool: str | None
     updated_at: str
+    started_at: str | None = None
+    last_progress_at: str | None = None
+    api_available: bool | None = None
+    active_tools: dict[str, RunningTool] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class AgentTraceEntry:
+    sequence: int
+    created_at: str
+    kind: str
+    text: str = ""
+    name: str = ""
+    call_id: str = ""
+    arguments: str = ""
+    result: str = ""
+    status: str = ""
+    started_at: str | None = None
+    job_id: str = ""
+
+
+@dataclass(slots=True)
+class AgentTracePage:
+    agent_id: str
+    entries: list[AgentTraceEntry]
+    next_before: int | None = None
 
 
 @dataclass(slots=True)
@@ -456,8 +491,8 @@ class DevelopmentSetup:
     repository: str
     revision: str
     acceptance: str
-    parallelism: int = 2
-    wall_seconds: int | None = None
+    parallelism: int = 1
+    wall_seconds: float | None = None
 
     def __post_init__(self) -> None:
         if not all(value.strip() for value in (

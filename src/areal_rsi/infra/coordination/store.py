@@ -232,13 +232,17 @@ class ResearchStore:
             sequence += 1
         return sequence
 
-    def events(self, after: int = 0, *, limit: int | None = None) -> list[ResearchEvent]:
+    def events(
+        self, after: int = 0, *, limit: int | None = None, before: int | None = None,
+    ) -> list[ResearchEvent]:
         # Event filenames encode their immutable sequence. Skip acknowledged
         # files before reading/decoding, rather than reparsing the full archive
         # on every workbench poll.
         result = []
         directory = self.root / "events"
         last = self._last_event_sequence()
+        if before is not None:
+            last = min(last, before - 1)
         start = max(0, after)
         if limit is not None:
             if not 1 <= limit <= 1000:

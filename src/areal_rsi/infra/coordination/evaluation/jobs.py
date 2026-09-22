@@ -624,12 +624,17 @@ class ResearchExecution:
         for record in records:
             if not record.terminal or not record.resources_released:
                 self.manager.cancel(record.job_id)
-        async with asyncio.timeout(5):
-            while any(not self.manager.get(record.job_id).terminal for record in records):
-                self.manager.poll()
-                await asyncio.sleep(0.05)
-        if any(not self.manager.get(record.job_id).resources_released for record in records):
-            raise RuntimeError("Previous job ownership is uncertain; resources remain reserved")
+        try:
+            async with asyncio.timeout(5):
+                while any(not current.terminal or not current.resources_released
+                          for record in records
+                          for current in [self.manager.get(record.job_id)]):
+                    self.manager.poll()
+                    await asyncio.sleep(0.05)
+        except TimeoutError as exc:
+            raise RuntimeError(
+                "Previous job ownership is uncertain; resources remain reserved"
+            ) from exc
 
     async def execute_completion(
         self,

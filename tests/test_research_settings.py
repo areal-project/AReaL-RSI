@@ -28,7 +28,8 @@ def test_current_brief_can_be_updated_and_started(tmp_path: Path) -> None:
             arguments = encode(c.store.brief())
             for key in PASSK_HIDDEN_LIMITS:
                 arguments["limits"].pop(key)
-            arguments.update(objective="Research", instructions="Keep fixed data")
+            arguments.update(objective="Research", instructions="Keep fixed data",
+                             acceptance=["Run the configured checks using fixed data"])
             result = await ResearchActions(c).handler("interaction")(
                 ToolCall("update_brief", arguments, "update")
             )

@@ -106,7 +106,8 @@ def test_conversation_can_bind_real_cpu_execution_without_template_or_baseline(
             await system.call("start", {"run_id": c.store.run_id})
         active = await system.attach(c)
         tools = active.actions.handler("interaction")
-        brief = TaskBrief("研究文本处理", "比较规则与结果，保留具体观察")
+        brief = TaskBrief("研究文本处理", "比较规则与结果，保留具体观察",
+                          acceptance=["运行文本处理命令并保留实际输出"])
         brief.limits.max_agents = 3
         arguments = encode(brief)
         for name in PASSK_HIDDEN_LIMITS:
@@ -253,6 +254,7 @@ def test_passk_handoff_accepts_optional_execution(tmp_path: Path, execution_requ
             c = system.coordinator(draft["run_id"])
             config = system.config(c)
             config.brief.objective = "Improve external benchmark"
+            config.brief.acceptance = ["Report measured results with execution evidence"]
             config.brief.instructions = (
                 "Use the existing submit/status scripts and report their score"
             )

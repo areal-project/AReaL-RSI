@@ -21,6 +21,7 @@ from typing import Any
 
 from jsonschema import ValidationError, validate
 
+from areal_rsi.api.control import public_tool_text
 from areal_rsi.api.interfaces import EventSink, ToolCall, ToolHandler, TurnResult
 from areal_rsi.api.records import AgentSpec, ModelVersion
 from areal_rsi.infra.config import local_codex_auth
@@ -147,6 +148,7 @@ class ResearchRuntime:
 
         async def serve(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
             task = asyncio.current_task()
+            call: ToolCall | None = None
             if connection is not None and task is not None:
                 connection.calls.add(task)
             try:
@@ -174,7 +176,8 @@ class ResearchRuntime:
                 )
                 if connection.sink:
                     await connection.sink(
-                        {"type": "tool_started", "name": name, "call_id": call.call_id}
+                        {"type": "tool_started", "name": name, "call_id": call.call_id,
+                         "arguments": public_tool_text(call.arguments)}
                     )
                 result = await connection.handler(call)
                 output: Any = result.output
@@ -198,9 +201,18 @@ class ResearchRuntime:
                             {"type": "message_injected", "message_id": update["message_id"]}
                         )
                     await connection.sink(
-                        {"type": "tool_completed", "name": name, "call_id": call.call_id}
+                        {"type": "tool_completed", "name": name, "call_id": call.call_id,
+                         "arguments": public_tool_text(call.arguments),
+                         "result": public_tool_text(result.output),
+                         "status": "failed" if isinstance(result.output, dict)
+                         and "error" in result.output else "completed"}
                     )
             except (ValueError, KeyError, ValidationError) as exc:
+                if call is not None and connection is not None and connection.sink:
+                    await connection.sink({
+                        "type": "tool_completed", "name": call.name, "call_id": call.call_id,
+                        "status": "failed", "result": public_tool_text({"error": str(exc)}),
+                    })
                 writer.write((json.dumps({"error": str(exc)}) + "\n").encode())
                 await writer.drain()
             finally:
@@ -390,13 +402,35 @@ class ResearchRuntime:
                 if data.get("role", "assistant") == "assistant":
                     await event_sink({"type": "model_output", "text": text})
             elif kind in {"tool.started", "tool.completed", "tool.failed"}:
+                value = data.get("value")
+                value = value if isinstance(value, dict) else {}
+                arguments = data.get("arguments") or {
+                    key: value[key] for key in ("command", "cwd", "path") if key in value
+                }
+                result = {key: value[key] for key in
+                          ("aggregatedOutput", "exitCode", "status", "processId", "durationMs")
+                          if key in value}
+                if not result:
+                    result = {"output": "\n".join(
+                        b.get("text", "") for b in (data.get("content") or [])
+                        if b.get("type") == "text"
+                    )}
+                if data.get("error"):
+                    result["error"] = data["error"]
+                status = ("running" if kind == "tool.started" else
+                          "failed" if kind == "tool.failed" or data.get("error")
+                          or value.get("exitCode") not in (None, 0) else
+                          "background" if value.get("status") in {"inProgress", "running"}
+                          else "completed")
                 await event_sink(
                     {
                         "type": "tool_started" if kind == "tool.started" else "tool_completed",
                         "name": data.get("name", "native"),
                         "call_id": f"{event.get('runId', '')}:"
                         f"{data.get('callId', event.get('eventId'))}",
-
+                        "arguments": public_tool_text(arguments),
+                        "result": "" if kind == "tool.started" else public_tool_text(result),
+                        "status": status,
                     }
                 )
 

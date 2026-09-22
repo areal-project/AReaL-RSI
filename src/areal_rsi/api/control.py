@@ -14,6 +14,7 @@ Json = dict[str, Any]
 JsonAction = Literal[
     "recover", "bootstrap", "list", "create", "detail", "delete", "chat",
     "model-settings", "collaboration", "start", "pause", "cancel", "resume", "retry", "stop",
+    "prepare", "agent-control", "revise-goal", "cancel-job",
 ]
 
 
@@ -63,6 +64,9 @@ ACTIONS: dict[str, Json] = {
         "conversation": {"type": "boolean"}, "simulated": {"type": "boolean"},
         "template": _STRING, "objective": _STRING, "instructions": _STRING,
         "max_agents": {"type": "integer", "minimum": 1},
+        "development": {"type": "object"},
+        "use_workspace": {"type": "boolean"},
+        "wall_seconds": {"type": ["integer", "null"], "minimum": 60, "maximum": 86400},
     }),
     "detail": _run({
         "after": {"type": "integer", "minimum": 0},
@@ -70,16 +74,27 @@ ACTIONS: dict[str, Json] = {
         "goal_before": {"type": ["integer", "null"], "minimum": 1},
         "goal_limit": {"type": "integer", "minimum": 1, "maximum": 50},
     }),
-    **{name: _run() for name in ("start", "pause", "cancel", "resume", "delete")},
+    **{name: _run() for name in ("start", "pause", "cancel", "resume", "delete", "prepare")},
     "stop": _run({"reason": _STRING}),
     "chat": _run({
         "text": {"type": "string", "minLength": 1, "maxLength": 12000},
         "message_id": _OPTIONAL_ID, "reply_to": _OPTIONAL_ID, "recipient": _OPTIONAL_ID,
     }, ("text",)),
+    "agent-control": _run({
+        "agent_id": _ID, "paused": {"type": "boolean"},
+    }, ("agent_id", "paused")),
+    "cancel-job": _run({"job_id": _ID}, ("job_id",)),
+    "revise-goal": _run({
+        "request_id": _ID, "expected_revision": {"type": "integer", "minimum": 0},
+        "objective": {"type": "string", "minLength": 1, "maxLength": 12000},
+        "instructions": {"type": "string", "maxLength": 12000},
+        "verification_confirmed": {"type": "boolean"},
+    }, ("request_id", "expected_revision", "objective", "instructions")),
     "retry": _run({"agent_id": _ID}, ("agent_id",)),
     "model-settings": _run(_MODEL["properties"], tuple(_MODEL["required"])),
     "collaboration": _run(_COLLABORATION["properties"], tuple(_COLLABORATION["required"])),
     "export": _run({"candidate_id": _ID}),
+    "export-report": _run({"job_id": _ID}, ("job_id",)),
 }
 
 HTTP_ACTIONS = ACTIONS.keys() - {"recover", "bootstrap", "list", "detail"}
@@ -87,6 +102,8 @@ HTTP_ACTIONS = ACTIONS.keys() - {"recover", "bootstrap", "list", "detail"}
 # HTTP cannot select simulation/template controls; those belong to the operator CLI.
 HTTP_CREATE_FIELDS = frozenset({
     "message", "message_id", "model_settings", "collaboration", "config", "run_id",
+    "development",
+    "use_workspace", "wall_seconds",
 })
 
 

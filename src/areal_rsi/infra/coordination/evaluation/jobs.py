@@ -31,6 +31,7 @@ from areal_rsi.infra.storage.files import decode, encode, now, safe_relative, wr
 VerificationReader = Callable[[JobRecord, CandidateSnapshot, str], VerifiedResult]
 INLINE_INSTRUCTIONS_CHARS = 8000
 FEEDBACK_CHARS = 12000
+BOUND_PARAMETERS = {"workspace", "output", "run_id", "agent_id"}
 WAIT = {
     "type": "boolean",
     "description": "通常为 true：完成后带回反馈；有独立工作要并行做时为 false。",
@@ -188,12 +189,12 @@ class ResearchExecution:
                             {
                                 "name": cmd.name,
                                 "parameters": [
-                                    p for p in cmd.parameters if p not in {"workspace", "output"}
+                                    p for p in cmd.parameters if p not in BOUND_PARAMETERS
                                 ],
                                 "parameter_descriptions": {
                                     p: cmd.parameter_descriptions[p]
                                     for p in cmd.parameters
-                                    if p not in {"workspace", "output"}
+                                    if p not in BOUND_PARAMETERS
                                     and p in cmd.parameter_descriptions
                                 },
                                 "output_subdir": cmd.output_subdir,
@@ -441,15 +442,17 @@ class ResearchExecution:
         supplied = {} if verification else json.loads(args["parameters_json"])
         if not isinstance(supplied, dict) or any(not isinstance(v, str) for v in supplied.values()):
             raise ValueError("Command parameters must be a JSON object of strings")
-        if set(supplied) & {"workspace", "output"}:
+        if set(supplied) & BOUND_PARAMETERS:
             raise ValueError("Execution paths are assigned by the application")
-        reserved = {"workspace", "output", "phase"} if verification else {"workspace", "output"}
+        reserved = BOUND_PARAMETERS | {"phase"} if verification else BOUND_PARAMETERS
         if set(supplied) != set(command.parameters) - reserved:
             raise ValueError("Supplied parameters do not match the configured command")
         values = {
             **supplied,
             "workspace": str(workspace.resolve()),
             "output": str(output.resolve()),
+            "run_id": self.c.store.run_id,
+            "agent_id": agent_id,
         }
         if verification:
             values["phase"] = phase
@@ -475,6 +478,7 @@ class ResearchExecution:
         )
         info = ResearchJob(
             agent_id=agent_id,
+            goal_revision=self.c.store.brief().revision,
             iteration_id=self.c.actor(agent_id).current_iteration_id,
             parameters=supplied,
             candidate_id=candidate_id,
@@ -569,6 +573,8 @@ class ResearchExecution:
         phase: str,
         extra_env: dict[str, str] | None = None,
     ) -> JobSpec:
+        spec = replace(spec, metadata={**spec.metadata,
+                                       "goal_revision": str(self.c.store.brief().revision)})
         environment = {**self.execution_env, **(extra_env or {})}
         if environment:
             spec = replace(spec, env=environment)
@@ -695,6 +701,7 @@ class ResearchExecution:
                 verification=candidate is not None,
                 phase=phase,
                 completion=True,
+                goal_revision=self.c.store.brief().revision,
                 public_output_subdir=command.public_output_subdir,
             )
         self.manager.scheduling_enabled = True
@@ -742,8 +749,12 @@ class ResearchExecution:
                 raise ValueError("Verifier returned the wrong simulation mode or phase")
             if record.state != "succeeded" and result.status == "succeeded":
                 raise ValueError("Failed execution cannot produce a successful verification")
+            result.goal_revision = info.goal_revision
             self.c.store.record_verification(result)
         ref = self.c.store.paths.reference(result_path)
+        if result.goal_revision != self.c.store.brief().revision:
+            info.result, info.result_ref = result, ref
+            return result
         run = self.c.store.run()
         baseline_id = self.c.state.baseline_candidate_id
         baseline = (
@@ -807,6 +818,7 @@ class ResearchExecution:
             "job_id": record.job_id,
             "agent_id": info.agent_id,
             "iteration_id": info.iteration_id,
+            "goal_revision": info.goal_revision,
             "command_name": record.spec.metadata.get("command_template"),
             # Only caller-supplied data arguments are public. Never publish the
             # operator's argv, environment, frozen paths or private verifier inputs.
@@ -957,7 +969,8 @@ class ResearchExecution:
         """
         info = self.jobs[record.job_id]
         subdir = info.auto_verify_output
-        if subdir is None or record.state != "succeeded":
+        if (subdir is None or record.state != "succeeded"
+            or info.goal_revision != self.c.store.brief().revision):
             return
         output = Path(info.output)
         source = output if subdir == "." else output / safe_relative(subdir)

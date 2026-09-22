@@ -8,25 +8,30 @@ import hashlib
 import json
 import os
 import shutil
+import zipfile
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, overload
 
-from areal_rsi.api.control import ArtifactDownload, JsonAction, validate_request
+from areal_rsi.api.control import ArtifactDownload, JsonAction, validate_record, validate_request
 from areal_rsi.api.interfaces import ResearchAgentRuntime
 from areal_rsi.api.records import AgentState, ResearchRun
 from areal_rsi.api.research import (
     CandidateSnapshot,
+    DevelopmentSetup,
     EvidenceRecord,
     GoalContext,
+    GoalRevision,
     IntakeState,
     ResearchMessage,
+    ResearchPreparation,
     TaskBrief,
     VerifiedResult,
 )
+from areal_rsi.infra import development
 from areal_rsi.infra.agents.communication import tool_instructions
 from areal_rsi.infra.coordination.config import (
     MODEL_EFFORTS,
@@ -56,7 +61,15 @@ from areal_rsi.infra.coordination.tools.web import register_sources
 from areal_rsi.infra.coordination.views import research_detail, research_list
 from areal_rsi.infra.execution import JobManager, JobRecord
 from areal_rsi.infra.runtime.research_runtime import ResearchRuntime
-from areal_rsi.infra.storage.files import decode, encode, new_id, now, write_bytes, write_json
+from areal_rsi.infra.storage.files import (
+    decode,
+    encode,
+    new_id,
+    now,
+    safe_relative,
+    write_bytes,
+    write_json,
+)
 from areal_rsi.infra.storage.runs import FileRunStore
 
 
@@ -136,6 +149,7 @@ class ResearchSystem:
         config = archived_config(
             json.loads((c.store.root / "coordination" / "config.json").read_text())
         )
+        config.brief = c.store.brief()
         if not config.model_settings_pinned:
             # Legacy archives stored service defaults. Prefer the actual recorded
             # connection for a started run, without rewriting its history.
@@ -333,6 +347,10 @@ class ResearchSystem:
 
     async def create(self, params: dict[str, Any]) -> dict[str, Any]:
         validate_request("create", params)
+        if params.get("use_workspace") and ("config" in params or "development" in params):
+            raise ValueError("使用当前工作区时不能同时提交其他执行配置")
+        if "development" in params and "config" in params:
+            raise ValueError("研发配置不能与完整 config 同时提交")
         if "config" in params:
             config_from_dict(params["config"])
         run_id = params.get("run_id") or new_id("research")
@@ -358,7 +376,8 @@ class ResearchSystem:
                     raise ValueError("该 run_id 已用于不同的创建请求")
             else:
                 await self._create(params, run_id, creation_digest)
-            if message := str(params.get("message", "")).strip():
+            if ("development" not in params and not params.get("use_workspace")
+                and (message := str(params.get("message", "")).strip())):
                 previous = self.coordinator(run_id)
                 if previous.state.status == "planned" and previous.state.mode == "pass1":
                     await self.start(run_id)
@@ -401,12 +420,44 @@ class ResearchSystem:
         if "max_agents" in params:
             config.brief.limits.max_agents = int(params["max_agents"])
             config.brief.limits.__post_init__()
+        setup = None
+        if params.get("use_workspace"):
+            objective = str(params.get("message", "")).strip()
+            if not objective:
+                raise ValueError("请描述你想完成的任务")
+            selected = development.default_profile(self.root, config)
+            if selected is None:
+                raise ValueError("当前工作区尚未配置，请先说明要处理的项目")
+            mode = params.get("collaboration", {}).get("mode", config.mode)
+            setup = replace(selected.defaults,
+                            acceptance=objective,
+                            parallelism=1 if mode == "pass1" else selected.defaults.parallelism,
+                            wall_seconds=params.get("wall_seconds"))
+        if "development" in params:
+            validate_record(DevelopmentSetup, params["development"])
+            setup = decode(DevelopmentSetup, params["development"])
+            development.profile(self.root, setup.profile_id)
+        if setup is not None:
+            conversation = False
+            objective = str(params.get("message", "")).strip()
+            if not objective:
+                raise ValueError("请填写研发目标")
+            config.brief.objective = objective
+            config.brief.instructions = objective
+            if setup.acceptance != objective:
+                config.brief.instructions += "\n验收要求：\n" + setup.acceptance
+            config.brief.limits.max_agents = setup.parallelism
+            config.brief.limits.max_wall_seconds = setup.wall_seconds
+            config.brief.limits.__post_init__()
+            config.metadata["auto_resume"] = True
         if config.metadata.get("simulation_only") and not simulated:
             raise ValueError(
                 "This template is for research simulation; configure real runners first"
             )
         if "collaboration" in params:
             self.select_collaboration(config, params["collaboration"])
+        if setup is not None and config.mode == "pass1" and setup.parallelism != 1:
+            raise ValueError("pass1 仅支持一个尝试；并行研发请选择 pass@k")
         if config.mode == "pass1":
             if conversation:
                 objective = str(params.get("objective") or params.get("message") or "").strip()
@@ -446,6 +497,8 @@ class ResearchSystem:
         c = Coordinator.create(self.root, config.brief, simulated=simulated, run_id=run_id)
         c.state.creation_digest = creation_digest
         c.state.mode = config.mode
+        if setup is not None:
+            c.state.preparation = ResearchPreparation(setup)
         if config.mode == "pass1":
             c.state.goal = GoalContext(updated_at=now())
         c.save()
@@ -492,7 +545,7 @@ class ResearchSystem:
                     limitations="Simulated task traces; no real task-model performance measured",
                 ),
             )
-        if message := str(params.get("message", "")).strip():
+        if setup is None and (message := str(params.get("message", "")).strip()):
             c.user_message(message, key=params.get("message_id") or "initial-" + creation_digest)
         (directory / ".creating").unlink()
 
@@ -510,12 +563,23 @@ class ResearchSystem:
         async with self.control(run_id, "start") as c:
             await self._start(c, confirmation_message_id)
 
+    async def prepare(self, run_id: str) -> dict[str, Any]:
+        async with self.control(run_id, "prepare") as c:
+            config = development.refresh(c, self.config(c))
+            development.prepare(c, config)
+        return await self.detail(run_id)
+
     async def _start(self, c: Coordinator, confirmation_message_id: str | None) -> None:
         if c.state.status != "planned":
             raise ValueError("研究已经开始")
         if c.state.intake.status is not None and c.state.intake.status != "ready":
             raise ValueError("请先与 Interaction 确认研究目标和执行条件")
         config = self.config(c)
+        if c.state.preparation is not None:
+            config = development.refresh(c, config)
+            prepared = c.state.preparation
+            if prepared.status != "ready" or prepared.config_digest != development.digest(config):
+                raise ValueError("执行配置尚未通过预检，请先预检后再启动")
         selected_modules(config.mode, config.collaboration_modules)
         config.brief = c.store.brief()
         config.__post_init__()
@@ -822,6 +886,8 @@ class ResearchSystem:
         )
         try:
             async with asyncio.timeout(remaining):
+                if not c.goal_verification_current:
+                    raise ValueError("新目标尚未确认现有验收器的覆盖范围，不能自动宣布完成")
                 await execution.cancel_pending(exploration_only=True)
                 if config.finalizer:
                     await c.store.export_selection(
@@ -882,6 +948,16 @@ class ResearchSystem:
             },
         )
         c = self._visible_coordinator(run_id)
+        if c.state.preparation is not None and c.state.status == "planned":
+            try:
+                c.acquire()
+            except BlockingIOError:
+                pass  # Another controller owns the transition; viewing stays read-only.
+            else:
+                try:
+                    development.refresh(c, self.config(c))
+                finally:
+                    c.release()
         active = self.active.get(run_id)
         return research_detail(
             c,
@@ -928,11 +1004,10 @@ class ResearchSystem:
         recipient: str | None = None,
     ) -> dict[str, Any]:
         async with self.control(run_id, "chat") as c:
-            if self.config(c).mode == "passk" and c.state.started_at:
-                raise ValueError(
-                    "passk researchers cannot receive intervention after launch; "
-                    "create a new run to change the task"
-                )
+            if c.state.preparation is not None and c.state.status == "planned":
+                raise ValueError("请先完成环境预检并启动研发；预检阶段不会启动对话 Agent")
+            if c.state.mode == "passk" and c.state.started_at and recipient is None:
+                recipient = "rsi"
             message_id = c.user_message(
                 text,
                 key=message_id or new_id("user"),
@@ -958,8 +1033,127 @@ class ResearchSystem:
                 active.engine.wake()
         return {"run_id": c.store.run_id, "message_id": message_id, "status": c.state.status}
 
+    @staticmethod
+    def _human_control(c: Coordinator) -> None:
+        if (c.state.mode != "passk" or not c.state.started_at
+            or c.state.status not in {"running", "paused"} or c.completion is not None):
+            raise ValueError("人工指导仅适用于已启动且尚未结束的 pass@k 任务")
+
+    async def set_agent_paused(self, run_id: str, agent_id: str, paused: bool) -> None:
+        async with self.control(run_id, "agent-control") as c:
+            self._human_control(c)
+            if agent_id not in {a.agent_id for a in c.store.run().research_agents}:
+                raise ValueError("请选择当前任务中的研究员")
+            actor = c.actor(agent_id)
+            if actor.state == AgentState.STOPPED:
+                raise ValueError("该研究员已停止")
+            held = c.state.human.paused_agents
+            if paused:
+                if agent_id not in held:
+                    held.append(agent_id)
+                actor.state, actor.wait_reason = AgentState.PAUSED, "human_paused"
+            else:
+                if agent_id not in held:
+                    return
+                held.remove(agent_id)
+                if actor.state == AgentState.PAUSED:
+                    actor.state, actor.wait_reason = AgentState.WAITING, "message"
+                c.enqueue("system", agent_id, "人工暂停已解除，请处理最新用户指导后继续。",
+                          key="human-resume:" + new_id("message"))
+            c.save_actor(actor)
+            c.save()
+            active = await self.attach(c)
+            await active.engine.tick()
+            active.engine.wake()
+
+    async def cancel_job(self, run_id: str, job_id: str) -> None:
+        async with self.control(run_id, "cancel-job") as c:
+            self._human_control(c)
+            active = await self.attach(c)
+            if job_id not in active.execution.jobs:
+                raise ValueError("作业不属于当前任务")
+            active.execution.manager.cancel(job_id)
+            c.store.event("job_cancel_requested", job_id=job_id)
+            active.engine.wake()
+
+    def _apply_goal_change(self, c: Coordinator, change: GoalRevision) -> None:
+        """Replay a durable intent while paused; all writes and deliveries are idempotent."""
+        if change.applied:
+            return
+        if c.state.status != "paused":
+            raise ValueError("目标切换必须在暂停状态下完成")
+        run = c.store.run()
+        run.brief_ref = c.store.put("briefs", "goal-" + change.request_id, change.brief)
+        run.plan.goal = change.brief.objective
+        run.best_result_ref = run.baseline_result_ref = run.final_result_ref = None
+        c.store.save_run(run)
+        config = self.config(c)
+        write_json(c.store.root / "coordination/config.json", config.public())
+        if active := self.active.get(c.store.run_id):
+            active.config = config
+        c.state.selected_candidate_id = None
+        c.state.passk_target = None
+        text = (f"全局目标已更新为 v{change.brief.revision + 1}。以此覆盖旧任务中冲突的要求，"
+                "保留可复用代码；旧成绩仅作历史，需重新验证。先说明调整后的执行计划。\n\n"
+                + change.brief.objective + "\n\n" + change.brief.instructions)
+        for actor in (c.actor("rsi"), *c.store.run().research_agents):
+            c.enqueue("user", actor.agent_id, text,
+                      key="goal:" + change.request_id + ":" + actor.agent_id)
+        change.applied = True
+        c.save()
+        c.store.event("goal_revised", revision=change.brief.revision,
+                      objective=change.brief.objective)
+
+    async def revise_goal(
+        self, run_id: str, objective: str, instructions: str,
+        request_id: str, expected_revision: int,
+        verification_confirmed: bool = False,
+    ) -> None:
+        validate_request("revise-goal", dict(run_id=run_id, objective=objective,
+                         instructions=instructions, request_id=request_id,
+                         expected_revision=expected_revision,
+                         verification_confirmed=verification_confirmed))
+        async with self.control(run_id, "revise-goal") as c:
+            self._human_control(c)
+            changes = c.state.human.goal_changes
+            previous = next((x for x in changes if x.request_id == request_id), None)
+            if previous:
+                if (previous.brief.objective != objective.strip()
+                    or previous.brief.instructions != instructions.strip()
+                    or previous.verification_confirmed != verification_confirmed
+                    or previous.previous.revision != expected_revision):
+                    raise ValueError("目标修改请求标识已用于不同内容")
+                if previous.applied:
+                    return
+            elif any(not x.applied for x in changes):
+                raise ValueError("上次目标修改尚未完成，请先恢复任务")
+            brief = c.store.brief()
+            if previous is None and brief.revision != expected_revision:
+                raise ValueError("目标已被其他页面修改，请刷新后重试")
+            revised = replace(brief, objective=objective.strip(), instructions=instructions.strip(),
+                              revision=expected_revision + 1)
+            running = c.state.status == "running"
+            if running:
+                c.pause()
+            active = await self.attach(c)
+            await active.engine.tick()  # Stop native turns before changing their task.
+            change = previous or GoalRevision(request_id, brief, revised, now(),
+                                              verification_confirmed=verification_confirmed)
+            if previous is None:
+                changes.append(change)
+                c.save()
+            # Stop writes from old jobs before the new goal reuses their workspaces.
+            await active.execution.cancel_pending()
+            self._apply_goal_change(c, change)
+            if running:
+                c.resume()
+            active.engine.wake()
+
     async def cancel(self, run_id: str) -> dict[str, Any]:
         async with self.control(run_id, "cancel") as c:
+            if c.state.preparation is not None and c.state.status == "planned":
+                development.cancel(c)
+                return await self.detail(run_id)
             if c.state.mode != "pass1" or c.state.status not in {"running", "paused"}:
                 raise ValueError("Only an active pass1 goal can be cancelled")
             if c.state.status == "running":
@@ -982,6 +1176,13 @@ class ResearchSystem:
 
     async def resume(self, run_id: str) -> dict[str, Any]:
         async with self.control(run_id, "resume") as c:
+            for change in c.state.human.goal_changes:
+                if not change.applied:
+                    active = await self.attach(c)
+                    await active.execution.cancel_pending()
+                    self._apply_goal_change(c, change)
+            if c.state.preparation is not None and not c.state.started_at:
+                raise ValueError("请先完成环境预检，再点击开始研究")
             if (
                 self.config(c).mode == "passk"
                 and c.state.status == "stopped"
@@ -1016,6 +1217,8 @@ class ResearchSystem:
 
     async def retry_agent(self, run_id: str, agent_id: str) -> dict[str, Any]:
         async with self.control(run_id, "retry") as c:
+            if c.state.preparation is not None and not c.state.started_at:
+                raise ValueError("请先完成环境预检，再点击开始研究")
             c.retry_agent(agent_id)
             if c.state.goal is not None and agent_id == "rsi":
                 c.state.goal.status, c.state.goal.blocker = "active", ""
@@ -1086,8 +1289,36 @@ class ResearchSystem:
                 "verification": verification,
             },
         )
-        archive = shutil.make_archive(str(folder), "zip", folder)
+        archive = await asyncio.to_thread(shutil.make_archive, str(folder), "zip", folder)
         return ArtifactDownload(Path(archive), candidate_id + ".zip")
+
+    async def export_report(self, run_id: str, job_id: str) -> ArtifactDownload:
+        c = self._visible_coordinator(run_id)
+        info = c.store.research_jobs().get(job_id)
+        if info is None or not info.verification or info.public_output_subdir is None:
+            raise ValueError("该作业没有公开验收报告")
+        if not info.processed:
+            raise ValueError("验收尚未结束")
+        output = c.store.root / "execution-outputs" / job_id
+        if Path(info.output).resolve() != output.resolve() or output.is_symlink():
+            raise ValueError("Invalid report output")
+        source = output / safe_relative(info.public_output_subdir)
+        if not source.is_dir() or not source.resolve().is_relative_to(output.resolve()):
+            raise ValueError("公开验收报告尚未生成")
+        if (any(path.is_symlink() for path in (source, *source.parents)
+                if path.is_relative_to(output))
+            or any(path.is_symlink() for path in source.rglob("*"))):
+            raise ValueError("Report must not contain symbolic links")
+        if (source / "rsi-verification.json").exists():
+            raise ValueError("Reserved verification manifest filename")
+        folder = c.store.root / "exports" / new_id("report")
+        folder.parent.mkdir(exist_ok=True)
+        archive = await asyncio.to_thread(shutil.make_archive, str(folder), "zip", source)
+        with zipfile.ZipFile(archive, "a") as report:
+            report.writestr("rsi-verification.json", json.dumps({
+                "run_id": run_id, "job_id": job_id, "verification": encode(info.result),
+            }, ensure_ascii=False, indent=2))
+        return ArtifactDownload(Path(archive), f"{c.store.run_id}-{job_id}-report.zip")
 
     async def list_runs(self) -> dict[str, Any]:
         return research_list(self.root, self.coordinator, allow_simulation=self.allow_simulation)
@@ -1139,6 +1370,8 @@ class ResearchSystem:
                 "mode": config.mode,
                 "modules": list(config.collaboration_modules),
             },
+            "development_profiles": development.catalog(self.root),
+            "workspace_ready": development.default_profile(self.root, config) is not None,
             "allow_simulation": self.allow_simulation,
             "default_simulated": self.allow_simulation and self.default_config is None,
             "has_config": self.default_config is not None,
@@ -1148,7 +1381,9 @@ class ResearchSystem:
         }
 
     @overload
-    async def call(self, action: Literal["export"], params: dict[str, Any]) -> ArtifactDownload: ...
+    async def call(
+        self, action: Literal["export", "export-report"], params: dict[str, Any]
+    ) -> ArtifactDownload: ...
 
     @overload
     async def call(self, action: JsonAction, params: dict[str, Any]) -> dict[str, Any]: ...
@@ -1176,13 +1411,18 @@ class ResearchSystem:
             "detail": self.detail,
             "delete": self.delete,
             "chat": self.send_message,
+            "agent-control": self.set_agent_paused,
+            "revise-goal": self.revise_goal,
+            "cancel-job": self.cancel_job,
             "start": self.start,
+            "prepare": self.prepare,
             "pause": self.pause,
             "cancel": self.cancel,
             "resume": self.resume,
             "retry": self.retry_agent,
             "stop": self.stop,
             "export": self.export,
+            "export-report": self.export_report,
         }
         result = await handlers[action](**params)
         return await self.detail(params["run_id"]) if result is None else result

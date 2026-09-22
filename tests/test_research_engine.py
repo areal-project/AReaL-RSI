@@ -193,6 +193,27 @@ def test_report_publication_survives_crash_before_delivery_ack(tmp_path: Path) -
     assert len(c.store.records("reports", ResearchReport)) == 1
 
 
+def test_default_budget_does_not_stop_after_four_hours(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        c = coordinator(tmp_path)
+        assert c.state.started_at is not None
+        observed = datetime.fromisoformat(c.state.started_at).timestamp() + 86400
+        runtime = CallbackRuntime(finish)
+        engine = ResearchEngine(c, runtime, lambda agent: tools(c, agent), clock=lambda: observed)
+        try:
+            await engine.run_until_idle(timeout=3)
+            assert runtime.calls
+            assert c.state.status == "running"
+            assert not c.state.budget_stop_reason
+            budget = c.budget(observed_at=observed)
+            assert budget["remaining_wall_seconds"] is None
+            assert budget["deadline_at"] is None
+        finally:
+            await engine.close()
+
+    asyncio.run(scenario())
+
+
 def test_wall_budget_keeps_deadline_across_wait_pause_and_resume(tmp_path: Path) -> None:
     async def scenario() -> None:
         c = coordinator(tmp_path, ResearchLimits(max_wall_seconds=1800))

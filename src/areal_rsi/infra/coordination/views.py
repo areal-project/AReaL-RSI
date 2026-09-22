@@ -321,6 +321,15 @@ def research_detail(
         if (m.sender == "user" or m.recipient == "user") and m.message_id not in archived_chat
     ]
     messages.sort(key=lambda m: m["created_at"])
+    answered = {m.reply_to for m in all_messages if m.recipient == "user" and m.reply_to}
+    for message in messages:
+        if message["sender"] == "user":
+            identifier = message["message_id"]
+            message["delivery_status"] = (
+                "replied" if identifier in answered else
+                "delivered" if identifier in c.state.human.received_messages
+                or identifier in c.state.delivered else "pending"
+            )
     jobs_path = c.store.root / "coordination" / "jobs.json"
     jobs = []
     contract = c.store.brief().verification
@@ -378,7 +387,10 @@ def research_detail(
                     "published_candidate_id": info.get("published_candidate_id"),
                     "verification_job_id": info.get("verification_job_id"),
                     "source_job_id": info.get("source_job_id"),
+                    "goal_revision": info.get("goal_revision", 0),
                     "publication_error": info.get("publication_error"),
+                    "report_available": bool(info.get("verification") and info.get("processed")
+                                             and info.get("public_output_subdir") is not None),
                     "progress": read_progress(Path(info["output"])),
                 }
             )
@@ -393,6 +405,7 @@ def research_detail(
                 and result.get("score") is not None
                 and result.get("phase") == "search"
                 and result.get("contract_digest") == contract_digest
+                and result.get("goal_revision", 0) == c.store.brief().revision
                 and result.get("simulated") == c.state.simulated
             ):
                 candidate_id = result["candidate_id"]
@@ -445,6 +458,15 @@ def research_detail(
         "messages": messages,
         "agent_activity": encode(c.state.agent_activity),
         "execution_setup": c.state.execution_setup,
+        "preparation": encode(c.state.preparation),
+        "human": {
+            "paused_agents": c.state.human.paused_agents,
+            "verification_current": c.goal_verification_current,
+            "assisted": bool(c.state.human.goal_changes or any(
+                m.sender == "user" and m.recipient.startswith("research_")
+                for m in all_messages)),
+            "goal_changes": encode(c.state.human.goal_changes),
+        },
         "model_settings": model_settings,
         "collaboration": collaboration,
         "jobs": jobs,

@@ -62,6 +62,8 @@ def brief_tool(mode: str) -> dict[str, Any]:
     )
     description = (
         "启动前更新需求。先读取 get_state，填写结构化参数并保留未修改字段。"
+        "用户未指定时限时保持不限，不得自行添加墙钟或有效时间截止；"
+        "仅按用户明确要求设置或修改时限。"
         "验证 identity 由后端保留，不在此工具修改。"
         "不支持模型调用次数上限；若用户要求此限制，请说明并确认可用的预算约束。"
     )
@@ -79,6 +81,8 @@ def brief_tool(mode: str) -> dict[str, Any]:
             {
                 "objective": {"type": "string", "description": "研究目标。"},
                 "instructions": {"type": "string", "description": "已确认的任务要求与必要原话。"},
+                "revision": {"type": "integer", "minimum": 0,
+                             "description": "当前 brief 的版本号，原样保留，不得自行增加。"},
                 "limits": object_schema(limits),
                 "verification": {"anyOf": [verification, {"type": "null"}]},
             }
@@ -96,6 +100,8 @@ def updated_brief(mode: str, current: TaskBrief, arguments: dict[str, Any]) -> T
         error = errors[0]
         location = ".".join(str(part) for part in error.path) or "arguments"
         raise ValueError(f"update_brief ({mode}) {location}: {error.message}")
+    if arguments["revision"] != current.revision:
+        raise ValueError("目标版本已变化，请重新读取当前 brief")
     value = encode(current)
     value.update(arguments)
     value["limits"] = dict(arguments["limits"])

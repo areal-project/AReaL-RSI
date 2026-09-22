@@ -73,7 +73,8 @@ def _collaboration(value: Any) -> Json:
 def _score(value: Any) -> Json | None:
     if not isinstance(value, dict):
         return None
-    result = _fields(value, "result_id candidate_id score passed status phase simulated error")
+    result = _fields(value, "result_id candidate_id score passed status phase simulated error "
+                           "goal_revision")
     result["metrics"] = (
         {
             name: number
@@ -110,7 +111,7 @@ def _evidence(value: Any) -> Json:
 def _brief(value: Any) -> Json:
     if not isinstance(value, dict):
         return {}
-    result = _fields(value, "objective instructions")
+    result = _fields(value, "objective instructions revision")
     result["limits"] = _fields(
         value.get("limits"),
         "max_agents max_nodes max_total_tokens "
@@ -140,6 +141,23 @@ def public_detail(value: Json) -> Json:
     )
     result["brief"] = _brief(value.get("brief"))
     result["goal"] = _goal(value.get("goal"))
+    human = value.get("human", {})
+    result["human"] = {
+        **_fields(human, "paused_agents assisted verification_current"),
+        "goal_changes": [
+            {**_fields(change, "request_id created_at applied verification_confirmed"),
+             "previous": _brief(change.get("previous")), "brief": _brief(change.get("brief"))}
+            for change in human.get("goal_changes", [])
+        ],
+    }
+    preparation = value.get("preparation")
+    result["preparation"] = None if not isinstance(preparation, dict) else {
+        **_fields(preparation, "status error job_id"),
+        "setup": _fields(preparation.get("setup"),
+                         "profile_id repository revision acceptance parallelism wall_seconds"),
+        "checks": [_fields(check, "name status message")
+                   for check in preparation.get("checks", [])],
+    }
     result["goal_turns_total"] = value.get("goal_turns_total", 0)
     result["goal_turns_next"] = value.get("goal_turns_next")
     result["goal_turns"] = [
@@ -230,7 +248,7 @@ def public_detail(value: Json) -> Json:
         if isinstance(edge, dict)
     ]
     result["messages"] = [
-        _fields(message, "message_id sender recipient text created_at reply_to")
+        _fields(message, "message_id sender recipient text created_at reply_to delivery_status")
         for message in value.get("messages", [])
         if isinstance(message, dict)
         and (message.get("sender") == "user" or message.get("recipient") == "user")
@@ -259,7 +277,7 @@ def public_detail(value: Json) -> Json:
                 "job_id agent_id status title description created_at started_at finished_at error "
                 "gpu_ids progress_message agent_name iteration_id candidate_id phase "
                 "verification is_baseline published_candidate_id verification_job_id "
-                "source_job_id publication_error search_eligible",
+                "source_job_id publication_error search_eligible report_available goal_revision",
             ),
             "progress": public_progress(job.get("progress")),
             "result": _score(job.get("result")),
@@ -421,6 +439,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                             for name in ("allow_simulation", "default_simulated", "has_config")
                         },
                         "models": [_fields(model, "id efforts") for model in raw.get("models", [])],
+                        "workspace_ready": raw.get("workspace_ready") is True,
                         "default_model_settings": _fields(
                             raw.get("default_model_settings"),
                             "base_url model reasoning_effort backend auth_mode has_credentials",
@@ -498,10 +517,13 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             self._json(500, {"error": "无法读取研究状态，请稍后重试"})
 
     def do_POST(self) -> None:
-        if not self._safe_origin() or not secrets.compare_digest(
+        if not self._safe_origin():
+            self._json(403, {"error": "不接受跨站请求"})
+            return
+        if not secrets.compare_digest(
             self.headers.get("X-RSI-Token", ""), self.server.csrf_token
         ):
-            self._json(403, {"error": "请求校验失败，请刷新工作台"})
+            self._json(403, {"error": "请求校验失败，请刷新工作台", "code": "csrf_expired"})
             return
         try:
             if (
@@ -534,7 +556,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                 return
             result = self.server.invoke(action, params)
             if isinstance(result, ArtifactDownload):
-                if action != "export":
+                if action not in {"export", "export-report"}:
                     raise TypeError("Downloads are only supported for explicit export")
                 self._download(result)
             else:

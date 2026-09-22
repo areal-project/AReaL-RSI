@@ -525,6 +525,7 @@ class ResearchStore:
         result = self.get("verifications", result_id, VerifiedResult)
         if (
             result.contract_digest != self.contract_digest()
+            or result.goal_revision != self.brief().revision
             or result.status != "succeeded"
             or not result.passed
             or result.phase != "search"

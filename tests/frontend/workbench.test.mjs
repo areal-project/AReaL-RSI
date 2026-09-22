@@ -120,71 +120,61 @@ test('collaboration selection saves before start, stays per run, and locks histo
   assert.match(ui.$('collaboration-summary').textContent, /已锁定/);
   assert.match(ui.$('collaboration-status').textContent, /历史研究/);
   ui.switchRun('a'); await settle();
-  assert.match(ui.$('collaboration-mode-trigger').textContent, /RSI 协调/);
+  assert.match(ui.$('collaboration-mode-trigger').textContent, /pass1/);
   ui.submit('collaboration-form'); await settle();
-  assert.deepEqual(ui.calls.find((call) => call.path.endsWith('/collaboration')).body, {mode: 'passk', modules: ['leader_guidance']});
+  assert.deepEqual(ui.calls.find((call) => call.path.endsWith('/collaboration')).body, {mode: 'pass1', modules: []});
   assert.equal(ui.$('save-collaboration').disabled, true);
   ui.$('reuse-collaboration').click();
-  assert.match(ui.$('create-collaboration-mode-trigger').textContent, /RSI 协调/);
+  assert.match(ui.$('create-collaboration-mode-trigger').textContent, /pass1/);
 });
 
-test('creation sends the selected recipe and registered modules appear without frontend edits', async (t) => {
+test('creation offers only passk and pass1, without hidden coordination modules', async (t) => {
   let submitted;
   const records = {a: run('a')};
-  const module = {id: 'test_evidence', label: '测试模块', version: '1', description: '仅测试注册入口', modes: ['passk'], requires: [], conflicts: []};
-  const presets = [...collaborationCatalog.modes.map((mode) => ({...mode, mode: mode.id, modules: []})),
-    {id: 'guided', label: 'pass@k + RSI 协调', mode: 'passk', modules: [module.id]}];
   const ui = await setup(t, records, (path, options) => {
-    if (path === '/api/bootstrap') return Promise.resolve(response({
+    if (path === '/api/bootstrap') return response({
       csrf_token: 'test', default_model_settings: defaults, models: [],
-      collaboration_catalog: {...collaborationCatalog, modules: [module], presets},
-      default_collaboration: {mode: 'passk', modules: []},
-    }));
+      collaboration_catalog: collaborationCatalog,
+      default_collaboration: {mode: 'passk', modules: ['leader_guidance', 'leader_guidance_v022']},
+    });
     if (path === '/api/runs' && options.method === 'POST') {
       submitted = JSON.parse(options.body);
       records.new = run('new');
-      return Promise.resolve(response(records.new));
+      return response(records.new);
     }
   });
   ui.$('new-run').click();
-  assert.match(ui.$('create-collaboration-mode-trigger').textContent, /pass@k/);
-  assert.equal(ui.$('create-collaboration-mode-options').closest('dialog'), ui.$('create-dialog'));
+  assert.equal(ui.$('create-collaboration-mode-trigger').textContent.trim(), 'pass@k');
+  assert.equal(ui.$('create-collaboration-modules'), null);
+  assert.equal(ui.$('collaboration-modules'), null);
   ui.$('create-collaboration-mode-trigger').click();
-  ui.$('create-collaboration-mode-options').querySelectorAll('[role="option"]')[1].click();
-  assert.equal(ui.$('create-collaboration-modules').querySelector('input').checked, true);
+  const options = [...ui.$('create-collaboration-mode-options').querySelectorAll('[role="option"]')];
+  assert.deepEqual(options.map((item) => item.textContent.replace('✓', '').trim()), ['pass@k', 'pass1']);
+  options[0].click();
   ui.submit('create-form'); await settle();
-  assert.deepEqual(submitted.collaboration, {mode: 'passk', modules: ['test_evidence']});
+  assert.deepEqual(submitted.collaboration, {mode: 'passk', modules: []});
 });
 
-test('new studies default to v0.2.2 and can select v0.2.1 with its original modules', async (t) => {
-  const base = {id: 'leader_guidance', label: 'RSI 协调', version: '3', modes: ['passk'], requires: []};
-  const prompt = {id: 'leader_guidance_v022', label: 'v0.2.2 Leader Prompt', version: '1', modes: ['passk'], requires: [base.id]};
-  const presets = [
-    {id: 'passk', label: '纯 pass@k', mode: 'passk', modules: []},
-    {id: 'passk_guided', label: 'v0.2.1 · pass@k + RSI 协调', mode: 'passk', modules: [base.id]},
-    {id: 'passk_guided_v022', label: 'v0.2.2 · pass@k + RSI 协调', mode: 'passk', modules: [base.id, prompt.id]},
-  ];
-  const records = {a: run('a')};
+test('historical coordination is preserved but reuse creates a plain passk task', async (t) => {
+  const old = run('a', 'stopped');
+  old.collaboration.modules = ['leader_guidance', 'leader_guidance_v022'];
+  old.collaboration.manifest = {modules: [{id: 'leader_guidance', version: '3'}]};
+  const before = structuredClone(old.collaboration);
+  const records = {a: old};
   const ui = await setup(t, records, (path, options) => {
-    if (path === '/api/bootstrap') return Promise.resolve(response({
-      csrf_token: 'test', default_model_settings: defaults, models: [],
-      collaboration_catalog: {modes: [collaborationCatalog.modes[0]], modules: [base, prompt], presets},
-      default_collaboration: {mode: 'passk', modules: [base.id, prompt.id]},
-    }));
     if (path === '/api/runs' && options.method === 'POST') {
       records.new = run('new');
-      return Promise.resolve(response(records.new));
+      return response(records.new);
     }
   });
-  ui.$('new-run').click();
-  assert.match(ui.$('create-collaboration-mode-trigger').textContent, /v0\.2\.2/);
-  assert.equal(ui.$('create-collaboration-modules').querySelector('input').disabled, true);
-  ui.$('create-collaboration-mode-trigger').click();
-  ui.$('create-collaboration-mode-options').querySelectorAll('[role="option"]')[1].click();
-  assert.match(ui.$('create-collaboration-mode-trigger').textContent, /v0\.2\.1/);
+  assert.match(ui.$('collaboration-summary').textContent, /原有协作配置/);
+  assert.doesNotMatch(ui.$('collaboration-settings').textContent, /leader_guidance|Leader Prompt|v0\.2/);
+  assert.deepEqual(old.collaboration, before);
+  assert.ok(!ui.calls.some((call) => call.path.endsWith('/collaboration')));
+  ui.$('reuse-collaboration').click();
   ui.submit('create-form'); await settle();
   assert.deepEqual(ui.calls.find((call) => call.path === '/api/runs' && call.options.method === 'POST').body.collaboration,
-    {mode: 'passk', modules: [base.id]});
+    {mode: 'passk', modules: []});
 });
 
 test('retired collaboration stays viewable without execution or reuse controls', async (t) => {
@@ -479,7 +469,7 @@ test('pass1 goal context updates while running and clears when switching to pass
   assert.doesNotMatch(ui.$('chat-feedback').textContent, /已定位视觉输入限制/);
   ui.$('new-run').click();
   ui.$('create-collaboration-mode-trigger').click();
-  [...ui.$('create-collaboration-mode-options').querySelectorAll('[role="option"]')].find((item) => item.textContent.includes('RSI pass1')).click();
+  [...ui.$('create-collaboration-mode-options').querySelectorAll('[role="option"]')].find((item) => item.textContent.includes('pass1')).click();
   assert.equal(ui.$('create-message').required, true);
   assert.equal(ui.$('create-submit').textContent, '开始目标');
   assert.match(ui.$('create-description').textContent, /一个 Agent/);
@@ -519,4 +509,98 @@ test('goal progress streams across turns without exposing round boundaries', asy
   assert.equal(ui.$('goal-turn-list').lastElementChild.textContent, '<script>新进展</script>');
   await ui.poll();
   assert.equal(ui.$('goal-turn-list').children.length, 4);
+});
+
+for (const hours of ['', '4']) {
+test(`development form prepares a draft with ${hours || 'no'} explicit time limit`, async (t) => {
+  const defaultsSetup = {repository: '/workspace/repo', revision: 'main', acceptance: 'Run project tests', parallelism: 2, wall_seconds: 14400};
+  const records = {a: run('a')};
+  let submitted;
+  const ui = await setup(t, records, (path, options) => {
+    if (path === '/api/bootstrap') return response({csrf_token: 'test', default_model_settings: defaults,
+      collaboration_catalog: collaborationCatalog, default_collaboration: {mode: 'passk', modules: []}, models: [],
+      workspace_ready: true});
+    if (path === '/api/runs' && options.method === 'POST') {
+      submitted = JSON.parse(options.body);
+      records.new = {...run('new'), preparation: {status: 'pending', setup: {...defaultsSetup, wall_seconds: submitted.wall_seconds}, checks: []}};
+      return response({run_id: 'new'});
+    }
+    if (path.endsWith('/prepare')) {
+      records.new.preparation.status = 'running';
+      return response({run_id: 'new'});
+    }
+  });
+  ui.$('new-run').click();
+  for (const id of ['create-profile', 'create-repository', 'create-revision', 'create-parallelism', 'create-acceptance']) assert.equal(ui.$(id), null);
+  assert.equal(ui.$('create-options').open, false);
+  assert.equal(ui.$('create-hours').value, ''); // Ignore the profile's four-hour preset.
+  ui.input('create-hours', hours);
+  ui.input('create-message', 'Implement the feature');
+  ui.submit('create-form'); await settle();
+  assert.equal(submitted.use_workspace, true);
+  assert.equal(submitted.development, undefined);
+  assert.equal(submitted.message, 'Implement the feature');
+  assert.equal(submitted.wall_seconds, hours ? 14400 : null);
+  assert.equal(ui.$('preparation').hidden, false);
+  assert.equal(ui.$('start').hidden, true);
+  records.new.preparation.status = 'ready';
+  records.new.preparation.checks = [{name: 'Workspace', status: 'passed', message: 'Ready'}];
+  await ui.poll();
+  assert.match(ui.$('preparation-checks').textContent, /通过 · Workspace/);
+  assert.equal(ui.$('start').hidden, false);
+  assert.match(ui.$('preparation-workspace').textContent, hours ? /4 小时/ : /未设置运行时限/);
+});
+}
+
+test('passk routes human guidance to one researcher and revises the shared goal', async (t) => {
+  const record = run('a', 'running');
+  record.started_at = '2026-09-22T03:00:00Z';
+  record.finalization = {};
+  record.brief = {objective: 'Old goal', instructions: 'Old requirements', revision: 0, limits: {}};
+  record.human = {paused_agents: [], assisted: false, goal_changes: []};
+  for (let i = 1; i <= 2; i++) {
+    record.agents.push({agent_id: `research_${i}`, direction: `独立探索 ${i}`, state: 'running'});
+    record.nodes.push({iteration_id: `node${i}`, agent_id: `research_${i}`, state: 'running', assignment: {instruction: 'Old goal'}});
+  }
+  const ui = await setup(t, {a: record}, (path, options) => {
+    if (options.method !== 'POST') return;
+    const body = JSON.parse(options.body);
+    if (path.endsWith('/chat')) {
+      record.messages.push({...body, message_id: 'server-' + body.message_id, sender: 'user', created_at: record.started_at, delivery_status: 'pending'});
+      record.human.assisted = true;
+      return response({message_id: 'server-' + body.message_id});
+    }
+    if (path.endsWith('/agent-control')) {
+      record.human.paused_agents = body.paused ? [body.agent_id] : [];
+      return response(record);
+    }
+    if (path.endsWith('/revise-goal')) {
+      assert.equal(body.expected_revision, 0);
+      assert.ok(body.request_id);
+      record.brief = {...record.brief, objective: body.objective, instructions: body.instructions, revision: 1};
+      record.objective = body.objective;
+      return response(record);
+    }
+  });
+  assert.equal(ui.$('chat-input').disabled, false);
+  ui.$('graph-canvas').querySelector('.graph-node').click();
+  const button = (text) => [...ui.$('node-panel').querySelectorAll('button')].find((b) => b.textContent === text);
+  button('暂停这个 Agent').click(); await settle();
+  assert.deepEqual(ui.calls.find((x) => x.path.endsWith('/agent-control')).body, {agent_id: 'research_1', paused: true});
+  assert.equal(button('继续这个 Agent').disabled, false);
+  button('指导这个 Agent').click();
+  ui.input('chat-input', 'Use Chinese'); ui.submit('chat-form'); await settle();
+  const sent = ui.calls.find((x) => x.path.endsWith('/chat')).body;
+  assert.equal(sent.recipient, 'research_1');
+  assert.equal(ui.$('messages').querySelectorAll('article').length, 1);
+  assert.match(ui.$('messages').textContent, /待送达/);
+  record.messages[0].delivery_status = 'delivered'; await ui.poll();
+  assert.match(ui.$('messages').textContent, /已送达/);
+  assert.match(ui.$('human-status').textContent, /人工指导/);
+  ui.$('revise-goal').click();
+  ui.input('revised-objective', 'New shared goal');
+  ui.input('revised-instructions', 'New requirements');
+  ui.submit('revise-goal-form'); await settle();
+  assert.equal(ui.$('objective').textContent, 'New shared goal');
+  assert.match(ui.$('human-status').textContent, /v2/);
 });

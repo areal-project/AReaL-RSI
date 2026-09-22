@@ -187,3 +187,34 @@ def test_invalid_nested_configuration_is_a_client_error(tmp_path: Path) -> None:
         assert not (tmp_path / "runs").exists()
 
     asyncio.run(scenario())
+
+
+def test_report_download_is_limited_to_published_files(tmp_path: Path) -> None:
+    import zipfile
+
+    from areal_rsi.api.execution import JobSpec
+    from areal_rsi.api.research import ResearchJob
+
+    async def scenario() -> None:
+        c = Coordinator.create(tmp_path, TaskBrief('Review', 'Review'), run_id='reports')
+        output = c.store.root / 'execution-outputs' / 'job-report'
+        public = output / 'public'
+        public.mkdir(parents=True)
+        (public / 'report.txt').write_text('Verified evidence')
+        private = output / 'private.txt'
+        private.write_text('Private verifier input')
+        info = ResearchJob('researcher', str(output), JobSpec(), 'now',
+                           verification=True, processed=True, public_output_subdir='public')
+        c.store.save_jobs({'job-report': info})
+        app = ResearchSystem(tmp_path)
+        report = await app.export_report('reports', 'job-report')
+        with zipfile.ZipFile(report.path) as archive:
+            assert set(archive.namelist()) == {'report.txt', 'rsi-verification.json'}
+        (public / 'leak.txt').symlink_to(private)
+        with pytest.raises(ValueError, match='symbolic'):
+            await app.export_report('reports', 'job-report')
+        with pytest.raises(ValueError, match='公开'):
+            await app.export_report('reports', 'job-other')
+        await app.close()
+
+    asyncio.run(scenario())

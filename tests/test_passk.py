@@ -62,9 +62,12 @@ def test_job_wait_keeps_turn_and_reuses_job_after_recovery(tmp_path: Path) -> No
         c, actions, agents = await setup(tmp_path, 1)
         agent = agents[0]
         c.begin_turn(agent)
+        command = ApprovedCommand(
+            "test", ("echo", "{run_id}", "{agent_id}"), ("run_id", "agent_id")
+        )
         execution = ResearchExecution(
             actions,
-            commands={"test": ApprovedCommand("test", ("echo", "ok"))},
+            commands={"test": command},
             simulated=True,
             mock_duration=0.2,
         )
@@ -75,8 +78,13 @@ def test_job_wait_keeps_turn_and_reuses_job_after_recovery(tmp_path: Path) -> No
             "one-experiment",
         )
         try:
+            with pytest.raises(ValueError, match="assigned"):
+                await execution.submit(agent, ToolCall("run_job", {
+                    "command_name": "test", "parameters_json": '{"agent_id":"other"}'
+                }, "forged-owner"))
             result = await actions.handler(agent)(call)
             job_id = result.output["job_id"]
+            assert execution.manager.get(job_id).spec.command == ("echo", c.store.run_id, agent)
             assert not result.stop
             assert "wait_for_job" in result.output["instruction"]
             assert not execution.jobs[job_id].waiters
@@ -85,7 +93,7 @@ def test_job_wait_keeps_turn_and_reuses_job_after_recovery(tmp_path: Path) -> No
             execution.close()
             execution = ResearchExecution(
                 actions,
-                commands={"test": ApprovedCommand("test", ("echo", "ok"))},
+                commands={"test": command},
                 simulated=True,
             )
             execution.continuous_wait_seconds = 10
@@ -364,12 +372,12 @@ def test_only_trusted_passing_search_result_stops_group(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
-def test_workbench_mode_stops_and_rejects_intervention(tmp_path: Path) -> None:
+def test_workbench_mode_stops_and_accepts_user_messages(tmp_path: Path) -> None:
     async def scenario() -> None:
         runtime = ScriptedRuntime()
         system = ResearchSystem(
             tmp_path,
-            config=configuration(seconds=0.25),
+            config=configuration(seconds=1.0),
             runtime_factory=lambda _: runtime,
             allow_simulation=True,
         )
@@ -378,9 +386,8 @@ def test_workbench_mode_stops_and_rejects_intervention(tmp_path: Path) -> None:
             c = system.coordinator(detail["run_id"])
             await system.start(c.store.run_id)
             c = system.coordinator(detail["run_id"])
-            with pytest.raises(ValueError, match="intervention"):
-                await system.call("chat", {"run_id": c.store.run_id, "text": "change direction"})
-            await asyncio.wait_for(system.active[c.store.run_id].task, 3)
+            await system.call("chat", {"run_id": c.store.run_id, "text": "check progress"})
+            await asyncio.wait_for(system.active[c.store.run_id].task, 5)
             assert c.state.status == "stopped"
             assert len(set(runtime.calls)) == 4  # RSI plus the fixed three attempts.
             assert len(c.store.run().research_agents) == 3

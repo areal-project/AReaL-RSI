@@ -43,7 +43,7 @@ def test_default_config_and_unimplemented_modules() -> None:
     plan = build_plan(restored.mode, restored.collaboration_modules)
     assert plan.actions is PassKActions and plan.engine is PassKEngine
     assert plan.supervisor_only
-    assert restored.brief.limits.max_wall_seconds == 14400
+    assert restored.brief.limits.max_wall_seconds is None
     assert restored.brief.limits.max_total_tokens is None
     assert restored.brief.limits.max_verify_calls is None
     restored.brief.limits.max_effective_seconds = 60

@@ -12,6 +12,7 @@ from areal_rsi.api.research import (
     CandidateSnapshot,
     PublishedResult,
     ReportSummary,
+    ResearchMessage,
     ResearchReport,
     RetryBackoff,
     TargetObservation,
@@ -173,6 +174,9 @@ class PassKActions(ResearchActions):
                         "state": actor.state,
                         "wait_reason": actor.wait_reason,
                         "needs_continue": needs_continue(c, actor.agent_id),
+                        "human_paused": actor.agent_id in c.state.human.paused_agents,
+                        "human_guided": any(m.sender == "user" and m.recipient == actor.agent_id
+                                            for m in c.store.records("messages", ResearchMessage)),
                         "best": self.state(actor.agent_id)["best"],
                         "latest_report": encode(c.state.passk_reports.get(actor.agent_id)),
                     }
@@ -190,6 +194,7 @@ class PassKActions(ResearchActions):
             and result.passed
             and result.phase == "search"
             and result.contract_digest == c.store.contract_digest()
+            and result.goal_revision == c.store.brief().revision
             and result.simulated == c.state.simulated
             and result.score is not None
             and not c.store.is_withdrawn(result.candidate_id)
@@ -204,6 +209,10 @@ class PassKActions(ResearchActions):
             "agent_id": agent_id,
             "status": c.state.status,
             "brief": encode(c.store.brief()),
+            "human_guidance": [encode(message) for message in
+                               sorted(c.store.records("messages", ResearchMessage),
+                                      key=lambda item: item.created_at)
+                               if message.sender == "user" and message.recipient == agent_id],
             "simulated": c.state.simulated,
             "current_node": encode(actor.iterations[-1]) if actor.iterations else None,
             "seed_candidate_id": c.state.seed_candidate_id,
@@ -305,6 +314,7 @@ def needs_continue(c: Coordinator, agent_id: str) -> bool:
     actor = c.actor(agent_id)
     return (
         c.state.status == "running"
+        and agent_id not in c.state.human.paused_agents
         and actor.state == AgentState.WAITING
         and actor.wait_reason == "passk_supervision"
         and agent_id not in c.state.active
@@ -343,9 +353,22 @@ async def launch(c: Coordinator, actions: PassKActions) -> None:
 def stop_on_target(c: Coordinator) -> None:
     contract = c.store.brief().verification
     best = c.store.run().best_result_ref
-    if c.state.status != "running" or not contract or contract.target is None or not best:
+    if (c.state.status != "running" or not contract or contract.target is None or not best
+        or not c.goal_verification_current):
         return
     result = c.store.public_record(best)
+    if result.get("goal_revision", 0) != c.store.brief().revision:
+        return
+    # A just-arrived human instruction must be handled before declaring success.
+    pending_messages = {identifier for identifiers in c.state.inboxes.values()
+                        for identifier in identifiers}
+    pending_messages.update(identifier for actor in c.actors()
+                            for identifier in c.current_message_ids(actor.agent_id))
+    if any(
+        c.store.get("messages", identifier, ResearchMessage).sender == "user"
+        for identifier in pending_messages
+    ):
+        return
     score = result["score"]
     reached = (
         score >= contract.target if contract.direction == "maximize" else score <= contract.target
@@ -439,6 +462,8 @@ class PassKEngine(ResearchEngine):
         return await super().tick()
 
     def _actor_allowed(self, agent_id: str) -> bool:
+        if agent_id in self.coordinator.state.human.paused_agents:
+            return False
         if self.coordinator.state.status == "planned":
             return agent_id == "interaction"
         return self.coordinator.state.status == "running" and (
@@ -452,7 +477,7 @@ class PassKEngine(ResearchEngine):
         state = PassKActions(self.coordinator).state(agent_id)
         # Native history retains the task and evidence. Repeating the complete
         # node reference list after every tool/turn makes context grow quadratically.
-        state.pop("brief", None)
+        # Keep the current goal authoritative after revisions and compaction.
         node = state.get("current_node")
         if node:
             state["current_node"] = {

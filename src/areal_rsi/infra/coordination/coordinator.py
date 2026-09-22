@@ -129,6 +129,14 @@ class Coordinator:
         return self.state.finalization
 
     @property
+    def goal_verification_current(self) -> bool:
+        revision = self.store.brief().revision
+        return revision == 0 or any(
+            change.applied and change.brief.revision == revision and change.verification_confirmed
+            for change in self.state.human.goal_changes
+        )
+
+    @property
     def selected_candidate_id(self) -> str | None:
         value = self.state.selected_candidate_id
         return str(value) if value else None
@@ -342,8 +350,14 @@ class Coordinator:
         if not isinstance(text, str) or not 1 <= len(text.strip()) <= 12000:
             raise ValueError("Message must contain 1–12000 characters")
         text = text.strip()
-        if recipient is not None and recipient not in {"rsi", "interaction"}:
-            raise ValueError("用户消息只能发给 RSI 或 Interaction")
+        researchers = {a.agent_id for a in self.store.run().research_agents}
+        allowed = {"rsi", "interaction"}
+        if self.state.mode == "passk" and self.state.started_at:
+            allowed = {"rsi", *researchers}
+        if recipient is not None and recipient not in allowed:
+            raise ValueError("请选择当前任务中的有效接收者")
+        if recipient in researchers and self.actor(recipient).state == AgentState.STOPPED:
+            raise ValueError("该研究员已停止，不能再接收指导")
         if reply_to is not None and (not isinstance(reply_to, str) or not reply_to):
             raise ValueError("reply_to 必须是问题的 message_id")
         try:
@@ -416,6 +430,8 @@ class Coordinator:
             return []
         ready = []
         for actor in self.actors():
+            if actor.agent_id in self.state.human.paused_agents:
+                continue
             if self.state.status == "planned" and actor.agent_id != "interaction":
                 continue
             if actor.state in {AgentState.STOPPED, AgentState.PAUSED, AgentState.FAILED}:
@@ -592,6 +608,7 @@ class Coordinator:
         if agent_id == "interaction":
             return {"user"}
         return {
+            "user",
             "rsi",
             "system",
             *(

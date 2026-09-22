@@ -118,15 +118,6 @@ class ResearchConfig:
                 )
             if limits.max_nodes is not None and limits.max_nodes < limits.max_agents:
                 raise ValueError("passk max_nodes must accommodate all k researchers")
-            contract = self.brief.verification
-            if (
-                limits.max_wall_seconds is None
-                and limits.max_effective_seconds is None
-                and not (contract and contract.target is not None and self.verifier)
-            ):
-                raise ValueError(
-                    "passk needs a wall-time/effective-time limit or a trusted verification target"
-                )
 
     def model_settings(self) -> dict[str, str]:
         settings = {

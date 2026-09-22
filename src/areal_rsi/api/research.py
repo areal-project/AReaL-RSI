@@ -20,7 +20,7 @@ class ResearchLimits:
     # Retained for configuration compatibility; execution rejects non-null caps.
     max_model_calls: int | None = None
     max_total_tokens: int | None = None
-    max_wall_seconds: float | None = 14400
+    max_wall_seconds: float | None = None
     max_verify_calls: int | None = None
     max_jobs: int | None = 1
     gpu_ids: tuple[str, ...] = ()
@@ -85,10 +85,13 @@ class TaskBrief:
     instructions: str
     limits: ResearchLimits = field(default_factory=ResearchLimits)
     verification: VerificationContract | None = None
+    revision: int = 0
 
     def __post_init__(self) -> None:
         if not self.objective.strip():
             raise ValueError("Research objective must not be empty")
+        if self.revision < 0:
+            raise ValueError("Goal revision must be nonnegative")
         if self.verification is not None and not isinstance(
             self.verification, VerificationContract
         ):
@@ -197,6 +200,7 @@ class VerifiedResult:
     simulated: bool = False
     references: tuple[RecordRef, ...] = ()
     error: str | None = None
+    goal_revision: int = 0
 
     def __post_init__(self) -> None:
         if self.status not in {"succeeded", "failed", "infra_error", "cancelled"}:
@@ -252,6 +256,7 @@ class ResearchJob:
     published_candidate_id: str | None = None
     verification_job_id: str | None = None
     publication_error: str | None = None
+    goal_revision: int = 0
 
 
 @dataclass(slots=True)
@@ -444,12 +449,78 @@ class GoalTurn:
 
 
 @dataclass(slots=True)
+class DevelopmentSetup:
+    profile_id: str
+    repository: str
+    revision: str
+    acceptance: str
+    parallelism: int = 2
+    wall_seconds: int | None = None
+
+    def __post_init__(self) -> None:
+        if not all(value.strip() for value in (
+            self.profile_id, self.repository, self.revision, self.acceptance
+        )):
+            raise ValueError("请填写执行环境、仓库、基线与验收要求")
+        if not 1 <= self.parallelism <= 16 or (
+            self.wall_seconds is not None and not 60 <= self.wall_seconds <= 86400
+        ):
+            raise ValueError("尝试数量须为 1–16，时限须为 60–86400 秒或留空不限")
+
+
+@dataclass(slots=True)
+class DevelopmentProfile:
+    profile_id: str
+    title: str
+    description: str
+    defaults: DevelopmentSetup
+    prepare_command: tuple[str, ...]
+    timeout_seconds: int = 1800
+
+
+@dataclass(slots=True)
+class PreparationCheck:
+    name: str
+    status: Literal["pending", "running", "passed", "failed"]
+    message: str = ""
+
+
+@dataclass(slots=True)
+class ResearchPreparation:
+    setup: DevelopmentSetup
+    status: Literal["pending", "running", "cancelling", "ready", "failed"] = "pending"
+    checks: list[PreparationCheck] = field(default_factory=list)
+    job_id: str | None = None
+    config_digest: str = ""
+    error: str = ""
+
+
+@dataclass(slots=True)
+class GoalRevision:
+    request_id: str
+    previous: TaskBrief
+    brief: TaskBrief
+    created_at: str
+    applied: bool = False
+    verification_confirmed: bool = False
+
+
+@dataclass(slots=True)
+class HumanControl:
+    paused_agents: list[str] = field(default_factory=list)
+    received_messages: list[str] = field(default_factory=list)
+    goal_changes: list[GoalRevision] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class CoordinationState:
     """Durable scheduling state. JSON is decoded once when a run is opened."""
 
     status: str = "planned"
     created_at: str = ""
     simulated: bool = False
+    preparation: ResearchPreparation | None = None
+    human: HumanControl = field(default_factory=HumanControl)
     inboxes: dict[str, list[str]] = field(default_factory=dict)
     active: dict[str, str] = field(default_factory=dict)
     delivered: list[str] = field(default_factory=list)

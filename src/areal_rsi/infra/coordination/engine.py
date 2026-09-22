@@ -170,6 +170,15 @@ class ResearchEngine:
             # misrepresent it as one model request in comparison statistics.
             self.coordinator.state.runtime_turns = self.coordinator.state.runtime_turns + 1
             self.coordinator.save()
+        if kind in {"runtime_turn_started", "message_injected"}:
+            c = self.coordinator
+            identifier = (event.get("message_id") if kind == "message_injected"
+                          else c.state.active.get(agent_id))
+            if identifier and identifier not in c.state.human.received_messages:
+                message = c.store.get("messages", identifier, ResearchMessage)
+                if message.sender == "user":
+                    c.state.human.received_messages.append(identifier)
+                    c.save()
         if kind in {"runtime_turn_started", "tool_started", "tool_completed"}:
             self.coordinator.state.agent_activity[agent_id] = AgentActivity(
                 kind, event.get("name"), now()
@@ -368,17 +377,15 @@ class ResearchEngine:
                 if c.store.get("messages", identifier, ResearchMessage).sender == "user"
             ]
             if (
-                (agent_id == "interaction" or (agent_id == "rsi" and user_messages))
+                (agent_id == "interaction" or user_messages)
                 and result.stop_reason == "completed"
                 and result.text.strip()
             ):
-                c.enqueue(
-                    agent_id,
-                    "user",
-                    result.text.strip(),
-                    key=agent_id + "-response:" + message.message_id,
-                    reply_to=(user_messages or c.current_message_ids(agent_id))[-1],
-                )
+                for identifier in user_messages or c.current_message_ids(agent_id)[-1:]:
+                    c.enqueue(
+                        agent_id, "user", result.text.strip(),
+                        key=agent_id + "-response:" + identifier, reply_to=identifier,
+                    )
             if result.stop_reason == "completed" and agent_id not in {"rsi", "interaction"}:
                 self._complete_research_turn(
                     agent_id, iteration_id, message.message_id, result.text
@@ -392,9 +399,11 @@ class ResearchEngine:
                 c.save_actor(actor)
                 c.end_turn(agent_id)
             elif actor.state not in {AgentState.STOPPED, AgentState.FAILED}:
-                paused = c.state.status == "paused"
+                human_paused = agent_id in c.state.human.paused_agents
+                paused = c.state.status == "paused" or human_paused
                 actor.state = AgentState.PAUSED if paused else AgentState.WAITING
-                actor.wait_reason = "run_paused" if paused else "worker_interrupted"
+                actor.wait_reason = ("human_paused" if human_paused else
+                                     "run_paused" if paused else "worker_interrupted")
                 c.save_actor(actor)
                 c.store.event("agent_suspended", agent_id=agent_id, reason=actor.wait_reason)
             raise

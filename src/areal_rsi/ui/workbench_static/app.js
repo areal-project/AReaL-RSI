@@ -108,58 +108,40 @@ function collaborationSelection(value) {
   return {mode: value.mode, modules: [...(value.modules || [])].sort()};
 }
 function collaborationPresets() {
-  return state.collaborationCatalog.presets || state.collaborationCatalog.modes.map((mode) => ({...mode, mode: mode.id, modules: []}));
+  return [
+    {id: "passk", mode: "passk", modules: [], label: "pass@k",
+      description: "多名研究员各自独立完成同一任务，不自动交流成果。你可以分别给予指导。"},
+    {id: "pass1", mode: "pass1", modules: [], label: "pass1",
+      description: "一个 Agent 持续完成任务，你可以随时补充要求或纠正方向。"},
+  ];
 }
 function selectCollaborationPreset(id) {
-  return collaborationSelection(collaborationPresets().find((preset) => preset.id === id));
+  return {mode: id === "pass1" ? "pass1" : "passk", modules: []};
 }
 function matchingCollaborationPreset(selection) {
-  return collaborationPresets().find((preset) => JSON.stringify(collaborationSelection(preset)) === JSON.stringify(collaborationSelection(selection)));
+  return collaborationPresets().find((preset) => preset.mode === selection.mode);
 }
 function collaborationChanged() {
   const draft = state.collaborationDrafts.get(state.runId), saved = state.run?.collaboration;
   return !!draft && !!saved && JSON.stringify(collaborationSelection(draft)) !== JSON.stringify(collaborationSelection(saved));
 }
-function renderCollaborationFields(prefix, dropdown, selection, disabled, onChange) {
-  const catalog = state.collaborationCatalog;
+function renderCollaborationFields(prefix, dropdown, selection, disabled) {
   const preset = matchingCollaborationPreset(selection);
-  dropdown.update(collaborationPresets().map((item) => ({value: item.id, text: item.label})), preset?.id || selection.mode, disabled);
-  $(`${prefix}description`).textContent = preset?.description || catalog.modes.find((mode) => mode.id === selection.mode)?.description || "";
-  const container = $(`${prefix}modules`);
-  container.replaceChildren();
-  const modules = catalog.modules.filter((module) => module.modes.includes(selection.mode));
-  if (!modules.length && selection.mode !== "pass1") container.append(element("p", "muted", "当前没有可选的附加模块。"));
-  for (const module of modules) {
-    const label = element("label", "collaboration-module");
-    const input = document.createElement("input");
-    input.type = "checkbox";
-    input.value = module.id;
-    input.checked = selection.modules.includes(module.id);
-    input.disabled = disabled || modules.some((item) => selection.modules.includes(item.id) && (item.requires || []).includes(module.id));
-    input.addEventListener("change", () => {
-      const selected = new Set(selection.modules);
-      if (input.checked) {
-        selected.add(module.id);
-        for (const dependency of module.requires || []) selected.add(dependency);
-      } else selected.delete(module.id);
-      onChange({mode: selection.mode, modules: [...selected].sort()});
-    });
-    const description = element("span", "", `${module.label} · v${module.version}`);
-    description.append(element("small", "muted", module.description));
-    label.append(input, description);
-    container.append(label);
-  }
+  dropdown.update(collaborationPresets().map((item) => ({value: item.id, text: item.label})), selection.mode, disabled);
+  $(`${prefix}description`).textContent = selection.modules?.length
+    ? "此任务保留原有协作配置；重新选择 pass@k 将使用独立探索。"
+    : preset?.description || "此历史任务保留原配置。";
 }
 function renderCreateCollaboration() {
   const pass1 = state.createCollaboration?.mode === "pass1";
-  $("create-description").textContent = pass1 ? "输入目标，由一个 Agent 持续执行；进展会实时显示在页面中。" : "先选择模型，再与 Interaction 聊聊研究目标。";
-  $("create-message-label").textContent = pass1 ? "目标" : "研究想法";
-  $("create-message-hint").textContent = pass1 ? "（必填）" : "（可稍后聊）";
-  $("create-message").required = pass1;
-  $("create-start-hint").textContent = pass1 ? "创建后直接执行，可随时暂停或补充指令。" : "开始研究前仍可修改配置。";
-  if (!state.creating) $("create-submit").textContent = pass1 ? "开始目标" : "创建研究";
-  renderCollaborationFields("create-collaboration-", createCollaborationDropdown, state.createCollaboration, state.creating,
-    (selection) => { state.createCollaboration = selection; renderCreateCollaboration(); });
+  const development = !!state.workspaceReady;
+  $("create-description").textContent = development ? "描述要完成的事情、需要遵守的要求，以及怎样算完成。系统会使用当前项目准备任务。" : pass1 ? "输入目标，由一个 Agent 持续执行；进展会实时显示在页面中。" : "先选择模型，再与 Interaction 聊聊研究目标。";
+  $("create-message-label").textContent = "你想完成什么";
+  $("create-message-hint").textContent = pass1 || development ? "（必填）" : "（可稍后聊）";
+  $("create-message").required = pass1 || development;
+  $("create-start-hint").textContent = development ? "准备好后即可开始；执行中也可以指导研究员或调整目标。" : pass1 ? "创建后直接执行，可随时暂停或补充指令。" : "开始研究前仍可修改配置。";
+  if (!state.creating) $("create-submit").textContent = development ? "创建任务" : pass1 ? "开始目标" : "创建研究";
+  renderCollaborationFields("create-collaboration-", createCollaborationDropdown, state.createCollaboration, state.creating);
 }
 function renderCollaboration() {
   const saved = state.run?.collaboration;
@@ -168,29 +150,17 @@ function renderCollaboration() {
   if (!saved.editable) state.collaborationDrafts.delete(state.runId);
   const draft = state.collaborationDrafts.get(state.runId) || collaborationSelection(saved);
   const disabled = !saved.editable || !!state.collaborationSavingRun || state.busy;
-  const currentVersion = !saved.manifest || (saved.manifest.modules || []).every((recorded) =>
-    state.collaborationCatalog.modules.some((module) => module.id === recorded.id && module.version === recorded.version));
-  const label = currentVersion
-    ? matchingCollaborationPreset(saved)?.label || [saved.label || saved.mode, ...(saved.modules || [])].join(" + ")
-    : `${saved.mode} · 历史协作版本`;
+  const label = (matchingCollaborationPreset(saved)?.label || "历史任务（仅供查看）") +
+    (saved.modules?.length ? " · 原有协作配置" : "");
   $("collaboration-summary").textContent = [label, saved.editable ? "启动前可修改" : "已锁定"].join(" · ");
-  renderCollaborationFields("collaboration-", collaborationDropdown, draft, disabled, (selection) => {
-    state.collaborationDrafts.set(state.runId, selection); renderCollaboration();
-  });
-  if (!saved.editable) {
-    const recorded = new Map((saved.manifest?.modules || []).map((module) => [module.id, module.version]));
-    $("collaboration-modules").replaceChildren(...(saved.modules?.length ? saved.modules.map((id) =>
-      element("p", "muted", `${id} · ${recorded.has(id) ? `v${recorded.get(id)}` : "历史版本未记录"}`))
-      : [element("p", "muted", "未启用附加模块。")]) );
-  }
+  renderCollaborationFields("collaboration-", collaborationDropdown, draft, disabled);
   $("reuse-collaboration").hidden = saved.supported === false;
   $("save-collaboration").hidden = !saved.editable;
   $("save-collaboration").disabled = disabled || !collaborationChanged();
   $("save-collaboration").textContent = state.collaborationSavingRun === state.runId ? "保存中…" : "保存协作配置";
   $("collaboration-status").textContent = saved.editable
-    ? (collaborationChanged() ? "有未保存的修改，请保存后开始研究。" : "启动时冻结配置和模块版本；启动后不能修改。")
-    : saved.manifest ? `配置指纹 ${saved.manifest.fingerprint.slice(0, 12)} · v${saved.manifest.mode_version}`
-    : "历史研究：按原 mode 展示，未补写版本记录。";
+    ? (collaborationChanged() ? "有未保存的修改，请保存后开始研究。" : "开始执行后，协作方式不再改变。")
+    : "历史研究：保留创建时的协作配置。";
 }
 $("collaboration-form").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -449,6 +419,7 @@ function progressFreshness(job) {
   return `${age > 45000 && activeJob(job) ? "进度暂未更新 · " : "进度更新于 "}${time(updated)}`;
 }
 function agentAction(run, agent) {
+  if ((run.human?.paused_agents || []).includes(agent.agent_id)) return "已暂停，等待人工继续";
   const activity = run.agent_activity?.[agent.agent_id];
   if (activity?.type === "model_retry") {
     const at = time(activity.next_retry_at * 1000);
@@ -489,7 +460,10 @@ function connected(ok) {
     ? `${time(Date.now())} 更新`
     : "重新连接中…";
 }
-async function api(path, body, signal) {
+async function api(path, body, signal, retryAuth = true) {
+  return (await requestResponse(path, body, signal, retryAuth)).json();
+}
+async function requestResponse(path, body, signal, retryAuth = true) {
   const options = {
     headers: {},
     cache: "no-store",
@@ -508,10 +482,25 @@ async function api(path, body, signal) {
   if (!response.ok) {
     if (response.status === 403) state.token = "";
     const error = await response.json().catch(() => ({}));
+    if (response.status === 403 && error.code === "csrf_expired" && body !== undefined && retryAuth) {
+      state.token = (await api("/api/bootstrap", undefined, signal)).csrf_token;
+      return requestResponse(path, body, signal, false);
+    }
     throw new Error(error.error || `请求失败（${response.status}）`);
   }
-  return response.json();
+  return response;
 }
+
+async function downloadArtifact(action, params = {}) {
+  try {
+    const response = await requestResponse(`/api/runs/${encodeURIComponent(state.runId)}/${action}`, params);
+    const url = URL.createObjectURL(await response.blob());
+    const link = element("a"); link.href = url; link.download = `${state.runId}-${params.job_id || action}.zip`;
+    document.body.append(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) { notice(error.message); }
+}
+$("export-candidate").addEventListener("click", () => downloadArtifact("export"));
 
 async function loadRuns() {
   const result = await api("/api/runs");
@@ -688,7 +677,9 @@ function render() {
   const needsResume = run.worker_alive === false && (
     run.status === "running" || (run.status === "planned" && run.pending_agents?.length)
   );
-  $("run-status").textContent = run.finalization?.status === "running" ? "最终复测与归档中"
+  $("run-status").textContent = run.preparation && run.status === "planned"
+    ? ({pending: "等待准备", running: "准备中", cancelling: "正在取消准备", ready: "可以开始", failed: "准备失败"}[run.preparation.status])
+    : run.finalization?.status === "running" ? "最终复测与归档中"
     : run.finalization?.status === "failed" ? "收尾失败 · 可恢复"
     : run.finalization?.status === "completed" ? (run.status === "succeeded" ? "已达标" : run.brief?.verification?.target == null ? "已完成" : "已完成 · 未达标")
     : run.status === "running" && run.goal?.status === "blocked" ? "目标阻塞"
@@ -696,7 +687,7 @@ function render() {
     : run.status === "running" && run.execution_setup === "pending"
     ? "研究中 · 接入准备" : label(run.status);
   $("run-status").className = `status ${run.status}`;
-  $("start").hidden = run.status !== "planned" || (run.collaboration?.mode !== "pass1" && run.intake?.status !== "ready");
+  $("start").hidden = run.status !== "planned" || (run.preparation ? run.preparation.status !== "ready" : (run.collaboration?.mode !== "pass1" && run.intake?.status !== "ready"));
   $("start").disabled = state.busy || run.agents?.some(
     (agent) => agent.agent_id === "interaction" && agent.state === "running",
   );
@@ -709,7 +700,7 @@ function render() {
     ? (run.status === "planned" ? "继续对话" : "恢复执行") : "继续";
   $("stop").hidden = !["planned", "running", "paused"].includes(run.status)
     && run.finalization?.status !== "running";
-  $("stop").textContent = run.status === "planned" ? "结束对话" : "停止";
+  $("stop").textContent = run.status === "planned" ? (run.preparation ? "放弃任务" : "结束对话") : "停止";
   if (run.collaboration?.supported === false) {
     for (const id of ["start", "pause", "resume"]) $(id).hidden = true;
   }
@@ -717,12 +708,13 @@ function render() {
   $("delete-run").title = deletionBlocked(run) ? "请先停止研究再删除" : "删除这项研究的本地记录";
   $("best-score").textContent = score(run.best?.score);
   $("final-score").textContent = score(run.final?.score);
+  $("export-candidate").hidden = !(run.final?.candidate_id || run.best?.candidate_id);
   const researchers = ResearchGraph.researchers(run);
   const pass1 = run.collaboration?.mode === "pass1";
   $("agent-count-label").textContent = pass1 ? "执行 Agent" : "研究员";
   $("node-count").textContent = integer(pass1 ? 1 : researchers.length);
   $("research-graph-card").hidden = $("research-plan-card").hidden = pass1;
-  $("runtime-turn-count").parentElement.hidden = pass1;
+  $("runtime-turn-count").parentElement.hidden = pass1 || !!run.preparation;
   $("runtime-turn-count").textContent = integer(run.runtime_turns ?? run.budget?.runtime_turns ?? 0);
   $("plan").textContent =
     run.plan || "研究开始后，RSI 会在这里说明当前方向和下一步。";
@@ -730,6 +722,10 @@ function render() {
   $("score-metric").hidden = $("final-metric").hidden = !run.brief?.verification;
   $("metrics").classList.toggle("without-score", !run.brief?.verification);
   $("run-elapsed").replaceChildren(elapsed(run.started_at, run.finished_at));
+  $("revise-goal").hidden = !canGuide(run);
+  $("revise-goal").disabled = state.busy;
+  $("human-status").textContent = run.collaboration?.mode === "passk" ? `目标 v${(run.brief?.revision || 0) + 1}${run.human?.assisted ? " · 人工指导" : ""}` : "";
+  renderPreparation(run);
   renderIntake(run);
   renderOverview(run);
   renderDirections(run);
@@ -743,13 +739,16 @@ function render() {
   renderAgentErrors(run);
   const ended = run.collaboration?.supported === false || !["planned", "running", "paused"].includes(run.status);
   const responding = (run.agents || []).find((agent) => agent.agent_id === target.recipient);
-  $("chat-input").disabled = ended;
-  $("send-message").disabled = ended || state.sending.has(run.run_id) || target.stale;
+  const fixedTask = run.preparation && run.status === "planned";
+  $("chat-input").disabled = ended || fixedTask;
+  $("send-message").disabled = ended || fixedTask || state.sending.has(run.run_id) || target.stale;
   $("chat-input-label").textContent = `向 ${agentName(target.recipient)} 发送消息`;
   $("chat-input").placeholder = target.reply_to
     ? "回答这个问题，或说明处理进展…"
     : "补充想法、提供环境，或询问进展…";
-  $("chat-status").textContent = ended
+  $("chat-status").textContent = fixedTask
+    ? "此研发任务按固定条件执行；请使用预检、启动、暂停或停止操作。"
+    : ended
     ? "研究已结束，记录保留供查看"
     : target.stale
     ? "该问题已回复，请重新选择发送对象"
@@ -814,6 +813,32 @@ function mergeGoalTurns(run, older = false) {
   history.total = Math.max(history.total, run.goal_turns_total ?? history.turns.size);
   history.ready = true;
 }
+
+function renderPreparation(run) {
+  const prep = run.preparation;
+  $("preparation").hidden = !prep;
+  const hideChat = !!prep && run.status === "planned";
+  $("chat-tab").hidden = hideChat;
+  if (hideChat && state.tab === "chat") switchTab("brief");
+  if (!prep) return;
+  const phase = `${run.run_id}/${run.status === "planned"}/${prep.status === "failed"}`;
+  if ($("preparation").dataset.phase !== phase) {
+    $("preparation").open = prep.status === "failed";
+    $("preparation").dataset.phase = phase;
+    if (run.status !== "planned") $("model-settings").open = $("collaboration-settings").open = false;
+  }
+  $("preparation-status").textContent = {pending: "等待准备", running: "准备中", cancelling: "取消中", ready: "已准备好", failed: "准备失败"}[prep.status];
+  $("preparation-workspace").textContent = `工作区由系统准备。${prep.setup.wall_seconds == null ? "未设置运行时限。" : `运行时限 ${prep.setup.wall_seconds / 3600} 小时。`}`;
+  $("preparation-checks").replaceChildren(...(prep.checks || []).map((check) => element("li", "", `${{pending: "等待", running: "检查中", passed: "通过", failed: "失败"}[check.status]} · ${check.name}：${check.message}`)));
+  $("preparation-error").textContent = prep.error || "";
+  $("prepare-run").hidden = run.status !== "planned";
+  $("prepare-run").disabled = state.busy || ["running", "cancelling"].includes(prep.status);
+  $("cancel-preparation").hidden = run.status !== "planned" || !["running", "cancelling"].includes(prep.status);
+  $("cancel-preparation").disabled = state.busy || prep.status === "cancelling";
+  $("prepare-run").textContent = prep.status === "pending" ? "准备任务" : "重新准备";
+}
+$("prepare-run").addEventListener("click", () => control("prepare"));
+$("cancel-preparation").addEventListener("click", () => control("cancel"));
 
 function renderGoalProgress(run) {
   const visible = run.collaboration?.mode === "pass1";
@@ -900,10 +925,12 @@ function renderReplyTarget(run) {
       recipient: q.agent_id,
       reply_to: q.message_id,
     })),
-    ...(run.collaboration?.mode === "pass1" ? [] : [{ value: "interaction", recipient: "interaction", text: "Interaction Agent · 新消息" }]),
+    ...(run.collaboration?.mode === "pass1" || run.started_at ? [] : [{ value: "interaction", recipient: "interaction", text: "Interaction Agent · 新消息" }]),
     ...(run.status !== "planned" || run.collaboration?.mode === "pass1"
       ? [{ value: "rsi", recipient: "rsi", text: "RSI Agent · 新消息" }] : []),
   ];
+  if (run.collaboration?.mode === "passk" && run.started_at)
+    choices.push(...(run.agents || []).filter((a) => a.agent_id !== "rsi" && a.agent_id !== "interaction" && a.state !== "stopped").map((a) => ({value: a.agent_id, recipient: a.agent_id, text: `${agentName(a.agent_id)} · 定向指导`})));
   let selected = state.replyTargets.get(run.run_id);
   const hasDraft = !!$("chat-input").value.trim();
   if (!selected || (!hasDraft && !choices.some((c) => c.value === selected.value)))
@@ -962,7 +989,7 @@ function renderAgentErrors(run) {
 }
 
 function renderIntake(run) {
-  const preparing = run.status === "planned" && run.collaboration?.mode !== "pass1";
+  const preparing = run.status === "planned" && !run.preparation && run.collaboration?.mode !== "pass1";
   $("intake-overview").hidden = !preparing;
   $("node-tab").hidden = run.collaboration?.mode === "pass1" || (preparing && !run.nodes?.length);
   $("intake-status").textContent = run.intake?.status === "ready" ? "待你确认" : "整理中";
@@ -1026,9 +1053,14 @@ function renderOverview(run) {
     const line = element(node ? "button" : "div", "live-agent");
     line.append(element("strong", "", `${agentName(agent.agent_id)} · ${agentAction(run, agent)}`));
     if (node) {
-      line.append(element("p", "", node.title || node.assignment?.instruction || "执行本轮研究任务"));
+      if (!run.preparation)
+        line.append(element("p", "", (node.title || node.assignment?.instruction || "执行本轮研究任务").slice(0, 160)));
       line.dataset.work = node.iteration_id;
       line.addEventListener("click", () => selectWork(run, node.iteration_id));
+    }
+    if (run.preparation) {
+      const latest = [...state.events.values()].filter((event) => event.kind === "assistant_output" && event.agent_id === agent.agent_id).at(-1);
+      if (latest?.data?.text) line.append(element("p", "live-description", latest.data.text.slice(0, 240)));
     }
     blocks.push(line);
   }
@@ -1344,7 +1376,8 @@ function renderNode(run) {
     (item) => item.iteration_id === state.selected.get(run.run_id),
   );
   const budget = run.budget?.researchers?.[node?.agent_id];
-  const signature = JSON.stringify([run.run_id, run.finished_at, node, budget]);
+  const latest = run.preparation && [...state.events.values()].filter((event) => event.kind === "assistant_output" && event.agent_id === node?.agent_id).at(-1);
+  const signature = JSON.stringify([run.run_id, run.status, run.finished_at, node, budget, latest, run.human, state.busy]);
   if (signature === state.detailSignature) return;
   state.detailSignature = signature;
   if (!node) {
@@ -1362,8 +1395,8 @@ function renderNode(run) {
   state.detailNodeId = node.iteration_id;
   const heading = element("div", "detail-header");
   heading.append(
-    badge(node.state),
-    element("h3", "", "本轮任务"),
+    badge((run.human?.paused_agents || []).includes(node.agent_id) ? "paused" : node.state),
+    element("h3", "", `${run.preparation ? "研发任务" : "本轮任务"} · ${agentName(node.agent_id)}`),
     element("p", "muted", node.iteration_id),
   );
   const [started, finished] = nodeTimes(run, node);
@@ -1373,6 +1406,26 @@ function renderNode(run) {
   if (budget) timing.append(element("small", "muted", `GPU 排队 ${(budget.gpu_queue_seconds / 60).toFixed(1)} 分钟 · API 故障等待 ${(budget.api_wait_seconds / 60).toFixed(1)} 分钟`));
   if (started) timing.append(element("small", "muted", `开始 ${new Date(timestamp(started)).toLocaleString("zh-CN")}${finished ? ` · 结束 ${new Date(timestamp(finished)).toLocaleString("zh-CN")}` : " · 进行中"}`));
   const blocks = [heading, timing, assignmentDetails(run, node)];
+  if (canGuide(run)) {
+    const actions = element("section", "detail-section");
+    const guide = element("button", "primary", "指导这个 Agent");
+    guide.addEventListener("click", () => {
+      state.replyTargets.set(run.run_id, {value: node.agent_id, explicit: true});
+      switchTab("chat"); render(); $("chat-input").focus();
+    });
+    const paused = (run.human?.paused_agents || []).includes(node.agent_id);
+    const hold = element("button", "secondary", paused ? "继续这个 Agent" : "暂停这个 Agent");
+    hold.disabled = state.busy;
+    hold.addEventListener("click", () => control("agent-control", {agent_id: node.agent_id, paused: !paused}));
+    actions.append(guide, hold, element("p", "muted", "指导仅发给此研究员。暂停后可发送指导，再继续执行；已有作业请在作业详情中单独取消。"));
+    blocks.push(actions);
+  }
+  if (latest?.data?.text) {
+    const progress = element("section", "detail-section progress-message");
+    progress.append(element("h4", "", "最新执行说明"));
+    appendProgressText(progress, latest.data.text);
+    blocks.push(progress);
+  }
   if (node.verification)
     blocks.push(section("本次探索最佳有效成绩", `${nodeScore(run, node)} · 探索阶段正式验证`));
   blocks.push(reportHistory(run, node));
@@ -1422,6 +1475,17 @@ function renderJobDetail(run, job) {
   heading.append(badge(job.status), element("h3", "", jobTitle(job)), element("p", "muted", job.job_id));
   const blocks = [heading, section(activeJob(job) ? "当前执行" : "最后上报的执行情况", job.error || job.progress?.message || job.progress_message
     || (activeJob(job) ? "执行器尚未上报细项进度。" : label(job.status)))];
+  if (canGuide(run) && activeJob(job)) {
+    const cancel = element("button", "secondary", "取消此作业");
+    cancel.addEventListener("click", () => control("cancel-job", {job_id: job.job_id}));
+    blocks.push(cancel);
+  }
+  blocks.push(section("所属目标", `v${(job.goal_revision || 0) + 1}${job.goal_revision != null && job.goal_revision !== (run.brief?.revision || 0) ? " · 历史目标结果" : ""}`));
+  if (job.report_available) {
+    const report = element("button", "secondary", "下载公开验收报告");
+    report.addEventListener("click", () => downloadArtifact("export-report", {job_id: job.job_id}));
+    blocks.push(report);
+  }
   const progress = element("section", "detail-section");
   progress.append(element("h4", "", job.progress?.stage || "执行进度"),
     element("p", "", progressText(job)), progressBar(job),
@@ -1521,7 +1585,7 @@ function renderMessages(run) {
             ? "RSI Agent"
             : message.sender === "runtime"
             ? "系统状态"
-            : "Interaction Agent",
+            : agentName(message.sender),
       ),
       element("time", "", time(message.created_at)),
     );
@@ -1529,6 +1593,8 @@ function renderMessages(run) {
     if (message.sender === "user") content.textContent = message.text;
     else appendFormattedText(content, message.text || "");
     block.append(heading, content);
+    if (message.delivery_status && message.sender === "user")
+      block.append(element("small", "delivery-status", {pending: "已保存 · 待送达", delivered: "已送达 · 等待回复", replied: "Agent 已回复"}[message.delivery_status]));
     if (message.delivery) {
       block.append(element("small", "delivery-status", message.delivery === "failed" ? "发送未确认，请重试" : "正在发送…"));
       if (message.delivery === "failed") {
@@ -1591,7 +1657,7 @@ function renderBrief(run) {
     ["研究时长上限", limits.max_wall_seconds === null ? "不限" : `${budgetLimit(limits.max_wall_seconds)} 秒`],
     ...(limits.max_effective_seconds != null ? [["每名研究员有效时间上限", `${limits.max_effective_seconds / 60} 分钟`]] : []),
     ["作业并发上限", budgetLimit(limits.max_jobs)],
-    ["GPU", limits.gpu_ids?.join(", ") || "尚未配置"],
+    ["本机 GPU", limits.gpu_ids?.join(", ") || (run.preparation ? "远端资源见执行配置和作业进度" : "尚未配置")],
     ["允许修改", limits.allowed_paths?.join(", ") || "待确认"],
     ["验证指标", verification?.metric || "尚未设置"],
     ["目标", score(verification?.target)],
@@ -1603,8 +1669,17 @@ function renderBrief(run) {
       `${(budget.effective_seconds / 60).toFixed(1)} / ${(budget.limit_seconds / 60).toFixed(0)} 分钟；GPU 排队 ${(budget.gpu_queue_seconds / 60).toFixed(1)} 分钟，API 故障等待 ${(budget.api_wait_seconds / 60).toFixed(1)} 分钟`));
   }
   blocks.push(grid);
+  if (verification && run.human?.verification_current === false)
+    blocks.push(section("新目标验收覆盖待确认", "已有验证器的成绩仅供参考，不会自动认定新目标达标；确认覆盖范围后可再次调整目标并勾选验收确认。"));
   if (verification?.description)
     blocks.push(section("验证条件", verification.description));
+  for (const change of run.human?.goal_changes || []) {
+    const history = element("details", "detail-section");
+    history.append(element("summary", "", `目标 v${change.previous.revision + 1} → v${change.brief.revision + 1} · ${change.applied ? "已应用" : "待恢复"}`),
+      section("修改前", change.previous.objective + "\n" + change.previous.instructions),
+      section("修改后", change.brief.objective + "\n" + change.brief.instructions));
+    blocks.push(history);
+  }
   replace("brief-panel", ...blocks);
 }
 function renderJobs(run) {
@@ -1778,7 +1853,7 @@ $("delete-form").addEventListener("submit", async (event) => {
   }
 });
 
-async function createConversation(message = "", modelSettings, collaboration) {
+async function createConversation(message = "", modelSettings, collaboration, workspace) {
   if (state.creating) return;
   state.creating = true;
   $("new-run").disabled = $("mobile-new").disabled = $("welcome-send").disabled = true;
@@ -1786,16 +1861,17 @@ async function createConversation(message = "", modelSettings, collaboration) {
   try {
     $("create-submit").disabled = true;
     $("create-submit").textContent = "正在创建…";
-    const result = await api("/api/runs", { message, message_id: crypto.randomUUID(), ...(modelSettings ? {model_settings: modelSettings} : {}), ...(collaboration ? {collaboration} : {}) });
+    const result = await api("/api/runs", { message, message_id: crypto.randomUUID(), ...(modelSettings ? {model_settings: modelSettings} : {}), ...(collaboration ? {collaboration} : {}), ...(workspace || {}) });
     $("create-dialog").close();
     $("create-api-key").value = "";
     if (!result.run_id) throw new Error("未能读取研究记录，请刷新列表。");
     await loadRuns();
     state.runId = null;
     await selectRun(result.run_id);
-    switchTab("chat");
+    if (workspace?.use_workspace) await control("prepare");
+    switchTab(workspace?.use_workspace ? "brief" : "chat");
     $("welcome-input").value = "";
-    $("chat-input").focus();
+    if (!workspace?.use_workspace) $("chat-input").focus();
   } catch (error) {
     $("create-error").textContent = error.message;
     $("create-error").hidden = false;
@@ -1834,6 +1910,10 @@ function updateCreateModels() {
   createPreset.update(state.models.map((item) => ({value: item.id, text: item.id})), model);
   createEffort.update(efforts.map((value) => ({value, text: effortLabels[value]})), state.createEffort);
 }
+function workspaceRequest() {
+  return state.workspaceReady ? {use_workspace: true,
+    wall_seconds: $("create-hours").value.trim() === "" ? null : Math.round(Number($("create-hours").value) * 3600)} : {};
+}
 function openCreate(message = "", collaboration = state.defaultCollaboration) {
   if (state.creating) return;
   const defaults = state.defaultModelSettings;
@@ -1843,12 +1923,15 @@ function openCreate(message = "", collaboration = state.defaultCollaboration) {
   $("create-api-key").placeholder = defaults.has_credentials ? "留空使用默认密钥（已配置）" : "请输入 API Key";
   $("create-message").value = message;
   $("create-error").hidden = true;
+  $("create-hours").value = "";
+  $("create-time-limit").hidden = !state.workspaceReady;
+  $("create-options").open = !defaults.has_credentials && defaults.auth_mode !== "codex_login";
   state.createEffort = defaults.reasoning_effort || "xhigh";
   state.createBackend = defaults.backend || "standard";
   createBackend.update(backendOptions, state.createBackend);
   state.createAuthMode = defaults.auth_mode || "api_key";
   updateCreateAuth();
-  state.createCollaboration = collaborationSelection(collaboration);
+  state.createCollaboration = selectCollaborationPreset(collaboration.mode);
   renderCreateCollaboration();
   updateCreateModels();
   $("create-dialog").showModal();
@@ -1862,7 +1945,7 @@ $("create-form").addEventListener("submit", (event) => {
     base_url: state.createAuthMode === "codex_login" ? "https://api.openai.com" : $("create-base-url").value.trim(), api_key: state.createAuthMode === "codex_login" ? "" : $("create-api-key").value.trim(),
     auth_mode: state.createAuthMode,
     model: $("create-model").value.trim(), reasoning_effort: state.createEffort, backend: state.createBackend,
-  }, collaborationSelection(state.createCollaboration));
+  }, collaborationSelection(state.createCollaboration), workspaceRequest());
 });
 $("new-run").addEventListener("click", () => openCreate());
 $("mobile-new").addEventListener("click", () => openCreate());
@@ -1998,16 +2081,18 @@ $("chat-form").addEventListener("submit", async (event) => {
   render();
   $("messages").scrollTop = $("messages").scrollHeight;
   try {
-    await api(`/api/runs/${encodeURIComponent(runId)}/chat`, {
+    const receipt = await api(`/api/runs/${encodeURIComponent(runId)}/chat`, {
       text,
       message_id: message.message_id,
       ...(target.reply_to ? { reply_to: target.reply_to } : { recipient: target.recipient }),
     });
+    message.message_id = receipt.message_id || message.message_id;
     state.drafts.set(runId, "");
-    state.replyTargets.delete(runId);
+    if (target.reply_to) state.replyTargets.delete(runId);
     if (state.runId === runId && $("chat-input").value.trim() === text)
       $("chat-input").value = "";
     message.delivery = null;
+    state.outgoing.delete(runId);
     if (state.runId === runId) {
       await refresh(true);
       $("messages").scrollTop = $("messages").scrollHeight;
@@ -2044,6 +2129,7 @@ async function bootstrap() {
   state.token = config.csrf_token;
   state.models = config.models || [];
   state.defaultModelSettings = config.default_model_settings || {};
+  state.workspaceReady = config.workspace_ready === true;
   state.collaborationCatalog = config.collaboration_catalog || {modes: [], modules: []};
   state.defaultCollaboration = config.default_collaboration || {mode: "passk", modules: []};
 }
@@ -2077,3 +2163,33 @@ async function boot() {
 }
 setInterval(tickElapsed, 1000);
 boot();
+
+function canGuide(run) {
+  return run.collaboration?.mode === "passk" && !!run.started_at && ["running", "paused"].includes(run.status) && !run.finalization?.status;
+}
+let goalDraft = null;
+$("revise-goal").addEventListener("click", () => {
+  const run = state.run;
+  goalDraft = {run_id: run.run_id, request_id: crypto.randomUUID(), expected_revision: run.brief?.revision || 0};
+  $("revised-objective").value = run.brief?.objective || run.objective;
+  $("revised-instructions").value = run.brief?.instructions || "";
+  $("goal-verification-confirmation").hidden = !run.brief?.verification;
+  $("goal-verification-confirmed").checked = false;
+  $("goal-revision-label").textContent = `当前目标 v${goalDraft.expected_revision + 1}，提交为 v${goalDraft.expected_revision + 2}`;
+  $("revise-goal-error").textContent = "";
+  $("goal-dialog").showModal();
+});
+$("close-goal-dialog").addEventListener("click", () => $("goal-dialog").close());
+$("revise-goal-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!goalDraft || $("submit-goal").disabled) return;
+  const {run_id, ...identity} = goalDraft;
+  $("submit-goal").disabled = true;
+  try {
+    await api(`/api/runs/${encodeURIComponent(run_id)}/revise-goal`, {...identity, objective: $("revised-objective").value.trim(), instructions: $("revised-instructions").value.trim(), verification_confirmed: $("goal-verification-confirmed").checked});
+    $("goal-dialog").close();
+    await loadRuns();
+    if (state.runId === run_id) await refresh(true);
+  } catch (error) { $("revise-goal-error").textContent = error.message; }
+  finally { $("submit-goal").disabled = false; }
+});

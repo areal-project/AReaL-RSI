@@ -670,6 +670,10 @@ class ResearchApp:
                 from areal_rsi.coordination.profile_resources import prepare_profiles
 
                 profiles = prepare_profiles(profiles)
+            if "researcher_skills" in config.collaboration_modules:
+                from areal_rsi.coordination.researcher_skills import prepare_skills
+
+                profiles = prepare_skills(profiles)
             write_json(
                 c.store.root / "coordination/researcher-profiles.json", profiles, immutable=True
             )

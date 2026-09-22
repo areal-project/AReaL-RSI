@@ -127,6 +127,15 @@ DEFAULT_MODULES = ("leader_guidance", "leader_guidance_v024")
 
 
 MODULES: dict[str, CollaborationModule] = {
+    "researcher_skills": CollaborationModule(
+        "researcher_skills",
+        "按身份加载技能",
+        "只为配置了技能的研究员追加技能入口与文件，保留原身份和协作方式。",
+        "1",
+        apply_profile_resources,
+        requires=("researcher_profiles",),
+        conflicts=("profile_resources",),
+    ),
     "team_review": CollaborationModule(
         "team_review",
         "v0.2.1.4 · 定期观察与协调",
@@ -341,6 +350,20 @@ def presets() -> list[dict[str, Any]]:
                 "profile_resources",
             ],
             "description": "基于 v0.2.1.2，定期协调探索，并加载任务配置的人设资料。",
+        }
+    )
+    choices.append(
+        {
+            "id": "passk_guided_v0212_skills",
+            "label": "v0.2.1.2 · 研究员技能",
+            "mode": "passk",
+            "modules": [
+                "leader_guidance",
+                "problem_sharing",
+                "researcher_profiles",
+                "researcher_skills",
+            ],
+            "description": MODULES["researcher_skills"].description,
         }
     )
     return choices

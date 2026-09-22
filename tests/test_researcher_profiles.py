@@ -52,7 +52,7 @@ def test_profile_selection_rejects_missing_assets_and_wrong_team_size() -> None:
         config.freeze_researcher_profiles()
 
 
-@pytest.mark.parametrize("extra", [(), ("objective_sharing",)])
+@pytest.mark.parametrize("extra", [(), ("objective_sharing",), ("researcher_skills",)])
 def test_profiles_reach_runtime_and_recovery_without_changing_assignment(
     tmp_path: Path, extra: tuple[str, ...]
 ) -> None:
@@ -78,6 +78,12 @@ def test_profiles_reach_runtime_and_recovery_without_changing_assignment(
             }
             for i in range(4)
         )
+        if "researcher_skills" in extra:
+            from areal_rsi.coordination.researcher_skills import prepare_skills
+
+            profiles = list(actions.researcher_profiles)
+            profiles[-1]["resources"] = {"skills/example/SKILL.md": "EXCLUSIVE_SKILL"}
+            actions.researcher_profiles = tuple(prepare_skills(profiles))
         await launch(c, actions)
         runtime = Capture()
         engine = plan.engine(
@@ -96,6 +102,11 @@ def test_profiles_reach_runtime_and_recovery_without_changing_assignment(
             )
             assert call["recovery_state"]["researcher_profile"]["id"] == str(i)
             assert "独立完成" in call["user_message"]
+            if "researcher_skills" in extra:
+                assert ("EXCLUSIVE_SKILL" in call["system_prompt"]) == (i == 3)
+                actor = c.store.run().research_agents[i]
+                path = actions.workspace(actor.agent_id) / "researcher/skills/example/SKILL.md"
+                assert path.exists() == (i == 3)
         recovered = Coordinator(c.store)
         assert recovered.state["researcher_profiles"] == c.state["researcher_profiles"]
         assert [r["profile"] for r in actions.state("rsi")["researchers"]] == [

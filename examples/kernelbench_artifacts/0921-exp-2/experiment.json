@@ -1,0 +1,20 @@
+{
+  "group_name": "0921-exp-2",
+  "max_agents": 4,
+  "max_effective_seconds": 3600,
+  "reasoning_effort": "xhigh",
+  "execution_interface": "cli",
+  "runs": [
+    {"task": "L2P71", "model": "gpt-5.6-luna", "collaboration": "passk", "label": "v0.1 · pass@4"},
+    {"task": "L2P71", "model": "gpt-5.6-luna", "collaboration": "passk_guided_v0212", "label": "v0.2.1.2"},
+    {
+      "task": "L2P71",
+      "model": "gpt-5.6-luna",
+      "collaboration": "passk_guided_v0212_skills",
+      "label": "v0.2.1.2 + profile skill",
+      "researcher_skills": {
+        "kernelbench/execution": "0921-exp-1/skills/kernel-profile"
+      }
+    }
+  ]
+}

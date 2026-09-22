@@ -106,3 +106,78 @@ def test_https_relay_keeps_flowing_when_owner_loop_is_blocked() -> None:
             assert process is not None and process.returncode == 0
 
         asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("upstream_closes", [False, True])
+def test_https_tunnel_releases_client_on_silence_or_upstream_eof(
+    upstream_closes: bool,
+) -> None:
+    async def scenario() -> None:
+        disconnected = asyncio.Event()
+
+        async def origin(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            assert await reader.readexactly(4) == b"ping"
+            writer.write(b"pong")
+            await writer.drain()
+            if not upstream_closes:
+                assert await reader.read() == b""
+            writer.close()
+            await writer.wait_closed()
+            disconnected.set()
+
+        server = await asyncio.start_server(origin, "127.0.0.1", 0)
+        target = f"127.0.0.1:{server.sockets[0].getsockname()[1]}"
+        tunnel = _TunnelServer("https://" + target, idle_timeout=0.1)
+        port = await tunnel.start()
+        try:
+            reader, writer = await asyncio.open_connection("127.0.0.1", port)
+            writer.write(f"CONNECT {target} HTTP/1.1\r\n\r\n".encode())
+            await writer.drain()
+            assert b" 200 " in await reader.readuntil(b"\r\n\r\n")
+            writer.write(b"ping")
+            await writer.drain()
+            assert await reader.readexactly(4) == b"pong"
+            # No client EOF: the relay must terminate the dead upstream itself.
+            assert await asyncio.wait_for(reader.read(), 2) == b""
+            await asyncio.wait_for(disconnected.wait(), 2)
+            writer.close()
+            await writer.wait_closed()
+        finally:
+            await tunnel.close()
+            server.close()
+            await server.wait_closed()
+        assert not tunnel.tasks
+
+    asyncio.run(scenario())
+
+
+def test_https_tunnel_idle_timeout_resets_on_traffic() -> None:
+    async def scenario() -> None:
+        async def origin(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            while data := await reader.read(1024):
+                writer.write(data)
+                await writer.drain()
+            writer.close()
+
+        server = await asyncio.start_server(origin, "127.0.0.1", 0)
+        target = f"127.0.0.1:{server.sockets[0].getsockname()[1]}"
+        tunnel = _TunnelServer("https://" + target, idle_timeout=0.3)
+        port = await tunnel.start()
+        try:
+            reader, writer = await asyncio.open_connection("127.0.0.1", port)
+            writer.write(f"CONNECT {target} HTTP/1.1\r\n\r\n".encode())
+            await writer.drain()
+            assert b" 200 " in await reader.readuntil(b"\r\n\r\n")
+            for _ in range(6):
+                await asyncio.sleep(0.1)
+                writer.write(b"ping")
+                await writer.drain()
+                assert await asyncio.wait_for(reader.readexactly(4), 1) == b"ping"
+            writer.close()
+            await writer.wait_closed()
+        finally:
+            await tunnel.close()
+            server.close()
+            await server.wait_closed()
+
+    asyncio.run(scenario())

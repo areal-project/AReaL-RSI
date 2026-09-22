@@ -77,6 +77,18 @@ def prepare_trial(item: tuple[dict[str, Any], dict[str, Any]]) -> dict[str, Any]
                     else HERE / "v0.2.1.4/profiles" / profile["id"].rsplit("/", 1)[-1]
                 )
                 profile.update(load_resources(directory))
+        if row.get("researcher_skills"):
+            if "researcher_skills" not in row["modules"]:
+                raise ValueError("技能配置需要 researcher_skills 模块")
+            from areal_rsi.coordination.profile_resources import load_resources
+
+            profiles = {p["id"]: p for p in config["metadata"]["researcher_profiles"]}
+            for identifier, source in row["researcher_skills"].items():
+                directory = HERE / source
+                profiles[identifier]["resources"] = {
+                    f"skills/{directory.name}/{name}": body
+                    for name, body in load_resources(directory)["resources"].items()
+                }
     write_json(path, config, immutable=True)
     return {"run_id": row["run_id"], "prepared": True}
 

@@ -403,7 +403,7 @@ class PackageAgentRuntime:
         self.agent_directories = agent_directories
         self.mcp_registry: dict[str, dict[str, Any]] = {}
         self.sessions: set[PackageSession] = set()
-        self.https_tunnel = HttpsTunnel(base_url)
+        self.https_tunnel = HttpsTunnel(base_url, event_log=self.root / "https-tunnel.jsonl")
 
     async def open(
         self,

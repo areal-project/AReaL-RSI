@@ -8,19 +8,22 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import json
 import socket
 import sys
+import time
 from contextlib import suppress
 from pathlib import Path
 from urllib.parse import urlsplit
 
 
 class _TunnelServer:
-    def __init__(self, base_url: str = "") -> None:
+    def __init__(self, base_url: str = "", *, idle_timeout: float = 300) -> None:
         provider = urlsplit(base_url)
         self.provider = (provider.hostname, provider.port or 443)
         self.server: asyncio.Server | None = None
         self.tasks: set[asyncio.Task[None]] = set()
+        self.idle_timeout = idle_timeout
 
     async def start(self) -> int:
         if self.server is None:
@@ -32,6 +35,11 @@ class _TunnelServer:
         assert task is not None
         self.tasks.add(task)
         remote: asyncio.StreamWriter | None = None
+        pumps: list[asyncio.Task[None]] = []
+        started = time.time()
+        transferred = [0, 0]
+        target = ""
+        outcome = "closed"
         try:
             async with asyncio.timeout(10):
                 header = await reader.readuntil(b"\r\n\r\n")
@@ -57,31 +65,75 @@ class _TunnelServer:
                 writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
                 await writer.drain()
 
-            async def pipe(source: asyncio.StreamReader, destination: asyncio.StreamWriter) -> None:
-                try:
+            # Bound silence across both directions, including TLS/HTTP setup before
+            # Codex's SSE timeout starts. Active long-running streams stay open.
+            loop = asyncio.get_running_loop()
+            async with asyncio.timeout(self.idle_timeout) as deadline:
+
+                async def pipe(
+                    source: asyncio.StreamReader,
+                    destination: asyncio.StreamWriter,
+                    direction: int,
+                ) -> None:
                     while data := await source.read(65536):
                         destination.write(data)
                         await destination.drain()
-                finally:
-                    destination.close()
+                        transferred[direction] += len(data)
+                        deadline.reschedule(loop.time() + self.idle_timeout)
 
-            await asyncio.gather(pipe(reader, remote), pipe(upstream, writer))
+                pumps = [
+                    asyncio.create_task(pipe(reader, remote, 0)),
+                    asyncio.create_task(pipe(upstream, writer, 1)),
+                ]
+                done, _ = await asyncio.wait(pumps, return_when=asyncio.FIRST_COMPLETED)
+                for completed in done:
+                    completed.result()
         except (
             OSError,
             ValueError,
             TimeoutError,
             asyncio.IncompleteReadError,
             asyncio.LimitOverrunError,
-        ):
+        ) as exc:
+            outcome = type(exc).__name__
             if remote is None:
                 writer.write(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
+                with suppress(OSError):
+                    await writer.drain()
         finally:
+            # Finish ordinary EOFs without losing buffered response bytes. Bound
+            # the flush as well: a dead peer must not retain a half-open tunnel.
             writer.close()
             if remote is not None:
                 remote.close()
-            with suppress(ConnectionError):
-                await writer.wait_closed()
+            for pump in pumps:
+                pump.cancel()
+            await asyncio.gather(*pumps, return_exceptions=True)
+            try:
+                with suppress(OSError, TimeoutError):
+                    async with asyncio.timeout(2):
+                        await writer.wait_closed()
+                        if remote is not None:
+                            await remote.wait_closed()
+            finally:
+                writer.transport.abort()
+                if remote is not None:
+                    remote.transport.abort()
             self.tasks.discard(task)
+            print(
+                json.dumps(
+                    {
+                        "at": time.time(),
+                        "started_at": started,
+                        "target": target,
+                        "outcome": outcome,
+                        "bytes_up": transferred[0],
+                        "bytes_down": transferred[1],
+                    }
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
 
     async def close(self) -> None:
         if self.server is not None:
@@ -96,8 +148,9 @@ class _TunnelServer:
 class HttpsTunnel:
     """Own a relay process so synchronous research/UI work cannot stall TLS."""
 
-    def __init__(self, base_url: str = "") -> None:
+    def __init__(self, base_url: str = "", *, event_log: Path | None = None) -> None:
         self.base_url = base_url
+        self.event_log = event_log
         self.process: asyncio.subprocess.Process | None = None
         self.port: int | None = None
         self._lock = asyncio.Lock()
@@ -105,15 +158,18 @@ class HttpsTunnel:
     async def start(self) -> int:
         async with self._lock:
             if self.process is None:
-                self.process = await asyncio.create_subprocess_exec(
-                    sys.executable,
-                    "-I",
-                    str(Path(__file__).resolve()),
-                    self.base_url,
-                    stdin=asyncio.subprocess.PIPE,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.DEVNULL,
-                )
+                with (
+                    self.event_log.open("ab") if self.event_log else open("/dev/null", "ab") as log
+                ):
+                    self.process = await asyncio.create_subprocess_exec(
+                        sys.executable,
+                        "-I",
+                        str(Path(__file__).resolve()),
+                        self.base_url,
+                        stdin=asyncio.subprocess.PIPE,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=log,
+                    )
                 assert self.process.stdout is not None
                 try:
                     self.port = int(await asyncio.wait_for(self.process.stdout.readline(), 10))

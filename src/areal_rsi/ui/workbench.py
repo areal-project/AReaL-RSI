@@ -496,6 +496,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                     "stop": "reason",
                     "delete": "",
                     "retry": "agent_id",
+                    "resume-assignment": "agent_id report_id instruction message_id",
                     "model-settings": "base_url model reasoning_effort backend api_key",
                     "collaboration": "mode modules",
                 }

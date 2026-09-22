@@ -29,6 +29,14 @@ from areal_rsi.modules.runtime_package import PackageAgentRuntime, PackageSessio
 Json = dict[str, Any]
 
 
+def scoped_call_id(delivery_id: str | None, call_id: str) -> str:
+    if delivery_id is None:
+        return call_id
+    return 'delivery_' + hashlib.sha256(
+        json.dumps([delivery_id, call_id]).encode()
+    ).hexdigest()
+
+
 def usage_event(event: Json) -> Json:
     values = event.get("data", {}).get("usage", {})
     normalized = {
@@ -57,6 +65,7 @@ class Conversation:
     incoming: Callable[[], list[Json]] | None = None
     stop_reason: str | None = None
     calls: set[asyncio.Task[Any]] = field(default_factory=set)
+    delivery_id: str | None = None
 
 
 class ResearchRuntime:
@@ -144,7 +153,10 @@ class ResearchRuntime:
                 if name not in catalog:
                     raise ValueError("Tool is not available to this agent")
                 validate(request["arguments"], catalog[name]["parameters"])
-                call = ToolCall(name, request["arguments"], request["call_id"])
+                # MCP request counters can restart between native turns. Scope
+                # effect identities to the durable delivery, not that counter alone.
+                call_id = scoped_call_id(connection.delivery_id, request["call_id"])
+                call = ToolCall(name, request["arguments"], call_id)
                 if connection.sink:
                     await connection.sink(
                         {"type": "tool_started", "name": name, "call_id": call.call_id}
@@ -317,6 +329,7 @@ class ResearchRuntime:
                 (recovery_state or {}).get("agent_id", "research-agent"),
             )
         connection.handler, connection.sink = handler, event_sink
+        connection.delivery_id = message_id
         connection.incoming, connection.stop_reason = incoming_messages, None
         usage: Json = {}
 

@@ -130,6 +130,14 @@ COMMON = [
 ]
 RSI = [
     definition(
+        "resume_assignment",
+        "仅用于误提前提交报告而原任务尚未完成的纠正：明确引用当前报告，在同节点、同会话继续原任务。"
+        "保留报告审计，不创建节点、不改变预算。正常完成阶段后应使用 assign。",
+        agent_id=STRING,
+        report_id=STRING,
+        instruction=STRING,
+    ),
+    definition(
         "read_agent_skill",
         "读取本次实验为当前角色冻结的 skill 或引用文件，不读取其他角色或候选工作区。",
         path=STRING,
@@ -615,6 +623,8 @@ class ResearchActions:
             result = c.spawn(**values) if name == "spawn_researcher" else c.assign(**values)
             await self.initialize_workspace(result["agent_id"])
             return ToolResult(result)
+        if name == "resume_assignment":
+            return ToolResult({"message_id": c.resume_assignment(**args, key=key)})
         if name == "message_researcher":
             return ToolResult(
                 {

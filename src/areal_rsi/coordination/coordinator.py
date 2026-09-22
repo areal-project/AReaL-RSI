@@ -736,6 +736,45 @@ class Coordinator:
         )
         return {"agent_id": agent_id, "iteration_id": node_id, "assignment_id": assignment_id}
 
+    def resume_assignment(
+        self, agent_id: str, *, report_id: str, instruction: str, key: str
+    ) -> str:
+        """Explicitly correct a premature report without allocating another node."""
+        if self.state["status"] != "running" or agent_id in {"rsi", "interaction"}:
+            raise ValueError("Resume requires a running research assignment")
+        if not instruction.strip():
+            raise ValueError("Resume requires an explicit continuation instruction")
+        actor = self.actor(agent_id)
+        node = next(
+            (n for n in actor.iterations if n.iteration_id == actor.current_iteration_id), None
+        )
+        if node is None or actor.state != AgentState.WAITING:
+            raise ValueError("Only a waiting researcher can resume its assignment")
+        expected = self.store.paths.reference(self.store.root / "reports" / f"{report_id}.json")
+        if (
+            node.report_ref is None
+            and expected in node.references
+            and node.state == IterationState.RUNNING
+            and actor.wait_reason == "assignment"
+        ):
+            report = self.store.get("reports", report_id, ResearchReport)
+            if report.iteration_id == node.iteration_id:
+                return self.message_researcher(agent_id, instruction, key=key)
+        if node.report_ref != expected:
+            raise ValueError("Resume must identify the current assignment's report")
+        # Keep the immutable report both on disk and in the node's evidence chain.
+        if expected not in node.references:
+            node.references = (*node.references, expected)
+        node.report_ref = None
+        node.state, node.updated_at = IterationState.RUNNING, now()
+        actor.wait_reason = "assignment"
+        self.save_actor(actor)
+        self.store.event(
+            "assignment_resumed", agent_id=agent_id, iteration_id=node.iteration_id,
+            report_id=report_id, reason=instruction,
+        )
+        return self.message_researcher(agent_id, instruction, key=key)
+
     def pending_updates(self, agent_id: str) -> list[str]:
         actor = self.actor(agent_id)
         node = next(n for n in actor.iterations if n.iteration_id == actor.current_iteration_id)

@@ -1138,6 +1138,15 @@ class ResearchApp:
                     raise ValueError("This run cannot be resumed")
                 active = await self.attach(c)
                 active.engine.wake()
+        elif action == "resume-assignment":
+            async with self.run_lock(c):
+                c = self.coordinator(c.store.run_id)
+                c.resume_assignment(
+                    params["agent_id"], report_id=params["report_id"],
+                    instruction=params["instruction"], key=params["message_id"],
+                )
+                active = await self.attach(c)
+                active.engine.wake()
         elif action == "retry":
             async with self.run_lock(c):
                 c = self.coordinator(c.store.run_id)

@@ -109,6 +109,9 @@ class GuidedPassKActions(PassKActions):
             if target not in {actor.agent_id for actor in self.c.store.run().research_agents}:
                 raise ValueError("Unknown researcher")
             if name == "advise_researcher":
+                goal = self.c.state.goals.get(target)
+                if goal is not None and goal.status == "completed":
+                    raise ValueError("该研究员已完成目标；需要新工作时由用户调整目标")
                 refs = self.handoff_refs(args["message"], args["references"])
                 message_id = self.c.enqueue(
                     "rsi",

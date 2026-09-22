@@ -234,7 +234,7 @@ def test_independent_records_jobs_and_identical_snapshots(tmp_path: Path) -> Non
         assert result.output["withdrawn"]
         assert c.store.is_withdrawn(first.candidate_id)
         assert not c.store.is_withdrawn(second.candidate_id), "One attempt must not prune another"
-        assert len(c.state.inboxes["rsi"]) == 1  # Initial launch request only.
+        assert not c.state.inboxes.get("rsi")  # Code-backed RSI needs no model delivery.
 
     asyncio.run(scenario())
 
@@ -302,6 +302,9 @@ def test_all_attempts_continue_and_cancel_at_original_deadline(
         original = c.state.started_at
         await launch(c, actions)
         assert len(c.store.run().research_agents) == 3
+        c.state.rsi_model_enabled = leader_busy
+        if leader_busy:
+            c.enqueue("system", "rsi", "Supervise", key="supervisor")
         runtime = ScriptedRuntime(leader_busy)
         assert original is not None
         clock = datetime.fromisoformat(original).timestamp()
@@ -319,7 +322,7 @@ def test_all_attempts_continue_and_cancel_at_original_deadline(
                     await asyncio.sleep(0.01)
             assert all(len(c.actor(a).iterations) == 1 for a in agents)
             assert len(list((c.store.root / "reports").glob("*.json"))) == 3
-            assert "rsi" in runtime.calls
+            assert ("rsi" in runtime.calls) == leader_busy
             clock += 61
             await engine.tick()
             assert set(agents) == runtime.cancelled
@@ -386,10 +389,12 @@ def test_workbench_mode_stops_and_accepts_user_messages(tmp_path: Path) -> None:
             c = system.coordinator(detail["run_id"])
             await system.start(c.store.run_id)
             c = system.coordinator(detail["run_id"])
-            await system.call("chat", {"run_id": c.store.run_id, "text": "check progress"})
+            await system.active[c.store.run_id].engine.tick()
+            await system.call("chat", {"run_id": c.store.run_id, "text": "check progress",
+                                       "recipient": c.store.run().research_agents[0].agent_id})
             await asyncio.wait_for(system.active[c.store.run_id].task, 5)
             assert c.state.status == "stopped"
-            assert len(set(runtime.calls)) == 4  # RSI plus the fixed three attempts.
+            assert len(set(runtime.calls)) == 3  # Only the fixed three researchers call the model.
             assert len(c.store.run().research_agents) == 3
             assert (
                 json.loads((c.store.root / "coordination/started-config.json").read_text())["mode"]
@@ -476,6 +481,8 @@ def test_supervisor_reports_do_not_block_or_share_research(tmp_path: Path) -> No
         ):
             denied = await leader(ToolCall(name, {}, name))
             assert "error" in denied.output
+        assert actions.definitions("rsi") == []
+        c.state.rsi_model_enabled = True  # Optional model-backed RSI uses the same role.
         assert {tool["name"] for tool in actions.definitions("rsi")} == {
             "get_state",
             "start_researchers",

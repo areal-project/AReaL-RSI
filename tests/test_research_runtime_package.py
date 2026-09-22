@@ -526,8 +526,8 @@ def test_native_codex_passk_launches_independent_attempts_and_stops_on_result(
             c = system.coordinator(created["run_id"])
             active = system.active[c.store.run_id]
             # Model tool behavior is covered by the supervisor scheduler test;
-            # this fixture answers text only, while all four native processes run.
-            await active.actions.handler("rsi")(ToolCall("start_researchers", {}, "launch"))
+            # this fixture answers text only; the code-backed RSI starts three native processes.
+            await active.engine.tick()
             async with asyncio.timeout(25):
                 while True:
                     agents = {actor.agent_id for actor in c.store.run().research_agents}
@@ -544,9 +544,9 @@ def test_native_codex_passk_launches_independent_attempts_and_stops_on_result(
             active = system.active[c.store.run_id]
             runtime = active.engine.runtime
             assert isinstance(runtime, ResearchRuntime)
-            assert len(runtime.conversations) == 4
+            assert len(runtime.conversations) == 3
             processes = [item.session.process for item in runtime.conversations.values()]
-            assert len({process.pid for process in processes}) == 4
+            assert len({process.pid for process in processes}) == 3
             for request in model.requests:
                 state = json.dumps(request["input"], ensure_ascii=False)
                 if "负责启动并监督" in state:
@@ -575,7 +575,7 @@ def test_native_codex_passk_launches_independent_attempts_and_stops_on_result(
             assert all(process.returncode is not None for process in processes)
             assert c.state.passk_target is not None
             assert c.state.passk_target.result.candidate_id == candidate.candidate_id
-            assert list(c.store.paths.agent("rsi").glob("sessions/*/runtime/request.json"))
+            assert not list(c.store.paths.agent("rsi").glob("sessions/*/runtime/request.json"))
             assert c.state.total_tokens > 0
         finally:
             await system.close()

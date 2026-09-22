@@ -28,12 +28,14 @@ def test_team_reads_and_targeted_advice_preserve_independent_attempts(tmp_path: 
         source, target, other = agents
         plan = build_plan("passk", ("leader_guidance",))
         actions = plan.actions(c)
-        assert isinstance(actions, GuidedPassKActions) and plan.engine is PassKEngine
+        assert isinstance(actions, GuidedPassKActions)
         assert build_plan("passk").actions is PassKActions
         assert "advise_researcher" not in {t["name"] for t in baseline.definitions("rsi")}
         assert not {"assign", "stop_researcher", "run_job", "share_evidence"} & {
             t["name"] for t in actions.definitions("rsi")
         }
+        c.state.rsi_model_enabled = True
+        c.enqueue("system", "rsi", "Review progress", key="leader-start")
         for agent in ["rsi", *agents]:
             c.begin_turn(agent)
         (actions.workspace(source) / "kernel.py").write_text("# original experiment\n")

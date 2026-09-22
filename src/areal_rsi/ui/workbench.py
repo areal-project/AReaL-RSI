@@ -58,7 +58,7 @@ def _refs(value: Any) -> list[Json]:
 
 
 def _collaboration(value: Any) -> Json:
-    result = _fields(value, "mode modules label editable supported")
+    result = _fields(value, "mode modules max_agents rsi_model_enabled label editable supported")
     frozen = value.get("manifest") if isinstance(value, dict) else None
     result["manifest"] = None
     if isinstance(frozen, dict):
@@ -128,8 +128,9 @@ def _brief(value: Any) -> Json:
 
 
 def _goal(value: Any) -> Json | None:
-    return _fields(value, "status summary current_step next_steps acceptance evidence "
-                         "blocker updated_at revision") if isinstance(value, dict) else None
+    return (_fields(value, "status summary current_step next_steps acceptance evidence "
+                           "blocker updated_at revision candidate_id")
+            if isinstance(value, dict) else None)
 
 
 def public_detail(value: Json) -> Json:
@@ -141,6 +142,7 @@ def public_detail(value: Json) -> Json:
     )
     result["brief"] = _brief(value.get("brief"))
     result["goal"] = _goal(value.get("goal"))
+    result["goals"] = {key: _goal(goal) for key, goal in value.get("goals", {}).items()}
     human = value.get("human", {})
     result["human"] = {
         **_fields(human, "paused_agents assisted verification_current"),
@@ -162,7 +164,8 @@ def public_detail(value: Json) -> Json:
     result["goal_turns_next"] = value.get("goal_turns_next")
     result["goal_turns"] = [
         {
-            **_fields(turn, "number started_at finished_at status output last_tool tool_running "
+            **_fields(turn, "number agent_id started_at finished_at status output last_tool "
+                            "tool_running "
                             "tools_completed error tokens_before tokens_after"),
             "brief": _brief(turn.get("brief")),
             "inputs": [_fields(message, "message_id sender text created_at")
@@ -233,6 +236,7 @@ def public_detail(value: Json) -> Json:
             "assignment_id instruction completion_criteria created_at reply_to_report_id",
         )
         entry["assignment"]["references"] = _refs((node.get("assignment") or {}).get("references"))
+        entry["goal"] = _goal(node.get("goal"))
         entry["report"] = _report(node.get("report"))
         entry["reports"] = [
             _report(report) for report in node.get("reports", []) if isinstance(report, dict)
@@ -433,7 +437,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                             "base_url model reasoning_effort backend auth_mode has_credentials",
                         ),
                         "default_collaboration": _fields(
-                            raw.get("default_collaboration"), "mode modules"
+                            raw.get("default_collaboration"), "mode modules max_agents"
                         ),
                         "collaboration_catalog": {
                             "presets": [

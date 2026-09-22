@@ -41,7 +41,7 @@ def test_default_config_and_unimplemented_modules() -> None:
     ResearchSystem.select_collaboration(config, {"mode": "passk", "modules": []})
     restored = config_from_dict(config.public())
     plan = build_plan(restored.mode, restored.collaboration_modules)
-    assert plan.actions is PassKActions and plan.engine is PassKEngine
+    assert plan.actions is PassKActions
     assert plan.supervisor_only
     assert restored.brief.limits.max_wall_seconds is None
     assert restored.brief.limits.max_total_tokens is None
@@ -77,7 +77,7 @@ def test_selection_rebuilds_runtime_and_freezes_versions(
             active = system.active[c.store.run_id]
             assert active is not original
             assert isinstance(active.actions, plan.actions)
-            assert isinstance(active.engine, plan.engine)
+            assert isinstance(active.engine, PassKEngine)
             assert active.engine.rsi_prompt == plan.rsi_prompt
             assert active.engine.research_prompt == plan.research_prompt
             assert "你的默认工作区" in active.engine.tools_factory("rsi").instructions
@@ -154,11 +154,13 @@ def test_http_selection_and_historical_read_only_projection(tmp_path: Path) -> N
         client.token = bootstrap["csrf_token"]
         assert bootstrap["default_collaboration"]["modules"] == list(DEFAULT_MODULES)
         assert {m["id"] for m in bootstrap["collaboration_catalog"]["modes"]} == {
-            "passk", "pass1"
+            "passk"
         }
         assert "leader_guidance" in {m["id"] for m in bootstrap["collaboration_catalog"]["modules"]}
         assert bootstrap["collaboration_catalog"]["presets"][1]["modules"] == ["leader_guidance"]
-        assert bootstrap["collaboration_catalog"]["presets"][2]["modules"] == list(DEFAULT_MODULES)
+        assert bootstrap["collaboration_catalog"]["presets"][2]["modules"] == [
+            "leader_guidance", "leader_guidance_v022"
+        ]
         detail = client.request(
             "/api/runs",
             {

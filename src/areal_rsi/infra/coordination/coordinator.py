@@ -353,7 +353,7 @@ class Coordinator:
         researchers = {a.agent_id for a in self.store.run().research_agents}
         allowed = {"rsi", "interaction"}
         if self.state.mode == "passk" and self.state.started_at:
-            allowed = {"rsi", *researchers}
+            allowed = researchers | ({"rsi"} if self.state.rsi_model_enabled else set())
         if recipient is not None and recipient not in allowed:
             raise ValueError("请选择当前任务中的有效接收者")
         if recipient in researchers and self.actor(recipient).state == AgentState.STOPPED:
@@ -385,11 +385,17 @@ class Coordinator:
                 if recipient is not None and recipient != question.agent_id:
                     raise ValueError("回复必须发送给原提问者")
                 recipient = question.agent_id
-        recipient = recipient or ("rsi" if self.state.mode == "pass1" else "interaction")
-        if self.state.mode == "pass1" and recipient != "rsi":
-            raise ValueError("RSI pass1 的消息应发给 RSI Agent")
-        if recipient == "rsi" and self.state.started_at is None and self.state.mode != "pass1":
-            raise ValueError("研究尚未开始，请先与 Interaction 确认需求")
+        if recipient is None:
+            if not self.state.started_at:
+                recipient = "interaction"
+            elif len(researchers) == 1:
+                recipient = next(iter(researchers))
+            elif self.state.rsi_model_enabled:
+                recipient = "rsi"
+            else:
+                raise ValueError("请选择要指导的研究员；全局变更请使用调整目标")
+        if recipient == "rsi" and self.state.started_at is None:
+            raise ValueError("研究尚未开始，请先确认需求")
         message_id = self.enqueue("user", recipient, text, key=key, reply_to=reply_to)
         if previous is None and self.actor(recipient).state == AgentState.FAILED:
             # A new user instruction is an explicit request to continue, not a
@@ -397,10 +403,10 @@ class Coordinator:
             self.retry_agent(recipient)
         # The archived reply is authoritative if a process stopped between these writes.
         self.state.waiting_for_user = self.user_questions()
-        if self.state.goal is not None and previous is None:
-            self.state.goal.status, self.state.goal.blocker = "active", ""
-            self.state.goal.updated_at = now()
-            self.state.goal.revision += 1
+        if recipient in self.state.goals and previous is None:
+            goal = self.state.goals[recipient]
+            goal.status, goal.blocker = "active", ""
+            goal.updated_at, goal.revision = now(), goal.revision + 1
         self.save()
         return message_id
 
@@ -414,7 +420,7 @@ class Coordinator:
         run = self.store.run()
         run.state, run.started_at = RunState.RUNNING, self.state.started_at
         self.store.save_run(run)
-        if self.state.mode != "pass1" or not self.state.inboxes.get("rsi"):
+        if self.state.mode != "passk" or self.state.rsi_model_enabled:
             self.enqueue(
                 "interaction",
                 "rsi",
@@ -431,6 +437,8 @@ class Coordinator:
         ready = []
         for actor in self.actors():
             if actor.agent_id in self.state.human.paused_agents:
+                continue
+            if (goal := self.state.goals.get(actor.agent_id)) and goal.status != "active":
                 continue
             if self.state.status == "planned" and actor.agent_id != "interaction":
                 continue
@@ -1157,7 +1165,9 @@ class Coordinator:
         return {
             "run_id": run.run_id,
             "mode": self.state.mode or "collaborative",
-            "goal": encode(self.state.goal),
+            "goal": encode(next(iter(self.state.goals.values()))) if len(self.state.goals) == 1
+            else encode(self.state.goal),
+            "goals": encode(self.state.goals),
             "runtime_turns": self.state.runtime_turns,
             "status": self.state.status,
             "brief": encode(self.store.brief()),

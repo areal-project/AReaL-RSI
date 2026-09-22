@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from typing import Any
 from urllib.parse import urlsplit
 
+from areal_rsi.api.control import validate_record
 from areal_rsi.api.interfaces import ToolCall, ToolHandler, ToolResult
 from areal_rsi.api.records import AgentState, RecordRef, RunState
 from areal_rsi.api.research import (
     CandidateSnapshot,
+    GoalContext,
+    GoalTurn,
     PublishedResult,
     ReportSummary,
     ResearchMessage,
@@ -79,14 +83,21 @@ class PassKActions(ResearchActions):
         if self.c.state.status == "planned" and agent_id == "interaction":
             return super().definitions(agent_id, include_hidden=include_hidden)
         if agent_id == "rsi":
-            return SUPERVISOR_TOOLS
+            return SUPERVISOR_TOOLS if self.c.state.rsi_model_enabled else []
         if agent_id == "interaction":
             return []
         return [
             tool
             for tool in super().definitions(agent_id, include_hidden=include_hidden)
             if tool["name"] in ALLOWED_TOOLS
-        ] + [PROGRESS_TOOL]
+        ] + [PROGRESS_TOOL, definition(
+            "update_goal", "更新本路进展；完成时提供验收证据，缺少必要条件时记录阻塞。",
+            status={"type": "string", "enum": ["active", "blocked", "completed"]},
+            summary=STRING, current_step=STRING,
+            next_steps={"type": "array", "items": STRING},
+            acceptance={"type": "array", "items": STRING},
+            evidence={"type": "array", "items": STRING}, blocker=STRING, candidate_id=STRING,
+        )]
 
     def candidate(
         self, agent_id: str, candidate_id: str, *, seed: bool = True
@@ -174,6 +185,7 @@ class PassKActions(ResearchActions):
                         "state": actor.state,
                         "wait_reason": actor.wait_reason,
                         "needs_continue": needs_continue(c, actor.agent_id),
+                        "goal": encode(c.state.goals.get(actor.agent_id)),
                         "human_paused": actor.agent_id in c.state.human.paused_agents,
                         "human_guided": any(m.sender == "user" and m.recipient == actor.agent_id
                                             for m in c.store.records("messages", ResearchMessage)),
@@ -209,6 +221,7 @@ class PassKActions(ResearchActions):
             "agent_id": agent_id,
             "status": c.state.status,
             "brief": encode(c.store.brief()),
+            "goal": encode(c.state.goals.get(agent_id)),
             "human_guidance": [encode(message) for message in
                                sorted(c.store.records("messages", ResearchMessage),
                                       key=lambda item: item.created_at)
@@ -238,6 +251,55 @@ class PassKActions(ResearchActions):
         }
 
     async def _apply(self, agent_id: str, key: str, name: str, args: dict[str, Any]) -> ToolResult:
+        if name == "update_goal":
+            if self.c.state.status != "running" or agent_id not in self.c.state.goals:
+                raise ValueError("只有运行中的研究员可以更新自己的目标")
+            validate_record(GoalContext, args)
+            goal: GoalContext = decode(GoalContext, args)
+            if not goal.summary.strip():
+                raise ValueError("请提供简明进展")
+            if goal.status == "blocked" and not goal.blocker.strip():
+                raise ValueError("请说明具体阻塞与恢复条件")
+            if goal.status == "completed":
+                if any(job.agent_id == agent_id and not job.processed
+                       for job in self.c.store.research_jobs().values()):
+                    raise ValueError("请先等待或取消本路作业，并收集结果，再完成目标")
+                if any(identifier not in self.c.current_message_ids(agent_id)
+                       and self.c.store.get("messages", identifier, ResearchMessage).sender
+                       == "user"
+                       for identifier in self.c.state.inboxes.get(agent_id, [])):
+                    raise ValueError("请先处理未送达的用户指令")
+                if not any(x.strip() for x in goal.acceptance) or not any(
+                    x.strip() for x in goal.evidence
+                ):
+                    raise ValueError("完成前必须记录验收条件和证据")
+                if not self.c.goal_verification_current and self.c.store.brief().verification:
+                    raise ValueError("新目标尚未确认验收覆盖，不能自动完成")
+                own_best = self.state(agent_id)["best"]
+                selected = goal.candidate_id or (own_best["candidate_id"] if own_best else None)
+                if selected:
+                    self.candidate(agent_id, selected, seed=False)
+                if self.c.store.brief().verification and not selected:
+                    raise ValueError("完成前需要本路的已验证候选")
+                _, selected = self.completion_candidate(
+                    selected, final_confirmation=False, require_verification=True
+                )
+                if selected:
+                    self.candidate(agent_id, selected, seed=False)
+                goal.candidate_id = selected or ""
+            goal.updated_at = now()
+            goal.revision = self.c.state.goals[agent_id].revision + 1
+            self.c.state.goals[agent_id] = goal
+            self.c.save()
+            self.c.store.event("goal_updated", agent_id=agent_id, goal=encode(goal),
+                               summary=goal.summary)
+            if goal.status == "blocked":
+                self.c.wait(agent_id, "goal_blocked")
+                self.c.enqueue(agent_id, "user", goal.blocker, key=key + ":blocked")
+            elif goal.status == "completed":
+                self.c.enqueue(agent_id, "user", goal.summary, key=key + ":completed")
+            return ToolResult({"goal": encode(goal)}, stop=goal.status != "active",
+                              reason=goal.status)
         if name == "start_researchers":
             await launch(self.c, self)
             return ToolResult(self.state("rsi"))
@@ -316,7 +378,8 @@ def needs_continue(c: Coordinator, agent_id: str) -> bool:
         c.state.status == "running"
         and agent_id not in c.state.human.paused_agents
         and actor.state == AgentState.WAITING
-        and actor.wait_reason == "passk_supervision"
+        and actor.wait_reason in {"passk_supervision", "message"}
+        and (goal := c.state.goals.get(agent_id)) is not None and goal.status == "active"
         and agent_id not in c.state.active
         and not c.state.inboxes.get(agent_id)
     )
@@ -333,6 +396,10 @@ async def launch(c: Coordinator, actions: PassKActions) -> None:
         c.state.inboxes[agent_id] = []
         c.state.active.pop(agent_id, None)
     c.save()
+    if not c.state.rsi_model_enabled:
+        rsi = c.actor("rsi")
+        rsi.state, rsi.wait_reason = AgentState.WAITING, "code_coordination"
+        c.save_actor(rsi)
     brief = c.store.brief()
     instruction = (
         "请独立完成下面的完整任务，自行调研、实现、实验和改进，直到系统通知停止。\n\n"
@@ -345,9 +412,10 @@ async def launch(c: Coordinator, actions: PassKActions) -> None:
             key=f"passk-{index + 1}", direction=f"独立探索 {index + 1}", instruction=instruction
         )
         await actions.initialize_workspace(result["agent_id"])
+        c.state.goals.setdefault(result["agent_id"], GoalContext(updated_at=now()))
     c.state.passk_ready = True
     c.save()
-    c.store.event("passk_launched", k=brief.limits.max_agents)
+    c.store.event("passk_launched", agent_id="rsi", k=brief.limits.max_agents)
 
 
 def stop_on_target(c: Coordinator) -> None:
@@ -387,6 +455,80 @@ def stop_on_target(c: Coordinator) -> None:
 
 
 class PassKEngine(ResearchEngine):
+    def __init__(self, *args: Any, **kwargs: Any):
+        super().__init__(*args, **kwargs)
+        self._goal_turns: dict[str, GoalTurn] = {}
+        self._running_tools: dict[str, dict[str, str]] = {}
+
+    def _save_turn(self, agent_id: str) -> None:
+        turn = self._goal_turns.get(agent_id)
+        if turn is not None:
+            turn.context_after = deepcopy(self.coordinator.state.goals.get(agent_id))
+            turn.tokens_after = sum(item.usage.get("total_tokens", 0)
+                                    for item in self.coordinator.state.runtime_usage.values()
+                                    if item.agent_id == agent_id)
+            self.coordinator.store.put("goal-turns", f"{turn.number:08d}", turn, immutable=False)
+
+    async def _event(self, agent_id: str, event: dict[str, Any]) -> None:
+        await super()._event(agent_id, event)
+        turn = self._goal_turns.get(agent_id)
+        if turn is None:
+            return
+        kind = event["type"]
+        tools = self._running_tools[agent_id]
+        if kind == "model_output":
+            turn.output.append(event.get("text", ""))
+        elif kind in {"tool_started", "tool_completed"}:
+            call_id = event.get("call_id") or event.get("name", "tool")
+            if kind == "tool_started":
+                tools[call_id] = event.get("name", "tool")
+            else:
+                tools.pop(call_id, None)
+            turn.last_tool = next(reversed(tools.values()), None)
+            turn.tool_running = bool(tools)
+        elif kind == "message_injected":
+            message = self.coordinator.store.get("messages", event["message_id"], ResearchMessage)
+            if all(item.message_id != message.message_id for item in turn.inputs):
+                turn.inputs.append(message)
+        elif kind != "runtime_usage":
+            return
+        self._save_turn(agent_id)
+
+    async def _drive(self, agent_id: str) -> None:
+        c = self.coordinator
+        number = c.state.goal_turns_latest.get(agent_id)
+        if number is not None:
+            previous = c.store.get("goal-turns", f"{number:08d}", GoalTurn)
+            if previous.status == "running":
+                previous.status, previous.finished_at = "interrupted", now()
+                previous.last_tool, previous.tool_running = None, False
+                c.store.put("goal-turns", f"{number:08d}", previous, immutable=False)
+        try:
+            await super()._drive(agent_id)
+        finally:
+            turn = self._goal_turns.get(agent_id)
+            if turn is not None:
+                actor, goal = c.actor(agent_id), c.state.goals[agent_id]
+                turn.status = ("completed" if goal.status == "completed" else
+                               "blocked" if goal.status == "blocked" else
+                               "failed" if actor.state == AgentState.FAILED else
+                               "interrupted" if actor.wait_reason in
+                               {"run_paused", "worker_interrupted", "human_paused"}
+                               or c.state.status in {"paused", "stopped"} else
+                               "completed")
+                turn.error, turn.finished_at = actor.error, now()
+                turn.last_tool, turn.tool_running = None, False
+                self._save_turn(agent_id)
+                if goal.status != "active":
+                    c.end_turn(agent_id)
+                    actor = c.actor(agent_id)
+                    if actor.state != AgentState.STOPPED:
+                        actor.wait_reason = "goal_" + goal.status
+                        c.save_actor(actor)
+                self._goal_turns.pop(agent_id, None)
+                self._running_tools.pop(agent_id, None)
+
+
     def _check_effective_time(self) -> None:
         if self.effective is None:
             return
@@ -420,8 +562,39 @@ class PassKEngine(ResearchEngine):
     async def tick(self) -> int:
         c = self.coordinator
         self._acquire()
+        if c.state.status == "running" and not c.state.passk_ready:
+            await launch(c, PassKActions(c))
         if c.state.status == "running":
             self._check_effective_time()
+            if not c.state.rsi_model_enabled and c.state.inboxes.get("rsi"):
+                for identifier in c.state.inboxes["rsi"]:
+                    if identifier not in c.state.delivered:
+                        c.state.delivered.append(identifier)
+                        c.store.event("report_received", agent_id="rsi", message_id=identifier)
+                c.state.inboxes["rsi"] = []
+                c.save()
+            agents = c.store.run().research_agents
+            if not c.state.rsi_model_enabled:
+                completed = sum(c.state.goals[a.agent_id].status == "completed" for a in agents)
+                blocked = sum(c.state.goals[a.agent_id].status == "blocked" for a in agents)
+                plan = (f"RSI 自动调度 {len(agents)} 路独立尝试：已完成 {completed} 路，"
+                        f"等待补充 {blocked} 路。收集各路结果并检查停止条件，不自动共享成果。")
+                if c.state.plan != plan:
+                    c.state.plan = plan
+                    c.save()
+            if agents and all(c.state.goals[a.agent_id].status == "completed" for a in agents):
+                selected = next((c.state.goals[a.agent_id].candidate_id for a in agents
+                                 if c.state.goals[a.agent_id].candidate_id), None)
+                best = c.store.run().best_result_ref
+                c.select_candidate(
+                    c.store.public_record(best)["candidate_id"] if best else selected
+                )
+                c.stop("所有独立尝试均已完成并记录验收证据")
+                c.state.status = "succeeded"
+                c.save()
+                run = c.store.run()
+                run.state = RunState.SUCCEEDED
+                c.store.save_run(run)
         if c.state.status == "running" and self._wall_reason() is None:
             retries = c.state.passk_retries
             for actor in (c.actor("rsi"), *c.store.run().research_agents):
@@ -439,30 +612,24 @@ class PassKEngine(ResearchEngine):
                     c.save()
             for actor in c.store.run().research_agents:
                 if needs_continue(c, actor.agent_id):
-                    report = c.state.passk_reports[actor.agent_id]
+                    report = c.state.passk_reports.get(actor.agent_id)
                     c.enqueue(
                         "system",
                         actor.agent_id,
                         CONTINUE_MESSAGE,
-                        key="passk-continue:" + report.uri,
+                        key="passk-continue:" + actor.agent_id + ":"
+                        + (report.uri if report else
+                           str(c.state.goal_turns_latest.get(actor.agent_id, 0))),
                     )
-            if (
-                "rsi" not in c.state.active
-                and not c.state.inboxes.get("rsi")
-                and not c.state.passk_ready
-                and self.clock() >= c.state.passk_supervision_at + 30
-            ):
-                c.state.passk_supervision_at = self.clock()
-                c.enqueue(
-                    "system",
-                    "rsi",
-                    "请检查研究状态，启动研究员。",
-                    key=f"passk-supervision:{self.clock()}",
-                )
         return await super().tick()
 
     def _actor_allowed(self, agent_id: str) -> bool:
-        if agent_id in self.coordinator.state.human.paused_agents:
+        c = self.coordinator
+        if agent_id in c.state.human.paused_agents:
+            return False
+        if agent_id == "rsi" and not c.state.rsi_model_enabled:
+            return False
+        if (goal := c.state.goals.get(agent_id)) and goal.status != "active":
             return False
         if self.coordinator.state.status == "planned":
             return agent_id == "interaction"
@@ -474,6 +641,22 @@ class PassKEngine(ResearchEngine):
     def _recovery_state(self, agent_id: str) -> dict[str, Any]:
         if agent_id == "interaction":
             return super()._recovery_state(agent_id)
+        c = self.coordinator
+        if agent_id in c.state.goals and agent_id not in self._goal_turns:
+            c.state.goal_turn_count += 1
+            number = c.state.goal_turn_count
+            self._running_tools[agent_id] = {}
+            self._goal_turns[agent_id] = GoalTurn(
+                number, now(), c.store.brief(),
+                [c.store.get("messages", key, ResearchMessage)
+                 for key in c.current_message_ids(agent_id)],
+                deepcopy(c.state.goals[agent_id]),
+                sum(item.usage.get("total_tokens", 0) for item in c.state.runtime_usage.values()
+                    if item.agent_id == agent_id), agent_id=agent_id,
+            )
+            self._save_turn(agent_id)
+            c.state.goal_turns_latest[agent_id] = number
+            c.save()
         state = PassKActions(self.coordinator).state(agent_id)
         # Native history retains the task and evidence. Repeating the complete
         # node reference list after every tool/turn makes context grow quadratically.
@@ -496,7 +679,7 @@ class PassKEngine(ResearchEngine):
             [],
         )
         c.end_turn(agent_id)
-        if c.state.status == "running":
+        if c.state.status == "running" and c.state.goals[agent_id].status == "active":
             actor = c.actor(agent_id)
             actor.state, actor.wait_reason = AgentState.WAITING, "passk_supervision"
             c.save_actor(actor)

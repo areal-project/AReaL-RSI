@@ -136,7 +136,7 @@ def test_workspace_creation_uses_server_context_and_user_requirements(
             assert c.state.status == "planned" and not app.active
             await app.create({"run_id": "single", "message": request, "use_workspace": True,
                               "wall_seconds": 3600,
-                              "collaboration": {"mode": "pass1", "modules": []}})
+                              "collaboration": {"mode": "passk", "modules": [], "max_agents": 1}})
             brief = app.coordinator("single").store.brief()
             assert brief.limits.max_agents == 1 and brief.limits.max_wall_seconds == 3600
             registered["profile_id"] = "other"

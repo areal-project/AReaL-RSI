@@ -159,7 +159,7 @@ def test_conversation_can_bind_real_cpu_execution_without_template_or_baseline(
             frozen = json.loads((c.store.root / "coordination/started-config.json").read_text())
             assert frozen["brief"]["objective"] == brief.objective
             assert frozen["execution_env"]["RSI_TEST_VALUE"] == "真实进程输出"
-            await active.actions.handler("rsi")(ToolCall("start_researchers", {}, "spawn"))
+            await active.engine.tick()
             researcher = c.store.run().research_agents[0].agent_id
             job = await active.actions.handler(researcher)(
                 ToolCall(

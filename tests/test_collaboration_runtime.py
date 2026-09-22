@@ -11,7 +11,7 @@ import pytest
 
 from areal_rsi.infra.coordination.config import ResearchConfig
 from areal_rsi.infra.coordination.engine import ResearchEngine
-from areal_rsi.infra.coordination.policies.collaboration import DEFAULT_MODULES, build_plan
+from areal_rsi.infra.coordination.policies.collaboration import build_plan
 from areal_rsi.infra.coordination.tools.brief import PASSK_HIDDEN_LIMITS, brief_tool
 from areal_rsi.infra.research import ResearchSystem
 from areal_rsi.infra.runtime.research_runtime import ResearchRuntime
@@ -46,7 +46,8 @@ def test_mode_changes_preserve_intake_with_fresh_native_sessions(
             )
             c = system.coordinator(detail["run_id"])
             sessions: list[Path] = []
-            for index, modules in enumerate(((), ("leader_guidance",), DEFAULT_MODULES)):
+            recipes = ((), ("leader_guidance",), ("leader_guidance", "leader_guidance_v022"))
+            for index, modules in enumerate(recipes):
                 if index:
                     if index == 2:
                         await system.close()

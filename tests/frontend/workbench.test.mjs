@@ -120,15 +120,15 @@ test('collaboration selection saves before start, stays per run, and locks histo
   assert.match(ui.$('collaboration-summary').textContent, /已锁定/);
   assert.match(ui.$('collaboration-status').textContent, /历史研究/);
   ui.switchRun('a'); await settle();
-  assert.match(ui.$('collaboration-mode-trigger').textContent, /pass1/);
+  assert.match(ui.$('collaboration-mode-trigger').textContent, /pass@1/);
   ui.submit('collaboration-form'); await settle();
-  assert.deepEqual(ui.calls.find((call) => call.path.endsWith('/collaboration')).body, {mode: 'pass1', modules: []});
+  assert.deepEqual(ui.calls.find((call) => call.path.endsWith('/collaboration')).body, {mode: 'passk', modules: [], max_agents: 1});
   assert.equal(ui.$('save-collaboration').disabled, true);
   ui.$('reuse-collaboration').click();
-  assert.match(ui.$('create-collaboration-mode-trigger').textContent, /pass1/);
+  assert.match(ui.$('create-collaboration-mode-trigger').textContent, /pass@1/);
 });
 
-test('creation offers only passk and pass1, without hidden coordination modules', async (t) => {
+test('creation offers pass@1 and pass@k with one execution mode, without hidden coordination modules', async (t) => {
   let submitted;
   const records = {a: run('a')};
   const ui = await setup(t, records, (path, options) => {
@@ -149,10 +149,10 @@ test('creation offers only passk and pass1, without hidden coordination modules'
   assert.equal(ui.$('collaboration-modules'), null);
   ui.$('create-collaboration-mode-trigger').click();
   const options = [...ui.$('create-collaboration-mode-options').querySelectorAll('[role="option"]')];
-  assert.deepEqual(options.map((item) => item.textContent.replace('✓', '').trim()), ['pass@k', 'pass1']);
+  assert.deepEqual(options.map((item) => item.textContent.replace('✓', '').trim()), ['pass@k', 'pass@1']);
   options[0].click();
   ui.submit('create-form'); await settle();
-  assert.deepEqual(submitted.collaboration, {mode: 'passk', modules: []});
+  assert.deepEqual(submitted.collaboration, {mode: 'passk', modules: [], max_agents: 2});
 });
 
 test('historical coordination is preserved but reuse creates a plain passk task', async (t) => {
@@ -174,7 +174,7 @@ test('historical coordination is preserved but reuse creates a plain passk task'
   ui.$('reuse-collaboration').click();
   ui.submit('create-form'); await settle();
   assert.deepEqual(ui.calls.find((call) => call.path === '/api/runs' && call.options.method === 'POST').body.collaboration,
-    {mode: 'passk', modules: []});
+    {mode: 'passk', modules: [], max_agents: 2});
 });
 
 test('retired collaboration stays viewable without execution or reuse controls', async (t) => {
@@ -405,11 +405,12 @@ test('agent timeline grows down and shares use distinct reserved rows with inspe
   assert.equal(new Set(paths).size, 2);
 });
 
-test('pass1 goal context updates while running and clears when switching to passk', async (t) => {
+test('single-researcher goal context updates and clears when switching tasks', async (t) => {
   const a = run('a', 'running');
-  a.collaboration = {...a.collaboration, mode: 'pass1', label: 'RSI pass1'};
+  a.collaboration = {...a.collaboration, mode: 'passk', max_agents: 1, label: 'pass@1'};
+  a.started_at = '2026-09-21T10:00:00Z';
   a.brief.instructions = '修复失败测试，保持 API 不变';
-  a.agents = [{agent_id: 'rsi', state: 'running'}];
+  a.agents = [{agent_id: 'research_one', state: 'running'}];
   a.goal = {status: 'active', summary: '已定位失败', current_step: '修复实现',
     next_steps: ['运行测试'], acceptance: ['全部测试通过'], evidence: [], blocker: '',
     revision: 1, updated_at: '2026-09-21T10:00:00Z'};
@@ -417,7 +418,7 @@ test('pass1 goal context updates while running and clears when switching to pass
   const ui = await setup(t, records, (path) => {
     if (path.endsWith('/cancel')) {
       a.status = 'paused';
-      a.agents[0] = {agent_id: 'rsi', state: 'waiting', wait_reason: 'user_cancelled'};
+      a.agents[0] = {agent_id: 'research_one', state: 'waiting', wait_reason: 'user_cancelled'};
       return response(a);
     }
     if (path === '/api/bootstrap') return response({csrf_token: 'test', default_model_settings: defaults,
@@ -427,7 +428,7 @@ test('pass1 goal context updates while running and clears when switching to pass
   });
   assert.equal(ui.$('goal-context').hidden, false);
   assert.equal(ui.$('goal-current-step').textContent, '修复实现');
-  assert.match(ui.$('chat-input-label').textContent, /RSI Agent/);
+  assert.match(ui.$('chat-input-label').textContent, /Research Agent/);
   assert.match(ui.$('chat-feedback').textContent, /正在执行目标/);
   assert.equal(ui.$('cancel-turn').hidden, false);
   ui.input('chat-input', '保留草稿');
@@ -441,12 +442,12 @@ test('pass1 goal context updates while running and clears when switching to pass
   assert.match(ui.$('chat-feedback').textContent, /当前执行已取消/);
   assert.equal(ui.$('chat-input').value, '保留草稿');
   assert.equal(ui.$('cancel-turn').hidden, true);
-  a.status = 'running'; a.agents[0] = {agent_id: 'rsi', state: 'running'};
+  a.status = 'running'; a.agents[0] = {agent_id: 'research_one', state: 'running'};
   await ui.poll();
-  a.events.push({sequence: 121, kind: 'assistant_output', agent_id: 'rsi',
+  a.events.push({sequence: 121, kind: 'assistant_output', agent_id: 'research_one',
     data: {text: '已定位视觉输入限制 <script>unsafe</script>'}});
   a.goal_turns = [{number: 1, status: 'running', started_at: '2026-09-21T10:00:00Z', inputs: []}];
-  a.messages.push({message_id: 'followup', sender: 'user', recipient: 'rsi', text: '使用远程目录', created_at: '2026-09-21T10:01:00Z'});
+  a.messages.push({message_id: 'followup', sender: 'user', recipient: 'research_one', text: '使用远程目录', created_at: '2026-09-21T10:01:00Z'});
   await ui.poll();
   assert.match(ui.$('chat-feedback').textContent, /已定位视觉输入限制/);
   assert.equal(ui.$('chat-feedback').querySelector('script'), null);
@@ -469,7 +470,7 @@ test('pass1 goal context updates while running and clears when switching to pass
   assert.doesNotMatch(ui.$('chat-feedback').textContent, /已定位视觉输入限制/);
   ui.$('new-run').click();
   ui.$('create-collaboration-mode-trigger').click();
-  [...ui.$('create-collaboration-mode-options').querySelectorAll('[role="option"]')].find((item) => item.textContent.includes('pass1')).click();
+  [...ui.$('create-collaboration-mode-options').querySelectorAll('[role="option"]')].find((item) => item.textContent.includes('pass@1')).click();
   assert.equal(ui.$('create-message').required, true);
   assert.equal(ui.$('create-submit').textContent, '开始目标');
   assert.match(ui.$('create-description').textContent, /一个 Agent/);
@@ -603,4 +604,22 @@ test('passk routes human guidance to one researcher and revises the shared goal'
   ui.submit('revise-goal-form'); await settle();
   assert.equal(ui.$('objective').textContent, 'New shared goal');
   assert.match(ui.$('human-status').textContent, /v2/);
+});
+
+test('individually completed researchers display completion while peers keep running', async (t) => {
+  const record = run('a', 'running');
+  record.started_at = '2026-09-22T10:00:00Z';
+  record.collaboration.max_agents = 2;
+  record.collaboration.rsi_model_enabled = false;
+  record.goals = {research_1: {status: 'completed', summary: 'done', updated_at: '2026-09-22T10:01:00Z'}};
+  record.agents = [{agent_id: 'rsi', state: 'waiting'}, {agent_id: 'research_1', state: 'waiting'}, {agent_id: 'research_2', state: 'running'}];
+  record.nodes = [1, 2].map((i) => ({iteration_id: `n${i}`, agent_id: `research_${i}`, state: 'running', created_at: record.started_at,
+    assignment: {instruction: 'Independent work'}, goal: record.goals[`research_${i}`]}));
+  const ui = await setup(t, {a: record});
+  const cards = [...ui.$('graph-canvas').querySelectorAll('.agent-summary')];
+  assert.match(cards[0].textContent, /自动调度/);
+  assert.match(cards[1].textContent, /已完成/);
+  assert.equal(cards[1].classList.contains('active-node'), false);
+  assert.equal(cards[2].classList.contains('active-node'), true);
+  assert.match(cards[1].textContent, /1 分 0 秒/);
 });

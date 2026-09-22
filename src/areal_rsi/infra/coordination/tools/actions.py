@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from areal_rsi.api.interfaces import ToolCall, ToolHandler, ToolResult
-from areal_rsi.api.records import AgentState, RecordRef, RunState
+from areal_rsi.api.records import AgentState, RecordRef, ResearchRun, RunState
 from areal_rsi.api.research import CandidateSnapshot, EvidenceRecord, VerifiedResult
 from areal_rsi.infra.coordination.config import config_from_dict
 from areal_rsi.infra.coordination.coordinator import Coordinator, effect_id
@@ -800,52 +800,7 @@ class ResearchActions:
             await self.checkout_candidate(agent_id, candidate, key)
             return ToolResult({"candidate_id": candidate.candidate_id, "checked_out": True})
         if name == "finish":
-            run = c.store.run()
-            contract = c.store.brief().verification
-            selected = args.get("candidate_id") or None
-            selected_ref = run.final_result_ref or run.best_result_ref
-            if selected is None and selected_ref is not None:
-                selected = c.store.public_record(selected_ref)["candidate_id"]
-            if selected is not None:
-                c.store.get("candidates", selected, CandidateSnapshot)
-                if c.store.is_withdrawn(selected):
-                    raise ValueError(
-                        "Selected candidate was withdrawn; repair and verify a new artifact"
-                    )
-            require_final = self.require_final_confirmation()
-            if require_final or (contract is not None and contract.target is not None):
-                if contract is None or selected is None:
-                    raise ValueError("No selected candidate has the required verification")
-                phase = "final" if require_final else "search"
-                results = [
-                    result
-                    for result in c.store.records("verifications", VerifiedResult)
-                    if result.candidate_id == selected
-                    and result.phase == phase
-                    and result.contract_digest == c.store.contract_digest()
-                    and result.simulated == c.state.simulated
-                ]
-                # A newer failed confirmation cannot be hidden by selecting an
-                # older successful attempt of this same candidate.
-                verified = max(results, key=lambda result: result.created_at) if results else None
-                if (
-                    verified is None
-                    or verified.status != "succeeded"
-                    or verified.passed is not True
-                ):
-                    raise ValueError(f"Selected candidate needs a successful {phase} verification")
-                assert verified.score is not None
-                if contract.target is not None and (
-                    (contract.direction == "maximize" and verified.score < contract.target)
-                    or (contract.direction == "minimize" and verified.score > contract.target)
-                ):
-                    raise ValueError(
-                        f"Selected candidate's {phase} score has not reached the target"
-                    )
-                if require_final:
-                    run.final_result_ref = c.store.paths.reference(
-                        c.store.root / "verifications" / f"{verified.result_id}.json"
-                    )
+            run, selected = self.completion_candidate(args.get("candidate_id") or None)
             for actor in run.research_agents:
                 if actor.state != AgentState.STOPPED:
                     c.stop_agent(actor.agent_id, "研究已完成")
@@ -860,6 +815,60 @@ class ResearchActions:
             c.store.event("run_completed", summary=args["summary"])
             return ToolResult({"completed": True}, stop=True, reason="completed")
         raise ValueError("Unknown tool")
+
+    def completion_candidate(
+        self, selected: str | None, *, final_confirmation: bool = True,
+        require_verification: bool = False,
+    ) -> tuple[ResearchRun, str | None]:
+        c = self.c
+        run = c.store.run()
+        contract = c.store.brief().verification
+        selected_ref = run.final_result_ref or run.best_result_ref
+        if selected is None and selected_ref is not None:
+            selected = c.store.public_record(selected_ref)["candidate_id"]
+        if selected is not None:
+            c.store.get("candidates", selected, CandidateSnapshot)
+            if c.store.is_withdrawn(selected):
+                raise ValueError(
+                    "Selected candidate was withdrawn; repair and verify a new artifact"
+                )
+        require_final = self.require_final_confirmation() if final_confirmation else False
+        if require_final or (contract is not None and
+                             (require_verification or contract.target is not None)):
+            if contract is None or selected is None:
+                raise ValueError("No selected candidate has the required verification")
+            phase = "final" if require_final else "search"
+            results = [
+                result
+                for result in c.store.records("verifications", VerifiedResult)
+                if result.candidate_id == selected
+                and result.phase == phase
+                and result.contract_digest == c.store.contract_digest()
+                and result.goal_revision == c.store.brief().revision
+                and result.simulated == c.state.simulated
+            ]
+            # A newer failed confirmation cannot be hidden by selecting an
+            # older successful attempt of this same candidate.
+            verified = max(results, key=lambda result: result.created_at) if results else None
+            if (
+                verified is None
+                or verified.status != "succeeded"
+                or verified.passed is not True
+            ):
+                raise ValueError(f"Selected candidate needs a successful {phase} verification")
+            assert verified.score is not None
+            if contract.target is not None and (
+                (contract.direction == "maximize" and verified.score < contract.target)
+                or (contract.direction == "minimize" and verified.score > contract.target)
+            ):
+                raise ValueError(
+                    f"Selected candidate's {phase} score has not reached the target"
+                )
+            if require_final:
+                run.final_result_ref = c.store.paths.reference(
+                    c.store.root / "verifications" / f"{verified.result_id}.json"
+                )
+        return run, selected
 
     async def candidate_receipt(
         self, agent_id: str, candidate: CandidateSnapshot

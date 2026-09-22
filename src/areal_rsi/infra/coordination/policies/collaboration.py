@@ -13,14 +13,12 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from areal_rsi.infra.coordination.engine import ResearchEngine
     from areal_rsi.infra.coordination.tools.actions import ResearchActions
 
 
 @dataclass(frozen=True)
 class CollaborationPlan:
     actions: type[ResearchActions]
-    engine: type[ResearchEngine]
     research_prompt: str
     rsi_prompt: str
     supervisor_only: bool = False
@@ -39,17 +37,11 @@ class CollaborationModule:
 
 
 MODES = {
-    "pass1": {
-        "id": "pass1",
-        "label": "RSI pass1",
-        "version": "1",
-        "description": "单 Agent 持续推进目标，支持中途指导，实时保存目标上下文。",
-    },
     "passk": {
         "id": "passk",
         "label": "纯 pass@k",
-        "version": "2",
-        "description": "每人独立完成整题；RSI 只启动和督促继续，不指导、不共享。"
+        "version": "3",
+        "description": "每名研究员独立完成整题，系统负责调度；不自动指导或共享。"
         "可按明确设置的时限、达标条件或手动停止；默认不限时，不限制模型调用、Token 和验证次数。",
     },
 }
@@ -67,7 +59,7 @@ def apply_leader_guidance_v022(plan: CollaborationPlan) -> CollaborationPlan:
     return replace(plan, rsi_prompt=PROMPT)
 
 
-DEFAULT_MODULES = ("leader_guidance", "leader_guidance_v022")
+DEFAULT_MODULES: tuple[str, ...] = ()
 
 
 MODULES: dict[str, CollaborationModule] = {
@@ -106,11 +98,10 @@ def presets() -> list[dict[str, Any]]:
             "id": "passk_guided_v022",
             "label": "v0.2.2 · pass@k + RSI 协调",
             "mode": "passk",
-            "modules": list(DEFAULT_MODULES),
+            "modules": ["leader_guidance", "leader_guidance_v022"],
             "description": MODULES["leader_guidance_v022"].description,
         }
     )
-    choices.append({**MODES["pass1"], "mode": "pass1", "modules": []})
     return choices
 
 
@@ -145,20 +136,10 @@ def selected_modules(mode: str, modules: tuple[str, ...]) -> tuple[str, ...]:
 def build_plan(mode: str, modules: tuple[str, ...] = ()) -> CollaborationPlan:
     from areal_rsi.infra.agents.research.passk_prompt import PROMPT as PASSK_RESEARCH_PROMPT
     from areal_rsi.infra.agents.rsi.passk_prompt import PROMPT as PASSK_RSI_PROMPT
-    from areal_rsi.infra.coordination.policies.passk import PassKActions, PassKEngine
+    from areal_rsi.infra.coordination.policies.passk import PassKActions
 
     ordered = selected_modules(mode, modules)
-    if mode == "pass1":
-        from areal_rsi.infra.coordination.policies.pass1 import (
-            PROMPT,
-            Pass1Actions,
-            Pass1Engine,
-        )
-
-        return CollaborationPlan(Pass1Actions, Pass1Engine, PROMPT, PROMPT)
-    plan = CollaborationPlan(
-        PassKActions, PassKEngine, PASSK_RESEARCH_PROMPT, PASSK_RSI_PROMPT, True
-    )
+    plan = CollaborationPlan(PassKActions, PASSK_RESEARCH_PROMPT, PASSK_RSI_PROMPT, True)
     for name in ordered:
         plan = MODULES[name].apply(plan)
     return plan

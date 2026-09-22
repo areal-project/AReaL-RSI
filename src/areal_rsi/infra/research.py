@@ -54,6 +54,7 @@ from areal_rsi.infra.coordination.policies.collaboration import (
     manifest,
     selected_modules,
 )
+from areal_rsi.infra.coordination.policies.passk import PassKEngine
 from areal_rsi.infra.coordination.presets import example_config
 from areal_rsi.infra.coordination.store import ResearchStore
 from areal_rsi.infra.coordination.tools.actions import ResearchActions
@@ -183,6 +184,8 @@ class ResearchSystem:
         frozen = json.loads(path.read_text()) if path.exists() else None
         return {
             "mode": config.mode,
+            "max_agents": config.brief.limits.max_agents,
+            "rsi_model_enabled": bool(config.collaboration_modules),
             "modules": list(config.collaboration_modules),
             "label": MODES.get(config.mode, {"label": "旧版协作（仅供查看）"})["label"],
             "supported": config.mode in MODES,
@@ -196,16 +199,18 @@ class ResearchSystem:
 
     @staticmethod
     def select_collaboration(config: ResearchConfig, values: dict[str, Any]) -> None:
-        if not isinstance(values, dict) or set(values) != {"mode", "modules"}:
+        if (not isinstance(values, dict) or not {"mode", "modules"} <= set(values)
+            or set(values) - {"mode", "modules", "max_agents"}):
             raise ValueError("协作设置需要 mode 和 modules")
         mode, modules = values["mode"], values["modules"]
         if not isinstance(mode, str):
             raise ValueError("协作方式须为名称")
         modules = selected_modules(mode, modules)
         config.mode, config.collaboration_modules = mode, modules
-        if mode == "pass1":
-            config.brief.limits.max_agents = 1
-            config.metadata.setdefault("auto_resume", True)
+        if "max_agents" in values:
+            validate_request("collaboration", {"run_id": "settings", **values})
+            config.brief.limits.max_agents = values["max_agents"]
+            config.brief.limits.__post_init__()
         config.__post_init__()
 
     async def set_collaboration(self, run_id: str, values: dict[str, Any]) -> None:
@@ -225,17 +230,6 @@ class ResearchSystem:
                 config = self.config(c)
                 config.brief = c.store.brief()
                 self.select_collaboration(config, values)
-            if config.mode == "pass1" and config.brief.objective in {
-                "新的研究",
-                "新研究",
-            }:
-                dialogue = sorted(
-                    (m for m in c.store.records("messages", ResearchMessage) if m.sender == "user"),
-                    key=lambda m: m.created_at,
-                )
-                if dialogue:
-                    config.brief.objective = dialogue[0].text
-                    config.brief.instructions = "\n\n".join(m.text for m in dialogue)
             # Budget changes in the preset must also reach the displayed brief.
             run = c.store.run()
             run.brief_ref = c.store.put("briefs", new_id("collaboration"), config.brief)
@@ -249,12 +243,12 @@ class ResearchSystem:
                 config.collaboration_modules,
             ):
                 # The native session freezes its collaboration and tool configuration.
-                self._reset_agent_session(c, "rsi" if config.mode == "pass1" else "interaction")
+                self._reset_agent_session(c, "interaction")
             write_json(c.store.root / "coordination/config.json", config.public())
             c.state.mode = config.mode
-            c.state.goal = GoalContext(updated_at=now()) if config.mode == "pass1" else None
-            if config.mode == "pass1":
-                c.state.intake = IntakeState()
+            c.state.rsi_model_enabled = not build_plan(
+                config.mode, config.collaboration_modules
+            ).supervisor_only
             c.save()
             c.store.event(
                 "collaboration_updated",
@@ -281,7 +275,7 @@ class ResearchSystem:
             # cancellation. Reload them instead of replacing the whole config.
             config = self.config(c)
             if any(settings[field] != getattr(config, field) for field in MODEL_FIELDS):
-                self._reset_agent_session(c, "rsi" if config.mode == "pass1" else "interaction")
+                self._reset_agent_session(c, "interaction")
             for field, value in settings.items():
                 setattr(config, field, value)
             config.pin_model_settings()
@@ -379,9 +373,7 @@ class ResearchSystem:
             if ("development" not in params and not params.get("use_workspace")
                 and (message := str(params.get("message", "")).strip())):
                 previous = self.coordinator(run_id)
-                if previous.state.status == "planned" and previous.state.mode == "pass1":
-                    await self.start(run_id)
-                elif previous.state.status == "planned":
+                if previous.state.status == "planned":
                     await self.send_message(
                         run_id,
                         message,
@@ -428,10 +420,10 @@ class ResearchSystem:
             selected = development.default_profile(self.root, config)
             if selected is None:
                 raise ValueError("当前工作区尚未配置，请先说明要处理的项目")
-            mode = params.get("collaboration", {}).get("mode", config.mode)
+            count = params.get("collaboration", {}).get("max_agents", selected.defaults.parallelism)
             setup = replace(selected.defaults,
                             acceptance=objective,
-                            parallelism=1 if mode == "pass1" else selected.defaults.parallelism,
+                            parallelism=count,
                             wall_seconds=params.get("wall_seconds"))
         if "development" in params:
             validate_record(DevelopmentSetup, params["development"])
@@ -456,17 +448,6 @@ class ResearchSystem:
             )
         if "collaboration" in params:
             self.select_collaboration(config, params["collaboration"])
-        if setup is not None and config.mode == "pass1" and setup.parallelism != 1:
-            raise ValueError("pass1 仅支持一个尝试；并行研发请选择 pass@k")
-        if config.mode == "pass1":
-            if conversation:
-                objective = str(params.get("objective") or params.get("message") or "").strip()
-                if not objective:
-                    raise ValueError("RSI pass1 需要明确目标")
-                config.brief.objective = objective
-                config.brief.instructions = str(params.get("instructions") or objective)
-            conversation = False
-            config.metadata.setdefault("auto_resume", True)
         config.pin_model_settings()
         selected_modules(config.mode, config.collaboration_modules)
         if "model_settings" in params:
@@ -499,8 +480,6 @@ class ResearchSystem:
         c.state.mode = config.mode
         if setup is not None:
             c.state.preparation = ResearchPreparation(setup)
-        if config.mode == "pass1":
-            c.state.goal = GoalContext(updated_at=now())
         c.save()
         if key:
             self.save_credentials(c, config, key)
@@ -743,6 +722,7 @@ class ResearchSystem:
             from areal_rsi.infra.coordination.policies.passk import stop_on_target
 
             c.state.mode = config.mode
+            c.state.rsi_model_enabled = not plan.supervisor_only
             c.save()
             actions = plan.actions(c)
             await actions.initialize_workspace("rsi")
@@ -784,7 +764,7 @@ class ResearchSystem:
                     stop_on_target(c)
                 return pending
 
-            engine = plan.engine(
+            engine = PassKEngine(
                 c,
                 runtime,
                 lambda agent_id: ToolSet(
@@ -1006,31 +986,18 @@ class ResearchSystem:
         async with self.control(run_id, "chat") as c:
             if c.state.preparation is not None and c.state.status == "planned":
                 raise ValueError("请先完成环境预检并启动研发；预检阶段不会启动对话 Agent")
-            if c.state.mode == "passk" and c.state.started_at and recipient is None:
-                recipient = "rsi"
             message_id = c.user_message(
                 text,
                 key=message_id or new_id("user"),
                 reply_to=reply_to,
                 recipient=recipient,
             )
-            if c.state.mode == "pass1" and c.state.status == "planned":
-                brief = c.store.brief()
-                if brief.objective in {"新的研究", "新研究"}:
-                    brief.objective = brief.instructions = text.strip()
-                    run = c.store.run()
-                    run.brief_ref = c.store.put("briefs", new_id("goal"), brief)
-                    run.plan.goal = brief.objective
-                    c.store.save_run(run)
-                await self._start(c, None)
-            else:
-                if (
-                    c.state.mode == "pass1" and c.state.status == "paused"
-                    and c.actor("rsi").wait_reason == "user_cancelled"
-                ):
-                    c.resume()
-                active = await self.attach(c)
-                active.engine.wake()
+            actual_recipient = c.store.get("messages", message_id, ResearchMessage).recipient
+            if (c.state.status == "paused"
+                and c.actor(actual_recipient).wait_reason == "user_cancelled"):
+                c.resume()
+            active = await self.attach(c)
+            active.engine.wake()
         return {"run_id": c.store.run_id, "message_id": message_id, "status": c.state.status}
 
     @staticmethod
@@ -1096,7 +1063,12 @@ class ResearchSystem:
         text = (f"全局目标已更新为 v{change.brief.revision + 1}。以此覆盖旧任务中冲突的要求，"
                 "保留可复用代码；旧成绩仅作历史，需重新验证。先说明调整后的执行计划。\n\n"
                 + change.brief.objective + "\n\n" + change.brief.instructions)
-        for actor in (c.actor("rsi"), *c.store.run().research_agents):
+        for actor in c.store.run().research_agents:
+            c.state.goals[actor.agent_id] = GoalContext(updated_at=now())
+        recipients = list(c.store.run().research_agents)
+        if c.state.rsi_model_enabled:
+            recipients.append(c.actor("rsi"))
+        for actor in recipients:
             c.enqueue("user", actor.agent_id, text,
                       key="goal:" + change.request_id + ":" + actor.agent_id)
         change.applied = True
@@ -1154,17 +1126,20 @@ class ResearchSystem:
             if c.state.preparation is not None and c.state.status == "planned":
                 development.cancel(c)
                 return await self.detail(run_id)
-            if c.state.mode != "pass1" or c.state.status not in {"running", "paused"}:
-                raise ValueError("Only an active pass1 goal can be cancelled")
+            self._human_control(c)
             if c.state.status == "running":
                 c.pause()
             active = self.active.get(c.store.run_id)
             if active:
                 await active.engine.tick()
-            c.end_turn("rsi")
-            actor = c.actor("rsi")
-            actor.state, actor.wait_reason = AgentState.WAITING, "user_cancelled"
-            c.save_actor(actor)
+            for actor in c.store.run().research_agents:
+                c.end_turn(actor.agent_id)
+                actor = c.actor(actor.agent_id)
+                actor.state, actor.wait_reason = AgentState.WAITING, "user_cancelled"
+                c.save_actor(actor)
+                goal = c.state.goals[actor.agent_id]
+                goal.status, goal.blocker = "blocked", "用户已取消当前执行，等待新指令"
+            c.save()
         return await self.detail(c.store.run_id)
 
     async def pause(self, run_id: str) -> dict[str, Any]:
@@ -1197,15 +1172,15 @@ class ResearchSystem:
             if c.state.status not in {"planned", "running", "paused", "stopped"}:
                 raise ValueError("This run cannot be resumed")
             c.state.user_stopped = False
-            if c.state.goal is not None and c.state.goal.status == "blocked":
-                c.state.goal.status, c.state.goal.blocker = "active", ""
-                c.state.goal.updated_at = now()
-                c.state.goal.revision += 1
-            c.save()
-            if self.config(c).needs_finalization and completion:
-                active = await self.attach(c)
-                return await self.detail(c.store.run_id)
             if c.state.status == "paused":
+                for actor in c.store.run().research_agents:
+                    if actor.wait_reason == "user_cancelled":
+                        goal = c.state.goals[actor.agent_id]
+                        goal.status, goal.blocker = "active", ""
+                        actor.wait_reason = "message"
+                        c.save_actor(actor)
+                        c.enqueue("system", actor.agent_id, "用户已恢复执行，请继续最新目标。",
+                                  key=new_id("resume"))
                 c.resume()
             elif c.state.status == "stopped":
                 c.reopen()
@@ -1220,10 +1195,10 @@ class ResearchSystem:
             if c.state.preparation is not None and not c.state.started_at:
                 raise ValueError("请先完成环境预检，再点击开始研究")
             c.retry_agent(agent_id)
-            if c.state.goal is not None and agent_id == "rsi":
-                c.state.goal.status, c.state.goal.blocker = "active", ""
-                c.state.goal.updated_at = now()
-                c.state.goal.revision += 1
+            if agent_id in c.state.goals:
+                goal = c.state.goals[agent_id]
+                goal.status, goal.blocker = "active", ""
+                goal.updated_at, goal.revision = now(), goal.revision + 1
                 c.save()
             active = await self.attach(c)
             active.engine.wake()
@@ -1368,6 +1343,7 @@ class ResearchSystem:
             "collaboration_catalog": catalog(),
             "default_collaboration": {
                 "mode": config.mode,
+                "max_agents": config.brief.limits.max_agents,
                 "modules": list(config.collaboration_modules),
             },
             "development_profiles": development.catalog(self.root),

@@ -104,22 +104,30 @@ const createCollaborationDropdown = new WorkbenchDropdown($("create-collaboratio
     renderCreateCollaboration();
   },
 });
+function isSingleRun(run) {
+  return run.collaboration?.mode === "pass1" ||
+    (run.collaboration?.max_agents ?? run.brief?.limits?.max_agents) === 1;
+}
+function primaryAgent(run) {
+  return (run.agents || []).find((agent) => !["rsi", "interaction"].includes(agent.agent_id))?.agent_id || "rsi";
+}
 function collaborationSelection(value) {
-  return {mode: value.mode, modules: [...(value.modules || [])].sort()};
+  return {mode: value.mode, modules: [...(value.modules || [])].sort(), max_agents: value.max_agents ?? 2};
 }
 function collaborationPresets() {
   return [
-    {id: "passk", mode: "passk", modules: [], label: "pass@k",
+    {id: "passk", mode: "passk", modules: [], max_agents: 2, label: "pass@k",
       description: "多名研究员各自独立完成同一任务，不自动交流成果。你可以分别给予指导。"},
-    {id: "pass1", mode: "pass1", modules: [], label: "pass1",
+    {id: "single", mode: "passk", modules: [], max_agents: 1, label: "pass@1",
       description: "一个 Agent 持续完成任务，你可以随时补充要求或纠正方向。"},
   ];
 }
 function selectCollaborationPreset(id) {
-  return {mode: id === "pass1" ? "pass1" : "passk", modules: []};
+  return {mode: "passk", modules: [], max_agents: id === "single" ? 1 : Math.max(2, state.defaultCollaboration.max_agents || 2)};
 }
 function matchingCollaborationPreset(selection) {
-  return collaborationPresets().find((preset) => preset.mode === selection.mode);
+  return selection.mode === "passk" ? collaborationPresets().find((preset) =>
+    (preset.max_agents === 1) === (selection.max_agents === 1)) : null;
 }
 function collaborationChanged() {
   const draft = state.collaborationDrafts.get(state.runId), saved = state.run?.collaboration;
@@ -127,19 +135,19 @@ function collaborationChanged() {
 }
 function renderCollaborationFields(prefix, dropdown, selection, disabled) {
   const preset = matchingCollaborationPreset(selection);
-  dropdown.update(collaborationPresets().map((item) => ({value: item.id, text: item.label})), selection.mode, disabled);
+  dropdown.update(collaborationPresets().map((item) => ({value: item.id, text: item.label})), preset?.id || selection.mode, disabled);
   $(`${prefix}description`).textContent = selection.modules?.length
     ? "此任务保留原有协作配置；重新选择 pass@k 将使用独立探索。"
     : preset?.description || "此历史任务保留原配置。";
 }
 function renderCreateCollaboration() {
-  const pass1 = state.createCollaboration?.mode === "pass1";
+  const pass1 = state.createCollaboration?.max_agents === 1;
   const development = !!state.workspaceReady;
   $("create-description").textContent = development ? "描述要完成的事情、需要遵守的要求，以及怎样算完成。系统会使用当前项目准备任务。" : pass1 ? "输入目标，由一个 Agent 持续执行；进展会实时显示在页面中。" : "先选择模型，再与 Interaction 聊聊研究目标。";
   $("create-message-label").textContent = "你想完成什么";
   $("create-message-hint").textContent = pass1 || development ? "（必填）" : "（可稍后聊）";
   $("create-message").required = pass1 || development;
-  $("create-start-hint").textContent = development ? "准备好后即可开始；执行中也可以指导研究员或调整目标。" : pass1 ? "创建后直接执行，可随时暂停或补充指令。" : "开始研究前仍可修改配置。";
+  $("create-start-hint").textContent = development ? "准备好后即可开始；执行中也可以指导研究员或调整目标。" : pass1 ? "确认任务后开始，可随时暂停或补充指令。" : "开始研究前仍可修改配置。";
   if (!state.creating) $("create-submit").textContent = development ? "创建任务" : pass1 ? "开始目标" : "创建研究";
   renderCollaborationFields("create-collaboration-", createCollaborationDropdown, state.createCollaboration, state.creating);
 }
@@ -370,6 +378,7 @@ function elapsed(start, end, className = "") {
 }
 function nodeTimes(run, node) {
   const budget = run.budget?.researchers?.[node.agent_id];
+  if (node.goal?.status === "completed") return [budget?.started_at || node.created_at || node.assignment?.created_at, node.goal.updated_at || node.updated_at || run.finished_at];
   if (budget?.started_at) return [budget.started_at, budget.finished_at || run.finished_at];
   const start = node.created_at || node.assignment?.created_at;
   const end = (!activeNode(node) ? node.updated_at || node.report?.created_at : null) || run.finished_at;
@@ -388,7 +397,7 @@ function tickElapsed() {
   }
 }
 const activeJob = (job) => ["pending", "queued", "starting", "running"].includes(job.status);
-const activeNode = (node) => ["pending", "running"].includes(node.state);
+const activeNode = (node) => node.goal?.status !== "completed" && ["pending", "running"].includes(node.state);
 const phaseName = (phase) => ({search: "迭代验证", final: "最终验证", diagnostic: "诊断检查"}[phase] || "验证");
 function jobTitle(job) {
   return job.is_baseline ? "起点评测" : job.title || job.description
@@ -419,6 +428,7 @@ function progressFreshness(job) {
   return `${age > 45000 && activeJob(job) ? "进度暂未更新 · " : "进度更新于 "}${time(updated)}`;
 }
 function agentAction(run, agent) {
+  if (agent.agent_id === "rsi" && run.collaboration?.mode === "passk" && !run.collaboration.rsi_model_enabled) return "代码调度";
   if ((run.human?.paused_agents || []).includes(agent.agent_id)) return "已暂停，等待人工继续";
   const activity = run.agent_activity?.[agent.agent_id];
   if (activity?.type === "model_retry") {
@@ -687,12 +697,12 @@ function render() {
     : run.status === "running" && run.execution_setup === "pending"
     ? "研究中 · 接入准备" : label(run.status);
   $("run-status").className = `status ${run.status}`;
-  $("start").hidden = run.status !== "planned" || (run.preparation ? run.preparation.status !== "ready" : (run.collaboration?.mode !== "pass1" && run.intake?.status !== "ready"));
+  $("start").hidden = run.status !== "planned" || (run.preparation ? run.preparation.status !== "ready" : (!isSingleRun(run) && run.intake?.status !== "ready"));
   $("start").disabled = state.busy || run.agents?.some(
     (agent) => agent.agent_id === "interaction" && agent.state === "running",
   );
   $("pause").hidden = run.status !== "running";
-  $("cancel-turn").hidden = run.collaboration?.mode !== "pass1" || run.status !== "running";
+  $("cancel-turn").hidden = !isSingleRun(run) || run.status !== "running";
   $("cancel-turn").disabled = state.busy;
   $("resume").hidden = run.status !== "paused" && !(run.status === "stopped" && run.started_at) && !needsResume;
   $("resume").hidden ||= ["running", "completed"].includes(run.finalization?.status);
@@ -710,7 +720,7 @@ function render() {
   $("final-score").textContent = score(run.final?.score);
   $("export-candidate").hidden = !(run.final?.candidate_id || run.best?.candidate_id);
   const researchers = ResearchGraph.researchers(run);
-  const pass1 = run.collaboration?.mode === "pass1";
+  const pass1 = isSingleRun(run);
   $("agent-count-label").textContent = pass1 ? "执行 Agent" : "研究员";
   $("node-count").textContent = integer(pass1 ? 1 : researchers.length);
   $("research-graph-card").hidden = $("research-plan-card").hidden = pass1;
@@ -764,7 +774,7 @@ function render() {
 }
 
 function renderGoal(run) {
-  const visible = run.collaboration?.mode === "pass1";
+  const visible = isSingleRun(run);
   $("goal-context").hidden = !visible;
   if (!visible) return;
   const goal = run.goal || {};
@@ -775,7 +785,7 @@ function renderGoal(run) {
   $("goal-instructions").textContent = run.brief?.instructions || run.objective || "";
   $("goal-summary").textContent = goal.summary || "等待 Agent 整理执行上下文…";
   $("goal-current-step").textContent = goal.current_step || "尚未记录当前步骤";
-  const activity = run.agent_activity?.rsi;
+  const activity = run.agent_activity?.[primaryAgent(run)];
   $("goal-activity").textContent = run.status === "running" && activity?.type === "tool_started" && activity.tool ? `正在执行：${activity.tool}` : "";
 
   for (const [field, empty] of [["next_steps", status === "completed" ? "目标已完成，无后续步骤" : status === "blocked" ? "等待补充条件后继续" : "等待整理下一步"], ["acceptance", "等待明确验收条件"], ["evidence", "尚无验收记录"]]) {
@@ -841,7 +851,7 @@ $("prepare-run").addEventListener("click", () => control("prepare"));
 $("cancel-preparation").addEventListener("click", () => control("cancel"));
 
 function renderGoalProgress(run) {
-  const visible = run.collaboration?.mode === "pass1";
+  const visible = isSingleRun(run);
   $("goal-history").hidden = !visible;
   if (!visible) return;
   const history = state.goalHistory.get(run.run_id);
@@ -925,12 +935,13 @@ function renderReplyTarget(run) {
       recipient: q.agent_id,
       reply_to: q.message_id,
     })),
-    ...(run.collaboration?.mode === "pass1" || run.started_at ? [] : [{ value: "interaction", recipient: "interaction", text: "Interaction Agent · 新消息" }]),
-    ...(run.status !== "planned" || run.collaboration?.mode === "pass1"
+    ...(run.started_at ? [] : [{ value: "interaction", recipient: "interaction", text: "Interaction Agent · 新消息" }]),
+    ...(run.started_at && run.collaboration?.rsi_model_enabled
       ? [{ value: "rsi", recipient: "rsi", text: "RSI Agent · 新消息" }] : []),
   ];
   if (run.collaboration?.mode === "passk" && run.started_at)
     choices.push(...(run.agents || []).filter((a) => a.agent_id !== "rsi" && a.agent_id !== "interaction" && a.state !== "stopped").map((a) => ({value: a.agent_id, recipient: a.agent_id, text: `${agentName(a.agent_id)} · 定向指导`})));
+  if (!choices.length) choices.push({value: "interaction", recipient: "interaction", text: "任务已结束"});
   let selected = state.replyTargets.get(run.run_id);
   const hasDraft = !!$("chat-input").value.trim();
   if (!selected || (!hasDraft && !choices.some((c) => c.value === selected.value)))
@@ -989,9 +1000,9 @@ function renderAgentErrors(run) {
 }
 
 function renderIntake(run) {
-  const preparing = run.status === "planned" && !run.preparation && run.collaboration?.mode !== "pass1";
+  const preparing = run.status === "planned" && !run.preparation;
   $("intake-overview").hidden = !preparing;
-  $("node-tab").hidden = run.collaboration?.mode === "pass1" || (preparing && !run.nodes?.length);
+  $("node-tab").hidden = preparing && !run.nodes?.length;
   $("intake-status").textContent = run.intake?.status === "ready" ? "待你确认" : "整理中";
   $("intake-summary").textContent = run.intake?.status === "ready"
     ? run.intake.summary
@@ -1009,6 +1020,10 @@ function renderIntake(run) {
 }
 
 function agentStatus(run, agent) {
+  if (agent.agent_id === "rsi" && run.status === "running" && !run.collaboration?.rsi_model_enabled) return "自动调度";
+  const goal = run.goals?.[agent.agent_id];
+  if (goal?.status === "completed") return "已完成";
+  if (goal?.status === "blocked") return "等待补充条件";
   if (agent.state !== "waiting") return label(agent.state);
   if (agent.wait_reason === "user") return "等待你回复";
   if (agent.wait_reason === "rsi_reply") return "已报告 · 等待 RSI 指令";
@@ -1173,7 +1188,7 @@ function renderGraph(run) {
     const button = element(node ? "button" : "div", `agent-summary ${node ? "graph-node" : "leader-summary"} ${ongoing ? "active-node" : ""} ${selected === node?.iteration_id ? "selected" : ""}`);
     Object.assign(button.style, {left: `${laneX(id) + 20}px`, top: "60px"});
     const top = element("div", "node-top");
-    top.append(element("span", "", "当前状态"), badge(owner?.state || node?.state));
+    top.append(element("span", "", "当前状态"), owner ? element("span", "status", agentStatus(run, owner)) : badge(node?.state));
     button.append(top);
     if (node) {
       button.dataset.node = node.iteration_id;
@@ -1406,6 +1421,11 @@ function renderNode(run) {
   if (budget) timing.append(element("small", "muted", `GPU 排队 ${(budget.gpu_queue_seconds / 60).toFixed(1)} 分钟 · API 故障等待 ${(budget.api_wait_seconds / 60).toFixed(1)} 分钟`));
   if (started) timing.append(element("small", "muted", `开始 ${new Date(timestamp(started)).toLocaleString("zh-CN")}${finished ? ` · 结束 ${new Date(timestamp(finished)).toLocaleString("zh-CN")}` : " · 进行中"}`));
   const blocks = [heading, timing, assignmentDetails(run, node)];
+  if (node.goal) {
+    blocks.push(section("本路目标状态", `${{active: "执行中", blocked: "等待补充条件", completed: "已完成"}[node.goal.status]} · ${node.goal.summary}`));
+    if (node.goal.blocker) blocks.push(section("等待补充", node.goal.blocker));
+    if (node.goal.evidence?.length) blocks.push(section("本路验收证据", node.goal.evidence.join("\n")));
+  }
   if (canGuide(run)) {
     const actions = element("section", "detail-section");
     const guide = element("button", "primary", "指导这个 Agent");
@@ -1525,7 +1545,7 @@ function renderChatFeedback(run, target, agent) {
   const working = agent?.state === "running";
   const open = ["planned", "running"].includes(run.status);
   const unserved = run.worker_alive === false && (pending || working);
-  const pass1 = run.collaboration?.mode === "pass1" && target.recipient === "rsi";
+  const pass1 = isSingleRun(run) && target.recipient === primaryAgent(run);
   if (pass1 && run.status === "paused" && agent?.wait_reason === "user_cancelled") {
     box.hidden = false;
     box.replaceChildren(element("p", "", "当前执行已取消，上下文和已有结果已保留。发送新指令或点击继续，即可恢复执行。"));
@@ -1534,21 +1554,21 @@ function renderChatFeedback(run, target, agent) {
   box.hidden = !open || !(sending || pending || working);
   if (box.hidden) { box.replaceChildren(); return; }
   const status = sending ? "正在发送消息…" : unserved ? "消息已保存，等待恢复服务"
-    : working && pass1 ? "RSI Agent 正在执行目标" : working ? `等待 ${agentName(target.recipient)} 回复` : `消息已收到，等待 ${agentName(target.recipient)} 处理`;
+    : working && pass1 ? "研究员正在执行目标" : working ? `等待 ${agentName(target.recipient)} 回复` : `消息已收到，等待 ${agentName(target.recipient)} 处理`;
   const row = element("div", "chat-feedback-title");
   if (!unserved) { const spinner = element("span", "spinner"); spinner.setAttribute("aria-hidden", "true"); row.append(spinner); }
   row.append(document.createTextNode(status));
   const detail = unserved ? "点击继续对话或恢复执行。" : working ? agentAction(run, agent) : "";
   box.replaceChildren(row, element("small", "muted", detail));
   if (pass1 && working && !unserved) {
-    const activity = run.agent_activity?.rsi;
+    const activity = run.agent_activity?.[primaryAgent(run)];
     if (activity?.updated_at) box.append(element("small", "muted", `最近活动：${time(activity.updated_at)}`));
-    const latest = [...state.events.values()].filter((event) => event.kind === "assistant_output" && event.agent_id === "rsi").at(-1);
+    const latest = [...state.events.values()].filter((event) => event.kind === "assistant_output" && event.agent_id === primaryAgent(run)).at(-1);
     const output = latest?.data?.text || run.goal_turns?.[0]?.output?.at(-1);
     if (output) box.append(element("p", "preserve", output));
     const turn = run.goal_turns?.[0];
     const queued = turn?.status === "running" && (run.messages || []).some((message) =>
-      message.sender === "user" && message.recipient === "rsi" && message.created_at >= turn.started_at
+      message.sender === "user" && message.recipient === primaryAgent(run) && message.created_at >= turn.started_at
       && !(turn.inputs || []).some((input) => input.message_id === message.message_id));
     if (queued) box.append(element("small", "muted", "补充消息仍在排队，将在下一次 RSI 工具返回或下一轮开始时送达。"));
   }
@@ -1878,7 +1898,7 @@ async function createConversation(message = "", modelSettings, collaboration, wo
     notice(error.message);
   } finally {
     $("create-submit").disabled = false;
-    $("create-submit").textContent = state.createCollaboration?.mode === "pass1" ? "开始目标" : "创建研究";
+    $("create-submit").textContent = state.createCollaboration?.max_agents === 1 ? "开始目标" : "创建研究";
     state.creating = false;
     $("new-run").disabled = $("mobile-new").disabled = $("welcome-send").disabled = false;
   }
@@ -1931,7 +1951,7 @@ function openCreate(message = "", collaboration = state.defaultCollaboration) {
   createBackend.update(backendOptions, state.createBackend);
   state.createAuthMode = defaults.auth_mode || "api_key";
   updateCreateAuth();
-  state.createCollaboration = selectCollaborationPreset(collaboration.mode);
+  state.createCollaboration = selectCollaborationPreset(collaboration.max_agents === 1 ? "single" : "passk");
   renderCreateCollaboration();
   updateCreateModels();
   $("create-dialog").showModal();

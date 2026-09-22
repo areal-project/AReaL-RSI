@@ -46,6 +46,7 @@ _MODEL = _object({
 }, ("base_url", "model", "reasoning_effort"))
 _COLLABORATION = _object({
     "mode": _STRING, "modules": {"type": "array", "items": _STRING, "uniqueItems": True},
+    "max_agents": {"type": "integer", "minimum": 1, "maximum": 16},
 }, ("mode", "modules"))
 
 

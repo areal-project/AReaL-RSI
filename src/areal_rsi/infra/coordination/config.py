@@ -91,7 +91,7 @@ class ResearchConfig:
         if self.brief.limits.max_model_calls is not None:
             raise ValueError("max_model_calls is not supported by native runtimes; use null")
         # Old configurations remain decodable for viewing; executable entry points reject them.
-        if self.mode != "collaborative":
+        if self.mode not in {"collaborative", "pass1"}:
             self.collaboration_modules = selected_modules(self.mode, self.collaboration_modules)
         if self.backend not in {"standard", "codex", "runtime"}:
             raise ValueError("Agent 后端支持 standard、codex 或 runtime")
@@ -101,8 +101,6 @@ class ResearchConfig:
             self.base_url, self.model, self.reasoning_effort,
             self.max_output_tokens, self.context_window_tokens, self.backend,
         )
-        if self.mode == "pass1" and self.brief.limits.max_agents != 1:
-            raise ValueError("RSI pass1 uses exactly one agent; max_agents must be 1")
         if self.mode == "passk":
             limits = self.brief.limits
             if any(

@@ -286,6 +286,7 @@ def research_detail(
                 {
                     **encode(node),
                     "assignment": assignment,
+                    "goal": encode(c.state.goals.get(actor.agent_id)),
                     "report": report,
                     "reports": reports_by_iteration.get(node.iteration_id, []),
                     "evidence": evidence_by_iteration.get(node.iteration_id, []),

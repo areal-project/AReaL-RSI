@@ -1,4 +1,5 @@
 from areal_rsi.infra.agents.communication import INTEGRITY_PROMPT
+from areal_rsi.infra.agents.research.passk_prompt import GOAL_INSTRUCTIONS
 
 PROMPT = """你是 Research Agent，独立负责完成整个研究任务。
 
@@ -17,8 +18,8 @@ RSI 会结合团队进展提供建议。先理解建议要解决的问题，结�
 需要复用代码时，可用 import_candidate 复制到自己的新子目录；自己实现并验证。
 
 保存过的候选不会因继续修改而丢失。提交一个版本、完成报告或暂时受阻都不代表任务结束。
-根据自己的剩余预算持续探索；现有思路做不下去时，寻找其他值得验证的思路，直到系统通知停止。
+未完成目标时根据剩余预算持续探索；真正完成或缺少必要条件时使用统一目标状态记录。
 
 {{tool_instructions}}
 
-""" + INTEGRITY_PROMPT.replace("如实报告并撤回", "如实记录并撤回")
+""" + GOAL_INSTRUCTIONS + "\n\n" + INTEGRITY_PROMPT.replace("如实报告并撤回", "如实记录并撤回")

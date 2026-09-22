@@ -410,6 +410,7 @@ class GoalContext:
     acceptance: list[str] = field(default_factory=list)
     evidence: list[str] = field(default_factory=list)
     blocker: str = ""
+    candidate_id: str = ""
     updated_at: str = ""
     revision: int = 0
 
@@ -436,6 +437,7 @@ class GoalTurn:
     inputs: list[ResearchMessage]
     context_before: GoalContext | None
     tokens_before: int
+    agent_id: str = ""
     context_after: GoalContext | None = None
     tokens_after: int = 0
     status: Literal["running", "completed", "blocked", "failed", "interrupted"] = "running"
@@ -534,8 +536,11 @@ class CoordinationState:
     started_at: str | None = None
     waiting_for_user: list[UserQuestion] = field(default_factory=list)
     finalization: CompletionRecord | None = None
-    goal: GoalContext | None = None
+    goal: GoalContext | None = None  # Historical single-agent records remain read-only.
+    goals: dict[str, GoalContext] = field(default_factory=dict)
     goal_turn_count: int = 0
+    goal_turns_latest: dict[str, int] = field(default_factory=dict)
+    rsi_model_enabled: bool = False
     intake: IntakeState = field(default_factory=IntakeState)
     effective_time: EffectiveClock | None = None
     turn_failures: dict[str, TurnFailure] = field(default_factory=dict)

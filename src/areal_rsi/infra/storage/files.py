@@ -15,6 +15,7 @@ import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from enum import Enum
+from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import Any, TypeVar, get_args, get_origin, get_type_hints
 
@@ -40,6 +41,20 @@ DIRECTORY_TYPE = "application/vnd.areal-rsi.directory+json"
 
 def now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+@lru_cache(maxsize=2048)
+def _record_text(path: Path, version: tuple[int, int, int, int]) -> str:
+    return path.read_text()
+
+
+def read_json(path: Path) -> Any:
+    """Reuse small unchanged records, but decode a fresh value for every reader."""
+    path = path.absolute()
+    stat = path.stat()
+    text = (_record_text(path, (stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size))
+            if stat.st_size <= 65536 else path.read_text())
+    return json.loads(text)
 
 
 def new_id(prefix: str) -> str:

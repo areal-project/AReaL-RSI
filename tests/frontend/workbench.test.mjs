@@ -711,3 +711,83 @@ test('single researcher shows confirmed intake acceptance before progress arrive
   const ui = await setup(t, {a: record});
   assert.match(ui.$('goal-acceptance').textContent, /Empty list returns zero/);
 });
+
+test('Interaction conversation restores explanations, paginates and keeps final replies unique', async (t) => {
+  const record = run('a');
+  record.agents[0].state = 'running';
+  record.agent_activity = {interaction: {type: 'tool_started', tool: 'functions.exec_command'}};
+  record.messages = [{message_id: 'user', sender: 'user', recipient: 'interaction', text: '检查环境', created_at: '2026-09-22T10:00:00Z'},
+    {message_id: 'reply', sender: 'interaction', recipient: 'user', text: '环境已就绪', created_at: '2026-09-22T10:00:03Z'}];
+  const handler = (path) => {
+    if (!path.includes('/trace?')) return;
+    return response({agent_id: 'interaction', next_before: path.includes('before=') ? null : 8, entries: path.includes('before=')
+      ? [{sequence: 3, kind: 'assistant_output', text: '先确认你的需求', created_at: '2026-09-22T09:59:00Z'}]
+      : [{sequence: 8, kind: 'assistant_output', text: '正在检查 **Python 环境**\n<script>unsafe</script>', created_at: '2026-09-22T10:00:01Z'},
+         {sequence: 9, kind: 'assistant_output', text: '环境已就绪', created_at: '2026-09-22T10:00:02Z'}]});
+  };
+  const ui = await setup(t, {a: record}, handler);
+  assert.match(ui.$('messages').textContent, /正在检查 Python 环境/);
+  assert.match(ui.$('messages').textContent, /过程说明/);
+  assert.equal(ui.$('messages').querySelector('strong').textContent, 'Python 环境');
+  assert.equal(ui.$('messages').querySelector('script'), null);
+  assert.equal(ui.$('messages').textContent.split('环境已就绪').length, 2);
+  assert.match(ui.$('chat-feedback').textContent, /执行命令/);
+  assert.doesNotMatch(ui.$('chat-feedback').textContent, /exec_command/);
+  ui.$('chat-history').querySelector('button').click(); await settle();
+  assert.match(ui.$('messages').textContent, /先确认你的需求/);
+  await ui.poll();
+  assert.match(ui.$('messages').textContent, /先确认你的需求/);
+  const reloaded = await setup(t, {a: record}, handler);
+  assert.match(reloaded.$('messages').textContent, /正在检查 Python 环境/);
+});
+
+test('late conversation outputs stay in their own run and failed history can be retried', async (t) => {
+  let finish;
+  let failed = true;
+  const ui = await setup(t, {a: run('a'), b: run('b')}, (path) => {
+    if (!path.includes('/trace?')) return;
+    if (path.includes('/a/')) return new Promise((resolve) => { finish = resolve; });
+    if (failed) return response({error: '暂时无法读取'}, false);
+    return response({agent_id: 'interaction', entries: [{sequence: 1, kind: 'assistant_output', text: '任务 B 的说明'}], next_before: null});
+  });
+  ui.switchRun('b'); await settle();
+  finish(response({agent_id: 'interaction', entries: [{sequence: 1, kind: 'assistant_output', text: '任务 A 的说明'}], next_before: null})); await settle();
+  assert.doesNotMatch(ui.$('messages').textContent, /任务 A 的说明/);
+  assert.match(ui.$('chat-history').textContent, /暂时无法读取/);
+  failed = false;
+  ui.$('chat-history').querySelector('button').click(); await settle();
+  assert.match(ui.$('messages').textContent, /任务 B 的说明/);
+  assert.equal(ui.$('chat-history').hidden, true);
+});
+
+test('started research keeps Interaction explanations beside the selected researcher', async (t) => {
+  const record = traceRun();
+  const ui = await setup(t, {a: record}, (path) => {
+    if (!path.includes('/trace?')) return;
+    const id = new URL(path, 'http://localhost').searchParams.get('agent_id');
+    return response({agent_id: id, entries: [{sequence: id === 'interaction' ? 1 : 2,
+      kind: 'assistant_output', text: id === 'interaction' ? '已确认任务与验收条件' : '正在验证实现',
+      created_at: record.started_at}], next_before: null});
+  });
+  assert.match(ui.$('messages').textContent, /已确认任务与验收条件/);
+  assert.match(ui.$('messages').textContent, /正在验证实现/);
+  record.agent_activity = {research_1: {type: 'tool_completed', active_tools: {
+    slow: {name: 'functions.exec_command', started_at: record.started_at}}}};
+  await ui.poll();
+  assert.match(ui.$('chat-feedback').textContent, /执行命令/);
+  assert.doesNotMatch(ui.$('chat-feedback').textContent, /操作已结束/);
+});
+
+test('initial detail failure exits the spinner and recovers on the next poll', async (t) => {
+  let failed = true;
+  const ui = await setup(t, {a: run('a')}, (path) => {
+    if (path.startsWith('/api/runs/a?') && failed) return response({error: '工作台请求超时'}, false);
+  });
+  assert.equal(ui.$('run-loading').hidden, true);
+  assert.equal(ui.$('workspace').hidden, true);
+  assert.match(ui.$('notice').textContent, /研究记录加载失败.*工作台请求超时/);
+  failed = false;
+  await ui.poll();
+  assert.equal(ui.$('workspace').hidden, false);
+  assert.equal(ui.$('notice').hidden, true);
+});

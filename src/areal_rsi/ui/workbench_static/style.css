@@ -1625,3 +1625,6 @@ button.primary.destructive { background: var(--red); }
 .trace-code { white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; max-height: 320px; background: #f4f5f5; padding: 10px; font-size: 11px; line-height: 1.6; }
 .agent-trace-switcher { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; font-size: 12px; }
 .agent-trace-switcher select { flex: 1; min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: white; font: inherit; }
+
+#chat-history { padding: 8px 18px; border-bottom: 1px solid #e5e8e0; }
+#chat-history .error { display: block; font-size: 12px; overflow-wrap: anywhere; }

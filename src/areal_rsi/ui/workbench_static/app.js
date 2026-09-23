@@ -66,6 +66,7 @@ const recipientDropdown = new WorkbenchDropdown($("chat-recipient"), {
   onChange: (value) => {
     state.replyTargets.set(state.runId, { value, explicit: true });
     render();
+    if (state.run) loadAgentTrace(state.runId, renderReplyTarget(state.run).recipient);
   },
 });
 const modelDropdown = new WorkbenchDropdown($("research-model"), {
@@ -381,7 +382,16 @@ function agentAction(run, agent) {
   }
   if (activity?.type === "model_attempt" && activity.attempt > 1)
     return `正在第 ${activity.attempt} 次尝试连接 API，等待模型响应`;
-  const names = {read: "读取文件", grep: "检索代码", glob: "查找文件", bash: "执行命令",
+  const active = Object.values(activity?.active_tools || {});
+  if (active.length || activity?.type === "tool_started")
+    return `${toolName(active.at(-1)?.name || activity.tool)}${active.length > 1 ? ` · ${active.length} 项进行中` : ""}`;
+  if (activity?.api_available === false) return "模型服务暂不可用，等待自动重试";
+  return activity?.type === "tool_completed" ? "操作已结束，正在整理结果" : "正在分析任务并组织回复";
+}
+const toolNames = {exec_command: "执行命令", write_stdin: "等待命令结果", apply_patch: "修改代码",
+    read_file: "读取文件", write_file: "写入文件", update_goal: "更新研究进度",
+    request_user_input: "向你确认需求", ask_user: "向你提问",
+    read: "读取文件", grep: "检索代码", glob: "查找文件", bash: "执行命令",
     write: "写入文件", edit: "修改文件", spawn_researcher: "安排研究任务",
     get_state: "查看研究进展", list_records: "查找研究记录", read_record: "阅读研究记录",
     save_candidate: "保存候选版本", checkout_candidate: "切换候选版本",
@@ -390,10 +400,11 @@ function agentAction(run, agent) {
     save_evidence: "记录研究发现", share_evidence: "共享研究发现",
     update_plan: "调整研究计划", assign: "安排下一轮任务", message_researcher: "补充研究要求",
     wait: "等待后续消息", submit_report: "提交本轮报告"};
-  return activity?.type === "tool_started" ? names[activity.tool] || `执行 ${activity.tool}`
-    : activity?.type === "tool_completed" ? (activity.tool ? `已完成${names[activity.tool] || activity.tool}，继续处理` : "继续处理任务")
-    : "模型正在处理任务";
+function toolName(name) {
+  const short = (name || "").split(/[.:/]/).at(-1);
+  return toolNames[short] || (name ? `运行工具（${name}）` : "处理任务");
 }
+
 function selectWork(run, id) {
   state.selected.set(run.run_id, id);
   localStorage.setItem(`rsi.workbench.node.${run.run_id}`, id);
@@ -596,6 +607,7 @@ async function refresh(force = false) {
       state.goalHistory.delete(oldest);
     }
     $("run-loading").hidden = true;
+    if ($("run-loading").dataset.failed) { notice(); delete $("run-loading").dataset.failed; }
     const listed = state.runs.find((item) => item.run_id === runId);
     if (
       listed &&
@@ -605,13 +617,25 @@ async function refresh(force = false) {
       renderRuns();
     }
     render();
+    connected(true);
     const selectedNode = run.nodes?.find((n) => n.iteration_id === state.selected.get(runId));
     if (selectedNode && state.tab === "node") await loadAgentTrace(runId, selectedNode.agent_id);
+    else if (state.tab === "chat" && state.traceAvailable) {
+      const recipient = renderReplyTarget(run).recipient;
+      const agents = new Set([recipient]);
+      if (!state.agentTraces.get(`${runId}/interaction`)?.ready
+          || run.agents?.some((agent) => agent.agent_id === "interaction" && agent.state === "running")) agents.add("interaction");
+      await Promise.all([...agents].map((agentId) => loadAgentTrace(runId, agentId)));
+    }
     connected(true);
   } catch (error) {
     if (error.name === "AbortError" || state.runId !== runId) return;
     connected(false);
-    if (force) notice(error.message);
+    if (!state.run) {
+      $("run-loading").hidden = true;
+      $("run-loading").dataset.failed = "true";
+      notice(`研究记录加载失败：${error.message}。正在自动重试，也可重新选择研究。`);
+    } else if (force) notice(error.message);
   } finally {
     if (state.refreshController === controller) state.polling = false;
   }
@@ -1534,7 +1558,13 @@ function renderChatFeedback(run, target, agent) {
     if (activity?.updated_at) box.append(element("small", "muted", `最近活动：${time(activity.updated_at)}`));
     const latest = [...state.events.values()].filter((event) => event.kind === "assistant_output" && event.agent_id === primaryAgent(run)).at(-1);
     const output = latest?.data?.text || run.goal_turns?.[0]?.output?.at(-1);
-    if (output) box.append(element("p", "preserve", output));
+    const trace = state.agentTraces.get(`${run.run_id}/${primaryAgent(run)}`);
+    const inConversation = [...(trace?.entries.values() || [])].some((entry) => entry.kind === "assistant_output" && entry.text === output);
+    if (output && !inConversation) {
+      const content = element("div", "message-content preserve");
+      appendFormattedText(content, output);
+      box.append(content);
+    }
     const turn = run.goal_turns?.[0];
     const queued = turn?.status === "running" && (run.messages || []).some((message) =>
       message.sender === "user" && message.recipient === primaryAgent(run) && message.created_at >= turn.started_at
@@ -1544,7 +1574,34 @@ function renderChatFeedback(run, target, agent) {
 }
 
 function renderMessages(run) {
+  const agentId = renderReplyTarget(run).recipient;
   const messages = [...(run.messages || [])];
+  const history = $("chat-history");
+  history.replaceChildren();
+  for (const id of new Set(["interaction", agentId])) {
+    const trace = state.agentTraces.get(`${run.run_id}/${id}`);
+    for (const entry of trace?.entries.values() || []) {
+      if (entry.kind !== "assistant_output" || !entry.text?.trim()) continue;
+      // The runtime may also publish the final output as a formal reply.
+      if (messages.some((message) => message.sender === id && message.text?.trim() === entry.text.trim())) continue;
+      messages.push({message_id: `output:${id}:${entry.sequence}`, sender: id,
+        text: entry.text, created_at: entry.created_at, progress: true});
+    }
+    if (trace?.next != null) {
+      const more = element("button", "quiet", `加载 ${agentName(id)} 更早的过程说明`);
+      more.disabled = trace.loading;
+      more.addEventListener("click", () => loadAgentTrace(run.run_id, id, true));
+      history.append(more);
+    }
+    if (trace?.error) {
+      history.append(element("span", "error", `${agentName(id)} 过程说明加载失败：${trace.error}`));
+      const retry = element("button", "quiet", "重试");
+      retry.addEventListener("click", () => loadAgentTrace(run.run_id, id));
+      history.append(retry);
+    }
+  }
+  history.hidden = !history.childElementCount;
+  messages.sort((a, b) => new Date(timestamp(a.created_at)) - new Date(timestamp(b.created_at)));
   const pending = state.outgoing.get(run.run_id);
   if (pending && !messages.some((message) => message.message_id === pending.message_id)) messages.push(pending);
   const signature = JSON.stringify([run.run_id, messages]);
@@ -1581,6 +1638,7 @@ function renderMessages(run) {
     const content = element("div", "message-content");
     if (message.sender === "user") content.textContent = message.text;
     else appendFormattedText(content, message.text || "");
+    if (message.progress) heading.append(element("span", "muted", "过程说明"));
     block.append(heading, content);
     if (message.delivery_status && message.sender === "user")
       block.append(element("small", "delivery-status", {pending: "已保存 · 待送达", delivered: "已送达 · 等待回复", replied: "Agent 已回复"}[message.delivery_status]));
@@ -1752,6 +1810,8 @@ function switchTab(tab) {
     renderNode(state.run);
     const node = state.run.nodes?.find((n) => n.iteration_id === state.selected.get(state.runId));
     if (node) loadAgentTrace(state.runId, node.agent_id);
+  } else if (tab === "chat" && state.run && state.traceAvailable) {
+    loadAgentTrace(state.runId, renderReplyTarget(state.run).recipient);
   }
 }
 
@@ -2220,6 +2280,14 @@ async function loadAgentTrace(runId, agentId, older = false) {
   } catch (error) { trace.error = error.message; }
   finally {
     trace.loading = false;
+    if (state.runId === runId && state.run && state.tab === "chat"
+        && (agentId === "interaction" || renderReplyTarget(state.run).recipient === agentId)) {
+      const panel = $("messages"), height = panel.scrollHeight, top = panel.scrollTop;
+      renderMessages(state.run);
+      const target = renderReplyTarget(state.run);
+      renderChatFeedback(state.run, target, state.run.agents?.find((agent) => agent.agent_id === target.recipient));
+      if (older) panel.scrollTop = top + panel.scrollHeight - height;
+    }
     const node = state.run?.nodes?.find((n) => n.iteration_id === state.selected.get(runId));
     if (state.runId === runId && node?.agent_id === agentId && state.tab === "node") {
       const panel = $('node-panel');
@@ -2245,15 +2313,15 @@ function agentDiagnostics(run, agentId) {
   else if (terminal) phase = label(run.status);
   else if (paused) { phase = '已暂停'; explanation = '可补充指导，再继续此研究员。'; }
   else if (goal?.status === 'blocked') { phase = '等待你补充'; explanation = goal.blocker || ''; }
-  else if (run.worker_alive === false) { phase = '执行器未运行'; explanation = '当前未检测到执行 worker；可使用恢复执行。'; }
+  else if (run.worker_alive === false) { phase = '执行器未运行'; explanation = '后台执行服务未运行，请点击恢复执行。'; }
   else if (agent?.state === 'failed') { phase = '执行异常'; explanation = agent.error || '查看下方失败记录。'; }
   else if (job && (agent?.state === 'waiting' || tools.some((t) => t.name === 'wait_for_job'))) {
     phase = ['queued', 'pending', 'starting'].includes(job.status) ? '作业排队中' : '等待作业完成';
     explanation = job.progress?.message || job.progress_message || `作业 ${job.job_id}`;
     since = job.started_at || job.created_at;
   } else if (tools.length || activity.type === 'tool_started') {
-    phase = `执行工具：${tools.at(-1)?.name || activity.tool || '工具'}`;
-    explanation = tools.length > 1 ? `${tools.length} 个工具调用尚未返回。` : '已收到工具开始事件，正在等待返回。';
+    phase = toolName(tools.at(-1)?.name || activity.tool);
+    explanation = tools.length > 1 ? `${tools.length} 项操作仍在进行中。` : '操作正在进行，完成后会继续回复。';
     since = tools.at(-1)?.started_at || since;
   } else if (activity.api_available === false) {
     phase = '模型服务暂不可用'; explanation = '运行时报告连接不可用，等待自动重试或恢复。';
@@ -2279,7 +2347,8 @@ function readableToolText(text) {
   try {
     const value = JSON.parse(text);
     if (value && typeof value === 'object') {
-      if (typeof value.command === 'string') return `${value.cwd ? value.cwd + '\n' : ''}$ ${value.command}`;
+      const command = value.command || value.cmd;
+      if (typeof command === 'string') return `${value.cwd ? value.cwd + '\n' : ''}$ ${command}`;
       if (typeof value.aggregatedOutput === 'string') return `${value.exitCode != null ? '退出码 ' + value.exitCode + '\n' : ''}${value.aggregatedOutput}`;
       return JSON.stringify(value, null, 2);
     }
@@ -2323,11 +2392,10 @@ function renderAgentTrace(run, agentId, trace) {
       const id = `${key}/${entry.call_id}`;
       const row = element('details', 'trace-tool'); row.open = state.traceExpansion.has(id);
       const status = {running: '尚未返回', completed: '已返回', failed: '失败', interrupted: '中断，未收到结果', ended: '本轮已结束，未记录返回', background: '已返回，后台执行中'}[entry.status] || entry.status;
-      const names = {exec_command: '执行命令', apply_patch: '修改代码', read_file: '读取文件', write_file: '写入文件', get_state: '读取任务状态', update_goal: '更新进度', save_candidate: '保存候选', wait_for_job: '等待作业'};
       let preview = entry.arguments;
       try { const args = JSON.parse(preview); preview = args.command || args.cmd || args.path || args.filename || args.patch || args.input || args.candidate_id || ''; } catch (_) {}
       preview = typeof preview === 'string' ? preview.replace(/\s+/g, ' ').slice(0, 140) : '';
-      const summary = element('summary', '', `${names[entry.name] || entry.name}${preview ? ' · ' + preview : ''} · ${status} · ${time(entry.created_at)}`);
+      const summary = element('summary', '', `${toolName(entry.name)}${preview ? ' · ' + preview : ''} · ${status} · ${time(entry.created_at)}`);
       row.append(summary);
       if (entry.started_at) {
         const timing = element('p', 'muted', '调用耗时 ');
@@ -2344,7 +2412,9 @@ function renderAgentTrace(run, agentId, trace) {
     } else {
       const row = element('article', `trace-message ${entry.kind}`);
       row.append(element('small', 'muted', `${titles[entry.kind] || entry.kind} · ${time(entry.created_at)}`));
-      row.append(element('p', 'preserve', entry.text));
+      const content = element('div', 'message-content preserve');
+      appendFormattedText(content, entry.text || '');
+      row.append(content);
       if (entry.job_id) {
         const link = element('button', 'quiet', '查看作业与日志');
         link.addEventListener('click', () => selectWork(run, `job:${entry.job_id}`)); row.append(link);

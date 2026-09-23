@@ -32,10 +32,10 @@ if TYPE_CHECKING:
 def agent_trace(
     c: Coordinator, agent_id: str, *, before: int | None = None, limit: int = 50,
 ) -> AgentTracePage:
-    if agent_id not in {a.agent_id for a in c.store.run().research_agents}:
-        raise ValueError("研究员不属于当前任务")
+    if agent_id not in {"interaction", "rsi", *(a.agent_id for a in c.store.run().research_agents)}:
+        raise ValueError("Agent 不属于当前任务")
     # Bounded scanning also paginates through intervals where only peers were active.
-    window = c.store.events(limit=500, before=before)
+    window = c.store.events(limit=max(100, limit), before=before)
     completed = False
     normal_endings: set[int] = set()
     for event in window:

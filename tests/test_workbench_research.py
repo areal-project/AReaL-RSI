@@ -241,3 +241,36 @@ def test_graph_attributes_explicit_sources_without_mutating_or_reading_other_run
         assert {p: p.read_bytes() for p in before} == before
 
     asyncio.run(scenario())
+
+
+def test_slow_detail_read_does_not_block_engine_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+
+    import areal_rsi.infra.research as research
+    from areal_rsi.infra.coordination.views import research_detail as original
+
+    async def scenario() -> None:
+        c = fixture(tmp_path)
+        entered, release = threading.Event(), threading.Event()
+
+        def slow_detail(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            entered.set()
+            assert release.wait(5), "detail blocked the event loop"
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(research, "research_detail", slow_detail)
+        app = ResearchSystem(tmp_path)
+        task = asyncio.create_task(app.detail(c.store.run_id, event_limit=10))
+        try:
+            assert await asyncio.to_thread(entered.wait, 5)
+            assert (await app.bootstrap())["service"] == "areal-rsi"
+            release.set()
+            assert (await task)["run_id"] == c.store.run_id
+        finally:
+            release.set()
+            await asyncio.gather(task, return_exceptions=True)
+            await app.close()
+
+    asyncio.run(scenario())

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar
@@ -14,6 +13,7 @@ from areal_rsi.infra.storage.files import (
     FileRecords,
     decode,
     encode,
+    read_json,
     safe_name,
     safe_relative,
     write_json,
@@ -119,7 +119,7 @@ class FileRunStore(FileRecords):
         path = self.state_path(key)
         if not path.exists():
             return None
-        data = json.loads(path.read_text())
+        data = read_json(path)
         if data["run_id"] != key:
             raise ValueError("Run record identity does not match its path")
         if data.pop("schema_version") != SCHEMA_VERSION:
@@ -131,12 +131,12 @@ class FileRunStore(FileRecords):
             if agent_id in seen_agents:
                 raise ValueError("Duplicate Agent identity in Run")
             seen_agents.add(agent_id)
-            agent = json.loads((paths.agent(agent_id) / "agent.json").read_text())
+            agent = read_json(paths.agent(agent_id) / "agent.json")
             if agent["agent_id"] != agent_id:
                 raise ValueError("Agent record identity does not match its path")
             steps = []
             for identifier in agent["iterations"]:
-                step = json.loads(paths.iteration(identifier).read_text())
+                step = read_json(paths.iteration(identifier))
                 if (
                     step["iteration_id"] != identifier
                     or step["run_id"] != key
@@ -177,7 +177,7 @@ class FileRunStore(FileRecords):
                 raise ValueError("Content digest mismatch")
         else:
             raise ValueError("Unsupported local record reference")
-        value = json.loads(path.read_text())
+        value = read_json(path)
         pointer = unquote(uri.fragment)
         if pointer:
             if not pointer.startswith("/"):

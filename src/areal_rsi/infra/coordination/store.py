@@ -35,6 +35,7 @@ from areal_rsi.infra.storage.files import (
     json_bytes,
     new_id,
     now,
+    read_json,
     safe_name,
     safe_relative,
     write_json,
@@ -60,7 +61,7 @@ class ResearchStore:
 
     def get(self, category: str, key: str, kind: type[T]) -> T:
         path = self.root / safe_name(category) / f"{safe_name(key)}.json"
-        return self.decode_record(kind, json.loads(path.read_text()))
+        return self.decode_record(kind, read_json(path))
 
     @staticmethod
     def decode_record(kind: type[T], value: dict[str, Any]) -> T:
@@ -70,7 +71,7 @@ class ResearchStore:
 
     def records(self, category: str, kind: type[T]) -> list[T]:
         return [
-            self.decode_record(kind, json.loads(p.read_text()))
+            self.decode_record(kind, read_json(p))
             for p in sorted((self.root / safe_name(category)).glob("*.json"))
         ]
 
@@ -86,7 +87,7 @@ class ResearchStore:
     def research_jobs(self) -> dict[str, ResearchJob]:
         """Decode old job indexes without rewriting them during reads."""
         path = self.root / "coordination/jobs.json"
-        records = json.loads(path.read_text()) if path.exists() else {}
+        records = read_json(path) if path.exists() else {}
         legacy_completion_ids = {
             "job-" + hashlib.sha256(f"closeout:{phase}:{attempt}".encode()).hexdigest()
             for phase in ("prepare", "search", "final")
@@ -251,7 +252,7 @@ class ResearchStore:
         for sequence in range(start + 1, last + 1):
             path = directory / f"{sequence:012d}.json"
             if path.is_file():  # Preserve support for legacy archives with gaps.
-                result.append(self.decode_record(ResearchEvent, json.loads(path.read_text())))
+                result.append(self.decode_record(ResearchEvent, read_json(path)))
         return result
 
     def record_reference(self, ref: RecordRef) -> RecordRef:
@@ -465,7 +466,7 @@ class ResearchStore:
 
     def withdrawals(self) -> list[dict[str, Any]]:
         return [
-            json.loads(path.read_text())
+            read_json(path)
             for path in sorted((self.root / "withdrawals").glob("*.json"))
         ]
 

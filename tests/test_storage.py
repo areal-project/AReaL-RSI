@@ -134,3 +134,35 @@ class StorageTest(unittest.IsolatedAsyncioTestCase):
             (source / "escape").symlink_to(root)
             with self.assertRaises(ValueError):
                 await store.snapshot(source)
+
+
+class RecordReadCacheTest(unittest.TestCase):
+    def test_reads_are_independent_and_follow_replacement_and_deletion(self) -> None:
+        from unittest.mock import patch
+
+        from areal_rsi.infra.storage.files import read_json, write_json
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "record.json"
+            write_json(path, {"text": "first"})
+            original = Path.read_text
+            reads = []
+
+            def read(p: Path, *args: object, **kwargs: object) -> str:
+                reads.append(p)
+                return original(p)
+
+            with patch.object(Path, "read_text", read):
+                value = read_json(path)
+                value["text"] = "local change"
+                self.assertEqual(read_json(path), {"text": "first"})
+                self.assertEqual(reads, [path])
+                timestamp = path.stat().st_mtime_ns
+                replacement = path.with_suffix(".new")
+                write_json(replacement, {"text": "other"})
+                os.utime(replacement, ns=(timestamp, timestamp))
+                replacement.replace(path)
+                self.assertEqual(read_json(path), {"text": "other"})
+                path.unlink()
+                with self.assertRaises(FileNotFoundError):
+                    read_json(path)

@@ -113,3 +113,22 @@ def test_public_tool_excerpts_redact_and_bound_text() -> None:
     decoded = json.loads(command)
     assert "hidden-secret" not in decoded["command"] and "proof.txt" in decoded["command"]
     assert json.loads(public_tool_text(command)) == decoded
+
+
+@pytest.mark.parametrize("agent_id", ["interaction", "rsi"])
+def test_conversation_agent_trace_restores_public_output(tmp_path: Path, agent_id: str) -> None:
+    async def scenario() -> None:
+        c = Coordinator.create(tmp_path, TaskBrief("task", "task"))
+        c.store.event("assistant_output", agent_id=agent_id, text="我先检查运行环境")
+        c.store.event("assistant_output", agent_id="research_foreign", text="其他 Agent 的输出")
+        c.store.event("tool_started", agent_id=agent_id, name="exec_command", call_id="check")
+        app = ResearchSystem(tmp_path)
+        try:
+            latest = await app.trace(c.store.run_id, agent_id, limit=1)
+            assert latest["entries"][0]["name"] == "exec_command"
+            earlier = await app.trace(c.store.run_id, agent_id, before=latest["next_before"])
+            assert any(e["text"] == "我先检查运行环境" for e in earlier["entries"])
+            assert "其他 Agent" not in str(earlier)
+        finally:
+            await app.close()
+    asyncio.run(scenario())

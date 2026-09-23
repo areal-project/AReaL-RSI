@@ -11,6 +11,7 @@ import shutil
 import zipfile
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
+from copy import copy, deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -944,8 +945,8 @@ class ResearchSystem:
     ) -> dict[str, Any]:
         validate_request("trace", dict(run_id=run_id, agent_id=agent_id,
                                        before=before, limit=limit))
-        result: dict[str, Any] = encode(agent_trace(
-            self._visible_coordinator(run_id), agent_id, before=before, limit=limit
+        result: dict[str, Any] = encode(await asyncio.to_thread(
+            agent_trace, self._visible_coordinator(run_id), agent_id, before=before, limit=limit
         ))
         return result
 
@@ -983,8 +984,13 @@ class ResearchSystem:
                 finally:
                     c.release()
         active = self.active.get(run_id)
-        return research_detail(
-            c,
+        # History reads can be slow on shared storage. Keep them off the engine's
+        # event loop, with a private state snapshot so concurrent turns cannot
+        # mutate dictionaries while the projection iterates them.
+        snapshot = copy(c)
+        snapshot.state = deepcopy(c.state)
+        return await asyncio.to_thread(
+            research_detail, snapshot,
             after=after,
             event_limit=event_limit,
             goal_before=goal_before,

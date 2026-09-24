@@ -58,6 +58,7 @@ class ResearchConfig:
     collaboration_modules: tuple[str, ...] = ()
     researcher_profile_ids: tuple[str, ...] = ()
     researcher_profile_dir: str | None = None
+    profile_library_dir: str | None = None
     seed_dir: str | None = None
     backend: str = "standard"
     model: str = "gpt-5.6-luna"
@@ -216,6 +217,11 @@ def archived_config(value: dict[str, Any]) -> ResearchConfig:
 
 def load_config(path: Path) -> ResearchConfig:
     config = config_from_dict(json.loads(path.read_text()))
+    if config.profile_library_dir is not None:
+        directory = Path(config.profile_library_dir).expanduser()
+        config.profile_library_dir = str(
+            (path.parent / directory).resolve() if not directory.is_absolute() else directory
+        )
     if config.researcher_profile_dir is not None:
         directory = Path(config.researcher_profile_dir).expanduser()
         config.researcher_profile_dir = str(

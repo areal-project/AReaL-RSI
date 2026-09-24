@@ -95,6 +95,8 @@ def _research_summary(detail: dict[str, Any], *, status: str | None = None) -> d
 
 
 def _idle_reason(detail: dict[str, Any]) -> str | None:
+    if (detail.get("profile_evolution") or {}).get("status") in {"pending", "running"}:
+        return None
     if (detail.get("finalization") or {}).get("status") == "running":
         return None
     if detail.get("status") == "paused":

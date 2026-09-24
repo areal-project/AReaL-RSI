@@ -91,6 +91,12 @@ def apply_profile_resources(plan: CollaborationPlan) -> CollaborationPlan:
     return apply(plan)
 
 
+def apply_profile_evolution(plan: CollaborationPlan) -> CollaborationPlan:
+    from areal_rsi.coordination.profile_evolution import apply
+
+    return apply(plan)
+
+
 def apply_leader_guidance_v023(plan: CollaborationPlan) -> CollaborationPlan:
     return replace(
         plan,
@@ -127,6 +133,14 @@ DEFAULT_MODULES = ("leader_guidance", "leader_guidance_v024")
 
 
 MODULES: dict[str, CollaborationModule] = {
+    "profile_evolution": CollaborationModule(
+        "profile_evolution",
+        "v0.3 · 人设选择与自演进",
+        "Leader 按任务选择带知识和技能的人设，任务结束后复盘并更新供后续任务使用的资产。",
+        "1",
+        apply_profile_evolution,
+        requires=("profile_resources",),
+    ),
     "researcher_skills": CollaborationModule(
         "researcher_skills",
         "按身份加载技能",
@@ -364,6 +378,21 @@ def presets() -> list[dict[str, Any]]:
                 "researcher_skills",
             ],
             "description": MODULES["researcher_skills"].description,
+        }
+    )
+    choices.append(
+        {
+            "id": "passk_guided_v03",
+            "label": "v0.3 · 人设选择与自演进",
+            "mode": "passk",
+            "modules": [
+                "leader_guidance",
+                "problem_sharing",
+                "researcher_profiles",
+                "profile_resources",
+                "profile_evolution",
+            ],
+            "description": MODULES["profile_evolution"].description,
         }
     )
     return choices

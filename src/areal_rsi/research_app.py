@@ -206,6 +206,15 @@ class ResearchApp:
             run.plan.max_iterations = config.brief.limits.max_nodes
             c.store.save_run(run)
             previous = self.config(c)
+            if (
+                "profile_evolution" in config.collaboration_modules
+                and "profile_library" not in config.metadata
+            ):
+                from areal_rsi.coordination.profile_evolution import freeze_library
+
+                config.researcher_profile_ids = ()
+                config.metadata.pop("researcher_profiles", None)
+                freeze_library(config, self.root)
             if (previous.mode, previous.collaboration_modules) != (
                 config.mode,
                 config.collaboration_modules,
@@ -381,6 +390,10 @@ class ResearchApp:
             if issues:
                 raise ValueError("；".join(issues))
         config.freeze_researcher_profiles()
+        if "profile_evolution" in config.collaboration_modules:
+            from areal_rsi.coordination.profile_evolution import freeze_library
+
+            freeze_library(config, self.root)
         c = Coordinator.create(self.root, config.brief, simulated=simulated, run_id=run_id)
         c.state["creation_digest"] = creation_digest
         c.state["mode"] = config.mode
@@ -643,7 +656,11 @@ class ResearchApp:
         c.state["mode"] = config.mode
         c.save()
         actions = plan.actions(c)
-        if "researcher_profiles" in config.collaboration_modules:
+        if "profile_evolution" in config.collaboration_modules:
+            from areal_rsi.coordination.profile_evolution import initialize
+
+            initialize(actions, config)
+        elif "researcher_profiles" in config.collaboration_modules:
             from areal_rsi.prompts import load_prompt
 
             profiles = (
@@ -757,6 +774,10 @@ class ResearchApp:
                     from areal_rsi.coordination.finalization import finalize
 
                     await finalize(c, current)
+                if "profile_evolution" in current.collaboration_modules:
+                    from areal_rsi.coordination.profile_evolution import review_profiles
+
+                    await review_profiles(c, current, runtime, actions)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -784,6 +805,8 @@ class ResearchApp:
         c = Coordinator(ResearchStore(self.root, run_id))
         summary = c.summary()
         summary["finalization"] = c.state.get("finalization")
+        summary["profile_evolution"] = c.state.get("profile_evolution")
+        summary["profile_selection"] = c.state.get("profile_selection")
         run = c.store.run()
         actors = {actor["agent_id"]: actor for actor in summary["agents"]}
         evidence = encode(c.store.records("evidence", EvidenceRecord))
@@ -1107,6 +1130,12 @@ class ResearchApp:
                             and c.state["status"] in {"stopped", "succeeded"}
                             and finalization.get("status") not in {"completed", "failed"}
                         )
+                        or (
+                            "profile_evolution" in config.collaboration_modules
+                            and c.state["status"] in {"stopped", "succeeded", "failed"}
+                            and c.state.get("profile_evolution", {}).get("status")
+                            in {None, "pending", "running", "interrupted"}
+                        )
                     )
                     and not self.worker_elsewhere(c)
                 ):
@@ -1194,6 +1223,15 @@ class ResearchApp:
         elif action == "resume":
             async with self.run_lock(c):
                 c = self.coordinator(c.store.run_id)
+                if (
+                    "profile_evolution" in self.config(c).collaboration_modules
+                    and c.state["status"] in {"stopped", "succeeded", "failed"}
+                    and c.state.get("profile_evolution", {}).get("status")
+                    in {"pending", "running", "interrupted"}
+                    and not c.state.get("user_stopped")
+                ):
+                    await self.attach(c)
+                    return await self.detail(c.store.run_id)
                 if (
                     self.config(c).mode == "passk"
                     and c.state["status"] == "stopped"

@@ -59,7 +59,9 @@ def prepare_trial(item: tuple[dict[str, Any], dict[str, Any]]) -> dict[str, Any]
     config["credential_file"] = base.credential_file
     config["api_key_env"] = base.api_key_env
     config["brief"]["objective"] = row["name"]
-    if "researcher_profiles" in row["modules"]:
+    if "profile_evolution" in row["modules"]:
+        config["profile_library_dir"] = str(root / "profile-library")
+    elif "researcher_profiles" in row["modules"]:
         config["metadata"]["researcher_profiles"] = load_profiles(
             ("general", "kernelbench/algorithm", "kernelbench/memory", "kernelbench/execution")
         )
@@ -167,8 +169,14 @@ def watch(batch_file: Path) -> None:
         ]
         if all(
             s.get("user_stopped")
-            or s["status"] in {"failed", "cancelled"}
-            or s.get("finalization", {}).get("status") in {"completed", "failed"}
+            or (
+                (
+                    s["status"] in {"failed", "cancelled"}
+                    or s.get("finalization", {}).get("status") in {"completed", "failed"}
+                )
+                and s.get("profile_evolution", {}).get("status")
+                in {None, "completed", "conflict", "failed", "skipped"}
+            )
             for s in states
         ):
             return

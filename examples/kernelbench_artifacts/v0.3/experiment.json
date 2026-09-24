@@ -1,0 +1,15 @@
+{
+  "group_name": "v0.3-persona-evolution",
+  "max_agents": 4,
+  "max_effective_seconds": 3600,
+  "reasoning_effort": "xhigh",
+  "execution_interface": "cli",
+  "runs": [
+    {
+      "task": "L2P71",
+      "model": "gpt-5.6-luna",
+      "collaboration": "passk_guided_v03",
+      "label": "v0.3"
+    }
+  ]
+}

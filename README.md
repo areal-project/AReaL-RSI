@@ -70,6 +70,9 @@ uv run --env-file .env --locked python run.py --type demo
 
 在 KernelBench 之外使用 v0.2.1.2 的人设机制，见[生成人设并启动实验](examples/researcher_profiles/README.md)。仓库附带供 Codex 使用的 skill，人设按资产 ID 选择。
 
+[v0.3 人设自演进原型](examples/kernelbench_artifacts/v0.3/README.md)为人设配备知识库和 skills，
+由 leader 在任务开始时选择人设、结束时根据轨迹复盘并更新资产，供后续新任务复用。
+
 已有完整研究配置时，可以不经过 Interaction，直接在终端运行：
 
 ```bash

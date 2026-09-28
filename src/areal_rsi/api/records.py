@@ -100,6 +100,8 @@ class RsiEvaluationReport:
     temperature: float
     max_new_tokens: int
     cases: tuple[RsiCaseScore, ...]
+    trajectory_path: str
+    trajectory_digest: str
 
     def __post_init__(self) -> None:
         if any(
@@ -116,6 +118,8 @@ class RsiEvaluationReport:
             or self.max_new_tokens < 1
             or not self.cases
             or len({case.task_id for case in self.cases}) != len(self.cases)
+            or not self.trajectory_path.startswith("/")
+            or not valid_digest(self.trajectory_digest)
         ):
             raise ValueError("Invalid or incomplete TIR evaluation report")
 

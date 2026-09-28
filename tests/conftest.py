@@ -4,9 +4,8 @@ import json
 from pathlib import Path
 
 import pytest
-
-from areal_rsi.infra.tasks.tir import TirSplitSizes, freeze_tir_task_set
-from areal_rsi.infra.tasks.tir_harness import TIR_RUNNER_FILES, freeze_tir_harness
+from areal_rsi_tir.harness import TIR_RUNNER_FILES, freeze_tir_harness
+from areal_rsi_tir.tasks import TirSplitSizes, freeze_tir_task_set
 
 
 @pytest.fixture

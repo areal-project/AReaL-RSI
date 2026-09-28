@@ -6,7 +6,7 @@
   "runner_root": "/shared/AReaL/examples/tir",
   "model_root": "/shared/models/Qwen2.5-Math-1.5B",
   "areal_python": "/shared/venvs/areal/bin/python",
-  "areal_config": "/shared/AReaL-RSI/examples/tir_slurm/tir_grpo.yaml",
+  "areal_config": "/shared/AReaL-RSI/examples/areal_rsi_tir/tir_grpo.yaml",
   "cluster_fileroot": "/shared/areal/experiments",
   "name_resolve_root": "/shared/areal/name_resolve",
   "experiment_name": "rsi-tir-demo",

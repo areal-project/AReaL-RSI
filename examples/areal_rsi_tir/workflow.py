@@ -10,7 +10,7 @@ import areal  # type: ignore[import-not-found]
 from examples.tir import tir_workflow  # type: ignore[import-not-found]
 from examples.tir.tir_workflow import TIRWorkflow  # type: ignore[import-not-found]
 
-from areal_rsi.infra.training.areal_tir import (
+from areal_rsi_tir.assets import (
     attest_worker_inputs,
     checkpoint_digest,
     validate_areal_import_root,

@@ -4,6 +4,9 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from areal_rsi_tir.assets import checkpoint_digest
+from areal_rsi_tir.cycle import TirCycle
+from areal_rsi_tir.harness import TirHarnessSpec
 
 from areal_rsi.api.records import RsiCaseScore, RsiEvaluationReport, RsiSplit, TaskSetVersion
 from areal_rsi.api.research import (
@@ -13,10 +16,7 @@ from areal_rsi.api.research import (
     RsiRolloutEvidence,
     RsiTrainResult,
 )
-from areal_rsi.infra.coordination.releases import active_release
-from areal_rsi.infra.research import ResearchSystem
-from areal_rsi.infra.tasks.tir_harness import TirHarnessSpec
-from areal_rsi.infra.training.areal_tir import checkpoint_digest
+from areal_rsi.infra.coordination.releases import active_release, rollback
 
 
 def _spec(frozen: tuple[Path, Path, Path, Path], candidate: Path) -> GenerationSpec:
@@ -59,7 +59,7 @@ def test_generation_promotes_only_after_signal_and_sealed_gate(
     seen: list[str] = []
 
     def fake_evaluate(
-        self: ResearchSystem,
+        self: TirCycle,
         jobs: object,
         spec: GenerationSpec,
         task_set: TaskSetVersion,
@@ -100,10 +100,12 @@ def test_generation_promotes_only_after_signal_and_sealed_gate(
                 RsiCaseScore(task_id, float(score), "answer", 8 if score else 10)
                 for task_id in getattr(task_set, split.value).task_ids
             ),
+            f"/tmp/{stage}.trajectories.json",
+            "sha256:" + "4" * 64,
         )
 
     def fake_train(
-        self: ResearchSystem,
+        self: TirCycle,
         jobs: object,
         spec: GenerationSpec,
         task_set: TaskSetVersion,
@@ -130,18 +132,19 @@ def test_generation_promotes_only_after_signal_and_sealed_gate(
             RsiRolloutEvidence("/shared/rollout", "sha256:" + "2" * 64, 2, 1),
         )
 
-    monkeypatch.setattr(ResearchSystem, "_evaluate", fake_evaluate)
-    monkeypatch.setattr(ResearchSystem, "_train", fake_train)
-    system = ResearchSystem(tmp_path / "data")
-    outcome = system.run(spec)
+    monkeypatch.setattr(TirCycle, "_evaluate", fake_evaluate)
+    monkeypatch.setattr(TirCycle, "_train", fake_train)
+    monkeypatch.setattr(TirCycle, "_preflight", staticmethod(lambda _spec, _root: None))
+    cycle = TirCycle(tmp_path / "data")
+    outcome = cycle.run(spec)
     if mixed:
         assert outcome.status == "promoted"
         assert outcome.release_id is not None
-        active = active_release(system.data_root)
+        active = active_release(cycle.data_root)
         assert active is not None and active.release_id == outcome.release_id
         assert "sealed_m1_h1" in seen
         count = len(seen)
-        assert system.run(spec) == outcome
+        assert cycle.run(spec) == outcome
         assert len(seen) == count
         next_spec = replace(
             spec,
@@ -151,19 +154,19 @@ def test_generation_promotes_only_after_signal_and_sealed_gate(
             model_root=active.checkpoint_path,
         )
         with pytest.raises(ValueError, match="ancestor sealed task"):
-            system.run(next_spec)
-        (system.data_root / "runs/demo1/outcome.json").unlink()
-        assert system.run(spec) == outcome  # Crash after pointer update is replayable.
-        event = system.rollback(spec.run_id, outcome.release_id, "regression")
-        assert active_release(system.data_root) is None
-        assert system.rollback(spec.run_id, outcome.release_id, "regression") == event
+            cycle.run(next_spec)
+        (cycle.data_root / "runs/demo1/outcome.json").unlink()
+        assert cycle.run(spec) == outcome  # Crash after pointer update is replayable.
+        event = rollback(cycle.data_root, spec.run_id, outcome.release_id, "regression")
+        assert active_release(cycle.data_root) is None
+        assert rollback(cycle.data_root, spec.run_id, outcome.release_id, "regression") == event
         with pytest.raises(ValueError, match="Expected release ID"):
-            system.rollback(spec.run_id, "../active", "invalid")
+            rollback(cycle.data_root, spec.run_id, "../active", "invalid")
     else:
         assert outcome.status == "signal_rejected"
         assert "train" not in seen
         assert all(not stage.startswith("sealed_") for stage in seen)
-        assert active_release(system.data_root) is None
+        assert active_release(cycle.data_root) is None
         Path(spec.areal_config).write_text("scheduler:\n  type: local\n")
         with pytest.raises(ValueError, match="setup changed"):
-            system.run(spec)
+            cycle.run(spec)

@@ -9,10 +9,9 @@ from pathlib import Path
 
 from areal_rsi.api.control import json_bytes
 from areal_rsi.api.records import RsiSplit
-from areal_rsi.infra.coordination.evaluation.tir import complete_tir_report, verified_tir_case
 from areal_rsi.infra.storage.files import write_bytes
-from areal_rsi.infra.tasks.tir_harness import load_tir_harness
-from areal_rsi.infra.training.areal_tir import (
+from areal_rsi.scripts.jobs import digest_bytes
+from areal_rsi_tir.assets import (
     RSI_REWARD_MAX_RETRIES,
     RSI_REWARD_TIMEOUT_SECONDS,
     checkpoint_digest,
@@ -24,7 +23,14 @@ from areal_rsi.infra.training.areal_tir import (
     validate_frozen_model,
     validate_tir_recipe_config,
 )
-from areal_rsi.infra.training.tir_verifier import strict_math_reward
+from areal_rsi_tir.contracts import TirTraceBundle
+from areal_rsi_tir.evaluation import (
+    complete_tir_report,
+    tir_trajectory,
+    verified_tir_case,
+)
+from areal_rsi_tir.harness import load_tir_harness
+from areal_rsi_tir.verifier import strict_math_reward
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -36,7 +42,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--validate-only", action="store_true")
     args, areal_args = parser.parse_known_args(argv)
-    if args.output.exists():
+    bundle_path = args.output.with_suffix(".trajectories.json")
+    if not args.output.is_absolute():
+        raise ValueError("TIR evaluation output path must be absolute")
+    if args.output.exists() or bundle_path.exists():
         raise FileExistsError(args.output)
     if args.split is RsiSplit.MODEL_TRAIN:
         raise ValueError("Model training tasks cannot be evaluated as a selection split")
@@ -106,7 +115,7 @@ def main(argv: list[str] | None = None) -> None:
     verifier_files = tir_verifier_files(runner_root)
     verifier_digest = source_files_digest(verifier_files)
     workflow_kwargs = {
-        "reward_fn": "areal_rsi.infra.training.tir_verifier.strict_tir_reward_fn",
+        "reward_fn": "areal_rsi_tir.verifier.strict_tir_reward_fn",
         "gconfig": config.gconfig,
         "tokenizer": config.tokenizer_path,
         "tir_config": config.tir,
@@ -125,6 +134,7 @@ def main(argv: list[str] | None = None) -> None:
         "reward_max_retries": RSI_REWARD_MAX_RETRIES,
     }
     cases = []
+    traces = []
     try:
         engine.initialize(role="eval-rollout", server_args=server_args)
         jobs = [
@@ -133,7 +143,7 @@ def main(argv: list[str] | None = None) -> None:
                 data,
                 engine.submit(
                     data,
-                    workflow="areal_rsi.infra.training.workflow.FrozenTIRWorkflow",
+                    workflow="areal_rsi_tir.workflow.FrozenTIRWorkflow",
                     workflow_kwargs=workflow_kwargs,
                     group_size=1,
                     is_eval=True,
@@ -154,6 +164,7 @@ def main(argv: list[str] | None = None) -> None:
                 verify=strict_math_reward,
             )
             cases.append(case)
+            traces.append(tir_trajectory(task_id, localized))
     finally:
         engine.destroy()
     if checkpoint_digest(Path(config.actor.path)) != args.base_model_digest:
@@ -162,6 +173,17 @@ def main(argv: list[str] | None = None) -> None:
         raise ValueError("TIR Harness changed during AReaL evaluation")
     if verifier_digest != source_files_digest(verifier_files):
         raise ValueError("TIR verifier changed during AReaL evaluation")
+    bundle = TirTraceBundle(
+        1,
+        frozen.task_set.task_set_id,
+        args.split,
+        args.base_model_digest,
+        frozen.harness.harness_id,
+        frozen.harness.runner_digest,
+        verifier_digest,
+        tuple(traces),
+    )
+    bundle_bytes = json_bytes(bundle)
     report = complete_tir_report(
         frozen.task_set,
         args.split,
@@ -173,7 +195,10 @@ def main(argv: list[str] | None = None) -> None:
         seed=config.seed,
         temperature=config.gconfig.temperature,
         max_new_tokens=config.gconfig.max_new_tokens,
+        trajectory_path=str(bundle_path),
+        trajectory_digest=digest_bytes(bundle_bytes),
     )
+    write_bytes(bundle_path, bundle_bytes, immutable=True)
     write_bytes(args.output, json_bytes(report), immutable=True)
 
 

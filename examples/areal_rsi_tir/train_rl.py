@@ -13,8 +13,7 @@ from pathlib import Path
 from areal_rsi.api.control import json_bytes, safe_name
 from areal_rsi.api.research import RsiTrainResult
 from areal_rsi.infra.storage.files import write_bytes
-from areal_rsi.infra.tasks.tir_harness import load_tir_harness
-from areal_rsi.infra.training.areal_tir import (
+from areal_rsi_tir.assets import (
     RSI_REWARD_MAX_RETRIES,
     RSI_REWARD_TIMEOUT_SECONDS,
     checkpoint_digest,
@@ -30,7 +29,8 @@ from areal_rsi.infra.training.areal_tir import (
     validate_tir_recipe_config,
     validate_tir_train_identity,
 )
-from areal_rsi.infra.training.tir_verifier import strict_math_reward
+from areal_rsi_tir.harness import load_tir_harness
+from areal_rsi_tir.verifier import strict_math_reward
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -107,7 +107,7 @@ def main(argv: list[str] | None = None) -> None:
     train_dataset = Dataset.from_list(list(frozen.train_rows))
     valid_dataset = Dataset.from_list(list(frozen.dev_rows))
     workflow_kwargs = {
-        "reward_fn": "areal_rsi.infra.training.tir_verifier.strict_tir_reward_fn",
+        "reward_fn": "areal_rsi_tir.verifier.strict_tir_reward_fn",
         "gconfig": config.gconfig,
         "tokenizer": config.tokenizer_path,
         "tir_config": config.tir,
@@ -127,9 +127,9 @@ def main(argv: list[str] | None = None) -> None:
     }
     with PPOTrainer(config, train_dataset, valid_dataset) as trainer:
         trainer.train(
-            workflow="areal_rsi.infra.training.workflow.FrozenTIRWorkflow",
+            workflow="areal_rsi_tir.workflow.FrozenTIRWorkflow",
             workflow_kwargs=workflow_kwargs,
-            eval_workflow="areal_rsi.infra.training.workflow.FrozenTIRWorkflow",
+            eval_workflow="areal_rsi_tir.workflow.FrozenTIRWorkflow",
             eval_workflow_kwargs=workflow_kwargs,
         )
     validate_frozen_model(config, args.base_model_digest, rl=True)

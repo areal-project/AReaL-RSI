@@ -38,12 +38,11 @@ flowchart LR
 | `src/areal_rsi/api/research.py` | 单代实验规格、预算、状态与决策契约 |
 | `src/areal_rsi/api/execution.py` | 外部作业与轨迹收据 |
 | `src/areal_rsi/api/control.py` | JSON 边界解码、ID/路径校验、控制请求 |
-| `src/areal_rsi/infra/research.py` | 唯一系统入口 `ResearchSystem`；检查状态与授权，推进 generation |
-| `src/areal_rsi/infra/tasks/` | ToRL 冻结、TIR Harness 快照、私有验证器 |
-| `src/areal_rsi/infra/coordination/` | 状态、作业记录、原子发布；`policies/` 选版，`evaluation/` 配对分析，`tools/` 研究员可见能力 |
-| `src/areal_rsi/infra/training/` | AReaL 2.0 GRPO recipe 与只支持 Slurm 的集群预检 |
+| `src/areal_rsi/infra/coordination/` | 原子发布及版本谱系 |
+| `src/areal_rsi/scripts/` | AReaL recipe 进程收据与 Slurm 控制端预检 |
+| `examples/areal_rsi_tir/` | ToRL/TIR 的题集、Harness、reward、workflow、AReaL 训练/推理 recipe 与运行入口；仅在这里锁定同一实验并执行选版 |
 
-API 不依赖 infra；infra 不依赖 UI。系统不复制 AReaL 的调度器或训练器。AReaL recipe 直接用它的 `PPOTrainer`、`TIRWorkflow` 和 `SlurmScheduler`；RSI 管实验身份、证据及晋升规则。当前旧分支的实现可作为参考，但代码要按上述契约重新选择和整理，不整包搬迁旧 `ResearchSystem`、Web UI、pass@k 控制层或 Ray 适配。
+API 不依赖 infra；infra 不依赖 UI。系统不复制 AReaL 的调度器或训练器。TIR 示例 recipe 直接调用 AReaL 的 `PPOTrainer`、`TIRWorkflow` 和 `SlurmScheduler`，经 `areal_rsi/scripts/` 留下作业意图与回执；通用核心不导入 TIR 示例，也不设置通用研究系统。当前旧分支的实现可作为参考，但不整包搬迁旧 Web UI、pass@k 控制层或 Ray 适配。
 
 旧历史前十个 commit 中，首个 API commit 的 `Task`、`VerificationResult`、`ModelVersion`、`HarnessVersion`、`TrajectoryRef` 等**值对象思路**值得保留；新契约会围绕一个真实 TIR 训练闭环重新命名和收窄。`ContentStore/Memory/AgentRuntime/TrainingBackend/Benchmark` 等大量单实现 `Protocol`、通用 `EvolutionTarget` 和旧服务接口不作为兼容目标。需要第二个实际实现时，再从调用点提取最小协议。这里保留的是可检验的语义，不承诺兼容旧 JSON schema 或 import 路径。
 
@@ -53,7 +52,7 @@ API 不依赖 infra；infra 不依赖 UI。系统不复制 AReaL 的调度器或
 
 AReaL 当前 Slurm 提交器要求按整节点分配 GPU；最小烟测的实际资源需求取决于目标分区每节点的 GPU 数。先测出可用节点形状，再冻结 batch、并发和训练预算。
 
-预检分两段：控制器验证 `sbatch/squeue/scancel`、共享路径与 recipe 配置；一个实际 Slurm worker 验证 GPU、SGLang、模型加载、源码/任务/Harness 摘要及最小 TIR rollout。只有真实 worker 通过，才能提交完整训练。已有 AReaL 配置示例使用 `scheduler.type: slurm`；最终命令必须在目标集群验证。
+预检分两段：控制器验证 `sbatch/squeue/scancel/srun/scontrol`、共享路径与 recipe 配置；一个实际 Slurm worker 验证 GPU、SGLang、模型加载、源码/任务/Harness 摘要及最小 TIR rollout。只有真实 worker 通过，才能提交完整训练。已有 AReaL 配置示例使用 `scheduler.type: slurm`；最终命令必须在目标集群验证。
 
 ## 5. 训练、比较和晋升
 

@@ -50,11 +50,33 @@ class AReaLJobRunner:
             if read_record(intent_path, JobIntent) != intent:
                 raise ValueError(f"Recipe command changed for stage {stage}")
             if not receipt_path.exists():
-                raise UncertainAReaLJob(f"Reconcile AReaL stage {stage} before resubmitting")
+                if output.is_symlink() or not output.is_file():
+                    raise UncertainAReaLJob(f"Reconcile AReaL stage {stage} before resubmitting")
+                ids = self._job_ids(log_path)
+                if self.require_slurm_jobs and not ids:
+                    raise UncertainAReaLJob(
+                        f"AReaL stage {stage} has output but no recorded Slurm job ID"
+                    )
+                write_bytes(
+                    receipt_path,
+                    json_bytes(
+                        JobReceipt(
+                            stage,
+                            command_digest,
+                            digest_bytes(output.read_bytes()),
+                            str(log_path),
+                            None,
+                            ids,
+                            "recovered",
+                        )
+                    ),
+                    immutable=True,
+                )
             receipt = read_record(receipt_path, JobReceipt)
             if (
                 receipt.command_digest != command_digest
                 or receipt.stage != stage
+                or output.is_symlink()
                 or not output.is_file()
                 or digest_bytes(output.read_bytes()) != receipt.output_digest
             ):
@@ -77,20 +99,11 @@ class AReaLJobRunner:
                 check=False,
                 env=environment,
             )
-        if result.returncode != 0 or not output.is_file():
+        if result.returncode != 0 or output.is_symlink() or not output.is_file():
             raise UncertainAReaLJob(
                 f"AReaL stage {stage} failed or produced no output; inspect {log_path}"
             )
-        job_ids = tuple(
-            sorted(
-                {
-                    int(value)
-                    for value in re.findall(
-                        r"Submitted batch job ([0-9]+)", log_path.read_text(errors="replace")
-                    )
-                }
-            )
-        )
+        job_ids = self._job_ids(log_path)
         if self.require_slurm_jobs and not job_ids:
             raise UncertainAReaLJob(f"AReaL stage {stage} has no recorded Slurm job ID")
         receipt = JobReceipt(
@@ -100,6 +113,24 @@ class AReaLJobRunner:
             str(log_path),
             time.monotonic() - started,
             job_ids,
+            "process",
         )
         write_bytes(receipt_path, json_bytes(receipt), immutable=True)
         return output
+
+    @staticmethod
+    def _job_ids(log_path: Path) -> tuple[int, ...]:
+        if log_path.is_symlink() or not log_path.is_file():
+            return ()
+        return tuple(
+            sorted(
+                {
+                    int(value)
+                    for value in re.findall(
+                        r"Submitted batch job ([0-9]+)",
+                        log_path.read_text(errors="replace"),
+                    )
+                    if int(value) > 0
+                }
+            )
+        )

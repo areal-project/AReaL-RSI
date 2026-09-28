@@ -10,6 +10,7 @@ from typing import Any
 from areal_rsi.api.control import json_bytes
 from areal_rsi.api.records import RsiCaseScore, RsiEvaluationReport, RsiSplit, TaskSetVersion
 from areal_rsi.api.research import RsiTrainingSignal
+from areal_rsi_tir.contracts import TirTrajectory
 
 
 def assess_tir_training_signal(
@@ -84,34 +85,46 @@ def verified_tir_case(
 ) -> RsiCaseScore:
     """Recompute reward from generated tokens, excluding tool observations."""
 
-    ids = _row(trajectory.get("input_ids"), "input_ids")
-    loss_mask = _row(trajectory.get("loss_mask"), "loss_mask")
-    attention = _row(trajectory.get("attention_mask"), "attention_mask")
-    if not len(ids) == len(loss_mask) == len(attention):
-        raise ValueError("TIR trajectory token arrays are misaligned")
-    if any(type(token) is not int or token < 0 for token in ids):
-        raise ValueError("TIR trajectory contains invalid token IDs")
-    if any(value not in (0, 1) for value in loss_mask + attention):
-        raise ValueError("TIR trajectory masks must be binary")
-    if any(attention[i] < attention[i + 1] for i in range(len(attention) - 1)):
-        raise ValueError("TIR attention mask is not prefix-contiguous")
+    evidence = tir_trajectory(task_id, trajectory)
     output_ids = [
         token
-        for token, trainable, visible in zip(ids, loss_mask, attention, strict=True)
+        for token, trainable, visible in zip(
+            evidence.input_ids, evidence.loss_mask, evidence.attention_mask, strict=True
+        )
         if trainable and visible
     ]
     response = decode(output_ids)
     score = float(verify(response, answer))
+    if not math.isfinite(score) or not math.isclose(score, evidence.reward, abs_tol=1e-6):
+        raise ValueError("TIR trusted verifier disagrees with rollout reward")
+    return RsiCaseScore(task_id, score, response, len(output_ids))
+
+
+def tir_trajectory(task_id: str, trajectory: dict[str, Any]) -> TirTrajectory:
+    """Keep the exact token/mask evidence needed to recheck tool boundaries."""
+
+    ids = _row(trajectory.get("input_ids"), "input_ids")
+    loss_mask = _row(trajectory.get("loss_mask"), "loss_mask")
+    attention = _row(trajectory.get("attention_mask"), "attention_mask")
+    if any(
+        type(value) not in (int, bool) or value not in (0, 1) for value in loss_mask + attention
+    ):
+        raise ValueError("TIR trajectory masks must be binary")
     rewards = _list(trajectory.get("rewards"))
     if (
         not isinstance(rewards, list)
         or len(rewards) != 1
-        or not isinstance(rewards[0], (int, float))
+        or type(rewards[0]) not in (int, float)
         or not math.isfinite(float(rewards[0]))
-        or not math.isclose(score, float(rewards[0]), abs_tol=1e-6)
     ):
-        raise ValueError("TIR trusted verifier disagrees with rollout reward")
-    return RsiCaseScore(task_id, score, response, len(output_ids))
+        raise ValueError("TIR trajectory reward is invalid")
+    return TirTrajectory(
+        task_id,
+        tuple(ids),
+        tuple(int(value) for value in loss_mask),
+        tuple(int(value) for value in attention),
+        float(rewards[0]),
+    )
 
 
 def complete_tir_report(
@@ -126,6 +139,8 @@ def complete_tir_report(
     seed: int,
     temperature: float,
     max_new_tokens: int,
+    trajectory_path: str,
+    trajectory_digest: str,
 ) -> RsiEvaluationReport:
     expected = getattr(task_set, split.value).task_ids
     by_id = {case.task_id: case for case in cases}
@@ -142,4 +157,6 @@ def complete_tir_report(
         temperature,
         max_new_tokens,
         tuple(by_id[task_id] for task_id in expected),
+        trajectory_path,
+        trajectory_digest,
     )

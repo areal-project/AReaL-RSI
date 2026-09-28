@@ -37,6 +37,28 @@ class HarnessSelectionDecision:
 
 
 @dataclass(frozen=True, slots=True)
+class HarnessNoiseEvidence:
+    baseline_primary_digest: str
+    baseline_repeat_digest: str
+    primary_seed: int
+    repeat_seed: int
+    observed_score_spread: float
+    effective_noise_band: float
+
+    def __post_init__(self) -> None:
+        if (
+            not valid_digest(self.baseline_primary_digest)
+            or not valid_digest(self.baseline_repeat_digest)
+            or self.primary_seed == self.repeat_seed
+            or not math.isfinite(self.observed_score_spread)
+            or self.observed_score_spread < 0
+            or not math.isfinite(self.effective_noise_band)
+            or self.effective_noise_band < self.observed_score_spread
+        ):
+            raise ValueError("Harness A/A evidence is invalid")
+
+
+@dataclass(frozen=True, slots=True)
 class RsiRolloutEvidence:
     path: str
     digest: str

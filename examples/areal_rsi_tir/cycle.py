@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from typing import Literal
 
-from areal_rsi.api.control import decode, json_bytes, read_record
+from areal_rsi.api.control import decode, json_bytes, read_record, safe_name
 from areal_rsi.api.execution import ResearchIntent
 from areal_rsi.api.records import RsiEvaluationReport, RsiSplit, TaskSetVersion
 from areal_rsi.api.research import (
@@ -16,15 +16,9 @@ from areal_rsi.api.research import (
     GenerationOutcome,
     GenerationSetup,
     GenerationSpec,
+    HarnessSelectionRule,
     ReleaseRecord,
-    RollbackEvent,
     RsiTrainResult,
-)
-from areal_rsi.infra.coordination.evaluation.tir import assess_tir_training_signal
-from areal_rsi.infra.coordination.policies.harness_selection import select_harness
-from areal_rsi.infra.coordination.policies.promotion import (
-    confirm_promotion,
-    propose_promotion,
 )
 from areal_rsi.infra.coordination.releases import (
     active_release,
@@ -32,35 +26,46 @@ from areal_rsi.infra.coordination.releases import (
     release_ancestry,
     rollback,
 )
-from areal_rsi.infra.coordination.tools.harness import propose_tir_prompt
 from areal_rsi.infra.storage.files import write_bytes
-from areal_rsi.infra.tasks.tir import load_tir_task_set, public_tir_tasks
-from areal_rsi.infra.tasks.tir_harness import (
-    TirHarnessSpec,
-    freeze_tir_harness,
-    load_tir_harness,
-)
-from areal_rsi.infra.training.areal_tir import (
+from areal_rsi.scripts.jobs import AReaLJobRunner, digest_bytes
+from areal_rsi.scripts.slurm import check_slurm
+from areal_rsi_tir.assets import (
     checkpoint_digest,
     rollout_dump_evidence,
     source_files_digest,
     tir_verifier_files,
 )
-from areal_rsi.infra.training.jobs import AReaLJobRunner, digest_bytes
+from areal_rsi_tir.contracts import TirTraceBundle
+from areal_rsi_tir.evaluation import assess_tir_training_signal
+from areal_rsi_tir.harness import (
+    TirHarnessSpec,
+    freeze_tir_harness,
+    load_tir_harness,
+)
+from areal_rsi_tir.harness_selection import (
+    assess_harness_noise,
+    select_harness,
+)
+from areal_rsi_tir.promotion import (
+    confirm_promotion,
+    propose_promotion,
+)
+from areal_rsi_tir.proposer import propose_tir_prompt
+from areal_rsi_tir.tasks import load_tir_task_set, public_tir_tasks
 
 
-class ResearchSystem:
-    """Controller for a single researcher candidate and one frozen training job."""
+class TirCycle:
+    """One ToRL/TIR generation with an exclusive Slurm submission identity."""
 
     def __init__(self, data_root: Path) -> None:
         self.data_root = data_root.resolve()
 
     def run(self, spec: GenerationSpec) -> GenerationOutcome:
-        run_root = self.data_root / "runs" / spec.run_id
-        run_root.mkdir(parents=True, exist_ok=True)
-        with (run_root / ".lock").open("a+b") as lock:
+        root = self.data_root / "runs" / safe_name(spec.run_id)
+        root.mkdir(parents=True, exist_ok=True)
+        with (root / ".lock").open("a+b") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            return self._run(spec, run_root)
+            return self._run(spec, root)
 
     def _run(self, spec: GenerationSpec, root: Path) -> GenerationOutcome:
         task_set = load_tir_task_set(Path(spec.task_set_root))
@@ -130,6 +135,7 @@ class ResearchSystem:
                     raise ValueError("New generation reuses an ancestor sealed task")
         write_bytes(setup_path, json_bytes(setup), immutable=True)
         write_bytes(root / "areal_config.yaml", config_bytes, immutable=True)
+        self._preflight(spec, root)
 
         jobs = AReaLJobRunner(
             root / "jobs",
@@ -173,6 +179,21 @@ class ResearchSystem:
             spec.seed,
             verifier_digest,
         )
+        h0_select_repeat = self._evaluate(
+            jobs,
+            spec,
+            task_set,
+            h0,
+            Path(spec.h0_root),
+            Path(spec.model_root),
+            model_digest,
+            RsiSplit.HARNESS_SELECT,
+            "h0_select_repeat",
+            spec.repeat_seed,
+            verifier_digest,
+        )
+        noise = assess_harness_noise(h0_select, h0_select_repeat, spec.harness_rule.noise_band)
+        write_bytes(root / "harness_noise.json", json_bytes(noise), immutable=True)
         candidate_root = root / "candidate_harness"
         if not candidate_root.exists():
             freeze_tir_harness(
@@ -209,7 +230,10 @@ class ResearchSystem:
             spec.seed,
             verifier_digest,
         )
-        choice = select_harness(h0_select, h1_select, spec.harness_rule)
+        effective_rule = HarnessSelectionRule(
+            noise.effective_noise_band, spec.harness_rule.max_relative_token_cost
+        )
+        choice = select_harness(h0_select, h1_select, effective_rule)
         write_bytes(root / "harness_selection.json", json_bytes(choice), immutable=True)
         if not choice.accepted:
             return self._finish(
@@ -393,9 +417,6 @@ class ResearchSystem:
             ),
         )
 
-    def rollback(self, run_id: str, expected_release_id: str, reason: str) -> RollbackEvent:
-        return rollback(self.data_root, run_id, expected_release_id, reason)
-
     @staticmethod
     def _candidate_prompt(
         spec: GenerationSpec,
@@ -470,6 +491,10 @@ class ResearchSystem:
         return outcome
 
     @staticmethod
+    def _preflight(spec: GenerationSpec, root: Path) -> None:
+        write_bytes(root / "slurm_preflight.json", json_bytes(check_slurm(spec)), immutable=True)
+
+    @staticmethod
     def _overrides(
         spec: GenerationSpec, harness: TirHarnessSpec, model: Path, stage: str, seed: int
     ) -> tuple[str, ...]:
@@ -511,7 +536,7 @@ class ResearchSystem:
         command = (
             spec.areal_python,
             "-m",
-            "areal_rsi.infra.training.eval_tir",
+            "areal_rsi_tir.evaluate",
             "--task-set-root",
             spec.task_set_root,
             "--harness-root",
@@ -531,6 +556,13 @@ class ResearchSystem:
         jobs.run(stage, command, output)
         report = read_record(output, RsiEvaluationReport)
         expected_ids = getattr(task_set, split.value).task_ids
+        bundle_path = output.with_suffix(".trajectories.json")
+        if report.trajectory_path != str(bundle_path):
+            raise ValueError(f"AReaL evaluation trace path changed: {stage}")
+        bundle = read_record(bundle_path, TirTraceBundle)
+        bundle_bytes = bundle_path.read_bytes()
+        if digest_bytes(bundle_bytes) != report.trajectory_digest:
+            raise ValueError(f"AReaL evaluation traces changed: {stage}")
         if (
             report.task_set_id != task_set.task_set_id
             or report.split is not split
@@ -540,6 +572,24 @@ class ResearchSystem:
             or report.verifier_digest != verifier_digest
             or report.seed != seed
             or tuple(case.task_id for case in report.cases) != expected_ids
+            or bundle.task_set_id != task_set.task_set_id
+            or bundle.split is not split
+            or bundle.model_digest != model_digest
+            or bundle.harness_id != harness.harness_id
+            or bundle.runner_digest != harness.runner_digest
+            or bundle.verifier_digest != verifier_digest
+            or tuple(trace.task_id for trace in bundle.trajectories) != expected_ids
+            or any(
+                case.generated_tokens
+                != sum(
+                    bool(trainable and visible)
+                    for trainable, visible in zip(
+                        trace.loss_mask, trace.attention_mask, strict=True
+                    )
+                )
+                or case.score != trace.reward
+                for case, trace in zip(report.cases, bundle.trajectories, strict=True)
+            )
         ):
             raise ValueError(f"AReaL evaluation report failed frozen identity checks: {stage}")
         return report
@@ -559,7 +609,7 @@ class ResearchSystem:
         command = (
             spec.areal_python,
             "-m",
-            "areal_rsi.infra.training.train_tir_rl",
+            "areal_rsi_tir.train_rl",
             "--task-set-root",
             spec.task_set_root,
             "--harness-root",
@@ -608,16 +658,18 @@ def main() -> None:
     undo.add_argument("--expected-release-id", required=True)
     undo.add_argument("--reason", required=True)
     args = parser.parse_args()
-    system = ResearchSystem(args.data_root)
+    cycle = TirCycle(args.data_root)
     if args.operation == "rollback":
         print(
-            json_bytes(system.rollback(args.run_id, args.expected_release_id, args.reason)).decode()
+            json_bytes(
+                rollback(cycle.data_root, args.run_id, args.expected_release_id, args.reason)
+            ).decode()
         )
     else:
         if args.config.is_symlink() or not args.config.is_file():
             raise ValueError("Generation config must be a regular file")
         spec = decode(GenerationSpec, json.loads(args.config.read_bytes()))
-        print(json_bytes(system.run(spec)).decode())
+        print(json_bytes(cycle.run(spec)).decode())
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ import pytest
 
 from areal_rsi.api.control import read_record
 from areal_rsi.api.execution import JobReceipt
-from areal_rsi.infra.training.jobs import AReaLJobRunner, UncertainAReaLJob
+from areal_rsi.scripts.jobs import AReaLJobRunner, UncertainAReaLJob
 
 
 def test_completed_recipe_is_reused_and_tampering_fails(tmp_path: Path) -> None:
@@ -65,5 +65,13 @@ def test_slurm_job_id_is_required_for_real_recipe(tmp_path: Path) -> None:
         str(output),
     )
     runner.run("eval", command, output)
-    receipt = read_record(tmp_path / "jobs/eval.receipt.json", JobReceipt)
+    receipt_path = tmp_path / "jobs/eval.receipt.json"
+    receipt = read_record(receipt_path, JobReceipt)
     assert receipt.slurm_job_ids == (12345,)
+    assert receipt.completion_source == "process"
+    receipt_path.unlink()  # Recipe finished; controller died before recording completion.
+    assert runner.run("eval", command, output) == output
+    recovered = read_record(receipt_path, JobReceipt)
+    assert recovered.slurm_job_ids == (12345,)
+    assert recovered.completion_source == "recovered"
+    assert recovered.elapsed_seconds is None

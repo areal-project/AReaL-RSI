@@ -14,8 +14,8 @@ from typing import Any
 
 from areal_rsi.api.records import RsiSplit, TaskSetVersion
 from areal_rsi.api.research import RsiRolloutEvidence
-from areal_rsi.infra.tasks.tir import load_tir_task_set, public_tir_tasks
-from areal_rsi.infra.tasks.tir_harness import TirHarnessSpec, load_tir_harness
+from areal_rsi_tir.harness import TirHarnessSpec, load_tir_harness
+from areal_rsi_tir.tasks import load_tir_task_set, public_tir_tasks
 
 RSI_REWARD_TIMEOUT_SECONDS = 60
 RSI_REWARD_MAX_RETRIES = 0
@@ -190,17 +190,19 @@ class TrustedSourceFile:
 
 
 def tir_verifier_files(runner_root: Path) -> tuple[TrustedSourceFile, ...]:
-    rsi_package = Path(__file__).resolve().parents[2]
-    rsi_paths = tuple(
-        sorted(path for path in rsi_package.rglob("*.py") if "__pycache__" not in path.parts)
-    )
+    import areal_rsi
+
+    rsi_package = Path(areal_rsi.__file__).resolve().parent
+    example_package = Path(__file__).resolve().parent
     return (
         TrustedSourceFile(
             "areal/api/reward_api.py", runner_root.parents[1] / "areal/api/reward_api.py"
         ),
         *(
-            TrustedSourceFile("rsi/" + path.relative_to(rsi_package).as_posix(), path)
-            for path in rsi_paths
+            TrustedSourceFile(label + "/" + path.relative_to(package).as_posix(), path)
+            for label, package in (("rsi", rsi_package), ("example", example_package))
+            for path in sorted(package.rglob("*.py"))
+            if "__pycache__" not in path.parts
         ),
     )
 

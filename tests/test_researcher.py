@@ -5,10 +5,10 @@ import json
 from urllib.request import Request
 
 import pytest
+from areal_rsi_tir import proposer as harness
 
 from areal_rsi.api.records import RsiCaseScore, RsiEvaluationReport, RsiSplit, Task
 from areal_rsi.api.research import ResearcherSpec
-from areal_rsi.infra.coordination.tools import harness
 
 
 def test_researcher_receives_only_public_question_and_failure(
@@ -26,6 +26,8 @@ def test_researcher_receives_only_public_question_and_failure(
         1.0,
         32,
         (RsiCaseScore("case1", 0.0, "4", 1),),
+        "/tmp/evolve.trajectories.json",
+        "sha256:" + "4" * 64,
     )
     sent: list[Request] = []
 
@@ -66,6 +68,8 @@ def test_researcher_rejects_question_copy(monkeypatch: pytest.MonkeyPatch) -> No
         1.0,
         32,
         (RsiCaseScore("case1", 0.0, "wrong", 1),),
+        "/tmp/evolve.trajectories.json",
+        "sha256:" + "4" * 64,
     )
 
     def fake_open(request: Request) -> io.BytesIO:

@@ -2,8 +2,49 @@
 
 from __future__ import annotations
 
+import hashlib
+
+from areal_rsi.api.control import json_bytes
 from areal_rsi.api.records import RsiEvaluationReport, RsiSplit
-from areal_rsi.api.research import HarnessSelectionDecision, HarnessSelectionRule
+from areal_rsi.api.research import (
+    HarnessNoiseEvidence,
+    HarnessSelectionDecision,
+    HarnessSelectionRule,
+)
+
+
+def assess_harness_noise(
+    primary: RsiEvaluationReport,
+    repeat: RsiEvaluationReport,
+    minimum_band: float,
+) -> HarnessNoiseEvidence:
+    if primary.split is not RsiSplit.HARNESS_SELECT or repeat.split is not primary.split:
+        raise ValueError("Harness A/A requires the frozen harness_select split")
+    for field in (
+        "model_digest",
+        "harness_id",
+        "task_set_id",
+        "runner_digest",
+        "verifier_digest",
+        "temperature",
+        "max_new_tokens",
+    ):
+        if getattr(primary, field) != getattr(repeat, field):
+            raise ValueError(f"Harness A/A changed {field}")
+    if primary.seed == repeat.seed or tuple(case.task_id for case in primary.cases) != tuple(
+        case.task_id for case in repeat.cases
+    ):
+        raise ValueError("Harness A/A needs the same tasks and distinct seeds")
+    spread = abs(primary.score - repeat.score)
+    rule = HarnessSelectionRule(minimum_band, 0)
+    return HarnessNoiseEvidence(
+        "sha256:" + hashlib.sha256(json_bytes(primary)).hexdigest(),
+        "sha256:" + hashlib.sha256(json_bytes(repeat)).hexdigest(),
+        primary.seed,
+        repeat.seed,
+        spread,
+        max(rule.noise_band, spread),
+    )
 
 
 def select_harness(

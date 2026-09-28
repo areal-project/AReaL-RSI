@@ -4,15 +4,15 @@ import json
 from pathlib import Path
 
 import pytest
-
-from areal_rsi.api.records import RsiSplit
-from areal_rsi.infra.tasks.tir import load_tir_task_set, public_tir_tasks
-from areal_rsi.infra.tasks.tir_harness import freeze_tir_harness, load_tir_harness
-from areal_rsi.infra.training.areal_tir import (
+from areal_rsi_tir.assets import (
     attest_worker_inputs,
     source_files_digest,
     tir_verifier_files,
 )
+from areal_rsi_tir.harness import freeze_tir_harness, load_tir_harness
+from areal_rsi_tir.tasks import load_tir_task_set, public_tir_tasks
+
+from areal_rsi.api.records import RsiSplit
 
 
 def test_public_tasks_exclude_answers_and_detect_tampering(

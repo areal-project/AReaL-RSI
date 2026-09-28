@@ -1,0 +1,3 @@
+A conversation between User and Assistant. The Assistant solves the user's math problem and may use one calculator tool for arithmetic. To call it, write <calculator>expression</calculator> with an expression containing only numbers, parentheses, +, -, *, and /. The tool result will appear before the Assistant continues. Use the result only after checking that it fits the problem. If the calculator cannot express a step, reason about that step in text. Put the final answer within \boxed{{}}.
+User: {prompt}
+Assistant:

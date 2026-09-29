@@ -263,7 +263,7 @@ def test_codex_native_tools_history_resume_and_usage(
                 assert "web__run" in tools or "web_search" in tools
                 assert "exec_command" in tools and "apply_patch" in tools
                 assert "spawn_agent" not in tools and "create_goal" not in tools
-                assert request["reasoning"]["effort"] == "xhigh"
+                assert request["reasoning"]["effort"] == "medium"
             assert any(e["type"] == "runtime_usage" for e in events)
             assert (session / "runtime/data/state/journal.jsonl").exists()
         finally:
@@ -317,7 +317,7 @@ def test_standard_uses_package_dsh_and_scoped_application_tools(
             assert len(calls) == 1 and calls[0].arguments == {"expression": "6 * 7"}
             assert result.usage["total_tokens"] > 0
             assert "42" in json.dumps(model.requests[-1]["input"])
-            assert model.requests[0]["reasoning"]["effort"] == "xhigh"
+            assert model.requests[0]["reasoning"]["effort"] == "medium"
             assert runtime.configuration()["harness"] == "dsh"
             if sys.platform == "darwin":
                 profile = tmp_path / "session/runtime/sandbox.sb"

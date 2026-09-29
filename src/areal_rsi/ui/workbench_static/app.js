@@ -39,7 +39,7 @@ const state = {
   creating: false,
   models: [],
   defaultModelSettings: {},
-  createEffort: "xhigh",
+  createEffort: "medium",
   modelDrafts: new Map(),
   modelFormRun: null,
   modelSavingRun: null,
@@ -338,6 +338,10 @@ function tickElapsed() {
   for (const item of document.querySelectorAll("[data-elapsed-start]")) {
     const parse = (value) => value && /^\d+(\.\d+)?$/.test(value) ? Number(value) : value;
     item.textContent = duration(parse(item.dataset.elapsedStart), parse(item.dataset.elapsedEnd));
+  }
+  for (const item of document.querySelectorAll("[data-stale-after]")) {
+    const at = Number(item.dataset.staleAfter);
+    item.hidden = !Number.isFinite(at) || Date.now() <= at;
   }
 }
 const activeJob = (job) => ["pending", "queued", "starting", "running"].includes(job.status);
@@ -1348,8 +1352,7 @@ function renderNode(run) {
   const trace = state.agentTraces.get(traceKey);
   const signature = JSON.stringify([run.run_id, run.status, run.finished_at, node, budget, latest, run.human, state.busy,
     run.worker_alive, run.agent_activity?.[node?.agent_id], run.goals?.[node?.agent_id],
-    run.agents?.find((a) => a.agent_id === node?.agent_id), run.jobs, [...(trace?.entries.values() || [])], trace?.loading, trace?.error, trace?.next,
-    Math.floor(Date.now() / 5000)]);
+    run.agents?.find((a) => a.agent_id === node?.agent_id), run.jobs, [...(trace?.entries.values() || [])], trace?.loading, trace?.error, trace?.next]);
   if (signature === state.detailSignature) return;
   state.detailSignature = signature;
   if (!node) {
@@ -1877,7 +1880,7 @@ const createPreset = new WorkbenchDropdown($("create-model-preset"), {
   label: "常用模型", onChange: (value) => { $("create-model").value = value; updateCreateModels(); },
 });
 const createBackend = new WorkbenchDropdown($("create-backend"), {
-  label: "Agent 后端", onChange: (value) => { state.createBackend = value; if (value === "standard") state.createAuthMode = "api_key"; updateCreateAuth(); },
+  label: "Agent 后端", onChange: (value) => { state.createBackend = value; if (value === "standard") state.createAuthMode = "api_key"; createBackend.update(backendOptions, value); updateCreateAuth(); },
 });
 const createAuth = new WorkbenchDropdown($("create-auth-mode"), {
   label: "认证方式", onChange: (value) => { state.createAuthMode = value; $("create-api-key").value = ""; updateCreateAuth(); },
@@ -1891,7 +1894,7 @@ function updateCreateAuth() {
   }
 }
 const createEffort = new WorkbenchDropdown($("create-effort"), {
-  label: "推理强度", onChange: (value) => { state.createEffort = value; },
+  label: "推理强度", onChange: (value) => { state.createEffort = value; updateCreateModels(); },
 });
 function updateCreateModels() {
   const model = $("create-model").value;
@@ -1908,7 +1911,7 @@ function openCreate(message = "", collaboration = null) {
   if (state.creating) return;
   const defaults = state.defaultModelSettings;
   $("create-base-url").value = defaults.base_url || "https://4ipic.com";
-  $("create-model").value = defaults.model || "gpt-5.6-luna";
+  $("create-model").value = defaults.model || "gpt-6-astra";
   $("create-api-key").value = "";
   $("create-api-key").placeholder = defaults.has_credentials ? "留空使用默认密钥（已配置）" : "请输入 API Key";
   $("create-message").value = message;
@@ -1916,7 +1919,7 @@ function openCreate(message = "", collaboration = null) {
   $("create-hours").value = "";
   $("create-time-limit").hidden = !state.workspaceReady;
   $("create-options").open = !defaults.has_credentials && defaults.auth_mode !== "codex_login";
-  state.createEffort = defaults.reasoning_effort || "xhigh";
+  state.createEffort = defaults.reasoning_effort || "medium";
   state.createBackend = defaults.backend || "standard";
   createBackend.update(backendOptions, state.createBackend);
   state.createAuthMode = defaults.auth_mode || "api_key";
@@ -2266,9 +2269,11 @@ function agentDiagnostics(run, agentId) {
   const last = activity.last_progress_at || activity.updated_at;
   if (last) {
     const line = element('p', 'muted', '最近活动距今 '); line.append(elapsed(last)); box.append(line);
-    const age = Date.now() - new Date(timestamp(last)).getTime();
-    if (!terminal && !paused && goal?.status !== 'completed' && goal?.status !== 'blocked' && age > 60000) {
-      box.append(element('p', 'trace-stale', '超过 1 分钟没有新活动。可能仍在等待模型或工具；仅凭时间不能判定卡死。'));
+    if (!terminal && !paused && goal?.status !== 'completed' && goal?.status !== 'blocked') {
+      const warning = element('p', 'trace-stale', '超过 1 分钟没有新活动。可能仍在等待模型或工具；仅凭时间不能判定卡死。');
+      warning.dataset.staleAfter = String(new Date(timestamp(last)).getTime() + 60000);
+      warning.hidden = Date.now() <= Number(warning.dataset.staleAfter);
+      box.append(warning);
     }
   }
   return box;

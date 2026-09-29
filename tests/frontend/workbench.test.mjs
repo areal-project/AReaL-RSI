@@ -5,7 +5,7 @@ import {Window} from 'happy-dom';
 
 const assets = new URL('../../src/areal_rsi/ui/workbench_static/', import.meta.url);
 const source = (name) => readFileSync(new URL(name, assets), 'utf8');
-const defaults = {base_url: 'https://4ipic.com', model: 'gpt-6-astra', reasoning_effort: 'xhigh', has_credentials: true};
+const defaults = {base_url: 'https://4ipic.com', model: 'gpt-6-astra', reasoning_effort: 'medium', has_credentials: true};
 const collaborationCatalog = {modes: [
   {id: 'passk', label: '纯 pass@k', version: '1', description: '独立探索，RSI 只监督继续。'},
 ], modules: [{id: 'leader_guidance', label: 'RSI 协调', version: '3', modes: ['passk'], requires: [], conflicts: []}], presets: [
@@ -34,7 +34,7 @@ async function setup(t, records, handler, savedStorage = {}) {
     calls.push({path, options, body: options.body ? JSON.parse(options.body) : null});
     const custom = handler?.(path, options, calls);
     if (custom) return custom;
-    if (path === '/api/bootstrap') return response({csrf_token: 'test', capabilities: ['agent-trace'], default_model_settings: defaults, collaboration_catalog: collaborationCatalog, default_collaboration: {mode: 'passk', modules: []}, models: [{id: 'gpt-6-astra', efforts: ['high', 'xhigh']}, {id: 'gpt-5.6-sol', efforts: ['medium', 'high', 'xhigh']}]});
+    if (path === '/api/bootstrap') return response({csrf_token: 'test', capabilities: ['agent-trace'], default_model_settings: defaults, collaboration_catalog: collaborationCatalog, default_collaboration: {mode: 'passk', modules: []}, models: [{id: 'gpt-6-astra', efforts: ['medium', 'high', 'xhigh']}, {id: 'gpt-5.6-sol', efforts: ['medium', 'high', 'xhigh']}]});
     if (path === '/api/runs') return response({runs: Object.values(records)});
     if (path.includes('/trace?')) return response({agent_id: new URL(path, 'http://localhost').searchParams.get('agent_id'), entries: [], next_before: null});
     const id = path.split('/')[3]?.split('?')[0];
@@ -318,6 +318,7 @@ test('creation configures the first conversation and modal dropdowns stay intera
   ui.$('new-run').click();
   assert.equal(ui.$('create-base-url').value, defaults.base_url);
   assert.equal(ui.$('create-model').value, defaults.model);
+  assert.match(ui.$('create-effort-trigger').textContent, /中 · medium/);
   assert.match(ui.$('create-api-key').placeholder, /默认密钥/);
   assert.equal(ui.$('create-effort-options').closest('dialog'), ui.$('create-dialog'));
   ui.$('create-effort-trigger').click();
@@ -328,8 +329,9 @@ test('creation configures the first conversation and modal dropdowns stay intera
   ui.input('create-model', 'custom-model');
   ui.$('create-backend-trigger').click();
   ui.$('create-backend-options').querySelectorAll('[role="option"]')[1].click();
+  assert.equal(ui.$('create-backend-trigger').textContent, 'codex');
   ui.submit('create-form'); await settle();
-  assert.deepEqual(submitted.model_settings, {base_url: 'https://custom.example/v1', api_key: 'dummy-ui-key', auth_mode: 'api_key', model: 'custom-model', reasoning_effort: 'high', backend: 'codex'});
+  assert.deepEqual(submitted.model_settings, {base_url: 'https://custom.example/v1', api_key: 'dummy-ui-key', auth_mode: 'api_key', model: 'custom-model', reasoning_effort: 'medium', backend: 'codex'});
   assert.equal(ui.$('create-dialog').open, false);
   assert.equal(ui.$('create-api-key').value, '');
   assert.equal(ui.$('objective').textContent, '研究 new');
@@ -344,6 +346,30 @@ test('creation configures the first conversation and modal dropdowns stay intera
   assert.equal(submitted.model_settings.auth_mode, 'codex_login');
   assert.equal(submitted.model_settings.api_key, '');
   assert.equal(submitted.model_settings.base_url, 'https://api.openai.com');
+});
+
+test('new task shows the selected reasoning effort for gpt-5.6-sol', async (t) => {
+  const records = {a: run('a')};
+  let submitted;
+  const ui = await setup(t, records, (path, options) => {
+    if (path === '/api/runs' && options.method === 'POST') {
+      submitted = JSON.parse(options.body);
+      records.new = run('new');
+      return response(records.new);
+    }
+  });
+  ui.$('new-run').click();
+  ui.input('create-model', 'gpt-5.6-sol');
+  ui.$('create-effort-trigger').click();
+  [...ui.$('create-effort-options').querySelectorAll('[role="option"]')]
+    .find((option) => option.textContent.includes('xhigh')).click();
+  ui.$('create-effort-trigger').click();
+  const medium = [...ui.$('create-effort-options').querySelectorAll('[role="option"]')]
+    .find((option) => option.textContent.includes('medium'));
+  medium.click();
+  assert.match(ui.$('create-effort-trigger').textContent, /中 · medium/);
+  ui.submit('create-form'); await settle();
+  assert.equal(submitted.model_settings.reasoning_effort, 'medium');
 });
 
 test('agent timeline grows down and shares use distinct reserved rows with inspectable provenance', async (t) => {
@@ -694,6 +720,30 @@ test('guidance follows the selected second researcher after a trace switch', asy
   assert.equal(ui.$('chat-input-label').textContent, '向 独立探索 2 发送消息');
   ui.input('chat-input', 'Only researcher 2'); ui.submit('chat-form'); await settle();
   assert.equal(ui.calls.find(c => c.path.endsWith('/chat')).body.recipient, 'research_2');
+});
+
+test('a blocked researcher can be selected and guided while the run is active', async (t) => {
+  const record = run('a', 'running');
+  record.started_at = '2026-09-22T00:00:00Z';
+  record.agents.push({agent_id: 'research_1', direction: '独立探索 1', state: 'waiting', wait_reason: 'goal_blocked'});
+  record.nodes.push({iteration_id: 'node1', agent_id: 'research_1', state: 'running',
+    goal: {status: 'blocked', blocker: '需要训练环境', summary: '等待补充'}, assignment: {instruction: 'Task'}});
+  record.goals = {research_1: record.nodes[0].goal};
+  const ui = await setup(t, {a: record});
+  ui.$('node-tab').click(); await settle();
+  const guide = [...ui.$('node-panel').querySelectorAll('button')]
+    .find((button) => button.textContent === '指导这个 Agent');
+  const now = ui.window.Date.now;
+  ui.window.Date.now = () => now() + 10000;
+  await ui.poll();
+  assert.equal([...ui.$('node-panel').querySelectorAll('button')]
+    .find((button) => button.textContent === '指导这个 Agent'), guide);
+  guide.click();
+  assert.equal(ui.$('chat-panel').hidden, false);
+  assert.equal(ui.$('chat-input').disabled, false);
+  assert.equal(ui.$('chat-input-label').textContent, '向 独立探索 1 发送消息');
+  ui.input('chat-input', '训练环境已准备好'); ui.submit('chat-form'); await settle();
+  assert.equal(ui.calls.find((call) => call.path.endsWith('/chat')).body.recipient, 'research_1');
 });
 
 test('ended passk has no resume action', async (t) => {

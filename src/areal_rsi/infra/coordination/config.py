@@ -62,8 +62,8 @@ class ResearchConfig:
     backend: str = "standard"
     auth_mode: Literal["api_key", "codex_login"] = "api_key"
     runtime_config: dict[str, Any] | None = None
-    model: str = "gpt-5.6-luna"
-    reasoning_effort: str = "xhigh"
+    model: str = "gpt-6-astra"
+    reasoning_effort: str = "medium"
     base_url: str = "https://api.openai.com"
     model_settings_pinned: bool = False
     model_settings_revision: str = ""

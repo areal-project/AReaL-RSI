@@ -23,8 +23,8 @@ cp -n .env.example .env
 ```dotenv
 RSI_BASE_URL=https://4ipic.com
 RSI_API_KEY=<你的密钥>
-RSI_MODEL=gpt-5.6-luna
-RSI_REASONING_EFFORT=xhigh
+RSI_MODEL=gpt-6-astra
+RSI_REASONING_EFFORT=medium
 RSI_DATA_ROOT=.rsi/research-lab
 ```
 

@@ -1867,7 +1867,7 @@ async function control(action, params = {}) {
   }
   state.busy = true;
   $("cancel-turn").disabled = true;
-  notice();
+  notice(action === "resume" ? "正在恢复执行，请稍候…" : "");
   for (const button of $("controls").querySelectorAll("button"))
     button.disabled = true;
   try {
@@ -1876,6 +1876,7 @@ async function control(action, params = {}) {
       params,
     );
     if (result.notice) notice(result.notice);
+    else if (action === "resume") notice("恢复请求已提交，请查看研究状态。");
     await refresh(true);
   } catch (error) {
     notice(error.message);

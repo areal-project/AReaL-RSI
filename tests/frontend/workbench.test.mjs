@@ -101,6 +101,47 @@ test('new research stays accessible alongside saved groups and empty groups disa
   assert.match(empty.$('run-list').textContent, /还没有研究记录/);
 });
 
+test('task submission works on HTTP browsers without crypto.randomUUID', async (t) => {
+  const records = {};
+  const submitted = {};
+  const ui = await setup(t, records, (path, options) => {
+    if (options.method !== 'POST') return;
+    if (path === '/api/runs') {
+      submitted.create = JSON.parse(options.body);
+      records.new = {...run('new', 'running'), started_at: '2026-09-30T00:00:00Z'};
+      records.new.brief.acceptance = ['Task complete'];
+      return response({run_id: 'new'});
+    }
+    if (path.endsWith('/chat')) {
+      submitted.chat = JSON.parse(options.body);
+      return response({message_id: submitted.chat.message_id});
+    }
+    if (path.endsWith('/update-goal')) {
+      submitted.goal = JSON.parse(options.body);
+      return response(records.new);
+    }
+  });
+  Object.defineProperty(ui.window.crypto, 'randomUUID', {value: undefined, configurable: true});
+  assert.equal(ui.window.crypto.randomUUID, undefined);
+
+  ui.$('new-run').click();
+  ui.input('create-message', 'Complete the task');
+  ui.submit('create-form'); await settle();
+  assert.equal(ui.$('objective').textContent, '研究 new');
+
+  ui.input('chat-input', 'One more requirement');
+  ui.submit('chat-form'); await settle();
+  ui.$('update-goal').click();
+  ui.input('revised-objective', 'Revised task');
+  ui.input('revised-acceptance', 'Task complete');
+  ui.submit('update-goal-form'); await settle();
+
+  const ids = [submitted.create?.message_id, submitted.chat?.message_id, submitted.goal?.request_id];
+  assert.ok(ids.every((id) => /^[0-9a-f]{32}$/.test(id)));
+  assert.equal(new Set(ids).size, ids.length);
+  assert.equal(ui.$('create-error').hidden, true);
+});
+
 for (const count of [1, 2]) {
 test(`new tasks default to one researcher despite deployment default ${count}`, async (t) => {
   let submitted;

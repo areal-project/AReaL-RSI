@@ -1,6 +1,15 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
+function newRequestId() {
+  const bytes = new Uint8Array(16);
+  if (globalThis.crypto?.getRandomValues) {
+    globalThis.crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  }
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 const state = {
   token: "",
   runId: new URLSearchParams(window.location.search).get("run") ||
@@ -1931,7 +1940,7 @@ async function createConversation(message = "", modelSettings, collaboration, wo
   try {
     $("create-submit").disabled = true;
     $("create-submit").textContent = "正在创建…";
-    const result = await api("/api/runs", { message, message_id: crypto.randomUUID(), ...(modelSettings ? {model_settings: modelSettings} : {}), ...(collaboration ? {collaboration} : {}), ...(workspace || {}) });
+    const result = await api("/api/runs", { message, message_id: newRequestId(), ...(modelSettings ? {model_settings: modelSettings} : {}), ...(collaboration ? {collaboration} : {}), ...(workspace || {}) });
     $("create-dialog").close();
     $("create-api-key").value = "";
     if (!result.run_id) throw new Error("未能读取研究记录，请刷新列表。");
@@ -2144,7 +2153,7 @@ $("chat-form").addEventListener("submit", async (event) => {
   const previous = state.outgoing.get(runId);
   const same = previous?.text === text && previous.recipient === target.recipient && previous.reply_to === target.reply_to;
   const message = {sender: "user", recipient: target.recipient, reply_to: target.reply_to,
-    text, message_id: same ? previous.message_id : crypto.randomUUID(),
+    text, message_id: same ? previous.message_id : newRequestId(),
     created_at: same ? previous.created_at : new Date().toISOString(), delivery: "sending"};
   state.outgoing.set(runId, message);
   state.sending.add(runId);
@@ -2242,7 +2251,7 @@ function canGuide(run) {
 let goalDraft = null;
 $("update-goal").addEventListener("click", () => {
   const run = state.run;
-  goalDraft = {run_id: run.run_id, request_id: crypto.randomUUID(), expected_revision: run.brief?.revision || 0};
+  goalDraft = {run_id: run.run_id, request_id: newRequestId(), expected_revision: run.brief?.revision || 0};
   $("revised-objective").value = run.brief?.objective || run.objective;
   $("revised-instructions").value = run.brief?.instructions || "";
   $("revised-acceptance").value = (run.brief?.acceptance || []).join("\n");

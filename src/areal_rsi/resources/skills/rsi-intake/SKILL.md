@@ -19,6 +19,8 @@ description: 为 AReaL-RSI 的 Interaction Agent 整理启动需求，通过必�
 
 验收标准与可信验证器不同：前者描述“什么算完成”，后者提供机器检查证据。普通代码、文档或调研任务可以有文本验收标准而没有数值评分，此时 `verification=null`。只有用户需要数值达标且执行环境确实支持时，才填写相应指标、方向和目标；不能凭一句文字要求声称验证器已经覆盖。
 
+用户指定修改某个本机 Git 仓库时，用 `set_execution` 的 `workspace_dir` 绑定该仓库，并用 `get_setup` 确认。研究员在该仓库 HEAD 派生的关联 worktree 中工作，后续 Interaction 继续使用选中的 worktree；提交进入该仓库的新分支，原检出目录不会自动更新。非 Git 目录不能绑定为代码工作区。`seed_dir` 只用于复制普通输入材料；仅把路径写进 `brief.instructions` 不会改变 Agent 的工作目录。
+
 ## 单研究员目标执行
 
 默认以 `passk`、`max_agents=1` 启动：一个 researcher 在同一目标和会话中持续实现、测试、修正，直到验收完成或遇到需要用户补充的阻塞；不是只生成一次回答。无需另设 pass@1 入口。启动后用户可查看该 researcher 的公开执行轨迹，并直接向它补充指导、暂停或继续；Interaction 完成交接后不充当消息中转。不要承诺展示模型未公开的内部推理。

@@ -323,7 +323,10 @@ class Coordinator:
     def ask_user(self, agent_id: str, question: str, *, key: str) -> str:
         if agent_id not in {"rsi", "interaction"}:
             raise ValueError("Only RSI and Interaction can ask the user")
-        if self.state.status not in {"planned", "running", "paused"}:
+        if self.state.status not in {"planned", "running", "paused"} and not (
+            agent_id == "interaction"
+            and self.state.status in {"stopped", "succeeded", "completed", "failed"}
+        ):
             raise ValueError("研究已结束，不能再创建待回复问题")
         if not question.strip():
             raise ValueError("请说明需要用户回答的问题")
@@ -345,19 +348,18 @@ class Coordinator:
         recipient: str | None = None,
     ) -> str:
         """Deliver a user reply to its question's author, or send an independent message."""
-        if self.state.status not in {"planned", "running", "paused"}:
-            raise ValueError("研究已结束，记录仍可查看；新的研究请另建对话")
+        terminal = self.state.status in {"stopped", "succeeded", "completed", "failed"}
+        if self.state.status not in {"planned", "running", "paused"} and not terminal:
+            raise ValueError("当前任务状态不支持对话")
         if not isinstance(text, str) or not 1 <= len(text.strip()) <= 12000:
             raise ValueError("Message must contain 1–12000 characters")
         text = text.strip()
         researchers = {a.agent_id for a in self.store.run().research_agents}
-        allowed = {"rsi", "interaction"}
-        if self.state.mode == "passk" and self.state.started_at:
-            allowed = researchers | ({"rsi"} if self.state.rsi_model_enabled else set())
-        if recipient is not None and recipient not in allowed:
-            raise ValueError("请选择当前任务中的有效接收者")
-        if recipient in researchers and self.actor(recipient).state == AgentState.STOPPED:
-            raise ValueError("该研究员已停止，不能再接收指导")
+        allowed = {"interaction"} if terminal else {"rsi", "interaction"}
+        if not terminal and self.state.mode == "passk" and self.state.started_at:
+            allowed = researchers | {"interaction"} | (
+                {"rsi"} if self.state.rsi_model_enabled else set()
+            )
         if reply_to is not None and (not isinstance(reply_to, str) or not reply_to):
             raise ValueError("reply_to 必须是问题的 message_id")
         try:
@@ -374,6 +376,11 @@ class Coordinator:
                 raise ValueError("Message idempotency key reused for different content")
             # Preserve routing on HTTP retries, even after the question was answered.
             recipient, reply_to = previous.recipient, previous.reply_to
+            if terminal and (
+                previous.recipient != "interaction"
+                or previous.message_id in self.state.delivered
+            ):
+                return previous.message_id
         else:
             questions = self.user_questions()
             if reply_to is None and recipient is None and len(questions) == 1:
@@ -386,7 +393,7 @@ class Coordinator:
                     raise ValueError("回复必须发送给原提问者")
                 recipient = question.agent_id
         if recipient is None:
-            if not self.state.started_at:
+            if terminal or not self.state.started_at:
                 recipient = "interaction"
             elif len(researchers) == 1:
                 recipient = next(iter(researchers))
@@ -394,8 +401,20 @@ class Coordinator:
                 recipient = "rsi"
             else:
                 raise ValueError("请选择要指导的研究员；全局变更请使用调整目标")
+        if recipient not in allowed:
+            raise ValueError("请选择当前任务中的有效接收者")
+        if recipient in researchers and self.actor(recipient).state == AgentState.STOPPED:
+            raise ValueError("该研究员已停止，不能再接收指导")
         if recipient == "rsi" and self.state.started_at is None:
             raise ValueError("研究尚未开始，请先确认需求")
+        if recipient == "interaction" and (
+            terminal or self.actor("interaction").state == AgentState.STOPPED
+        ):
+            if "interaction" in self.state.active:
+                self.end_turn("interaction")
+            actor = self.actor("interaction")
+            actor.state, actor.wait_reason, actor.error = AgentState.WAITING, "message", None
+            self.save_actor(actor)
         message_id = self.enqueue("user", recipient, text, key=key, reply_to=reply_to)
         if previous is None and self.actor(recipient).state == AgentState.FAILED:
             # A new user instruction is an explicit request to continue, not a
@@ -432,10 +451,14 @@ class Coordinator:
         self.store.event("run_started")
 
     def pending(self) -> list[str]:
-        if self.state.status not in {"planned", "running"}:
+        if self.state.status not in {
+            "planned", "running", "paused", "stopped", "succeeded", "completed", "failed"
+        }:
             return []
         ready = []
         for actor in self.actors():
+            if self.state.status not in {"planned", "running"} and actor.agent_id != "interaction":
+                continue
             if actor.agent_id in self.state.human.paused_agents:
                 continue
             if (goal := self.state.goals.get(actor.agent_id)) and goal.status != "active":

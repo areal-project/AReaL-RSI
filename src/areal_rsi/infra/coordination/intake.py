@@ -19,7 +19,13 @@ from urllib.parse import urlsplit
 
 from areal_rsi.api.interfaces import ToolCall, ToolHandler, ToolResult
 from areal_rsi.api.research import ResearchMessage, TaskBrief
-from areal_rsi.infra.coordination.config import ResearchConfig, archived_config, load_config
+from areal_rsi.infra.coordination.config import (
+    ResearchConfig,
+    archived_config,
+    git_head_commit,
+    git_repository,
+    load_config,
+)
 from areal_rsi.infra.coordination.coordinator import Coordinator, effect_id
 from areal_rsi.infra.coordination.evaluation.verification import IDENTITY_FIELDS
 from areal_rsi.infra.coordination.tools.actions import STRING, ResearchActions, definition
@@ -70,6 +76,11 @@ def validate_execution(config: ResearchConfig) -> list[str]:
         issues.append("当前配置不是正式执行配置")
     if config.seed_dir and not Path(config.seed_dir).is_dir():
         issues.append("起点目录不存在：" + config.seed_dir)
+    if config.workspace_dir:
+        try:
+            git_head_commit(config.workspace_dir)
+        except ValueError as exc:
+            issues.append(str(exc))
     commands = [*config.commands, *([config.verifier] if config.verifier else [])]
     if len({cmd.name for cmd in commands}) != len(commands):
         issues.append("执行命令名称不能重复")
@@ -214,8 +225,11 @@ class ResearchIntake:
             ),
             definition(
                 "set_execution",
-                "按对话约定保存起点目录、普通执行命令和非敏感环境变量。"
-                "JSON 可含 seed_dir、commands、execution_env、description；"
+                "按对话约定保存 Git 仓库、复制起点目录、普通执行命令和非敏感环境变量。"
+                "用户指定 Git 目录时设 workspace_dir；每名研究员在该仓库的关联"
+                " worktree 中工作，后续 Interaction 可继续使用选中的 worktree。"
+                "需要隔离副本时才设 seed_dir。"
+                "JSON 可含 workspace_dir、seed_dir、commands、execution_env、description；"
                 "命令格式为 name/command(argv数组)/parameters/"
                 "gpu_count/timeout_seconds/output_subdir。"
                 "系统只自动绑定 {workspace} 和 {output}，须同时声明在 parameters 中；"
@@ -287,6 +301,12 @@ class ResearchIntake:
         write_json(self.path, value)
         intake = self.c.state.intake
         intake.environment, intake.config_revision = description, digest
+        self.c.state.workspace_dir = config.workspace_dir
+        self.c.state.workspace_base_commit = None
+        if config.workspace_dir:
+            # Keep the old snapshot record, but stop using it as this run's baseline.
+            self.c.state.seed_candidate_id = None
+            self.c.state.baseline_candidate_id = None
         if self.c.state.status == "planned":
             intake.status, intake.prepared_at = "discussing", None
         self.c.save()
@@ -298,6 +318,7 @@ class ResearchIntake:
             **encode(self.c.state.intake),
             "execution_setup": self.c.state.execution_setup,
             "seed_dir": config.seed_dir,
+            "workspace_dir": config.workspace_dir,
             "commands": encode(config.commands),
             "verifier_available": config.verifier is not None,
             "experiment_commands_available": bool(config.commands),
@@ -511,13 +532,15 @@ class ResearchIntake:
             if call.name == "set_execution":
                 value = json.loads(args["execution_json"])
                 if not isinstance(value, dict) or set(value) - {
+                    "workspace_dir",
                     "seed_dir",
                     "commands",
                     "execution_env",
                     "description",
                 }:
                     raise ValueError(
-                        "执行配置只接受 seed_dir、commands、execution_env 和 description"
+                        "执行配置只接受 workspace_dir、seed_dir、commands、"
+                        "execution_env 和 description"
                     )
                 reject_credentials(value)
                 config = self.config()
@@ -525,6 +548,17 @@ class ResearchIntake:
                     config.seed_dir = value["seed_dir"] or None
                     if config.seed_dir and not Path(config.seed_dir).is_absolute():
                         raise ValueError("起点目录必须使用绝对路径")
+                if "workspace_dir" in value:
+                    requested = value["workspace_dir"]
+                    if requested:
+                        if not isinstance(requested, str):
+                            raise ValueError("Git 仓库必须是目录路径")
+                        path = git_repository(requested)
+                        git_head_commit(path)
+                        config.seed_dir = None
+                        config.workspace_dir = str(path)
+                    else:
+                        config.workspace_dir = None
                 if "commands" in value:
                     config.commands = tuple(
                         decode(ApprovedCommand, item) for item in value["commands"]

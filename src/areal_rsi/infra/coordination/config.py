@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -26,6 +27,38 @@ MODEL_EFFORTS = {
     "gpt-6-astra": ("low", "medium", "high", "xhigh", "max"),
 }
 MODEL_FIELDS = ("base_url", "model", "reasoning_effort", "backend", "auth_mode")
+
+
+def git_repository(path: str | Path) -> Path:
+    directory = Path(path).expanduser().resolve()
+    result = subprocess.run(
+        ["git", "-C", str(directory), "rev-parse", "--show-toplevel"],
+        capture_output=True, text=True, check=False,
+    )
+    if result.returncode != 0:
+        raise ValueError("指定目录不是 Git 仓库：" + str(directory))
+    return Path(result.stdout.strip()).resolve()
+
+
+def git_common_directory(path: str | Path) -> Path:
+    directory = git_repository(path)
+    result = subprocess.run(
+        ["git", "-C", str(directory), "rev-parse", "--git-common-dir"],
+        capture_output=True, text=True, check=True,
+    )
+    common = Path(result.stdout.strip())
+    return (common if common.is_absolute() else directory / common).resolve()
+
+
+def git_head_commit(path: str | Path) -> str:
+    directory = git_repository(path)
+    result = subprocess.run(
+        ["git", "-C", str(directory), "rev-parse", "--verify", "HEAD"],
+        capture_output=True, text=True, check=False,
+    )
+    if result.returncode != 0:
+        raise ValueError("Git 仓库需要已有基线提交：" + str(directory))
+    return result.stdout.strip()
 
 
 def validate_model_settings(value: dict[str, Any]) -> dict[str, str]:
@@ -59,6 +92,7 @@ class ResearchConfig:
     mode: str = "passk"
     collaboration_modules: tuple[str, ...] = ()
     seed_dir: str | None = None
+    workspace_dir: str | None = None
     backend: str = "standard"
     auth_mode: Literal["api_key", "codex_login"] = "api_key"
     runtime_config: dict[str, Any] | None = None
@@ -80,6 +114,9 @@ class ResearchConfig:
     evolution_target: EvolutionTarget | None = None
 
     def __post_init__(self) -> None:
+        if self.workspace_dir is not None:
+            self.workspace_dir = str(Path(self.workspace_dir).expanduser().resolve())
+            self.seed_dir = None
         if self.auth_mode not in {"api_key", "codex_login"}:
             raise ValueError("Invalid authentication mode")
         if self.auth_mode == "codex_login":

@@ -25,7 +25,11 @@ from areal_rsi.api.control import public_tool_text
 from areal_rsi.api.interfaces import EventSink, ToolCall, ToolHandler, TurnResult
 from areal_rsi.api.records import AgentSpec, ModelVersion
 from areal_rsi.infra.config import local_codex_auth
-from areal_rsi.infra.coordination.config import ResearchConfig, config_from_dict
+from areal_rsi.infra.coordination.config import (
+    ResearchConfig,
+    config_from_dict,
+    git_common_directory,
+)
 from areal_rsi.infra.runtime.runtime_package import (
     PackageAgentRuntime,
     PackageSession,
@@ -303,6 +307,8 @@ class ResearchRuntime:
                 ),
                 codex_config=codex_config if kind == "codex-cli" else None,
                 environment=environment,
+                writable_paths=(str(git_common_directory(self.config.workspace_dir)),)
+                if self.config.workspace_dir else (),
             )
         except BaseException:
             server.close()

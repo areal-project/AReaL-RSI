@@ -180,6 +180,13 @@ def public_detail(value: Json) -> Json:
         value.get("finalization"), "status error exploration_finished_at target_reached"
     )
     result["intake"] = _fields(value.get("intake"), "status summary environment execution_required")
+    result["workspace_dir"] = (
+        value.get("workspace_dir") if isinstance(value.get("workspace_dir"), str) else None
+    )
+    result["worktree_dirs"] = {
+        name: path for name, path in value.get("worktree_dirs", {}).items()
+        if isinstance(name, str) and isinstance(path, str)
+    }
     result["model_settings"] = _fields(
         value.get("model_settings"),
         "base_url model reasoning_effort backend auth_mode editable has_credentials",

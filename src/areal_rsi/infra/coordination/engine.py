@@ -443,7 +443,10 @@ class ResearchEngine:
 
     def _actor_allowed(self, agent_id: str) -> bool:
         status = self.coordinator.state.status
-        return status == "running" or (status == "planned" and agent_id == "interaction")
+        return status == "running" or (
+            status in {"planned", "paused", "stopped", "succeeded", "completed", "failed"}
+            and agent_id == "interaction"
+        )
 
     def _complete_research_turn(
         self, agent_id: str, iteration_id: str | None, message_id: str, text: str
@@ -469,11 +472,14 @@ class ResearchEngine:
         """Poll jobs, apply controls and dispatch ready actors without awaiting their turns."""
         async with self._tick_lock:
             self._acquire()
-            reason = self._wall_reason()
-            if reason is not None:
-                self._pause_for_budget(reason)
-            if self.tick_hook is not None:
-                self._jobs_pending = bool(await self.tick_hook())
+            if self.coordinator.state.status in {"planned", "running", "paused"}:
+                reason = self._wall_reason()
+                if reason is not None:
+                    self._pause_for_budget(reason)
+                if self.tick_hook is not None:
+                    self._jobs_pending = bool(await self.tick_hook())
+            else:
+                self._jobs_pending = False
             status = self.coordinator.state.status
             cancelled = []
             for agent_id, task in self._tasks.items():
@@ -497,16 +503,16 @@ class ResearchEngine:
                         actor.state, actor.wait_reason = AgentState.WAITING, "resume"
                         self.coordinator.save_actor(actor)
                 self.coordinator.reconcile_report_replies()
-                for agent_id in self.coordinator.pending():
-                    if (
-                        self._actor_allowed(agent_id)
-                        and agent_id not in self._tasks
-                        and len(self._tasks) < self.max_concurrent_turns
-                    ):
-                        self._tasks[agent_id] = asyncio.create_task(
-                            self._drive(agent_id),
-                            name=f"research:{self.coordinator.store.run_id}:{agent_id}",
-                        )
+            for agent_id in self.coordinator.pending():
+                if (
+                    self._actor_allowed(agent_id)
+                    and agent_id not in self._tasks
+                    and len(self._tasks) < self.max_concurrent_turns
+                ):
+                    self._tasks[agent_id] = asyncio.create_task(
+                        self._drive(agent_id),
+                        name=f"research:{self.coordinator.store.run_id}:{agent_id}",
+                    )
             return len(self._tasks)
 
     async def _wait(self) -> None:
@@ -524,7 +530,10 @@ class ResearchEngine:
         async def run() -> None:
             while True:
                 active = await self.tick()
-                if self.coordinator.state.status not in {"running", "planned"}:
+                if (
+                    self.coordinator.state.status not in {"running", "planned", "paused"}
+                    and not active and not self.coordinator.pending()
+                ):
                     return
                 if not active and not self.coordinator.pending() and not self._jobs_pending:
                     return
@@ -542,12 +551,11 @@ class ResearchEngine:
         """Run model turns; the owner closes us after any result confirmation."""
         self._acquire()
         try:
-            while self.coordinator.state.status not in {
-                "stopped",
-                "succeeded",
-                "failed",
-                "completed",
-            }:
+            while True:
+                if self.coordinator.state.status in {
+                    "stopped", "succeeded", "failed", "completed"
+                } and not self.coordinator.pending() and not self._tasks:
+                    break
                 await self.tick()
                 await self._wait()
         finally:

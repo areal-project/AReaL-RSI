@@ -58,6 +58,7 @@ const state = {
   goalHistory: new Map(),
   agentTraces: new Map(),
   traceAvailable: false,
+  interactionTraceAvailable: false,
   traceExpansion: new Set(),
 };
 const emptyChat = $("messages").firstElementChild.cloneNode(true);
@@ -637,12 +638,13 @@ async function refresh(force = false) {
     if (selectedNode && state.tab === "node") await loadAgentTrace(runId, selectedNode.agent_id);
     else if (state.tab === "chat" && state.traceAvailable) {
       const recipient = renderReplyTarget(run).recipient;
-      const agents = new Set([recipient]);
-      if (!state.agentTraces.get(`${runId}/interaction`)?.ready
-          || run.agents?.some((agent) => agent.agent_id === "interaction" && agent.state === "running")) agents.add("interaction");
-      await Promise.all([...agents].map((agentId) => loadAgentTrace(runId, agentId)));
+      const loads = [loadAgentTrace(runId, recipient, false, run.event_cursor)];
+      const interactionTrace = state.agentTraces.get(`${runId}/interaction`);
+      if (state.interactionTraceAvailable && recipient !== "interaction" &&
+          (!interactionTrace?.ready || interactionTrace.eventCursor !== run.event_cursor))
+        loads.push(loadAgentTrace(runId, "interaction", false, run.event_cursor));
+      await Promise.all(loads);
     }
-    connected(true);
   } catch (error) {
     if (error.name === "AbortError" || state.runId !== runId) return;
     connected(false);
@@ -768,6 +770,7 @@ function render() {
       ? `${agentName(target.recipient)} 正在处理…`
       : "Enter 发送 · Shift+Enter 换行";
   renderChatFeedback(run, target, responding);
+  renderInteractionTrace(run);
   if (run.budget_stop_reason) notice(run.budget_stop_reason);
 }
 
@@ -1601,6 +1604,17 @@ function renderChatFeedback(run, target, agent) {
   }
 }
 
+function renderInteractionTrace(run) {
+  const box = $("interaction-trace");
+  const trace = state.agentTraces.get(`${run.run_id}/interaction`);
+  const hasTools = [...(trace?.entries.values() || [])].some((entry) =>
+    entry.kind === "tool_started" || entry.kind === "tool_completed");
+  const working = run.agents?.some((agent) => agent.agent_id === "interaction" && agent.state === "running");
+  box.hidden = !state.interactionTraceAvailable || !(hasTools || working || trace?.error || trace?.next != null);
+  if (box.hidden) { box.replaceChildren(); return; }
+  box.replaceChildren(renderAgentTrace(run, "interaction", trace, true));
+}
+
 function renderMessages(run) {
   const agentId = renderReplyTarget(run).recipient;
   const messages = [...(run.messages || [])];
@@ -1841,6 +1855,8 @@ function switchTab(tab) {
   } else if (tab === "chat" && state.run && state.traceAvailable) {
     loadAgentTrace(state.runId, renderReplyTarget(state.run).recipient);
   }
+  if (tab === "chat" && state.run && state.interactionTraceAvailable)
+    loadAgentTrace(state.runId, "interaction", false, state.run.event_cursor);
 }
 
 async function control(action, params = {}) {
@@ -2208,6 +2224,7 @@ async function bootstrap() {
   $("workbench-name").textContent = branch ? `研究空间 · ${branch}` : "研究空间";
   state.token = config.csrf_token;
   state.traceAvailable = (config.capabilities || []).includes("agent-trace");
+  state.interactionTraceAvailable = (config.capabilities || []).includes("interaction-trace");
   state.models = config.models || [];
   state.defaultModelSettings = config.default_model_settings || {};
   state.workspaceReady = config.workspace_ready === true;
@@ -2276,7 +2293,7 @@ $("update-goal-form").addEventListener("submit", async (event) => {
   finally { $("submit-goal").disabled = false; }
 });
 
-async function loadAgentTrace(runId, agentId, older = false) {
+async function loadAgentTrace(runId, agentId, older = false, eventCursor = null) {
   const key = `${runId}/${agentId}`;
   let trace = state.agentTraces.get(key);
   if (!trace) {
@@ -2301,6 +2318,7 @@ async function loadAgentTrace(runId, agentId, older = false) {
     if (!trace.ready || older) trace.next = page.next_before ?? null;
     for (const entry of entries) trace.entries.set(entry.sequence, entry);
     trace.ready = true;
+    if (!older && eventCursor != null) trace.eventCursor = eventCursor;
     trace.expanded ||= older;
     if (!trace.expanded && trace.entries.size > 500) {
       const keys = [...trace.entries.keys()].sort((a, b) => a - b);
@@ -2310,6 +2328,8 @@ async function loadAgentTrace(runId, agentId, older = false) {
   } catch (error) { trace.error = error.message; }
   finally {
     trace.loading = false;
+    if (state.runId === runId && agentId === "interaction" && state.run)
+      renderInteractionTrace(state.run);
     if (state.runId === runId && state.run && state.tab === "chat"
         && (agentId === "interaction" || renderReplyTarget(state.run).recipient === agentId)) {
       const panel = $("messages"), height = panel.scrollHeight, top = panel.scrollTop;
@@ -2388,9 +2408,9 @@ function readableToolText(text) {
   return text;
 }
 
-function renderAgentTrace(run, agentId, trace) {
+function renderAgentTrace(run, agentId, trace, toolsOnly = false) {
   const block = element('section', 'agent-trace');
-  block.append(element('h3', '', `${agentName(agentId)} · 执行轨迹`));
+  block.append(element('h3', '', `${agentName(agentId)} · ${toolsOnly ? '工具调用' : '执行轨迹'}`));
   const key = `${run.run_id}/${agentId}`;
   if (trace?.next != null) {
     const more = element('button', 'quiet', '加载更早轨迹'); more.disabled = trace.loading;
@@ -2413,7 +2433,7 @@ function renderAgentTrace(run, agentId, trace) {
     } else {
       if (['agent_suspended', 'agent_failed', 'agent_finished'].includes(entry.kind))
         for (const call of calls.values()) if (call.status === 'running') { call.status = entry.kind === 'agent_finished' ? 'ended' : 'interrupted'; call.finished_at = entry.created_at; }
-      items.push(entry);
+      if (!toolsOnly) items.push(entry);
     }
   }
   const titles = {assistant_output: '执行说明', user_message: '你的指导', agent_message: '研究员回复',
@@ -2454,6 +2474,6 @@ function renderAgentTrace(run, agentId, trace) {
       block.append(row);
     }
   }
-  if (!items.length) block.append(element('p', 'muted', trace?.loading ? '正在读取轨迹…' : '本页暂无公开执行记录，可加载更早记录。'));
+  if (!items.length) block.append(element('p', 'muted', trace?.loading || (toolsOnly && !trace?.ready) ? '正在读取轨迹…' : toolsOnly ? '暂无工具调用。' : '本页暂无公开执行记录，可加载更早记录。'));
   return block;
 }

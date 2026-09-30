@@ -34,7 +34,7 @@ async function setup(t, records, handler, savedStorage = {}) {
     calls.push({path, options, body: options.body ? JSON.parse(options.body) : null});
     const custom = handler?.(path, options, calls);
     if (custom) return custom;
-    if (path === '/api/bootstrap') return response({csrf_token: 'test', capabilities: ['agent-trace'], default_model_settings: defaults, collaboration_catalog: collaborationCatalog, default_collaboration: {mode: 'passk', modules: []}, models: [{id: 'gpt-6-astra', efforts: ['medium', 'high', 'xhigh']}, {id: 'gpt-5.6-sol', efforts: ['medium', 'high', 'xhigh']}]});
+    if (path === '/api/bootstrap') return response({csrf_token: 'test', capabilities: ['agent-trace', 'interaction-trace'], default_model_settings: defaults, collaboration_catalog: collaborationCatalog, default_collaboration: {mode: 'passk', modules: []}, models: [{id: 'gpt-6-astra', efforts: ['medium', 'high', 'xhigh']}, {id: 'gpt-5.6-sol', efforts: ['medium', 'high', 'xhigh']}]});
     if (path === '/api/runs') return response({runs: Object.values(records)});
     if (path.includes('/trace?')) return response({agent_id: new URL(path, 'http://localhost').searchParams.get('agent_id'), entries: [], next_before: null});
     const id = path.split('/')[3]?.split('?')[0];
@@ -680,6 +680,50 @@ function traceRun() {
   record.nodes = [1, 2].map((i) => ({iteration_id: `node${i}`, agent_id: `research_${i}`, state: 'running', created_at: record.started_at, assignment: {instruction: 'Task'}}));
   return record;
 }
+
+test('interaction tools show commands and results while waiting for a reply', async (t) => {
+  const record = run('a');
+  record.agents[0].state = 'running';
+  record.agent_activity = {interaction: {type: 'tool_started', tool: 'exec_command'}};
+  let stage = 0;
+  const started = {sequence: 10, kind: 'tool_started', name: 'exec_command', call_id: 'command',
+    status: 'running', created_at: '2026-09-30T10:00:00Z', arguments: '{"cmd":"cat alpha.py"}'};
+  const completed = {sequence: 11, kind: 'tool_completed', name: 'exec_command', call_id: 'command',
+    status: 'completed', created_at: '2026-09-30T10:00:02Z', result: '{"aggregatedOutput":"file contents","exitCode":0}'};
+  const other = {sequence: 12, kind: 'tool_started', name: 'read_file', call_id: 'file',
+    status: 'running', created_at: '2026-09-30T10:00:03Z', arguments: '{"path":"notes.txt"}'};
+  const ui = await setup(t, {a: record}, (path) => {
+    if (!path.includes('/trace?')) return;
+    assert.match(path, /agent_id=interaction/);
+    return response({agent_id: 'interaction', entries: [started,
+      ...(stage >= 1 ? [completed, other] : [])], next_before: null});
+  });
+  const trace = ui.$('interaction-trace');
+  assert.equal(trace.hidden, false);
+  assert.match(ui.$('chat-feedback').textContent, /等待 Interaction Agent 回复/);
+  assert.match(trace.querySelector('summary').textContent, /cat alpha.py/);
+  trace.querySelector('details').open = true; await settle();
+  assert.match(trace.textContent, /\$ cat alpha.py/);
+
+  stage = 1; record.event_cursor++; await ui.poll();
+  assert.equal(trace.querySelectorAll('.trace-tool').length, 2);
+  assert.match(trace.textContent, /file contents|notes.txt/);
+  record.agents[0].state = 'waiting'; record.event_cursor++; await ui.poll();
+  assert.equal(trace.hidden, false);
+  assert.match(trace.textContent, /cat alpha.py/);
+});
+
+test('older servers do not receive interaction trace requests', async (t) => {
+  const record = run('a');
+  record.agents[0].state = 'running';
+  const ui = await setup(t, {a: record}, (path) => {
+    if (path === '/api/bootstrap') return response({csrf_token: 'test', capabilities: ['agent-trace'],
+      default_model_settings: defaults, collaboration_catalog: collaborationCatalog,
+      default_collaboration: {mode: 'passk', modules: []}, models: []});
+  });
+  assert.equal(ui.$('interaction-trace').hidden, true);
+  assert.ok(!ui.calls.some((call) => call.path.includes('agent_id=interaction')));
+});
 
 test('researcher trace pages keep tools, guidance and peers separate', async (t) => {
   const record = traceRun();

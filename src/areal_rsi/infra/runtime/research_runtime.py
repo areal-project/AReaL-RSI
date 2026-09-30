@@ -411,7 +411,7 @@ class ResearchRuntime:
                 value = data.get("value")
                 value = value if isinstance(value, dict) else {}
                 arguments = data.get("arguments") or {
-                    key: value[key] for key in ("command", "cwd", "path") if key in value
+                    key: value[key] for key in ("command", "cmd", "cwd", "path") if key in value
                 }
                 result = {key: value[key] for key in
                           ("aggregatedOutput", "exitCode", "status", "processId", "durationMs")

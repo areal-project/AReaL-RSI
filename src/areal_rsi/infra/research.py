@@ -1461,7 +1461,8 @@ class ResearchSystem:
         return {
             "service": "areal-rsi",
             "api_version": 1,
-            "capabilities": ["configured-runs", "automatic-finalization", "agent-trace"],
+            "capabilities": ["configured-runs", "automatic-finalization", "agent-trace",
+                             "interaction-trace"],
             "data_root": str(self.root),
             "default_model_settings": {
                 **config.model_settings(),

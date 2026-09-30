@@ -32,10 +32,15 @@ def test_agent_trace_is_scoped_paginated_and_read_only(tmp_path: Path) -> None:
                       result={"api_key": "private-key", "output": "checked"}, status="failed")
         c.store.event("goal_updated", agent_id=first, goal={"status": "completed"})
         c.store.event("agent_suspended", agent_id=first, reason="worker_interrupted")
+        c.store.event("tool_started", agent_id="interaction", name="exec_command",
+                      call_id="interaction-call",
+                      arguments={"cmd": "cat visible.txt; echo token=private-secret"},
+                      status="running")
         message = c.user_message("Only the first researcher", key="direct", recipient=first)
         before = {p: p.read_bytes() for p in c.store.root.rglob("*.json")}
         app = ResearchSystem(tmp_path)
         try:
+            assert "interaction-trace" in (await app.bootstrap())["capabilities"]
             page = await app.trace(c.store.run_id, first, limit=3)
             all_entries = list(page["entries"])
             while page["next_before"] is not None:
@@ -52,6 +57,12 @@ def test_agent_trace_is_scoped_paginated_and_read_only(tmp_path: Path) -> None:
             assert "private-key" not in tool["result"] and "checked" in tool["result"]
             assert tool["status"] == "failed"
             assert any(e["kind"] == "agent_finished" for e in all_entries)
+            interaction = await app.trace(c.store.run_id, "interaction")
+            tool = next(e for e in interaction["entries"]
+                        if e["call_id"] == "interaction-call")
+            assert "visible.txt" in tool["arguments"]
+            assert "private-secret" not in tool["arguments"]
+            assert "first-0" not in str(interaction)
             peer = await app.trace(c.store.run_id, second)
             assert "Only the first" not in str(peer)
             assert message not in str(peer)

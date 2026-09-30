@@ -1513,6 +1513,8 @@ button.primary.destructive { background: var(--red); }
 .chat-feedback-title { font-size: 13px; font-weight: 600; color: #3f5e38; }
 .chat-feedback small { display: block; margin-top: 6px; }
 .chat-feedback small:empty { display: none; }
+.interaction-trace { max-height: 320px; overflow-y: auto; margin: 0 18px 12px; padding: 0 12px; border: 1px solid var(--line); border-radius: 10px; }
+.interaction-trace .agent-trace { margin: 10px 0; }
 .delivery-status { display: block; margin-top: 8px; color: var(--muted); }
 .collaboration-modules { margin: 12px 0; }
 .collaboration-module { display: flex; align-items: start; gap: 10px; margin: 10px 0; }

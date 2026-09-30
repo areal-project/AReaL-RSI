@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
+import os
 import shlex
 import signal
 from contextlib import suppress
@@ -204,9 +206,12 @@ def serve_workbench(
     from areal_rsi.infra.research import ResearchSystem
     from areal_rsi.ui.workbench import WorkbenchServer
 
+    request_timeout = float(os.environ.get("RSI_WORKBENCH_REQUEST_TIMEOUT", "120"))
+    if not math.isfinite(request_timeout) or request_timeout <= 0:
+        raise ValueError("RSI_WORKBENCH_REQUEST_TIMEOUT 须为正数秒")
     config = load_config(config_file) if config_file else None
     system = ResearchSystem(data_root(root), config=config, allow_simulation=simulate_gpu)
-    server = WorkbenchServer(system, port=port)
+    server = WorkbenchServer(system, port=port, backend_timeout=request_timeout)
     server.invoke("recover", {})
     previous = signal.getsignal(signal.SIGTERM)
     terminated = False

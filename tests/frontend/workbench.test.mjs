@@ -299,6 +299,7 @@ test('failed sends retain the draft and retry the same delivery identity', async
   });
   ui.input('chat-input', '保留这条消息'); ui.submit('chat-form'); await settle();
   assert.equal(ui.$('chat-input').value, '保留这条消息');
+  assert.match(ui.$('chat-status').textContent, /发送失败/);
   assert.match(ui.$('messages').textContent, /发送未确认/);
   [...ui.$('messages').querySelectorAll('button')].find((button) => button.textContent === '重试发送').click(); await settle();
   assert.equal(sent.length, 2);
@@ -751,6 +752,57 @@ test('ended passk has no resume action', async (t) => {
   record.started_at = '2026-09-22T00:00:00Z';
   const ui = await setup(t, {a: record});
   assert.equal(ui.$('resume').hidden, true);
+});
+
+for (const status of ['stopped', 'succeeded', 'completed', 'failed']) {
+test(`interaction chat stays available after ${status} research`, async (t) => {
+  const record = run('a', status);
+  record.started_at = '2026-09-22T00:00:00Z';
+  record.agents.push({agent_id: 'research_1', direction: '独立探索 1', state: 'stopped'});
+  let sent;
+  const ui = await setup(t, {a: record}, (path, options) => {
+    if (path.endsWith('/chat')) {
+      sent = JSON.parse(options.body);
+      return response({message_id: sent.message_id});
+    }
+  });
+  assert.equal(ui.$('chat-input').disabled, false);
+  assert.equal(ui.$('send-message').disabled, false);
+  assert.match(ui.$('chat-recipient-trigger').textContent, /Interaction Agent/);
+  ui.input('chat-input', '继续讨论交付'); ui.submit('chat-form'); await settle();
+  assert.equal(sent.recipient, 'interaction');
+  assert.equal(ui.calls.filter((call) => call.path.endsWith('/resume')).length, 0);
+});
+}
+
+test('a draft for a stopped researcher asks for an explicit new recipient', async (t) => {
+  const record = run('a', 'running');
+  record.started_at = '2026-09-22T00:00:00Z';
+  record.agents.push({agent_id: 'research_1', direction: '独立探索 1', state: 'waiting'});
+  const ui = await setup(t, {a: record});
+  ui.input('chat-input', '保留这条指导');
+  record.status = 'stopped';
+  record.agents.at(-1).state = 'stopped';
+  await ui.poll();
+  assert.equal(ui.$('chat-input').value, '保留这条指导');
+  assert.equal(ui.$('send-message').disabled, true);
+  assert.match(ui.$('chat-status').textContent, /改选 Interaction Agent/);
+  ui.$('chat-recipient-trigger').click();
+  [...ui.$('chat-recipient-options').querySelectorAll('[role="option"]')]
+    .find((option) => option.textContent.includes('Interaction Agent')
+      && option.getAttribute('aria-disabled') !== 'true').click();
+  assert.equal(ui.$('send-message').disabled, false);
+  assert.equal(ui.$('chat-input').value, '保留这条指导');
+});
+
+test('the source repository and linked worktree are visible in the run', async (t) => {
+  const record = run('a');
+  record.workspace_dir = '/work/project';
+  record.worktree_dirs = {research_1: '/work/data/worktrees/a/research_1'};
+  const ui = await setup(t, {a: record});
+  assert.equal(ui.$('workspace-target').textContent,
+    '源 Git 仓库：/work/project\nresearch_1 工作区：/work/data/worktrees/a/research_1');
+  assert.equal(ui.$('workspace-target').hidden, false);
 });
 
 

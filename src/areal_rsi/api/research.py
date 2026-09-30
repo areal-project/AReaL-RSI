@@ -562,6 +562,8 @@ class CoordinationState:
     active: dict[str, str] = field(default_factory=dict)
     delivered: list[str] = field(default_factory=list)
     plan: str = ""
+    workspace_dir: str | None = None
+    workspace_base_commit: str | None = None
     seed_candidate_id: str | None = None
     baseline_candidate_id: str | None = None
     selected_candidate_id: str | None = None

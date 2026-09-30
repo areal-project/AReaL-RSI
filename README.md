@@ -48,6 +48,9 @@ uv run --env-file .env --locked python run.py --type web --port 33331
 
 首次使用可按下文[新建与查看研究](#新建与查看研究)操作；退出前参见[暂停、停止与删除研究](#暂停停止与删除研究)。
 
+任务消息指定本机 Git 仓库时，Interaction 可将其绑定为代码来源。启动研究时从该仓库的 HEAD 为每名研究员创建独立的关联 worktree；研究员和后续 Interaction 在选中的 worktree 中读写、运行命令和提交 Git。提交保存在同一 Git 仓库的新分支上，原检出目录不会自动更新。非 Git 目录不能绑定为代码工作区；`seed_dir` 仍用于把普通输入材料复制到每名研究员的独立工作区。
+对话在研究运行、暂停或结束后仍可继续：结束后的消息发给 Interaction，研究状态与冻结结果保持原样；复制模式下 Interaction 也可按需读取并导入本次研究已保存的候选，处理后续交付。
+
 Agent 后端支持 `standard`（默认，DSH）、`codex` 和 `runtime`（受信 Runtime 配置，
 可选择 Hermes、Claude 等适配器，也可按角色选择后端）。模型连接和后端配置在研究开始前
 固定。所有后端通过 `PackageAgentRuntime` 执行；原生会话、工具和压缩由 Runtime 管理，

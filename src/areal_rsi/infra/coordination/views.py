@@ -532,6 +532,13 @@ def research_detail(
         "edges": edges,
         "messages": messages,
         "agent_activity": encode(c.state.agent_activity),
+        "workspace_dir": c.state.workspace_dir,
+        "worktree_dirs": {
+            agent.agent_id: str(path)
+            for agent in run.research_agents
+            if (path := c.store.root.parent.parent / "worktrees"
+                / c.store.run_id / agent.agent_id).is_dir()
+        } if c.state.workspace_dir else {},
         "execution_setup": c.state.execution_setup,
         "preparation": encode(c.state.preparation),
         "human": {

@@ -40,6 +40,8 @@ from areal_rsi.infra.coordination.config import (
     ResearchConfig,
     archived_config,
     config_from_dict,
+    git_head_commit,
+    git_repository,
     validate_model_settings,
 )
 from areal_rsi.infra.coordination.coordinator import Coordinator
@@ -106,6 +108,9 @@ class ResearchSystem:
         self.allow_simulation = allow_simulation
         self.active: dict[str, ActiveResearch] = {}
         self._run_locks: dict[str, asyncio.Lock] = {}
+        self._chat_followup_runs: set[str] = set()
+        self._chat_wakeups: set[asyncio.Task[None]] = set()
+        self._closing = False
 
     @asynccontextmanager
     async def control(self, run_id: str, action: str) -> AsyncIterator[Coordinator]:
@@ -466,6 +471,9 @@ class ResearchSystem:
         key = key or config.api_key()
         if not conversation and config.seed_dir and not Path(config.seed_dir).is_dir():
             raise FileNotFoundError(f"Seed directory does not exist: {config.seed_dir}")
+        if config.workspace_dir:
+            config.workspace_dir = str(git_repository(config.workspace_dir))
+            git_head_commit(config.workspace_dir)
         if (
             not conversation
             and not simulated
@@ -483,6 +491,7 @@ class ResearchSystem:
         c = Coordinator.create(self.root, config.brief, simulated=simulated, run_id=run_id)
         c.state.creation_digest = creation_digest
         c.state.mode = config.mode
+        c.state.workspace_dir = config.workspace_dir
         if setup is not None:
             c.state.preparation = ResearchPreparation(setup)
         c.save()
@@ -534,7 +543,7 @@ class ResearchSystem:
         (directory / ".creating").unlink()
 
     async def _seed(self, c: Coordinator, config: ResearchConfig) -> None:
-        if config.seed_dir and not c.state.seed_candidate_id:
+        if config.seed_dir and not config.workspace_dir and not c.state.seed_candidate_id:
             candidate = await c.store.snapshot(
                 Path(config.seed_dir), agent_id="operator", description="研究起点"
             )
@@ -593,6 +602,8 @@ class ResearchSystem:
         selected_modules(config.mode, config.collaboration_modules)
         config.brief = c.store.brief()
         config.__post_init__()
+        if config.workspace_dir:
+            config.workspace_dir = str(git_repository(config.workspace_dir))
         config.validate_clock()
         config.pin_model_settings()
         config.connection_settings()
@@ -642,7 +653,13 @@ class ResearchSystem:
         )
         if c.state.intake.status is not None:
             c.state.intake.confirmation_message_id = confirmation_message_id
-            c.save()
+        c.state.workspace_dir = config.workspace_dir
+        c.state.workspace_base_commit = (
+            git_head_commit(config.workspace_dir) if config.workspace_dir else None
+        )
+        c.save()
+        if config.workspace_dir and c.state.intake.status is not None:
+            self._reset_agent_session(c, "interaction")
         c.start()
         active.engine.wake()
 
@@ -719,13 +736,15 @@ class ResearchSystem:
 
         return read
 
-    async def attach(self, c: Coordinator) -> ActiveResearch:
+    async def attach(self, c: Coordinator, *, chat_only: bool = False) -> ActiveResearch:
         existing = self.active.get(c.store.run_id)
         if existing and not existing.task.done():
             return existing
         if existing:
             existing.execution.close()
             await existing.engine.close()
+        if chat_only and c.state.status not in {"stopped", "succeeded", "completed", "failed"}:
+            raise ValueError("Only a concluded research run can use chat-only execution")
         c.acquire()
         runtime: ResearchAgentRuntime | None = None
         execution: ResearchExecution | None = None
@@ -789,7 +808,7 @@ class ResearchSystem:
                     # The engine pauses at a hard budget. A configured closeout must
                     # still run without a user having to turn that pause into a stop.
                     c.stop("探索时间已到，停止研究并自动验证和归档已有产物")
-                if c.state.status == "stopped":
+                if c.state.status in {"stopped", "succeeded", "completed", "failed"}:
                     return False
                 pending = await execution.poll()
                 if current.mode == "passk":
@@ -829,7 +848,8 @@ class ResearchSystem:
                     # Native tool handlers are drained before completion takes over.
                     current = self.active[c.store.run_id].config
                     if (
-                        current.needs_finalization
+                        not chat_only
+                        and current.needs_finalization
                         and c.state.status in {"stopped", "succeeded"}
                         and not c.state.user_stopped
                     ):
@@ -1037,6 +1057,7 @@ class ResearchSystem:
             if (c.state.preparation is not None and c.state.status == "planned"
                 and c.state.intake.status is None):
                 raise ValueError("请先完成环境预检并启动研发；预检阶段不会启动对话 Agent")
+            previous_active = self.active.get(run_id)
             message_id = c.user_message(
                 text,
                 key=message_id or new_id("user"),
@@ -1047,9 +1068,53 @@ class ResearchSystem:
             if (c.state.status == "paused"
                 and c.actor(actual_recipient).wait_reason == "user_cancelled"):
                 c.resume()
-            active = await self.attach(c)
+            config = self.config(c)
+            closeout_pending = (
+                config.needs_finalization
+                and c.state.status in {"stopped", "succeeded"}
+                and not c.state.user_stopped
+                and (c.completion is None or c.completion.status not in {"completed", "failed"})
+            )
+            active = await self.attach(
+                c,
+                chat_only=c.state.status in {"stopped", "succeeded", "completed", "failed"}
+                and not closeout_pending,
+            )
             active.engine.wake()
+            if (
+                c.state.status in {"stopped", "succeeded", "completed", "failed"}
+                and previous_active is active
+                and not active.task.done()
+                and run_id not in self._chat_followup_runs
+            ):
+                self._chat_followup_runs.add(run_id)
+
+                def after_current_task(_: asyncio.Task[None]) -> None:
+                    self._chat_followup_runs.discard(run_id)
+                    if self._closing:
+                        return
+                    wakeup = asyncio.create_task(self._continue_terminal_chat(run_id))
+                    self._chat_wakeups.add(wakeup)
+                    wakeup.add_done_callback(self._chat_wakeups.discard)
+
+                active.task.add_done_callback(after_current_task)
         return {"run_id": c.store.run_id, "message_id": message_id, "status": c.state.status}
+
+    async def _continue_terminal_chat(self, run_id: str) -> None:
+        try:
+            async with self.control(run_id, "chat") as c:
+                if (
+                    c.state.status not in {"stopped", "succeeded", "completed", "failed"}
+                    or "interaction" not in c.pending()
+                ):
+                    return
+                active = await self.attach(c, chat_only=True)
+                active.engine.wake()
+        except Exception as exc:
+            with suppress(OSError, ValueError):
+                self.coordinator(run_id).store.event(
+                    "chat_recovery_failed", error=type(exc).__name__
+                )
 
     @staticmethod
     def _human_control(c: Coordinator) -> None:
@@ -1362,23 +1427,29 @@ class ResearchSystem:
             except (OSError, ValueError, KeyError):
                 continue
             completion = c.completion
-            if (
-                config.mode in MODES
-                and config.metadata.get("auto_resume")
+            closeout_pending = (
+                config.needs_finalization
+                and c.state.status in {"stopped", "succeeded"}
+                and not c.state.user_stopped
+                and (completion is None or completion.status not in {"completed", "failed"})
+            )
+            resume_research = bool(
+                config.metadata.get("auto_resume")
                 and c.state.started_at
                 and not c.state.user_stopped
-                and (
-                    c.state.status == "running"
-                    or (
-                        config.needs_finalization
-                        and c.state.status in {"stopped", "succeeded"}
-                        and (completion is None or completion.status not in {"completed", "failed"})
-                    )
-                )
+                and (c.state.status == "running" or closeout_pending)
+            )
+            resume_chat = (
+                c.state.status in {"stopped", "succeeded", "completed", "failed"}
+                and "interaction" in c.pending()
+            )
+            if (
+                config.mode in MODES
+                and (resume_research or resume_chat)
                 and not self.worker_elsewhere(c)
             ):
                 try:
-                    await self.attach(c)
+                    await self.attach(c, chat_only=resume_chat and not closeout_pending)
                 except Exception as exc:
                     c.store.event("recovery_failed", error=type(exc).__name__)
         return {}
@@ -1461,6 +1532,11 @@ class ResearchSystem:
         return await self.detail(params["run_id"]) if result is None else result
 
     async def close(self) -> None:
+        self._closing = True
+        wakeups = tuple(self._chat_wakeups)
+        for task in wakeups:
+            task.cancel()
+        await asyncio.gather(*wakeups, return_exceptions=True)
         for active in self.active.values():
             active.task.cancel()
         await asyncio.gather(*(a.task for a in self.active.values()), return_exceptions=True)

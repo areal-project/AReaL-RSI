@@ -148,6 +148,7 @@ p {
 [hidden] {
   display: none !important;
 }
+.workspace-target { overflow-wrap: anywhere; white-space: pre-wrap; color: var(--muted); font-size: 12px; }
 .sidebar {
   width: 215px;
   position: fixed;

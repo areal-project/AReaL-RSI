@@ -23,6 +23,7 @@ const state = {
   tab: "chat",
   polling: false,
   sending: new Set(),
+  chatErrors: new Map(),
   outgoing: new Map(),
   busy: false,
   deleting: false,
@@ -65,6 +66,7 @@ const recipientDropdown = new WorkbenchDropdown($("chat-recipient"), {
   label: "发送给",
   onChange: (value) => {
     state.replyTargets.set(state.runId, { value, explicit: true });
+    state.chatErrors.delete(state.runId);
     render();
     if (state.run) loadAgentTrace(state.runId, renderReplyTarget(state.run).recipient);
   },
@@ -648,6 +650,11 @@ async function refresh(force = false) {
 function render() {
   const run = state.run;
   if (!run) return;
+  $("workspace-target").hidden = !run.workspace_dir;
+  $("workspace-target").textContent = run.workspace_dir
+    ? [`源 Git 仓库：${run.workspace_dir}`,
+      ...Object.entries(run.worktree_dirs || {}).map(([agent, path]) =>
+        `${agent} 工作区：${path}`)].join("\n") : "";
   renderModelSettings();
   renderCollaboration();
   renderGoal(run);
@@ -724,25 +731,30 @@ function render() {
   renderEvents();
   const target = renderReplyTarget(run);
   renderAgentErrors(run);
-  const ended = run.collaboration?.supported === false || !["planned", "running", "paused"].includes(run.status);
-  const responding = (run.agents || []).find((agent) => agent.agent_id === target.recipient);
+  const chatUnavailable = run.collaboration?.supported === false;
+  const researchEnded = ["stopped", "succeeded", "completed", "failed"].includes(run.status);
   const fixedTask = run.preparation && run.status === "planned" && !run.intake?.status;
-  $("chat-input").disabled = ended || fixedTask;
-  $("send-message").disabled = ended || fixedTask || state.sending.has(run.run_id) || target.stale;
+  const responding = (run.agents || []).find((agent) => agent.agent_id === target.recipient);
+  $("chat-input").disabled = chatUnavailable || fixedTask;
+  $("send-message").disabled = chatUnavailable || fixedTask || state.sending.has(run.run_id) || target.stale;
   $("chat-input-label").textContent = `向 ${agentName(target.recipient)} 发送消息`;
   $("chat-input").placeholder = target.reply_to
     ? "回答这个问题，或说明处理进展…"
     : "补充想法、提供环境，或询问进展…";
-  $("chat-status").textContent = fixedTask
+  $("chat-status").textContent = chatUnavailable
+    ? "当前历史配置无法继续对话"
+    : fixedTask
     ? "此研发任务按固定条件执行；请使用预检、启动、暂停或停止操作。"
-    : ended
-    ? "研究已结束，记录保留供查看"
     : target.stale
-    ? "该问题已回复，请重新选择发送对象"
-    : run.status === "paused"
+    ? target.text
+    : state.chatErrors.has(run.run_id)
+    ? `发送失败：${state.chatErrors.get(run.run_id)}`
+    : run.status === "paused" && target.recipient !== "interaction"
     ? "研究已暂停，消息将在继续后处理"
     : state.sending.has(run.run_id)
     ? "正在发送…"
+    : researchEnded
+    ? "研究执行已结束，仍可与 Interaction Agent 对话"
     : responding?.state === "running"
       ? `${agentName(target.recipient)} 正在处理…`
       : "Enter 发送 · Shift+Enter 换行";
@@ -905,7 +917,9 @@ function questionPreview(question, length = 48) {
   return text.length > length ? `${text.slice(0, length)}…` : text;
 }
 function renderReplyTarget(run) {
-  const questions = (run.waiting_for_user || []).filter((q) => q.message_id);
+  const active = ["planned", "running", "paused"].includes(run.status);
+  const questions = (run.waiting_for_user || []).filter((q) =>
+    q.message_id && (active || q.agent_id === "interaction"));
   const choices = [
     ...questions.map((q) => ({
       value: q.message_id,
@@ -914,11 +928,12 @@ function renderReplyTarget(run) {
       reply_to: q.message_id,
     })),
     ...(run.started_at ? [] : [{ value: "interaction", recipient: "interaction", text: "Interaction Agent · 新消息" }]),
-    ...(run.started_at && run.collaboration?.rsi_model_enabled
+    ...(active && run.started_at && run.collaboration?.rsi_model_enabled
       ? [{ value: "rsi", recipient: "rsi", text: "RSI Agent · 新消息" }] : []),
   ];
-  if (run.collaboration?.mode === "passk" && run.started_at)
+  if (active && run.collaboration?.mode === "passk" && run.started_at)
     choices.push(...(run.agents || []).filter((a) => a.agent_id !== "rsi" && a.agent_id !== "interaction" && a.state !== "stopped").map((a) => ({value: a.agent_id, recipient: a.agent_id, text: `${agentName(a.agent_id)} · 定向指导`})));
+  if (run.started_at) choices.push({value: "interaction", recipient: "interaction", text: "Interaction Agent · 对话"});
   if (!choices.length) choices.push({value: "interaction", recipient: "interaction", text: "任务已结束"});
   let selected = state.replyTargets.get(run.run_id);
   const hasDraft = !!$("chat-input").value.trim();
@@ -930,11 +945,12 @@ function renderReplyTarget(run) {
   if (!target) {
     // Never silently redirect a draft if another browser already answered its question.
     target = { value: selected.value, recipient: "interaction", stale: true,
-      text: "问题已回复，请重新选择", disabled: true };
+      text: active ? "原接收者已不可用，请重新选择" : "研究已结束，请改选 Interaction Agent",
+      disabled: true };
     choices.unshift(target);
   }
   recipientDropdown.update(choices, selected.value,
-    state.sending.has(run.run_id) || !["planned", "running", "paused"].includes(run.status));
+    state.sending.has(run.run_id) || run.collaboration?.supported === false);
   const pending = $("pending-questions");
   pending.hidden = !questions.length;
   const questionSignature = JSON.stringify([run.run_id, questions, selected.value]);
@@ -1539,7 +1555,7 @@ function renderChatFeedback(run, target, agent) {
   const sending = state.sending.has(run.run_id);
   const pending = (run.pending_agents || []).includes(target.recipient);
   const working = agent?.state === "running";
-  const open = ["planned", "running"].includes(run.status);
+  const open = ["planned", "running"].includes(run.status) || target.recipient === "interaction";
   const unserved = run.worker_alive === false && (pending || working);
   const pass1 = isSingleRun(run) && target.recipient === primaryAgent(run);
   if (pass1 && run.status === "paused" && agent?.wait_reason === "user_cancelled") {
@@ -1876,7 +1892,7 @@ $("delete-form").addEventListener("submit", async (event) => {
   try {
     await api(`/api/runs/${encodeURIComponent(runId)}/delete`, {});
     for (const cache of [state.runCache, state.eventCache, state.cursors, state.selected,
-      state.drafts, state.replyTargets, state.outgoing, state.modelDrafts]) cache.delete(runId);
+      state.drafts, state.replyTargets, state.outgoing, state.chatErrors, state.modelDrafts]) cache.delete(runId);
     localStorage.removeItem(`rsi.workbench.node.${runId}`);
     localStorage.removeItem(`rsi.workbench.zoom.${runId}`);
     localStorage.removeItem("rsi.workbench.run");
@@ -2124,6 +2140,7 @@ $("chat-form").addEventListener("submit", async (event) => {
   const target = renderReplyTarget(state.run);
   if (target.stale) return;
   const runId = state.runId;
+  state.chatErrors.delete(runId);
   const previous = state.outgoing.get(runId);
   const same = previous?.text === text && previous.recipient === target.recipient && previous.reply_to === target.reply_to;
   const message = {sender: "user", recipient: target.recipient, reply_to: target.reply_to,
@@ -2152,6 +2169,7 @@ $("chat-form").addEventListener("submit", async (event) => {
     }
   } catch (error) {
     message.delivery = "failed";
+    state.chatErrors.set(runId, error.message);
     if (state.runId === runId) notice(error.message);
   } finally {
     state.sending.delete(runId);

@@ -80,12 +80,10 @@ class PassKActions(ResearchActions):
     team_read = False
 
     def definitions(self, agent_id: str, *, include_hidden: bool = False) -> list[dict[str, Any]]:
-        if self.c.state.status == "planned" and agent_id == "interaction":
+        if agent_id == "interaction":
             return super().definitions(agent_id, include_hidden=include_hidden)
         if agent_id == "rsi":
             return SUPERVISOR_TOOLS if self.c.state.rsi_model_enabled else []
-        if agent_id == "interaction":
-            return []
         return [
             tool
             for tool in super().definitions(agent_id, include_hidden=include_hidden)
@@ -110,7 +108,7 @@ class PassKActions(ResearchActions):
         return candidate
 
     def read_record(self, agent_id: str, uri: str) -> Any:
-        if agent_id == "interaction" and self.c.state.status == "planned":
+        if agent_id == "interaction":
             return super().read_record(agent_id, uri)
         ref = self.c.store.record_reference(RecordRef(uri))
         value = self.c.store.public_record(ref)
@@ -389,12 +387,26 @@ async def launch(c: Coordinator, actions: PassKActions) -> None:
     """RSI invokes this fixed launch; no sampled assignments or replacement attempts."""
     if c.state.passk_ready:
         return
-    for agent_id in ("interaction",):
-        actor = c.actor(agent_id)
+    actor = c.actor("interaction")
+    started_at = c.state.started_at or ""
+    pending_user = [
+        identifier for identifier in c.state.inboxes.get("interaction", [])
+        if (message := c.store.get("messages", identifier, ResearchMessage)).sender == "user"
+        and message.created_at >= started_at
+    ]
+    if pending_user:
+        if (
+            "interaction" in c.state.active
+            and c.state.active["interaction"] not in pending_user
+        ):
+            c.end_turn("interaction")
+        c.state.inboxes["interaction"] = pending_user
+        actor.state, actor.wait_reason = AgentState.WAITING, "message"
+    else:
         actor.state, actor.wait_reason = AgentState.STOPPED, "passk: no intervention"
-        c.save_actor(actor)
-        c.state.inboxes[agent_id] = []
-        c.state.active.pop(agent_id, None)
+        c.state.inboxes["interaction"] = []
+        c.state.active.pop("interaction", None)
+    c.save_actor(actor)
     c.save()
     if not c.state.rsi_model_enabled:
         rsi = c.actor("rsi")
@@ -626,17 +638,19 @@ class PassKEngine(ResearchEngine):
 
     def _actor_allowed(self, agent_id: str) -> bool:
         c = self.coordinator
+        if agent_id == "interaction":
+            return c.state.status in {
+                "planned", "running", "paused", "stopped", "succeeded", "completed", "failed"
+            }
         if agent_id in c.state.human.paused_agents:
             return False
         if agent_id == "rsi" and not c.state.rsi_model_enabled:
             return False
         if (goal := c.state.goals.get(agent_id)) and goal.status != "active":
             return False
-        if self.coordinator.state.status == "planned":
-            return agent_id == "interaction"
         return self.coordinator.state.status == "running" and (
             agent_id == "rsi"
-            or (agent_id != "interaction" and bool(self.coordinator.state.passk_ready))
+            or bool(self.coordinator.state.passk_ready)
         )
 
     def _recovery_state(self, agent_id: str) -> dict[str, Any]:

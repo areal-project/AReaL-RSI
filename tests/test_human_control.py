@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any
 
 import pytest
-from runtime_fakes import ActionRuntime
+from runtime_fakes import ActionRuntime, CallbackRuntime
 
-from areal_rsi.api.interfaces import ToolCall
+from areal_rsi.api.interfaces import ToolCall, TurnResult
 from areal_rsi.api.records import AgentState
 from areal_rsi.api.research import (
     GoalRevision,
@@ -18,6 +19,7 @@ from areal_rsi.api.research import (
     VerifiedResult,
 )
 from areal_rsi.infra.coordination.config import ResearchConfig
+from areal_rsi.infra.coordination.coordinator import effect_id
 from areal_rsi.infra.coordination.policies.passk import PassKActions, launch, stop_on_target
 from areal_rsi.infra.execution import ApprovedCommand
 from areal_rsi.infra.research import ResearchSystem
@@ -39,6 +41,319 @@ async def start(root: Path) -> tuple[ResearchSystem, str, list[str]]:
     await active.engine.tick()
     await asyncio.sleep(.01)
     return app, run_id, [a.agent_id for a in active.coordinator.store.run().research_agents]
+
+
+def test_interaction_continues_after_research_stops_without_reopening_it(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        turns = 0
+
+        async def respond(session: Path, request: dict[str, Any]) -> TurnResult:
+            nonlocal turns
+            if session.name != "interaction":
+                await asyncio.Event().wait()
+                raise AssertionError("research turn should have been cancelled")
+            turns += 1
+            if turns == 1:
+                result = await request["handler"](
+                    ToolCall(
+                        "ask_user", {"question": "还需要提交到哪个仓库？"}, "followup-question"
+                    )
+                )
+                return TurnResult(session.name, request["message_id"], "", result.reason, {})
+            return TurnResult(session.name, request["message_id"], "收到仓库信息", "completed", {})
+
+        runtime = CallbackRuntime(respond)
+        app = ResearchSystem(
+            tmp_path,
+            config=ResearchConfig(TaskBrief("Investigate", "Inspect only")),
+            runtime_factory=lambda _: runtime,
+        )
+        try:
+            await app.create({"run_id": "stopped-chat", "conversation": False})
+            await app.start("stopped-chat")
+            await app.stop("stopped-chat")
+            c = app.coordinator("stopped-chat")
+            finished_at = c.store.run().finished_at
+            await app.send_message("stopped-chat", "请继续沟通交付", recipient="interaction")
+            async with asyncio.timeout(5):
+                while not (questions := c.user_questions()):
+                    await asyncio.sleep(.01)
+            question = questions[0].message_id
+            await app.send_message("stopped-chat", "提交到指定仓库", reply_to=question)
+            async with asyncio.timeout(5):
+                while not any(
+                    message.sender == "interaction" and message.text == "收到仓库信息"
+                    for message in c.store.records("messages", ResearchMessage)
+                ):
+                    await asyncio.sleep(.01)
+            assert c.state.status == "stopped"
+            assert c.store.run().finished_at == finished_at
+            assert not any(event.kind == "run_reopened" for event in c.store.events())
+            assert all(actor.state == AgentState.STOPPED for actor in c.store.run().research_agents)
+            with pytest.raises(ValueError, match="接收者"):
+                await app.send_message("stopped-chat", "不要重启研究员", recipient="research_other")
+        finally:
+            await app.close()
+
+    asyncio.run(scenario())
+
+
+def test_terminal_chat_retry_repairs_an_unqueued_message(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        app = ResearchSystem(
+            tmp_path,
+            config=ResearchConfig(TaskBrief("Investigate", "Inspect only")),
+            runtime_factory=lambda _: ActionRuntime(),
+        )
+        try:
+            await app.create({"run_id": "retry-chat", "conversation": False})
+            await app.stop("retry-chat")
+            c = app.coordinator("retry-chat")
+            key = "interrupted-terminal-chat"
+            message_id = effect_id("message", key)
+            c.store.put(
+                "messages", message_id,
+                ResearchMessage(message_id, "user", "interaction", "继续对话", now()),
+            )
+            assert message_id not in c.state.inboxes.get("interaction", [])
+            assert c.user_message("继续对话", key=key, recipient="interaction") == message_id
+            assert message_id in c.state.inboxes["interaction"]
+            assert c.actor("interaction").state == AgentState.WAITING
+        finally:
+            await app.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("pause_research", [False, True])
+def test_interaction_can_reply_during_research(
+    tmp_path: Path, pause_research: bool
+) -> None:
+    async def scenario() -> None:
+        async def respond(session: Path, request: dict[str, Any]) -> TurnResult:
+            if session.name != "interaction":
+                await asyncio.Event().wait()
+                raise AssertionError("research turn should have been cancelled")
+            return TurnResult(session.name, request["message_id"], "可以继续讨论", "completed", {})
+
+        app = ResearchSystem(
+            tmp_path,
+            config=ResearchConfig(TaskBrief("Investigate", "Inspect only")),
+            runtime_factory=lambda _: CallbackRuntime(respond),
+        )
+        try:
+            await app.create({"run_id": "live-chat", "conversation": False})
+            await app.start("live-chat")
+            if pause_research:
+                await app.pause("live-chat")
+            await app.send_message("live-chat", "还有一个问题", recipient="interaction")
+            c = app.coordinator("live-chat")
+            async with asyncio.timeout(5):
+                while not any(
+                    message.sender == "interaction" and message.text == "可以继续讨论"
+                    for message in c.store.records("messages", ResearchMessage)
+                ):
+                    await asyncio.sleep(.01)
+            assert c.state.status == ("paused" if pause_research else "running")
+        finally:
+            await app.close()
+
+    asyncio.run(scenario())
+
+
+def test_terminal_interaction_can_import_a_selected_researcher_candidate(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        app, run_id, agents = await start(tmp_path)
+        try:
+            active = app.active[run_id]
+            assert isinstance(active.actions, PassKActions)
+            source = active.actions.workspace(agents[1])
+            (source / "result.txt").write_text("second researcher's result")
+            candidate = await active.coordinator.store.snapshot(
+                source, agent_id=agents[1], description="handoff"
+            )
+            await app.stop(run_id)
+            await app.send_message(run_id, "请处理已保存的候选", recipient="interaction")
+            active = app.active[run_id]
+            assert isinstance(active.actions, PassKActions)
+            assert "import_candidate" in {
+                tool["name"] for tool in active.actions.definitions("interaction")
+            }
+            result = await active.actions.handler("interaction")(
+                ToolCall(
+                    "import_candidate",
+                    {"candidate_id": candidate.candidate_id, "destination": "handoff"},
+                    "import-for-delivery",
+                )
+            )
+            assert "error" not in result.output
+            assert (active.actions.workspace("interaction") / "handoff/result.txt").read_text() == (
+                "second researcher's result"
+            )
+            assert active.coordinator.state.status == "stopped"
+        finally:
+            await app.close()
+
+    asyncio.run(scenario())
+
+
+def test_terminal_interaction_reply_recovers_after_worker_restart(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async def respond(session: Path, request: dict[str, Any]) -> TurnResult:
+            if session.name != "interaction":
+                await asyncio.Event().wait()
+                raise AssertionError("research turn should have been cancelled")
+            return TurnResult(
+                session.name, request["message_id"], "恢复后仍可回复", "completed", {}
+            )
+
+        config = ResearchConfig(TaskBrief("Investigate", "Inspect only"))
+        app = ResearchSystem(
+            tmp_path, config=config, runtime_factory=lambda _: CallbackRuntime(respond)
+        )
+        await app.create({"run_id": "recover-chat", "conversation": False})
+        await app.start("recover-chat")
+        await app.stop("recover-chat")
+        c = app.coordinator("recover-chat")
+        c.acquire()
+        try:
+            c.user_message("继续沟通", key="queued-after-stop", recipient="interaction")
+        finally:
+            c.release()
+        await app.close()
+
+        recovered = ResearchSystem(
+            tmp_path, runtime_factory=lambda _: CallbackRuntime(respond)
+        )
+        try:
+            await recovered.recover()
+            c = recovered.coordinator("recover-chat")
+            async with asyncio.timeout(5):
+                while not any(
+                    message.sender == "interaction" and message.text == "恢复后仍可回复"
+                    for message in c.store.records("messages", ResearchMessage)
+                ):
+                    await asyncio.sleep(.01)
+            assert c.state.status == "stopped"
+        finally:
+            await recovered.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("recover", [False, True])
+def test_terminal_chat_keeps_pending_finalization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recover: bool
+) -> None:
+    async def scenario() -> None:
+        async def respond(session: Path, request: dict[str, Any]) -> TurnResult:
+            if session.name != "interaction":
+                raise AssertionError("terminal chat must not restart researchers")
+            return TurnResult(session.name, request["message_id"], "收到", "completed", {})
+
+        config = ResearchConfig(
+            TaskBrief("Investigate", "Inspect only"),
+            finalizer=ApprovedCommand("finish", ("true",)),
+        )
+        app = ResearchSystem(
+            tmp_path, config=config, runtime_factory=lambda _: CallbackRuntime(respond)
+        )
+        try:
+            await app.create({"run_id": "closeout-chat", "conversation": False})
+            c = app.coordinator("closeout-chat")
+            c.acquire()
+            try:
+                c.start()
+                c.stop("Exploration budget ended")
+            finally:
+                c.release()
+            called = asyncio.Event()
+
+            async def finish(*_: Any) -> None:
+                called.set()
+
+            if recover:
+                c.acquire()
+                try:
+                    c.user_message("继续沟通", key="queued-closeout", recipient="interaction")
+                finally:
+                    c.release()
+                await app.close()
+                app = ResearchSystem(
+                    tmp_path, runtime_factory=lambda _: CallbackRuntime(respond)
+                )
+            monkeypatch.setattr(app, "_complete_result", finish)
+            if recover:
+                await app.recover()
+            else:
+                await app.send_message("closeout-chat", "继续沟通", recipient="interaction")
+            await asyncio.wait_for(called.wait(), timeout=5)
+            assert c.state.status == "stopped"
+            assert any(
+                message.sender == "interaction" and message.text == "收到"
+                for message in c.store.records("messages", ResearchMessage)
+            )
+        finally:
+            await app.close()
+
+    asyncio.run(scenario())
+
+
+def test_terminal_chat_queued_during_finalization_is_delivered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        async def respond(session: Path, request: dict[str, Any]) -> TurnResult:
+            if session.name != "interaction":
+                raise AssertionError("terminal chat must not restart researchers")
+            return TurnResult(session.name, request["message_id"], "收尾后回复", "completed", {})
+
+        app = ResearchSystem(
+            tmp_path,
+            config=ResearchConfig(
+                TaskBrief("Investigate", "Inspect only"),
+                finalizer=ApprovedCommand("finish", ("true",)),
+            ),
+            runtime_factory=lambda _: CallbackRuntime(respond),
+        )
+        entered, release = asyncio.Event(), asyncio.Event()
+        try:
+            await app.create({"run_id": "chat-during-finalization", "conversation": False})
+            c = app.coordinator("chat-during-finalization")
+            c.acquire()
+            try:
+                c.start()
+                c.stop("Exploration budget ended")
+            finally:
+                c.release()
+
+            async def finish(*_: Any) -> None:
+                entered.set()
+                await release.wait()
+
+            monkeypatch.setattr(app, "_complete_result", finish)
+            async with app.control("chat-during-finalization", "recover") as owned:
+                await app.attach(owned)
+            await asyncio.wait_for(entered.wait(), timeout=5)
+            receipt = await app.send_message(
+                "chat-during-finalization", "收尾期间继续对话", recipient="interaction"
+            )
+            release.set()
+            async with asyncio.timeout(5):
+                while not any(
+                    message.sender == "interaction"
+                    and message.reply_to == receipt["message_id"]
+                    for message in c.store.records("messages", ResearchMessage)
+                ):
+                    await asyncio.sleep(.01)
+            assert c.state.status == "stopped"
+        finally:
+            release.set()
+            await app.close()
+
+    asyncio.run(scenario())
 
 
 def test_guidance_is_durable_scoped_and_individually_paused(tmp_path: Path) -> None:

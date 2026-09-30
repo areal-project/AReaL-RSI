@@ -139,6 +139,7 @@ def sandbox_command(
     *,
     isolation: str = "sandbox",
     codex_auth_file: Path | None = None,
+    writable_paths: tuple[Path, ...] = (),
 ) -> list[str]:
     validate_isolation(isolation)
     worker = [
@@ -160,6 +161,7 @@ def sandbox_command(
     roots = {
         directory.resolve(),
         workspace.resolve(),
+        *(path.resolve() for path in writable_paths),
         Path(sys.prefix).resolve(),
         Path(sys.base_prefix).resolve(),
         Path(sys.executable).resolve().parent,
@@ -224,7 +226,7 @@ def sandbox_command(
             executable = alias
     for parent in sorted({p for root in roots for p in root.parents}):
         profile.append(f"(allow file-read-metadata (literal {json.dumps(str(parent))}))")
-    for path in (directory.resolve(), workspace.resolve()):
+    for path in (directory.resolve(), workspace.resolve(), *writable_paths):
         profile.append(f"(allow file-write* (subpath {json.dumps(str(path))}))")
     profile.append(
         '(allow file-read* file-write* (literal "/dev/null") (literal "/dev/tty") '
@@ -410,6 +412,7 @@ class PackageAgentRuntime:
         context_window_tokens: int | None = None,
         reasoning_effort: str | None = None,
         environment: Mapping[str, str] | None = None,
+        writable_paths: tuple[str, ...] = (),
     ) -> PackageSession:
         if agent.runtime not in {"areal-agent-runtime@v1", "deepseek-harness@v1"}:
             raise ValueError(f"Unknown RSI Runtime binding: {agent.runtime}")
@@ -631,6 +634,7 @@ class PackageAgentRuntime:
             tuple(service_ports),
             isolation=self.settings.isolation,
             codex_auth_file=self.codex_auth_file,
+            writable_paths=tuple(Path(path).resolve() for path in writable_paths),
         )
         if research_tools is not None:
             # Fail before spending model calls if the agent's actual shell cannot

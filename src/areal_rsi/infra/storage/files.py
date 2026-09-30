@@ -200,6 +200,9 @@ class FileContentStore:
             raise ValueError("快照来源必须是实际存在的非符号链接目录")
         files = {}
         for path in sorted(directory.rglob("*")):
+            if path == directory / ".git" and path.is_file():
+                # Linked worktrees store an administrative pointer here, not source content.
+                continue
             mode = path.lstat().st_mode
             if stat.S_ISLNK(mode):
                 raise ValueError("快照不接受符号链接")

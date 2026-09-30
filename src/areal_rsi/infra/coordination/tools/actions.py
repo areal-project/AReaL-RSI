@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import shutil
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -13,7 +15,11 @@ from urllib.parse import urlsplit
 from areal_rsi.api.interfaces import ToolCall, ToolHandler, ToolResult
 from areal_rsi.api.records import AgentState, RecordRef, ResearchRun, RunState
 from areal_rsi.api.research import CandidateSnapshot, EvidenceRecord, VerifiedResult
-from areal_rsi.infra.coordination.config import config_from_dict
+from areal_rsi.infra.coordination.config import (
+    config_from_dict,
+    git_common_directory,
+    git_repository,
+)
 from areal_rsi.infra.coordination.coordinator import Coordinator, effect_id
 from areal_rsi.infra.coordination.tools.brief import brief_tool, updated_brief
 from areal_rsi.infra.coordination.views import model_state, record_preview
@@ -259,11 +265,19 @@ class ResearchActions:
 
     def definitions(self, agent_id: str, *, include_hidden: bool = False) -> list[dict[str, Any]]:
         role = self.role(agent_id)
-        common = COMMON if role != "interaction" else COMMON[:3]
+        terminal = self.c.state.status in {"stopped", "succeeded", "completed", "failed"}
+        common = COMMON if role != "interaction" else [
+            tool for tool in COMMON if tool["name"] in {
+                "get_state", "read_record", "list_records", "read_candidate_file",
+                "import_candidate",
+            }
+        ]
         hidden = set()
         if not include_hidden:
             if {"read", "write", "glob"} <= self.extras.keys():
                 hidden.update({"read_file", "write_file", "list_files"})
+            if terminal:
+                hidden.add("send_to_rsi")
             if self.c.state.status != "planned" and self.c.state.execution_setup != "pending":
                 hidden.update(
                     {
@@ -299,6 +313,15 @@ class ResearchActions:
             actor = self.c.actor(agent_id)
             key = effect_id("action", agent_id + ":" + call.call_id)
             action_path = self.c.store.root / "actions" / f"{key}.json"
+            if (
+                self.c.state.status != "planned"
+                and call.name in {
+                    "set_execution", "load_execution_config", "prepare_adapter",
+                    "prepare_research", "start_research", "handoff_research", "update_brief",
+                }
+                and not action_path.exists()
+            ):
+                return ToolResult({"error": "Tool is not available after research starts"})
             stopping_replay = call.name == "stop_run" and action_path.exists()
             if (
                 actor.state == AgentState.STOPPED
@@ -353,7 +376,29 @@ class ResearchActions:
 
         return handle
 
+    def _worktree_path(self, agent_id: str) -> Path:
+        return self.c.store.root.parent.parent / "worktrees" / self.c.store.run_id / agent_id
+
     def workspace(self, agent_id: str) -> Path:
+        if self.c.state.workspace_dir:
+            if agent_id not in {"rsi", "interaction"}:
+                return self._worktree_path(agent_id)
+            if agent_id == "interaction" and self.c.state.started_at:
+                agents = self.c.store.run().research_agents
+                selected = self.c.selected_candidate_id
+                if selected:
+                    candidate = self.c.store.get("candidates", selected, CandidateSnapshot)
+                    owner = next(
+                        (a for a in agents if a.agent_id == candidate.source_agent_id), None
+                    )
+                    if owner is None and len(agents) == 1:
+                        owner = agents[0]
+                else:
+                    owner = agents[0] if len(agents) == 1 else None
+                if owner is not None:
+                    worktree = self._worktree_path(owner.agent_id)
+                    if worktree.is_dir():
+                        return worktree
         root = self.c.store.paths.agent(agent_id) / "workspace"
         root.mkdir(parents=True, exist_ok=True)
         return root
@@ -716,6 +761,8 @@ class ResearchActions:
                 {"question_sent": True, "message_id": message_id}, stop=True, reason="user"
             )
         if name == "send_to_rsi":
+            if c.state.status in {"stopped", "succeeded", "completed", "failed"}:
+                raise ValueError("研究已结束；请直接回复用户，新的研究需要另建任务")
             c.enqueue("interaction", "rsi", args["message"], key=key)
             return ToolResult({"sent": True})
         if name == "update_brief":
@@ -944,6 +991,36 @@ class ResearchActions:
         if staging.exists():
             shutil.rmtree(staging)
         await self.c.store.content.materialize(candidate.content, staging)
+        if self.c.state.workspace_dir and agent_id not in {"rsi", "interaction"}:
+            # A linked worktree must keep its .git pointer and directory identity.
+            backup.mkdir()
+            try:
+                for path in workspace.iterdir():
+                    if path.name != ".git":
+                        path.rename(backup / path.name)
+                for path in staging.iterdir():
+                    if path.name == ".git":
+                        raise ValueError("候选内容不能覆盖 Git worktree 元数据")
+                    path.rename(workspace / path.name)
+            except BaseException:
+                for path in workspace.iterdir():
+                    if path.name != ".git":
+                        if path.is_dir():
+                            shutil.rmtree(path)
+                        else:
+                            path.unlink()
+                for path in backup.iterdir():
+                    path.rename(workspace / path.name)
+                raise
+            finally:
+                shutil.rmtree(staging)
+                shutil.rmtree(backup)
+            self.mark_workspace_candidate(agent_id, candidate.candidate_id)
+            self.c.store.event(
+                "candidate_checked_out", agent_id=agent_id,
+                candidate_id=candidate.candidate_id,
+            )
+            return
         workspace.rename(backup)
         staging.rename(workspace)
         self.mark_workspace_candidate(agent_id, candidate.candidate_id)
@@ -953,6 +1030,38 @@ class ResearchActions:
         )
 
     async def initialize_workspace(self, agent_id: str) -> None:
+        if self.c.state.workspace_dir and agent_id not in {"rsi", "interaction"}:
+            source = git_repository(self.c.state.workspace_dir)
+            target = self._worktree_path(agent_id)
+            if target.exists():
+                if (
+                    git_repository(target) != target.resolve()
+                    or git_common_directory(target) != git_common_directory(source)
+                ):
+                    raise ValueError("现有工作目录不属于所选 Git 仓库：" + str(target))
+                return
+            base = self.c.state.workspace_base_commit
+            if not base:
+                raise ValueError("研究启动前缺少 Git 基线提交")
+            branch = f"rsi/{self.c.store.run_id}/{agent_id}"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            exists = subprocess.run(
+                ["git", "-C", str(source), "show-ref", "--verify", "--quiet",
+                 "refs/heads/" + branch],
+                check=False,
+            ).returncode == 0
+            command = ["git", "-C", str(source), "worktree", "add"]
+            command += [str(target), branch] if exists else ["-b", branch, str(target), base]
+            result = await asyncio.to_thread(
+                subprocess.run, command, capture_output=True, text=True, check=False
+            )
+            if result.returncode:
+                raise ValueError("创建 Git worktree 失败：" + result.stderr.strip())
+            self.c.store.event(
+                "worktree_created", agent_id=agent_id, path=str(target),
+                branch=branch, base_commit=base,
+            )
+            return
         root = self.workspace(agent_id)
         marker = self.c.store.paths.agent(agent_id) / "workspace_initialized.json"
         seed_id = self.c.state.seed_candidate_id

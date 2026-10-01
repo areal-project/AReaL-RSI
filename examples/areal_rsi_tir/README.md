@@ -59,22 +59,29 @@ python -m areal_rsi_tir.cycle rollback \
 
 `areal_rsi_tir.claude_code` 将 Claude Code CLI 作为解题 Agent 运行。它从冻结题集读取公开题面，逐题调用 CLI，保留完整事件轨迹、用量和成本，再由可信的 ToRL 评分器读取私有答案打分。CLI 只开放随包提供的有界计算器 MCP 工具；其他内置工具在 `dontAsk` 模式下不可用。Harness ID 绑定提示词、CLI 可执行文件、计算器源码、模型 ID、超时和每题预算。
 
-先在运行评测的同一用户环境完成 Claude Code 登录。冻结时使用具体模型 ID，不使用会自动改变指向的别名：
+本地模式给 CLI 传入仅供本地服务使用的占位 API key；无需 Claude 账户登录。当前 Claude Code 2.1.167 会把一条 `system` 消息放进 `messages` 并请求 32000 个输出 token；本地 SGLang 0.5.10 的 Anthropic 接口会拒绝这两处。因此在同一节点启动 `claude_backend` 适配器，将 `system` 移到顶层并按服务的上下文限制缩小输出上限。适配器只监听 `127.0.0.1`，转发到本地 SGLang，不改题面或模型结果。冻结时绑定实际后端模型文件摘要，使用服务中的具体模型 ID：
 
 ```bash
 python -m areal_rsi_tir.claude_code freeze \
   --prompt examples/areal_rsi_tir/claude_h0_prompt.txt \
   --claude-cli /absolute/path/to/claude \
-  --model <pinned-Claude-model-id> \
+  --backend-model-root /shared/models/your-local-model \
+  --model /shared/models/your-local-model \
   --output /shared/rsi/claude-h0
+
+# 在 SGLang 的 31930 端口就绪后，在同一节点单独启动：
+python -m areal_rsi_tir.claude_backend \
+  --port 31931 --upstream-port 31930 --max-tokens 4096
 
 python -m areal_rsi_tir.claude_code evaluate \
   --task-set-root /shared/rsi/taskset-v1 \
   --harness-root /shared/rsi/claude-h0 \
   --claude-cli /absolute/path/to/claude \
+  --backend-model-root /shared/models/your-local-model \
+  --backend-url http://127.0.0.1:31931 \
   --runner-root /shared/AReaL/examples/tir \
   --split harness_evolve --trial-id claude_h0_evolve_a \
   --output /shared/rsi/claude-h0-evolve.json
 ```
 
-同题重复运行应使用不同的 `trial-id` 和输出路径。评分异常或 CLI 失败会中止整份报告，已完成逐题记录可在相同身份下复用。Claude Code 是实际解题模型；这个入口不声称 AReaL 的 GRPO 可以更新 Claude 权重。Claude 路线的 RSI 迭代对象是冻结的 Agent 提示和工具策略，需用独立选择集及固定观察集判断收益。
+同题重复运行应使用不同的 `trial-id` 和输出路径。评分异常或 CLI 失败会中止整份报告，已完成逐题记录可在相同身份下复用。Claude Code 是实际解题 Agent，记录中明确标出本地后端模型；它不会因 CLI 名称而变成 Anthropic Claude 模型。AReaL 的 GRPO 不会更新这个 CLI 后端的权重。此路线的 RSI 迭代对象是冻结的 Agent 提示和工具策略，需用独立选择集及固定观察集判断收益。

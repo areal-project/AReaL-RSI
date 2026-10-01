@@ -140,6 +140,7 @@ class AgentHarnessSpec:
     prompt_digest: str
     executable_digest: str
     calculator_digest: str
+    backend_model_digest: str
     model: str
     timeout_seconds: int
     max_budget_usd: float
@@ -152,7 +153,12 @@ class AgentHarnessSpec:
             )
             or any(
                 not valid_digest(value)
-                for value in (self.prompt_digest, self.executable_digest, self.calculator_digest)
+                for value in (
+                    self.prompt_digest,
+                    self.executable_digest,
+                    self.calculator_digest,
+                    self.backend_model_digest,
+                )
             )
             or (
                 not self.model.strip()
@@ -207,6 +213,7 @@ class AgentEvaluationReport:
     split: RsiSplit
     model: str
     executable_digest: str
+    backend_model_digest: str
     verifier_digest: str
     trial_id: str
     cases: tuple[AgentCaseRecord, ...]
@@ -217,6 +224,7 @@ class AgentEvaluationReport:
             or not self.task_set_id.startswith("taskset_")
             or not self.model.strip()
             or not valid_digest(self.executable_digest)
+            or not valid_digest(self.backend_model_digest)
             or not valid_digest(self.verifier_digest)
             or not self.trial_id.strip()
             or not self.cases

@@ -59,7 +59,7 @@ python -m areal_rsi_tir.cycle rollback \
 
 `areal_rsi_tir.claude_code` 将 Claude Code CLI 作为解题 Agent 运行。它从冻结题集读取公开题面，逐题调用 CLI，保留完整事件轨迹、用量和 CLI 估算成本，再由可信的 ToRL 评分器读取私有答案打分。CLI 只开放随包提供的有界计算器 MCP 工具；其他内置工具在 `dontAsk` 模式下不可用。Harness ID 绑定提示词、CLI 可执行文件、计算器源码、实际后端权重摘要、模型 ID、超时和每题预算。
 
-本地模式给 CLI 传入仅供本地服务使用的占位 API key；无需 Claude 账户登录。当前 Claude Code 2.1.167 会把一条 `system` 消息放进 `messages` 并请求 32000 个输出 token；本地 SGLang 0.5.10 的 Anthropic 接口会拒绝这两处。因此在同一节点启动 `claude_backend` 适配器，将 `system` 移到顶层并按服务的上下文限制缩小输出上限。适配器只监听 `127.0.0.1`，转发到本地 SGLang，不改题面或模型结果。冻结时绑定实际后端模型文件摘要，使用服务中的具体模型 ID：
+本地模式给 CLI 传入仅供本地服务使用的占位 API key；无需 Claude 账户登录。当前 Claude Code 2.1.167 会把一条 `system` 消息放进 `messages` 并请求 32000 个输出 token；本地 SGLang 0.5.10 的 Anthropic 接口会拒绝这两处。因此在同一节点启动 `claude_backend` 适配器，将 `system` 移到顶层并按服务的上下文限制缩小输出上限。适配器只监听 `127.0.0.1`，转发到本地 SGLang，不改题面或模型结果。SGLang 启动时须针对实际 Qwen 版本启用工具调用解析器；只打开 Claude Code 的 MCP 工具还不够。冻结时绑定实际后端模型文件摘要，使用服务中的具体模型 ID：
 
 ```bash
 python -m areal_rsi_tir.claude_code freeze \

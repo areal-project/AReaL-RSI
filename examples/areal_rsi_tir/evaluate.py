@@ -62,7 +62,7 @@ def main(argv: list[str] | None = None) -> None:
         RemoteSGLangEngine,
         RemotevLLMEngine,
     )
-    from areal.infra import SlurmScheduler  # type: ignore[import-not-found]
+    from areal.infra import LocalScheduler, SlurmScheduler  # type: ignore[import-not-found]
     from areal.infra.rpc.rtensor import RTensor  # type: ignore[import-not-found]
     from areal.utils.hf_utils import load_hf_tokenizer  # type: ignore[import-not-found]
     from examples.tir import tir_workflow  # type: ignore[import-not-found]
@@ -92,7 +92,11 @@ def main(argv: list[str] | None = None) -> None:
     rows = evaluation_rows(args.task_set_root, args.split)
     tokenizer = load_hf_tokenizer(config.tokenizer_path)
 
-    scheduler = SlurmScheduler(exp_config=config)
+    scheduler = (
+        LocalScheduler(exp_config=config)
+        if config.scheduler.type == "local"
+        else SlurmScheduler(exp_config=config)
+    )
     allocation = ModelAllocation.from_str(config.rollout.backend, name="rollout")
     if allocation.backend == "sglang":
         engine_type = RemoteSGLangEngine
@@ -110,7 +114,11 @@ def main(argv: list[str] | None = None) -> None:
         )
     else:
         raise ValueError("Unsupported AReaL evaluator rollout backend")
-    config.rollout.max_head_offpolicyness = int(1e12)
+    config.rollout.max_head_offpolicyness = 0
+    # This immutable evaluation stays at model version zero. The training
+    # batch size would otherwise cap accepted rollouts for the entire run.
+    config.rollout.consumer_batch_size = len(rows)
+    config.rollout.deterministic_sampling = True
     engine = engine_type.as_controller(config.rollout, scheduler)
     verifier_files = tir_verifier_files(runner_root)
     verifier_digest = source_files_digest(verifier_files)
@@ -137,22 +145,19 @@ def main(argv: list[str] | None = None) -> None:
     traces = []
     try:
         engine.initialize(role="eval-rollout", server_args=server_args)
-        jobs = [
-            (
-                task_id,
+        for index, (_task_id, data) in enumerate(rows):
+            engine.submit(
                 data,
-                engine.submit(
-                    data,
-                    workflow="areal_rsi_tir.workflow.FrozenTIRWorkflow",
-                    workflow_kwargs=workflow_kwargs,
-                    group_size=1,
-                    is_eval=True,
-                ),
+                workflow="areal_rsi_tir.workflow.FrozenTIRWorkflow",
+                workflow_kwargs=workflow_kwargs,
+                task_id=index,
+                group_size=1,
+                is_eval=True,
             )
-            for task_id, data in rows
-        ]
-        for task_id, data, job_id in jobs:
-            result = engine.wait_for_task(job_id, timeout=None)
+        results = engine.wait(len(rows), timeout=None)
+        if len(results) != len(rows):
+            raise RuntimeError("AReaL returned an incomplete TIR evaluation batch")
+        for (task_id, data), result in zip(rows, results, strict=True):
             if result is None:
                 raise RuntimeError(f"AReaL returned no trajectory for task {task_id}")
             localized = RTensor.localize(result)

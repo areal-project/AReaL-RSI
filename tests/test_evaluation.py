@@ -19,11 +19,93 @@ from areal_rsi_tir.evaluation import (
 )
 from areal_rsi_tir.harness import load_tir_harness
 from areal_rsi_tir.tasks import load_tir_task_set
+from areal_rsi_tir.verifier import strict_math_reward
 
 from areal_rsi.api.control import json_bytes, read_record
 from areal_rsi.api.records import RsiCaseScore, RsiSplit
 from areal_rsi.api.research import GenerationSpec, HarnessSelectionRule, RsiPromotionRule
 from areal_rsi.scripts.jobs import AReaLJobRunner, digest_bytes
+
+
+def test_clock_answer_is_not_division_by_zero() -> None:
+    pytest.importorskip("math_verify")
+    gold = r"\boxed{11:00}"
+    assert strict_math_reward(gold, gold) == 1.0
+    assert strict_math_reward(r"They meet at \boxed{11:00}.", gold) == 1.0
+    assert strict_math_reward(r"\boxed{\text{11:00}}", gold) == 1.0
+    assert strict_math_reward(r"\boxed{12:00}", gold) == 0.0
+    assert strict_math_reward(r"\boxed{\infty}", gold) == 0.0
+    assert strict_math_reward(r"\boxed{3:2}", r"\boxed{1.5}") == 1.0
+    assert strict_math_reward(r"\boxed{\frac{19}{16}}", r"\boxed{19:16}") == 1.0
+
+
+def test_large_integer_comparison_has_exact_inequality_fallback() -> None:
+    pytest.importorskip("math_verify")
+    huge = r"\boxed{2^{100000000}}"
+    assert strict_math_reward(huge, r"\boxed{3}") == 0.0
+    assert strict_math_reward(huge, huge) == 1.0
+    # The exponent remains a Pow in the parser rather than an Integer.
+    nested = r"\boxed{2^{2^{1981}}}"
+    assert strict_math_reward(nested, r"\boxed{2^{1984}-3}") == 0.0
+    assert strict_math_reward(r"\boxed{2^{2^{1981}}+4}", r"\boxed{2^{1984}-3}") == 0.0
+    assert strict_math_reward(nested, nested) == 1.0
+    tower = r"\boxed{2004 + 2003^{2002^{2001}}}"
+    assert strict_math_reward(tower, r"\boxed{4003}") == 0.0
+    assert strict_math_reward(tower, tower) == 1.0
+
+
+def test_integer_bounds_do_not_confuse_zero_or_negative_powers() -> None:
+    sympy = pytest.importorskip("sympy")
+    from areal_rsi_tir.verifier import _integer_bound_counterexample
+
+    tower = sympy.Pow(2003, sympy.Pow(2002, 2001, evaluate=False), evaluate=False)
+    assert _integer_bound_counterexample(sympy.Integer(4003), tower)
+    # A huge exponent alone does not imply a large value.
+    for base in (0, 1):
+        assert not _integer_bound_counterexample(
+            sympy.Integer(base), sympy.Pow(base, tower, evaluate=False)
+        )
+    assert not _integer_bound_counterexample(sympy.Integer(0), sympy.Mul(0, tower, evaluate=False))
+    assert not _integer_bound_counterexample(sympy.Integer(1), sympy.Pow(2, -1, evaluate=False))
+    assert not _integer_bound_counterexample(sympy.Integer(1), sympy.Add(tower, -1, evaluate=False))
+
+
+def test_symbolic_equation_chain_has_exact_counterexample_fallback() -> None:
+    pytest.importorskip("math_verify")
+    response = r"\(\frac{1}{\binom{n}{2009}} = \frac{2009!(n-2009)!}{n!}\)"
+    assert strict_math_reward(response, r"\boxed{\frac{2009}{2008}}") == 0.0
+    assert strict_math_reward(r"\(x=\frac{1}{2}\)", r"\boxed{0.5}") == 1.0
+    assert strict_math_reward(r"\boxed{\frac{n!}{n!}}", r"\boxed{1}") == 1.0
+
+
+def test_comparison_retry_preserves_equality_and_propagates_failure(monkeypatch) -> None:
+    grader = pytest.importorskip("math_verify.grader")
+    errors = pytest.importorskip("math_verify.errors")
+    original = grader.verify
+    attempts = 0
+
+    def once_timed_out(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise errors.TimeoutException("comparison timeout")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(grader, "verify", once_timed_out)
+    assert strict_math_reward(r"\boxed{\frac{1}{2}}", r"\boxed{0.5}") == 1.0
+    # Both certificate primes divide the difference; collisions cannot prove equality.
+    attempts = 0
+    assert strict_math_reward(r"\boxed{10406}", r"\boxed{3}") == 0.0
+
+    def always_timed_out(*args, **kwargs):
+        raise errors.TimeoutException("persistent comparison timeout")
+
+    monkeypatch.setattr(grader, "verify", always_timed_out)
+    with pytest.raises(errors.TimeoutException, match="persistent comparison timeout"):
+        strict_math_reward(r"\boxed{\frac{1}{2}}", r"\boxed{0.5}")
+    # Equal values at every sampled point cannot certify symbolic equality.
+    with pytest.raises(errors.TimeoutException, match="persistent comparison timeout"):
+        strict_math_reward(r"\boxed{\frac{n!}{n!}}", r"\boxed{1}")
 
 
 def test_tir_verification_excludes_tool_observation_tokens() -> None:

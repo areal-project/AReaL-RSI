@@ -46,7 +46,7 @@ def _file_digest(path: Path) -> str:
 
 def _rows(path: Path) -> list[dict[str, Any]]:
     # pyarrow belongs to the AReaL recipe environment, not RSI's core runtime.
-    import pyarrow.parquet as parquet  # type: ignore[import-not-found]
+    import pyarrow.parquet as parquet  # type: ignore
 
     return cast(
         list[dict[str, Any]],

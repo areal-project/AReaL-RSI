@@ -60,11 +60,11 @@ def _read_regular(path: Path) -> bytes:
     return path.read_bytes()
 
 
-def _validate_prompt(text: str) -> None:
+def validate_tir_prompt(text: str) -> None:
     if not text.strip():
         raise ValueError("TIR Harness prompt is empty")
     try:
-        fields = [field for _, field, _, _ in Formatter().parse(text) if field]
+        fields = [field for _, field, _, _ in Formatter().parse(text) if field is not None]
     except ValueError as exc:
         raise ValueError("TIR Harness prompt contains malformed braces") from exc
     if fields != ["prompt"]:
@@ -131,7 +131,7 @@ def freeze_tir_harness(
     if destination.exists():
         raise FileExistsError(destination)
     prompt_bytes = _read_regular(prompt_file)
-    _validate_prompt(prompt_bytes.decode())
+    validate_tir_prompt(prompt_bytes.decode())
     provisional = TirHarnessSpec(
         "pending",
         _sha256(prompt_bytes),
@@ -171,7 +171,7 @@ def load_tir_harness(root: Path, runner_root: Path) -> tuple[TirHarnessSpec, str
     if spec.runner_digest != _runner_digest(runner_root):
         raise ValueError("TIR runner source changed")
     prompt = prompt_bytes.decode()
-    _validate_prompt(prompt)
+    validate_tir_prompt(prompt)
     return spec, prompt
 
 

@@ -9,12 +9,15 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from areal_rsi.api.records import RsiEvaluationReport, RsiSplit, Task
 from areal_rsi.api.research import ResearcherSpec
+from areal_rsi_tir.harness import validate_tir_prompt
 
 SYSTEM_PROMPT = (
     "You improve one reusable prompt for a math agent with a calculator tool. "
     "Return only a complete prompt template containing exactly one literal {prompt} field. "
+    "Include the line 'User: {prompt}' verbatim. Do not repeat the input JSON. "
     "Do not include specific questions, answers, task IDs, or benchmark examples. "
-    "Keep the calculator syntax and a boxed final answer."
+    "Keep the <calculator>expression</calculator> syntax and a boxed final answer. "
+    "Escape all other braces by doubling them, for example \\boxed{{answer}}."
 )
 
 
@@ -27,7 +30,7 @@ class _NoRedirect(HTTPRedirectHandler):
 
 
 def _open(request: Request) -> BinaryIO:
-    return cast(BinaryIO, build_opener(_NoRedirect).open(request, timeout=60))
+    return cast(BinaryIO, build_opener(_NoRedirect).open(request, timeout=180))
 
 
 def propose_tir_prompt(
@@ -60,7 +63,7 @@ def propose_tir_prompt(
     body = {
         "model": config.model,
         "temperature": 0.7,
-        "max_tokens": 2048,
+        "max_tokens": 1024,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {
@@ -103,4 +106,6 @@ def propose_tir_prompt(
         for task in public_tasks
     ):
         raise ValueError("Researcher copied a specific public question into the Harness")
-    return prompt.strip() + "\n"
+    prompt = prompt.strip() + "\n"
+    validate_tir_prompt(prompt)
+    return prompt

@@ -86,3 +86,37 @@ def test_researcher_rejects_question_copy(monkeypatch: pytest.MonkeyPatch) -> No
             (task,),
             report,
         )
+
+
+def test_researcher_rejects_unusable_template(monkeypatch: pytest.MonkeyPatch) -> None:
+    task = Task("case1", {"messages": [{"role": "user", "content": "Compute 2 plus 3"}]})
+    report = RsiEvaluationReport(
+        "sha256:" + "1" * 64,
+        "harness_h0",
+        "taskset_t0",
+        RsiSplit.HARNESS_EVOLVE,
+        "sha256:" + "2" * 64,
+        "sha256:" + "3" * 64,
+        1,
+        1.0,
+        32,
+        (RsiCaseScore("case1", 0.0, "4", 1),),
+        "/tmp/evolve.trajectories.json",
+        "sha256:" + "4" * 64,
+    )
+
+    def fake_open(_request: Request) -> io.BytesIO:
+        return io.BytesIO(
+            json.dumps(
+                {"choices": [{"message": {"content": "Use \\boxed{} for {prompt}"}}]}
+            ).encode()
+        )
+
+    monkeypatch.setattr(harness, "_open", fake_open)
+    with pytest.raises(ValueError, match="exactly one"):
+        harness.propose_tir_prompt(
+            ResearcherSpec("http://127.0.0.1:8000/v1/chat/completions", "researcher", None),
+            "Original {prompt}",
+            (task,),
+            report,
+        )

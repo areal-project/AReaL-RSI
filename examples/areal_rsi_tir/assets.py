@@ -276,8 +276,9 @@ def validate_tir_train_identity(config: Any, run_id: str) -> None:
     ):
         raise ValueError("AReaL rollout and Saver must use the frozen RSI trial identity")
     if (
-        config.total_train_epochs != 1
-        or config.saver.freq_epochs != 1
+        type(config.total_train_epochs) is not int
+        or config.total_train_epochs < 1
+        or config.saver.freq_epochs != config.total_train_epochs
         or config.saver.freq_steps is not None
         or config.saver.freq_secs is not None
     ):
@@ -303,11 +304,11 @@ def latest_hf_checkpoint(save_root: Path, *, require_unique: bool = False) -> tu
         raise FileNotFoundError("AReaL Saver produced no complete HuggingFace checkpoint")
     if require_unique and len(candidates) != 1:
         raise ValueError("First RSI training generation expected exactly one complete checkpoint")
-    step, selected = max(candidates, key=lambda item: item[0])
-    if step < 1:
-        raise ValueError("AReaL checkpoint has no completed training step")
+    step_index, selected = max(candidates, key=lambda item: item[0])
+    # AReaL names the checkpoint with a zero-based update index. The receipt
+    # records the number of completed updates, so the first save is step 1.
     checkpoint_digest(selected)
-    return selected, step
+    return selected, step_index + 1
 
 
 def validate_frozen_model(config: Any, expected_digest: str, *, rl: bool) -> None:
@@ -384,7 +385,7 @@ def validate_tir_recipe_config(config: Any, frozen: FrozenTirInputs, root: Path)
     tir = config.tir
     harness = frozen.harness
     if (
-        config.scheduler.type != "slurm"
+        config.scheduler.type not in ("slurm", "local")
         or not Path(config.cluster.fileroot).is_absolute()
         or config.cluster.name_resolve.type != "nfs"
         or not Path(config.cluster.name_resolve.nfs_record_root).is_absolute()

@@ -77,6 +77,34 @@ class RsiRolloutEvidence:
 
 
 @dataclass(frozen=True, slots=True)
+class RsiTrainIntent:
+    run_id: str
+    task_set_id: str
+    harness_id: str
+    base_model_digest: str
+    runner_digest: str
+    verifier_digest: str
+    config_digest: str
+
+    def __post_init__(self) -> None:
+        if (
+            not self.run_id.strip()
+            or not self.task_set_id.startswith("taskset_")
+            or not self.harness_id.startswith("harness_")
+            or any(
+                not valid_digest(digest)
+                for digest in (
+                    self.base_model_digest,
+                    self.runner_digest,
+                    self.verifier_digest,
+                    self.config_digest,
+                )
+            )
+        ):
+            raise ValueError("Training intent lacks frozen input lineage")
+
+
+@dataclass(frozen=True, slots=True)
 class RsiTrainResult:
     run_id: str
     algorithm: Literal["grpo"]

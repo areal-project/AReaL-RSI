@@ -1,4 +1,4 @@
-"""One local AReaL GRPO smoke run with Claude Code as the rollout Agent."""
+"""Train AReaL GRPO with a frozen Claude Code solving Agent."""
 
 from __future__ import annotations
 
@@ -18,7 +18,8 @@ def main(argv: list[str]) -> None:
     parser.add_argument("--task-set-root", type=Path, required=True)
     parser.add_argument("--harness-root", type=Path, required=True)
     parser.add_argument("--claude-cli", type=Path, required=True)
-    parser.add_argument("--train-cases", type=int, default=8)
+    parser.add_argument("--train-cases", type=int)
+    parser.add_argument("--dev-cases", type=int)
     parser.add_argument("--validate-only", action="store_true")
     args, areal_args = parser.parse_known_args(argv)
 
@@ -40,15 +41,26 @@ def main(argv: list[str]) -> None:
             for path in (config.ref.path, config.tokenizer_path, config.sglang.model_path)
         )
         or harness.model != str(model_root.resolve())
-        or args.train_cases < 1
-        or args.train_cases > len(task_set.model_train.task_ids)
-        or config.train_dataset.batch_size != args.train_cases
     ):
-        raise ValueError("Claude GRPO recipe differs from the frozen smoke setup")
+        raise ValueError("Claude GRPO recipe differs from the frozen inputs")
+
+    train_cases = (
+        args.train_cases if args.train_cases is not None else len(task_set.model_train.task_ids)
+    )
+    dev_cases = args.dev_cases if args.dev_cases is not None else len(task_set.model_dev.task_ids)
+    if (
+        train_cases < 1
+        or train_cases > len(task_set.model_train.task_ids)
+        or dev_cases < 1
+        or dev_cases > len(task_set.model_dev.task_ids)
+        or config.train_dataset.batch_size > train_cases
+        or config.valid_dataset.batch_size > dev_cases
+    ):
+        raise ValueError("Claude GRPO dataset sizes are invalid")
 
     answers: dict[str, str] = json.loads((args.task_set_root / "private/answers.json").read_bytes())
-    train_rows = _rows(args.task_set_root, RsiSplit.MODEL_TRAIN, answers)[: args.train_cases]
-    dev_rows = _rows(args.task_set_root, RsiSplit.MODEL_DEV, answers)[: args.train_cases]
+    train_rows = _rows(args.task_set_root, RsiSplit.MODEL_TRAIN, answers)[:train_cases]
+    dev_rows = _rows(args.task_set_root, RsiSplit.MODEL_DEV, answers)[:dev_cases]
     if args.validate_only:
         print(
             json.dumps(
@@ -57,6 +69,7 @@ def main(argv: list[str]) -> None:
                     "task_set_id": task_set.task_set_id,
                     "harness_id": harness.harness_id,
                     "train_cases": len(train_rows),
+                    "dev_cases": len(dev_rows),
                 }
             )
         )

@@ -245,7 +245,9 @@ def test_claude_timeout_scores_one_case_zero_and_continues(
     }
 
 
-def test_frozen_claude_workflow_uses_areal_session_proxy(tmp_path: Path) -> None:
+def test_frozen_claude_workflow_uses_areal_session_proxy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import asyncio
 
     from areal_rsi_tir.claude_code import FrozenClaudeWorkflow
@@ -278,10 +280,14 @@ def test_frozen_claude_workflow_uses_areal_session_proxy(tmp_path: Path) -> None
     cli = tmp_path / "fake-claude"
     cli.write_text(
         f"#!{sys.executable}\n"
-        "import json,os\n"
+        "import json,os,sys\n"
         "assert os.environ['ANTHROPIC_BASE_URL']=='http://proxy.example:3123'\n"
         "assert os.environ['ANTHROPIC_API_KEY']=='session-key'\n"
         "assert os.environ['CLAUDE_CODE_MAX_OUTPUT_TOKENS']=='4096'\n"
+        "if os.environ.get('TIR_TEST_OVERFLOW')=='1':\n"
+        " print(json.dumps({'type':'result','result':"
+        '"API Error: Claude\'s response exceeded the 4096 output token maximum."}))\n'
+        " sys.exit(1)\n"
         "print(json.dumps({'type':'result','is_error':False,'result':'\\\\boxed{2}',"
         "'usage':{'input_tokens':10,'output_tokens':3},"
         "'total_cost_usd':0.0,'duration_ms':100}))\n"
@@ -304,6 +310,11 @@ def test_frozen_claude_workflow_uses_areal_session_proxy(tmp_path: Path) -> None
     assert (
         asyncio.run(workflow.run(row, base_url="http://proxy.example:3123", api_key="session-key"))
         == 1.0
+    )
+    monkeypatch.setenv("TIR_TEST_OVERFLOW", "1")
+    assert (
+        asyncio.run(workflow.run(row, base_url="http://proxy.example:3123", api_key="session-key"))
+        == 0.0
     )
     with pytest.raises(ValueError, match="frozen dataset"):
         asyncio.run(

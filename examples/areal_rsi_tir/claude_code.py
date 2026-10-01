@@ -35,6 +35,8 @@ from areal_rsi_tir.harness import validate_tir_prompt
 from areal_rsi_tir.tasks import load_tir_task_set, public_tir_tasks
 from areal_rsi_tir.verifier import strict_math_reward
 
+CLAUDE_MAX_OUTPUT_TOKENS = 4096
+
 
 def _regular_bytes(path: Path) -> bytes:
     if not stat.S_ISREG(path.lstat().st_mode):
@@ -239,7 +241,7 @@ def _call(
                 "NO_PROXY": "*",
                 "no_proxy": "*",
                 "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-                "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "4096",
+                "CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(CLAUDE_MAX_OUTPUT_TOKENS),
             }
         )
         completed = subprocess.run(
@@ -322,6 +324,13 @@ class FrozenClaudeWorkflow:
                 api_key=api_key,
             )
         except subprocess.TimeoutExpired:
+            return 0.0
+        except RuntimeError as error:
+            if (
+                f"Claude's response exceeded the {CLAUDE_MAX_OUTPUT_TOKENS} output token maximum"
+                not in str(error)
+            ):
+                raise
             return 0.0
         response, _, _, _, _ = _result(raw)
         score = asyncio.get_running_loop().run_in_executor(

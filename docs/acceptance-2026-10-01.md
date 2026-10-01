@@ -35,6 +35,14 @@ M1 监控集复测与此前基线同为 56/194。按预登记规则，M2 未超�
 
 第二代重新冻结了与第一代全部 640 道题不重叠的任务集 `taskset_c2450a2ef81103d1cf1481c0a0c89b94a2cc34cc0b2e0a0bc4ee0c3c5ffeeee4`，以第一代选中的 H1 作为新 H0。公开演化为 51/128；选择与同题重复分别为 41/128、52/128，A/A 噪声 11 题。Claude Code 再提出的 H2 为 49/128，较选择基线增加 8 题，未超过噪声，因此拒绝 H2，停止 Claude Harness RSI，保留 H1。第二代全新密封集保持未开启。证据为 `plan-next-taskset.json`、`plan-next.json`、`selection-next.json`、`audit-next-h0-evolve-h0-select-h0-select-repeat.json`、`audit-next-h1-select.json`。
 
-本地 Claude Harness 搜索评估的是 Agent 提示词/工具策略的解题收益；它尚未替换 AReaL GRPO 训练 worker 的 rollout 路径，因此不能把第一代 11 题增益解释为模型权重训练收益。
+本地 Claude Harness 搜索评估的是 Agent 提示词/工具策略的解题收益；第一代 11 题增益不能解释为模型权重训练收益。
 
-主分支合入 Claude 代码及训练 reward 超时修复后，`make check` 为 30 passed、4 skipped；跳过项需要可选环境。
+## Claude Code 接入 AReaL rollout 的本地烟测
+
+新增 `FrozenClaudeWorkflow` 作为 AReaL inline Agent workflow。它核对冻结任务、Harness、CLI、计算器和本地模型文件，通过 AReaL 分配的会话 `base_url` 与 `api_key` 运行 Claude Code CLI，并用严格数学验证器返回奖励。Claude Code 不需要账号登录。训练入口在 `examples/areal_rsi_tir/claude_train.py`。
+
+在 Slurm 分配 `972320` 的 `slurmd-3` 上，使用 8 张 L20X、`/storage/openpsi/models/Qwen__Qwen3-4B`、本地 SGLang、8 道冻结训练题和 8 道开发题，运行了一个 epoch 的 GRPO 烟测。配置与启动脚本保存在 `data/claude-proxy-smoke/config.yaml`、`launch.sh`；独立生成的代理管理密钥仅在本地配置中。首次试跑因 AReaL 拒绝默认管理密钥而在代理初始化时失败，未进行更新；修正后试验 `qwen3-4b-one-step-20261001-b` 正常退出。日志确认 Claude Code 的 Anthropic 请求到达 AReaL 代理，再由本地 SGLang 服务生成；AReaL 指标 `ppo_actor/update/update_successful=1`，检查点 `model.safetensors` 的 SHA-256 为 `195d7dc4d571bcdc27cbefba7aed404c6a266d84746d099cde6e7016721c7c36`。
+
+逐条核对的训练轨迹有 19 条、4 分，涉及前 8 道训练题中的 7 道；AReaL 采样重复了部分题，漏了其中 1 道。开发轨迹有 19 条、8 分，覆盖前 8 道开发题。每条轨迹含冻结任务 ID、Claude Code 系统提示、生成内容与 0/1 奖励；记录集摘要见 `data/claude-proxy-smoke/audit-b.json`。这是连接和单次更新验收，不据此判断 4B 模型收益，也不改变上面的 32B Harness 选择和第六代权重发布决定。
+
+本次跨模块修改后 `make check` 为 31 passed、4 skipped；跳过项需要可选环境。

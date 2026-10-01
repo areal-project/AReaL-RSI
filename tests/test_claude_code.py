@@ -243,3 +243,70 @@ def test_claude_timeout_scores_one_case_zero_and_continues(
         "type": "local_timeout",
         "timeout_seconds": 1,
     }
+
+
+def test_frozen_claude_workflow_uses_areal_session_proxy(tmp_path: Path) -> None:
+    import asyncio
+
+    from areal_rsi_tir.claude_code import FrozenClaudeWorkflow
+    from areal_rsi_tir.tasks import TirSplitSizes, freeze_tir_task_set, public_tir_tasks
+
+    from areal_rsi.api.records import RsiSplit
+
+    train, test = tmp_path / "train.jsonl", tmp_path / "test.jsonl"
+    train.write_text(
+        "\n".join(
+            json.dumps(
+                {
+                    "messages": [{"role": "user", "content": f"What is 1+1? Variant {i}"}],
+                    "answer": "2",
+                }
+            )
+            for i in range(4)
+        )
+        + "\n"
+    )
+    test.write_text(
+        json.dumps({"messages": [{"role": "user", "content": "2+2"}], "answer": "4"}) + "\n"
+    )
+    tasks = tmp_path / "tasks"
+    task_set = freeze_tir_task_set(train, test, tasks, sizes=TirSplitSizes(1, 1, 1, 1), seed=2)
+    backend = tmp_path / "backend"
+    backend.mkdir()
+    (backend / "config.json").write_text('{"model_type":"qwen2"}')
+    (backend / "model.safetensors").write_bytes(b"fake weights")
+    cli = tmp_path / "fake-claude"
+    cli.write_text(
+        f"#!{sys.executable}\n"
+        "import json,os\n"
+        "assert os.environ['ANTHROPIC_BASE_URL']=='http://proxy.example:3123'\n"
+        "assert os.environ['ANTHROPIC_API_KEY']=='session-key'\n"
+        "print(json.dumps({'type':'result','is_error':False,'result':'\\\\boxed{2}',"
+        "'usage':{'input_tokens':10,'output_tokens':3},"
+        "'total_cost_usd':0.0,'duration_ms':100}))\n"
+    )
+    cli.chmod(0o755)
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_text("Solve. User: {prompt}\nAssistant:\n")
+    harness = tmp_path / "harness"
+    spec = freeze_claude_harness(prompt, cli, backend, harness, model="qwen-test")
+    workflow = FrozenClaudeWorkflow(
+        task_set_root=str(tasks),
+        harness_root=str(harness),
+        claude_cli=str(cli),
+        backend_model_root=str(backend),
+        task_set_id=task_set.task_set_id,
+        harness_id=spec.harness_id,
+    )
+    task = public_tir_tasks(tasks, RsiSplit.MODEL_TRAIN)[0]
+    row = {"task_id": task.task_id, "messages": task.input["messages"], "answer": "\\boxed{2}"}
+    assert (
+        asyncio.run(workflow.run(row, base_url="http://proxy.example:3123", api_key="session-key"))
+        == 1.0
+    )
+    with pytest.raises(ValueError, match="frozen dataset"):
+        asyncio.run(
+            workflow.run(
+                {**row, "answer": "3"}, base_url="http://proxy.example:3123", api_key="session-key"
+            )
+        )

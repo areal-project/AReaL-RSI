@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import hashlib
 import json
 import os
@@ -10,6 +11,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -163,16 +165,23 @@ def _call(
     calculator: Path,
     python: Path,
     backend_url: str,
+    *,
+    api_key: str | None = None,
 ) -> bytes:
     parsed = urlparse(backend_url)
     if (
-        parsed.scheme != "http"
-        or parsed.hostname not in {"127.0.0.1", "localhost"}
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
         or parsed.username
         or parsed.password
         or parsed.fragment
+        or (
+            api_key is None
+            and (parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"})
+        )
+        or (api_key is not None and not api_key)
     ):
-        raise ValueError("Claude Code backend must be local HTTP")
+        raise ValueError("Claude Code backend must be local HTTP or an authenticated proxy")
     with tempfile.TemporaryDirectory(prefix="tir-claude-case-") as temporary:
         work = Path(temporary)
         mcp = work / "mcp.json"
@@ -226,9 +235,10 @@ def _call(
         env.update(
             {
                 "ANTHROPIC_BASE_URL": backend_url,
-                "ANTHROPIC_API_KEY": "local-inference-only",
+                "ANTHROPIC_API_KEY": api_key or "local-inference-only",
                 "NO_PROXY": "*",
                 "no_proxy": "*",
+                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
             }
         )
         completed = subprocess.run(
@@ -255,6 +265,68 @@ def _call(
                 f"{result_error[:1000]} {completed.stderr.decode(errors='replace')[:1000]}"
             )
         return completed.stdout
+
+
+class FrozenClaudeWorkflow:
+    """Run the frozen Claude Code solver through AReaL's rollout proxy."""
+
+    def __init__(
+        self,
+        *,
+        task_set_root: str,
+        harness_root: str,
+        claude_cli: str,
+        backend_model_root: str,
+        task_set_id: str,
+        harness_id: str,
+    ) -> None:
+        root = Path(task_set_root)
+        manifest = load_tir_task_set(root)
+        spec, template = load_claude_harness(
+            Path(harness_root), Path(claude_cli), Path(backend_model_root)
+        )
+        if manifest.task_set_id != task_set_id or spec.harness_id != harness_id:
+            raise ValueError("Frozen Claude rollout inputs changed")
+        answers: dict[str, str] = json.loads((root / "private/answers.json").read_bytes())
+        self.cases = {
+            task.task_id: (task.input["messages"], _gold_answer(answers[task.task_id]))
+            for split in (RsiSplit.MODEL_TRAIN, RsiSplit.MODEL_DEV)
+            for task in public_tir_tasks(root, split)
+        }
+        self.spec = spec
+        self.template = template
+        self.executable = Path(claude_cli)
+        self.reward_executor = ProcessPoolExecutor(max_workers=2)
+
+    async def run(self, data: dict[str, Any], **extra_kwargs: Any) -> float:
+        task_id = data.get("task_id")
+        if not isinstance(task_id, str) or task_id not in self.cases:
+            raise ValueError("Claude rollout received an unknown task")
+        messages, answer = self.cases[task_id]
+        if data.get("messages") != messages or data.get("answer") != answer:
+            raise ValueError("Claude rollout task differs from the frozen dataset")
+        url, api_key = extra_kwargs.get("base_url"), extra_kwargs.get("api_key")
+        if not isinstance(url, str) or not isinstance(api_key, str) or not api_key:
+            raise ValueError("AReaL did not provide a session-scoped Claude proxy")
+        question = messages[0]["content"]
+        try:
+            raw = await asyncio.to_thread(
+                _call,
+                self.executable,
+                self.spec,
+                self.template.format(prompt=question),
+                Path(__file__).with_name("claude_calculator.py"),
+                Path(sys.executable),
+                url,
+                api_key=api_key,
+            )
+        except subprocess.TimeoutExpired:
+            return 0.0
+        response, _, _, _, _ = _result(raw)
+        score = asyncio.get_running_loop().run_in_executor(
+            self.reward_executor, strict_math_reward, response, answer
+        )
+        return await asyncio.wait_for(score, timeout=45)
 
 
 def evaluate_claude(

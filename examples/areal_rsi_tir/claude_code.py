@@ -295,13 +295,37 @@ def evaluate_claude(
             question = task.input["messages"][0]["content"]
             if not isinstance(question, str):
                 raise ValueError("Invalid public question")
-            raw = _call(
-                executable, spec, template.format(prompt=question), calculator, python, backend_url
-            )
-            response, input_tokens, output_tokens, cost, duration = _result(raw)
+            failure_reason: str | None
+            try:
+                raw = _call(
+                    executable,
+                    spec,
+                    template.format(prompt=question),
+                    calculator,
+                    python,
+                    backend_url,
+                )
+            except subprocess.TimeoutExpired as error:
+                partial = error.stdout or b""
+                raw = (
+                    partial.rstrip(b"\n")
+                    + b"\n"
+                    + json_bytes({"type": "local_timeout", "timeout_seconds": spec.timeout_seconds})
+                    + b"\n"
+                )
+                response, input_tokens, output_tokens, cost = "", 0, 0, 0.0
+                duration = spec.timeout_seconds * 1000
+                failure_reason = "cli_timeout"
+            else:
+                response, input_tokens, output_tokens, cost, duration = _result(raw)
+                failure_reason = None
             transcript = case_root / f"{task.task_id}.jsonl"
             write_bytes(transcript, raw, immutable=True)
-            score = strict_math_reward(response, _gold_answer(answers[task.task_id]))
+            score = (
+                0.0
+                if failure_reason
+                else strict_math_reward(response, _gold_answer(answers[task.task_id]))
+            )
             case = AgentCaseRecord(
                 task.task_id,
                 spec.harness_id,
@@ -315,6 +339,7 @@ def evaluate_claude(
                 duration,
                 str(transcript.resolve()),
                 digest_bytes(raw),
+                failure_reason,
             )
             write_bytes(case_path, json_bytes(case), immutable=True)
         cases.append(case)

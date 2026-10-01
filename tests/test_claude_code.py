@@ -176,3 +176,70 @@ def test_claude_cli_evaluation_records_real_subprocess_trace_and_rejects_drift(
         claude_code.evaluate_claude(
             task_root, harness_root, cli, backend, "http://127.0.0.1:31930", output, **kwargs
         )
+
+
+def test_claude_timeout_scores_one_case_zero_and_continues(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from areal_rsi_tir import claude_code
+    from areal_rsi_tir.tasks import TirSplitSizes, freeze_tir_task_set, public_tir_tasks
+
+    from areal_rsi.api.records import RsiSplit
+
+    train, test = tmp_path / "train.jsonl", tmp_path / "test.jsonl"
+    train.write_text(
+        "\n".join(
+            json.dumps(
+                {
+                    "messages": [{"role": "user", "content": f"What is 1+1? Variant {i}"}],
+                    "answer": "2",
+                }
+            )
+            for i in range(5)
+        )
+        + "\n"
+    )
+    test.write_text(
+        json.dumps({"messages": [{"role": "user", "content": "2+2"}], "answer": "4"}) + "\n"
+    )
+    tasks = tmp_path / "tasks"
+    freeze_tir_task_set(train, test, tasks, sizes=TirSplitSizes(2, 1, 1, 1), seed=2)
+    first = public_tir_tasks(tasks, RsiSplit.HARNESS_EVOLVE)[0]
+    cli = tmp_path / "fake-claude"
+    cli.write_text(
+        f"#!{sys.executable}\n"
+        "import json,sys,time\n"
+        f"if {first.input['messages'][0]['content']!r} in sys.argv[-1]: time.sleep(2)\n"
+        "print(json.dumps({'type':'result','is_error':False,'result':'\\\\boxed{2}',"
+        "'usage':{'input_tokens':10,'output_tokens':3},"
+        "'total_cost_usd':0.0,'duration_ms':100}))\n"
+    )
+    cli.chmod(0o755)
+    backend = tmp_path / "backend"
+    backend.mkdir()
+    (backend / "config.json").write_text('{"model_type":"qwen2"}')
+    (backend / "model.safetensors").write_bytes(b"fake weights")
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_text("Solve. User: {prompt}\nAssistant:\n")
+    harness = tmp_path / "harness"
+    freeze_claude_harness(prompt, cli, backend, harness, model="qwen-test", timeout_seconds=1)
+    monkeypatch.setattr(claude_code, "source_files_digest", lambda _: "sha256:" + "a" * 64)
+    monkeypatch.setattr(claude_code, "tir_verifier_files", lambda _: ())
+    report = claude_code.evaluate_claude(
+        tasks,
+        harness,
+        cli,
+        backend,
+        "http://127.0.0.1:31930",
+        tmp_path / "report.json",
+        split=RsiSplit.HARNESS_EVOLVE,
+        trial_id="timeout_trial",
+        runner_root=tmp_path,
+    )
+    assert len(report.cases) == 2
+    assert [case.score for case in report.cases] == [0.0, 1.0]
+    assert report.cases[0].failure_reason == "cli_timeout"
+    assert json.loads(Path(report.cases[0].transcript_path).read_bytes().splitlines()[-1]) == {
+        "type": "local_timeout",
+        "timeout_seconds": 1,
+    }

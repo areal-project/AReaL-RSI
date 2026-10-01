@@ -185,6 +185,7 @@ class AgentCaseRecord:
     duration_ms: int
     transcript_path: str
     transcript_digest: str
+    failure_reason: str | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -202,6 +203,11 @@ class AgentCaseRecord:
             or self.cost_usd < 0
             or not self.transcript_path.startswith("/")
             or not valid_digest(self.transcript_digest)
+            or self.failure_reason not in (None, "cli_timeout")
+            or (
+                self.failure_reason == "cli_timeout"
+                and (self.response or self.score != 0 or self.input_tokens or self.output_tokens)
+            )
         ):
             raise ValueError("Invalid external agent case")
 

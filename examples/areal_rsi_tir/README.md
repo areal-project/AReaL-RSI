@@ -54,3 +54,27 @@ python -m areal_rsi_tir.cycle rollback \
 ```
 
 本地 CPU 可用 `--validate-only` 分别检查训练与评测 recipe 的冻结身份和 Slurm 配置解析；这不会调用模型、`sbatch` 或训练器。项目测试覆盖控制流程与故障路径，不能替代真实集群验收。
+
+## Claude Code 直接解题实验
+
+`areal_rsi_tir.claude_code` 将 Claude Code CLI 作为解题 Agent 运行。它从冻结题集读取公开题面，逐题调用 CLI，保留完整事件轨迹、用量和成本，再由可信的 ToRL 评分器读取私有答案打分。CLI 只开放随包提供的有界计算器 MCP 工具；其他内置工具在 `dontAsk` 模式下不可用。Harness ID 绑定提示词、CLI 可执行文件、计算器源码、模型 ID、超时和每题预算。
+
+先在运行评测的同一用户环境完成 Claude Code 登录。冻结时使用具体模型 ID，不使用会自动改变指向的别名：
+
+```bash
+python -m areal_rsi_tir.claude_code freeze \
+  --prompt examples/areal_rsi_tir/claude_h0_prompt.txt \
+  --claude-cli /absolute/path/to/claude \
+  --model <pinned-Claude-model-id> \
+  --output /shared/rsi/claude-h0
+
+python -m areal_rsi_tir.claude_code evaluate \
+  --task-set-root /shared/rsi/taskset-v1 \
+  --harness-root /shared/rsi/claude-h0 \
+  --claude-cli /absolute/path/to/claude \
+  --runner-root /shared/AReaL/examples/tir \
+  --split harness_evolve --trial-id claude_h0_evolve_a \
+  --output /shared/rsi/claude-h0-evolve.json
+```
+
+同题重复运行应使用不同的 `trial-id` 和输出路径。评分异常或 CLI 失败会中止整份报告，已完成逐题记录可在相同身份下复用。Claude Code 是实际解题模型；这个入口不声称 AReaL 的 GRPO 可以更新 Claude 权重。Claude 路线的 RSI 迭代对象是冻结的 Agent 提示和工具策略，需用独立选择集及固定观察集判断收益。

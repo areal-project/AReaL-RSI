@@ -281,6 +281,7 @@ def test_frozen_claude_workflow_uses_areal_session_proxy(tmp_path: Path) -> None
         "import json,os\n"
         "assert os.environ['ANTHROPIC_BASE_URL']=='http://proxy.example:3123'\n"
         "assert os.environ['ANTHROPIC_API_KEY']=='session-key'\n"
+        "assert os.environ['CLAUDE_CODE_MAX_OUTPUT_TOKENS']=='4096'\n"
         "print(json.dumps({'type':'result','is_error':False,'result':'\\\\boxed{2}',"
         "'usage':{'input_tokens':10,'output_tokens':3},"
         "'total_cost_usd':0.0,'duration_ms':100}))\n"

@@ -239,6 +239,7 @@ def _call(
                 "NO_PROXY": "*",
                 "no_proxy": "*",
                 "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+                "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "4096",
             }
         )
         completed = subprocess.run(

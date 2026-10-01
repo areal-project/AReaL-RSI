@@ -400,6 +400,7 @@ def propose_claude_harness(
         "Do not solve or repeat any example. Do not include braces, backslashes, "
         "quotes, JSON, markdown, or final answer markup. Return only the line.\n"
         + json.dumps(examples, ensure_ascii=False)
+        + "\n/no_think"
     )
     output_root.mkdir(parents=True)
     write_bytes(
@@ -429,7 +430,7 @@ def propose_claude_harness(
     candidate = (
         instructions
         + "\nUser: {prompt}\nAssistant: Solve the question and end with one final answer "
-        "in LaTeX boxed form.\n"
+        "in LaTeX boxed form.\n/no_think\n"
     )
     validate_tir_prompt(candidate)
     prompt_path = output_root / "candidate.txt"

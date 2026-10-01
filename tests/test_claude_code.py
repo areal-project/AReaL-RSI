@@ -80,9 +80,13 @@ def test_claude_harness_detects_prompt_and_cli_drift(tmp_path: Path) -> None:
     cli.write_bytes(b"fake executable")
     backend = tmp_path / "backend"
     backend.mkdir()
+    (backend / "config.json").write_text('{"model_type":"qwen2"}')
     (backend / "model.safetensors").write_bytes(b"fake weights")
     prompt.write_text("Solve carefully. User: {prompt}\\nAssistant:\\n")
     spec = freeze_claude_harness(prompt, cli, backend, frozen, model="qwen-test-pinned")
+    assert load_claude_harness(frozen, cli, backend)[0] == spec
+    (backend / "evaluation-logs").mkdir()
+    (backend / "evaluation-logs/run.log").write_text("mutable output")
     assert load_claude_harness(frozen, cli, backend)[0] == spec
     cli.write_bytes(b"different executable")
     with pytest.raises(ValueError, match="changed"):
@@ -130,6 +134,7 @@ def test_claude_cli_evaluation_records_real_subprocess_trace_and_rejects_drift(
     freeze_tir_task_set(train, test, task_root, sizes=TirSplitSizes(1, 1, 1, 1), seed=2)
     backend = tmp_path / "backend"
     backend.mkdir()
+    (backend / "config.json").write_text('{"model_type":"qwen2"}')
     (backend / "model.safetensors").write_bytes(b"fake weights")
     cli = tmp_path / "fake-claude"
     cli.write_text(

@@ -26,7 +26,6 @@ from areal_rsi.infra.storage.files import write_bytes
 from areal_rsi.scripts.jobs import digest_bytes
 from areal_rsi_tir.assets import (
     _gold_answer,
-    checkpoint_digest,
     source_files_digest,
     tir_verifier_files,
 )
@@ -46,6 +45,31 @@ def _digest_file(path: Path) -> str:
     with path.open("rb") as stream:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
+    return "sha256:" + digest.hexdigest()
+
+
+def _backend_model_digest(root: Path) -> str:
+    """Bind the loadable model files without mutable evaluation logs or cache dirs."""
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError("Backend model must be a local directory")
+    files = sorted(
+        path
+        for path in root.iterdir()
+        if path.is_file()
+        and (
+            path.name.endswith((".safetensors", ".json", ".jinja", ".py"))
+            or path.name in {"merges.txt", "vocab.txt"}
+        )
+    )
+    if not (root / "config.json").is_file() or not any(
+        path.suffix == ".safetensors" for path in files
+    ):
+        raise ValueError("Backend model lacks configuration or weights")
+    digest = hashlib.sha256()
+    for path in files:
+        if not stat.S_ISREG(path.lstat().st_mode):
+            raise ValueError(f"Backend model contains a symlink or special file: {path}")
+        digest.update(path.name.encode() + b"\0" + bytes.fromhex(_digest_file(path)[7:]))
     return "sha256:" + digest.hexdigest()
 
 
@@ -77,7 +101,7 @@ def freeze_claude_harness(
         digest_bytes(prompt),
         _digest_file(executable),
         digest_bytes(_regular_bytes(calculator)),
-        checkpoint_digest(backend_model_root),
+        _backend_model_digest(backend_model_root),
         model,
         timeout_seconds,
         max_budget_usd,
@@ -101,7 +125,7 @@ def load_claude_harness(
         or spec.prompt_digest != digest_bytes(prompt)
         or spec.executable_digest != _digest_file(executable)
         or spec.calculator_digest != digest_bytes(_regular_bytes(calculator))
-        or spec.backend_model_digest != checkpoint_digest(backend_model_root)
+        or spec.backend_model_digest != _backend_model_digest(backend_model_root)
     ):
         raise ValueError("Frozen Claude Code Harness changed")
     return spec, prompt.decode()
@@ -217,9 +241,18 @@ def _call(
             check=False,
         )
         if completed.returncode != 0:
+            result_events = []
+            for line in completed.stdout.splitlines():
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(event, dict) and event.get("type") == "result":
+                    result_events.append(event)
+            result_error = str(result_events[-1].get("result", "")) if result_events else ""
             raise RuntimeError(
                 f"Claude Code exited {completed.returncode}: "
-                f"{completed.stderr.decode(errors='replace')[:1000]}"
+                f"{result_error[:1000]} {completed.stderr.decode(errors='replace')[:1000]}"
             )
         return completed.stdout
 
@@ -368,7 +401,11 @@ def propose_claude_harness(
         or any(len(question) > 40 and question in instructions for question in public.values())
     ):
         raise ValueError("Claude Code returned invalid or copied Harness instructions")
-    candidate = instructions + "\nUser: {prompt}\nAssistant:\n"
+    candidate = (
+        instructions
+        + "\nUser: {prompt}\nAssistant: Solve the question and end with one final answer "
+        "in LaTeX boxed form.\n"
+    )
     validate_tir_prompt(candidate)
     prompt_path = output_root / "candidate.txt"
     write_bytes(prompt_path, candidate.encode(), immutable=True)

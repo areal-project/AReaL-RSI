@@ -259,7 +259,18 @@ def strict_tir_reward_fn(
     answer: str,
     **kwargs: Any,
 ) -> float:
-    """AReaL TIR callback with the same strict reward as independent evaluation."""
+    """AReaL reward; an ungradable comparison is zero rather than a dead worker."""
+
+    from math_verify.errors import TimeoutException
 
     del prompt, prompt_ids, completion_ids, kwargs
-    return strict_math_reward(completions, answer)
+    try:
+        return strict_math_reward(completions, answer)
+    except TimeoutException:
+        logging.getLogger(__name__).warning(
+            "Training math comparison timed out after retry; assigning zero reward: "
+            "answer=%r response_prefix=%r",
+            answer,
+            completions[:256],
+        )
+        return 0.0

@@ -108,6 +108,17 @@ def test_comparison_retry_preserves_equality_and_propagates_failure(monkeypatch)
         strict_math_reward(r"\boxed{\frac{n!}{n!}}", r"\boxed{1}")
 
 
+def test_training_reward_contains_persistent_math_timeout(monkeypatch) -> None:
+    errors = pytest.importorskip("math_verify.errors")
+    from areal_rsi_tir import verifier
+
+    def timed_out(response: str, answer: str) -> float:
+        raise errors.TimeoutException("persistent comparison timeout")
+
+    monkeypatch.setattr(verifier, "strict_math_reward", timed_out)
+    assert verifier.strict_tir_reward_fn("question", r"\boxed{2}", [1], [2], r"\boxed{2}") == 0.0
+
+
 def test_tir_verification_excludes_tool_observation_tokens() -> None:
     trajectory = {
         "input_ids": [[1, 2, 3, 4]],

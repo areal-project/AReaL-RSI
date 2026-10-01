@@ -130,3 +130,120 @@ class RsiEvaluationReport:
     @property
     def generated_tokens(self) -> int:
         return sum(case.generated_tokens for case in self.cases)
+
+
+@dataclass(frozen=True, slots=True)
+class AgentHarnessSpec:
+    """Frozen external solving agent and its task prompt."""
+
+    harness_id: str
+    prompt_digest: str
+    executable_digest: str
+    calculator_digest: str
+    backend_model_digest: str
+    model: str
+    timeout_seconds: int
+    max_budget_usd: float
+
+    def __post_init__(self) -> None:
+        if (
+            (
+                not re.fullmatch(r"harness_[0-9a-f]{64}", self.harness_id)
+                and self.harness_id != "harness_pending"
+            )
+            or any(
+                not valid_digest(value)
+                for value in (
+                    self.prompt_digest,
+                    self.executable_digest,
+                    self.calculator_digest,
+                    self.backend_model_digest,
+                )
+            )
+            or (
+                not self.model.strip()
+                or type(self.timeout_seconds) is not int
+                or self.timeout_seconds < 1
+                or not math.isfinite(self.max_budget_usd)
+                or self.max_budget_usd <= 0
+            )
+        ):
+            raise ValueError("Invalid external agent Harness")
+
+
+@dataclass(frozen=True, slots=True)
+class AgentCaseRecord:
+    task_id: str
+    harness_id: str
+    trial_id: str
+    verifier_digest: str
+    response: str
+    score: float
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float
+    duration_ms: int
+    transcript_path: str
+    transcript_digest: str
+    failure_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        if (
+            not self.task_id.strip()
+            or not re.fullmatch(r"harness_[0-9a-f]{64}", self.harness_id)
+            or not self.trial_id.strip()
+            or not valid_digest(self.verifier_digest)
+            or not math.isfinite(self.score)
+            or not 0 <= self.score <= 1
+            or any(
+                type(v) is not int or v < 0
+                for v in (self.input_tokens, self.output_tokens, self.duration_ms)
+            )
+            or not math.isfinite(self.cost_usd)
+            or self.cost_usd < 0
+            or not self.transcript_path.startswith("/")
+            or not valid_digest(self.transcript_digest)
+            or self.failure_reason not in (None, "cli_timeout")
+            or (
+                self.failure_reason == "cli_timeout"
+                and (self.response or self.score != 0 or self.input_tokens or self.output_tokens)
+            )
+        ):
+            raise ValueError("Invalid external agent case")
+
+
+@dataclass(frozen=True, slots=True)
+class AgentEvaluationReport:
+    harness_id: str
+    task_set_id: str
+    split: RsiSplit
+    model: str
+    executable_digest: str
+    backend_model_digest: str
+    verifier_digest: str
+    trial_id: str
+    cases: tuple[AgentCaseRecord, ...]
+
+    def __post_init__(self) -> None:
+        if (
+            not re.fullmatch(r"harness_[0-9a-f]{64}", self.harness_id)
+            or not self.task_set_id.startswith("taskset_")
+            or not self.model.strip()
+            or not valid_digest(self.executable_digest)
+            or not valid_digest(self.backend_model_digest)
+            or not valid_digest(self.verifier_digest)
+            or not self.trial_id.strip()
+            or not self.cases
+            or len({case.task_id for case in self.cases}) != len(self.cases)
+            or any(
+                case.harness_id != self.harness_id
+                or case.trial_id != self.trial_id
+                or case.verifier_digest != self.verifier_digest
+                for case in self.cases
+            )
+        ):
+            raise ValueError("Invalid external agent evaluation")
+
+    @property
+    def score(self) -> float:
+        return sum(case.score for case in self.cases) / len(self.cases)

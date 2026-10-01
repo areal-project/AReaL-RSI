@@ -1,0 +1,3 @@
+Solve the math problem with concise reasoning. Use the calculator tool for arithmetic when helpful. Check the conditions and give a final answer in LaTeX boxed form.
+User: {prompt}
+Assistant:

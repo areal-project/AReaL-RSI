@@ -135,12 +135,16 @@ def load_claude_harness(
     return spec, prompt.decode()
 
 
-def _result(raw: bytes) -> tuple[str, int, int, float, int]:
+def _final_event(raw: bytes) -> dict[str, Any]:
     events = [json.loads(line) for line in raw.splitlines() if line.strip()]
     final = [event for event in events if isinstance(event, dict) and event.get("type") == "result"]
     if len(final) != 1 or final[0].get("is_error") is not False:
         raise ValueError("Claude Code did not return one successful final result")
-    event = final[0]
+    return final[0]
+
+
+def _result(raw: bytes) -> tuple[str, int, int, float, int]:
+    event = _final_event(raw)
     usage = event.get("usage")
     if not isinstance(usage, dict):
         raise ValueError("Claude Code omitted token usage")
@@ -332,7 +336,9 @@ class FrozenClaudeWorkflow:
             ):
                 raise
             return 0.0
-        response, _, _, _, _ = _result(raw)
+        response = _final_event(raw).get("result")
+        if not isinstance(response, str) or not response.strip():
+            return 0.0
         score = asyncio.get_running_loop().run_in_executor(
             self.reward_executor, strict_math_reward, response, answer
         )

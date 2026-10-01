@@ -288,6 +288,9 @@ def test_frozen_claude_workflow_uses_areal_session_proxy(
         " print(json.dumps({'type':'result','result':"
         '"API Error: Claude\'s response exceeded the 4096 output token maximum."}))\n'
         " sys.exit(1)\n"
+        "if os.environ.get('TIR_TEST_NO_USAGE')=='1':\n"
+        " print(json.dumps({'type':'result','is_error':False,'result':'\\\\boxed{2}'}))\n"
+        " sys.exit(0)\n"
         "print(json.dumps({'type':'result','is_error':False,'result':'\\\\boxed{2}',"
         "'usage':{'input_tokens':10,'output_tokens':3},"
         "'total_cost_usd':0.0,'duration_ms':100}))\n"
@@ -315,6 +318,12 @@ def test_frozen_claude_workflow_uses_areal_session_proxy(
     assert (
         asyncio.run(workflow.run(row, base_url="http://proxy.example:3123", api_key="session-key"))
         == 0.0
+    )
+    monkeypatch.delenv("TIR_TEST_OVERFLOW")
+    monkeypatch.setenv("TIR_TEST_NO_USAGE", "1")
+    assert (
+        asyncio.run(workflow.run(row, base_url="http://proxy.example:3123", api_key="session-key"))
+        == 1.0
     )
     with pytest.raises(ValueError, match="frozen dataset"):
         asyncio.run(

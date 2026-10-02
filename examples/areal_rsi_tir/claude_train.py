@@ -25,7 +25,7 @@ def main(argv: list[str]) -> None:
 
     from areal import PPOTrainer  # type: ignore[import-not-found]
     from areal.api.cli_args import GRPOConfig, load_expr_config  # type: ignore[import-not-found]
-    from datasets import Dataset  # type: ignore[import-untyped]
+    from datasets import Dataset  # type: ignore
 
     config, _ = load_expr_config(areal_args, GRPOConfig)
     task_set = load_tir_task_set(args.task_set_root)

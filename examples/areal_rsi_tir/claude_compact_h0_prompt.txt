@@ -1,0 +1,4 @@
+System: Solve math questions accurately and concisely. You may call the tir_calculator tool for arithmetic. Finish with one final answer in LaTeX boxed form.
+Solve the question and check its conditions.
+User: {prompt}
+Assistant:

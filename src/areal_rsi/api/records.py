@@ -203,9 +203,9 @@ class AgentCaseRecord:
             or self.cost_usd < 0
             or not self.transcript_path.startswith("/")
             or not valid_digest(self.transcript_digest)
-            or self.failure_reason not in (None, "cli_timeout")
+            or self.failure_reason not in (None, "cli_timeout", "cli_output_limit")
             or (
-                self.failure_reason == "cli_timeout"
+                self.failure_reason is not None
                 and (self.response or self.score != 0 or self.input_tokens or self.output_tokens)
             )
         ):

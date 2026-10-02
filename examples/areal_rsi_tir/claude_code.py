@@ -6,15 +6,20 @@ import argparse
 import asyncio
 import hashlib
 import json
+import logging
 import os
+import re
 import stat
 import subprocess
 import sys
 import tempfile
-from concurrent.futures import ProcessPoolExecutor
+import unicodedata
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from contextlib import nullcontext
 from dataclasses import replace
+from multiprocessing import get_context
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 from areal_rsi.api.control import json_bytes, read_record, safe_name
@@ -23,7 +28,9 @@ from areal_rsi.api.records import (
     AgentEvaluationReport,
     AgentHarnessSpec,
     RsiSplit,
+    Task,
 )
+from areal_rsi.api.research import AgentHarnessAttemptFailure, AgentHarnessSearchDecision
 from areal_rsi.infra.storage.files import write_bytes
 from areal_rsi.scripts.jobs import digest_bytes
 from areal_rsi_tir.assets import (
@@ -31,11 +38,69 @@ from areal_rsi_tir.assets import (
     source_files_digest,
     tir_verifier_files,
 )
+from areal_rsi_tir.claude_backend import local_adapter
 from areal_rsi_tir.harness import validate_tir_prompt
+from areal_rsi_tir.harness_selection import select_agent_harnesses
 from areal_rsi_tir.tasks import load_tir_task_set, public_tir_tasks
 from areal_rsi_tir.verifier import strict_math_reward
 
 CLAUDE_MAX_OUTPUT_TOKENS = 4096
+COMPACT_BACKEND_MAX_TOKENS = 512
+
+
+def _claude_math_reward(response: str, answer: str) -> float:
+    """Score only the final boxed answer, never incidental numbers in CLI text."""
+    matches = list(re.finditer(r"\\boxed\s*\{", response))
+    if not matches:
+        return 0.0
+    start = matches[-1].start()
+    depth = 1
+    end = matches[-1].end()
+    while end < len(response) and depth:
+        if response[end] == "{":
+            depth += 1
+        elif response[end] == "}":
+            depth -= 1
+        end += 1
+    if depth:
+        return 0.0
+    response = response[start:end]
+    normalized = unicodedata.normalize("NFKC", response)
+    normalized = "".join(
+        str(unicodedata.decimal(char)) if char.isdecimal() else char for char in normalized
+    )
+    return strict_math_reward(normalized, answer)
+
+
+def _training_claude_math_reward(response: str, answer: str) -> float:
+    from math_verify.errors import TimeoutException  # type: ignore[import-untyped]
+
+    try:
+        return _claude_math_reward(response, answer)
+    except TimeoutException:
+        logging.getLogger(__name__).warning(
+            "Training math comparison timed out after retry; assigning zero reward: "
+            "answer=%r response_prefix=%r",
+            answer,
+            response[:256],
+        )
+        return 0.0
+    except ValueError as error:
+        if str(error) == "Frozen TIR gold answer cannot be parsed":
+            raise
+        logging.getLogger(__name__).warning(
+            "Training answer could not be parsed; assigning zero reward: "
+            "error=%r response_prefix=%r",
+            error,
+            response[:256],
+        )
+        return 0.0
+
+
+class ClaudeOutputLimit(RuntimeError):
+    def __init__(self, transcript: bytes) -> None:
+        super().__init__("Claude Code exhausted its output token budget")
+        self.transcript = transcript
 
 
 def _regular_bytes(path: Path) -> bytes:
@@ -203,6 +268,12 @@ def _call(
                 }
             )
         )
+        compact_system: str | None = None
+        if prompt.startswith("System: "):
+            first_line, prompt = prompt.split("\n", 1)
+            compact_system = first_line.removeprefix("System: ").strip()
+            if not compact_system:
+                raise ValueError("Frozen Claude system prompt is empty")
         command = [
             str(executable),
             "--print",
@@ -226,8 +297,10 @@ def _call(
             spec.model,
             "--max-budget-usd",
             str(spec.max_budget_usd),
-            prompt,
         ]
+        if compact_system is not None:
+            command.extend(("--system-prompt", compact_system))
+        command.append(prompt)
         env = os.environ.copy()
         for name in (
             "HTTP_PROXY",
@@ -248,15 +321,22 @@ def _call(
                 "CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(CLAUDE_MAX_OUTPUT_TOKENS),
             }
         )
-        completed = subprocess.run(
-            command,
-            env=env,
-            cwd=work,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            timeout=spec.timeout_seconds,
-            check=False,
+        adapter = (
+            local_adapter(backend_url, max_tokens=COMPACT_BACKEND_MAX_TOKENS)
+            if compact_system is not None
+            else nullcontext(backend_url)
         )
+        with adapter as local_url:
+            env["ANTHROPIC_BASE_URL"] = local_url
+            completed = subprocess.run(
+                command,
+                env=env,
+                cwd=work,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                timeout=spec.timeout_seconds,
+                check=False,
+            )
         if completed.returncode != 0:
             result_events = []
             for line in completed.stdout.splitlines():
@@ -267,6 +347,11 @@ def _call(
                 if isinstance(event, dict) and event.get("type") == "result":
                     result_events.append(event)
             result_error = str(result_events[-1].get("result", "")) if result_events else ""
+            if (
+                f"Claude's response exceeded the {CLAUDE_MAX_OUTPUT_TOKENS} output token maximum"
+                in result_error
+            ):
+                raise ClaudeOutputLimit(completed.stdout)
             raise RuntimeError(
                 f"Claude Code exited {completed.returncode}: "
                 f"{result_error[:1000]} {completed.stderr.decode(errors='replace')[:1000]}"
@@ -329,20 +414,20 @@ class FrozenClaudeWorkflow:
             )
         except subprocess.TimeoutExpired:
             return 0.0
-        except RuntimeError as error:
-            if (
-                f"Claude's response exceeded the {CLAUDE_MAX_OUTPUT_TOKENS} output token maximum"
-                not in str(error)
-            ):
-                raise
+        except ClaudeOutputLimit:
             return 0.0
         response = _final_event(raw).get("result")
         if not isinstance(response, str) or not response.strip():
             return 0.0
         score = asyncio.get_running_loop().run_in_executor(
-            self.reward_executor, strict_math_reward, response, answer
+            self.reward_executor, _training_claude_math_reward, response, answer
         )
-        return await asyncio.wait_for(score, timeout=45)
+        try:
+            return await asyncio.wait_for(score, timeout=45)
+        except TimeoutError:
+            # The independent evaluator surfaces an undecidable comparison;
+            # a training rollout needs a bounded zero reward to keep workers alive.
+            return 0.0
 
 
 def evaluate_claude(
@@ -357,17 +442,20 @@ def evaluate_claude(
     trial_id: str,
     runner_root: Path,
     python: Path = Path(sys.executable),
+    workers: int = 1,
 ) -> AgentEvaluationReport:
     safe_name(trial_id)
+    if not 1 <= workers <= 32:
+        raise ValueError("Claude evaluation workers must be between 1 and 32")
     manifest = load_tir_task_set(task_root)
     spec, template = load_claude_harness(harness_root, executable, backend_model_root)
     calculator = Path(__file__).with_name("claude_calculator.py")
     source_digest = source_files_digest(tir_verifier_files(runner_root))
     answers: Any = json.loads((task_root / "private/answers.json").read_bytes())
-    cases: list[AgentCaseRecord] = []
     case_root = output.with_suffix(".cases")
     case_root.mkdir(parents=True, exist_ok=True)
-    for task in public_tir_tasks(task_root, split):
+
+    def evaluate_case(task: Task) -> AgentCaseRecord:
         case_path = case_root / f"{task.task_id}.json"
         if case_path.exists():
             case = read_record(case_path, AgentCaseRecord)
@@ -404,16 +492,32 @@ def evaluate_claude(
                 response, input_tokens, output_tokens, cost = "", 0, 0, 0.0
                 duration = spec.timeout_seconds * 1000
                 failure_reason = "cli_timeout"
+            except ClaudeOutputLimit as error:
+                raw = (
+                    error.transcript.rstrip(b"\n")
+                    + b"\n"
+                    + json_bytes(
+                        {
+                            "type": "local_output_limit",
+                            "max_output_tokens": CLAUDE_MAX_OUTPUT_TOKENS,
+                        }
+                    )
+                    + b"\n"
+                )
+                response, input_tokens, output_tokens, cost = "", 0, 0, 0.0
+                duration = 0
+                failure_reason = "cli_output_limit"
             else:
                 response, input_tokens, output_tokens, cost, duration = _result(raw)
                 failure_reason = None
             transcript = case_root / f"{task.task_id}.jsonl"
             write_bytes(transcript, raw, immutable=True)
-            score = (
-                0.0
-                if failure_reason
-                else strict_math_reward(response, _gold_answer(answers[task.task_id]))
-            )
+            if failure_reason:
+                score = 0.0
+            else:
+                score = verifier_pool.submit(
+                    _claude_math_reward, response, _gold_answer(answers[task.task_id])
+                ).result(timeout=45)
             case = AgentCaseRecord(
                 task.task_id,
                 spec.harness_id,
@@ -430,7 +534,15 @@ def evaluate_claude(
                 failure_reason,
             )
             write_bytes(case_path, json_bytes(case), immutable=True)
-        cases.append(case)
+        return case
+
+    tasks = public_tir_tasks(task_root, split)
+    with ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn")) as verifier_pool:
+        if workers == 1:
+            cases = tuple(map(evaluate_case, tasks))
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                cases = tuple(pool.map(evaluate_case, tasks))
     report = AgentEvaluationReport(
         spec.harness_id,
         manifest.task_set_id,
@@ -440,7 +552,7 @@ def evaluate_claude(
         spec.backend_model_digest,
         source_digest,
         trial_id,
-        tuple(cases),
+        cases,
     )
     write_bytes(output, json_bytes(report), immutable=True)
     return report
@@ -456,13 +568,14 @@ def propose_claude_harness(
     output_root: Path,
     *,
     max_cases: int = 8,
+    proposal_index: int = 0,
     python: Path = Path(sys.executable),
 ) -> AgentHarnessSpec:
     """Ask the solving Claude Code agent to revise its reusable public-task instructions."""
-    if not 1 <= max_cases <= 64 or output_root.exists():
+    if not 1 <= max_cases <= 64 or proposal_index < 0 or output_root.exists():
         raise ValueError("Invalid proposal budget or an existing proposal directory")
     manifest = load_tir_task_set(task_root)
-    spec, _ = load_claude_harness(harness_root, executable, backend_model_root)
+    spec, template = load_claude_harness(harness_root, executable, backend_model_root)
     baseline = read_record(baseline_path, AgentEvaluationReport)
     tasks = public_tir_tasks(task_root, RsiSplit.HARNESS_EVOLVE)
     if (
@@ -472,23 +585,33 @@ def propose_claude_harness(
         or tuple(case.task_id for case in baseline.cases) != tuple(task.task_id for task in tasks)
     ):
         raise ValueError("Claude proposal needs matching public failure feedback")
-    public = {task.task_id: task.input["messages"][0]["content"] for task in tasks}
-    examples = [
-        {
-            "question": public[case.task_id][:1000],
-            "agent_response": case.response[:1500],
-            "score": case.score,
-        }
-        for case in sorted(baseline.cases, key=lambda item: (item.score, item.task_id))[:max_cases]
-    ]
+    failures = sorted(
+        (case for case in baseline.cases if case.score < 1),
+        key=lambda item: (item.score, item.task_id),
+    )
+    if not failures:
+        raise ValueError("Claude proposal needs public failures")
+    offset = proposal_index * max_cases % len(failures)
+    sampled = (failures + failures)[offset : offset + min(max_cases, len(failures))]
+    if {case.task_id for case in sampled} - {task.task_id for task in tasks}:
+        raise ValueError("Claude proposal feedback contains an unknown public task")
+    missing_box = sum(r"\boxed{" not in case.response for case in sampled)
+    wrong_box = len(sampled) - missing_box
+    focus = (
+        "finish within the output limit with a final boxed answer",
+        "check the requested quantity and verify signs or units",
+        "use the calculator for exact arithmetic and check its result",
+        "write only essential equations before the final boxed result",
+    )[proposal_index % 4]
     request = (
-        "Write one plain English line of reusable instructions for a math solving Agent. "
-        "Improve the general method based on the public failures below. "
-        "Use fewer than 90 words. Keep the calculator available for arithmetic. "
-        "Do not solve or repeat any example. Do not include braces, backslashes, "
-        "quotes, JSON, markdown, or final answer markup. Return only the line.\n"
-        + json.dumps(examples, ensure_ascii=False)
-        + "\n/no_think"
+        "System: You edit the instructions of a math-solving agent. "
+        "Do not solve any math problem. Reply with exactly one short imperative sentence "
+        "in English, without markup or explanation.\n"
+        "Write one new instruction for the solver. Keep its calculator available. "
+        f"Public failure summary: {len(sampled)} incorrect answers; "
+        f"{missing_box} omitted a boxed final answer and {wrong_box} boxed an incorrect answer. "
+        f"Focus on how to {focus}.\n"
+        "Instruction:"
     )
     output_root.mkdir(parents=True)
     write_bytes(
@@ -497,7 +620,12 @@ def propose_claude_harness(
             {
                 "baseline_report_digest": digest_bytes(baseline_path.read_bytes()),
                 "harness_id": spec.harness_id,
-                "public_failure_feedback": examples,
+                "proposal_index": proposal_index,
+                "public_failure_feedback": {
+                    "sampled_task_ids": [case.task_id for case in sampled],
+                    "missing_box": missing_box,
+                    "wrong_box": wrong_box,
+                },
                 "request": request,
             }
         ),
@@ -508,15 +636,60 @@ def propose_claude_harness(
     write_bytes(output_root / "proposal.trajectory.jsonl", raw, immutable=True)
     instructions, _, _, _, _ = _result(raw)
     instructions = " ".join(instructions.split())
-    if (
-        len(instructions) > 2000
-        or not instructions
-        or any(character in instructions for character in '{}\\"')
-        or any(len(question) > 40 and question in instructions for question in public.values())
-    ):
-        raise ValueError("Claude Code returned invalid or copied Harness instructions")
+    first_word = instructions.split(" ", 1)[0].rstrip(".,:").casefold()
+    valid = (
+        5 <= len(instructions.split()) <= 30
+        and first_word
+        in {
+            "always",
+            "box",
+            "check",
+            "compute",
+            "confirm",
+            "finish",
+            "identify",
+            "keep",
+            "reserve",
+            "solve",
+            "state",
+            "use",
+            "verify",
+            "write",
+        }
+        and not any(character in instructions for character in '{}\\"`')
+        and not re.search(r"\b(?:code|python|today|print|example)\b", instructions, re.I)
+        and not any(
+            len(task.input["messages"][0]["content"]) > 40
+            and task.input["messages"][0]["content"] in instructions
+            for task in tasks
+        )
+    )
+    if not valid:
+        instructions = (
+            "Reserve enough output space to state the requested quantity once "
+            "in a final boxed answer.",
+            "Identify the requested quantity before computing and verify "
+            "signs and units before boxing it.",
+            "Use the calculator only for exact arithmetic, then check that "
+            "its result fits the problem.",
+            "Write the shortest valid chain of equations, then finish with a single boxed answer.",
+        )[proposal_index % 4]
+    write_bytes(
+        output_root / "proposal-origin.json",
+        json_bytes(
+            {
+                "origin": "same_model_proposal" if valid else "public_failure_fallback",
+                "instruction": instructions,
+                "proposal_trajectory_digest": digest_bytes(raw),
+            }
+        ),
+        immutable=True,
+    )
+    incumbent_prefix = template.split("User: {prompt}", 1)[0].rstrip()
     candidate = (
-        instructions
+        incumbent_prefix
+        + "\n"
+        + instructions
         + "\nUser: {prompt}\nAssistant: Solve the question and end with one final answer "
         "in LaTeX boxed form.\n/no_think\n"
     )
@@ -532,6 +705,116 @@ def propose_claude_harness(
         timeout_seconds=spec.timeout_seconds,
         max_budget_usd=spec.max_budget_usd,
     )
+
+
+def search_claude_harnesses(
+    task_root: Path,
+    baseline_evolve_path: Path,
+    baseline_select_path: Path,
+    baseline_repeat_path: Path,
+    harness_root: Path,
+    executable: Path,
+    backend_model_root: Path,
+    backend_url: str,
+    output_root: Path,
+    *,
+    candidate_count: int,
+    runner_root: Path,
+    max_cases: int = 8,
+    on_no_improvement: Literal["reuse", "stop"] = "reuse",
+    workers_per_candidate: int = 1,
+    candidate_prompt_files: tuple[Path, ...] = (),
+) -> AgentHarnessSearchDecision:
+    """Propose and evaluate independent H0 branches concurrently on one task set."""
+    if not 1 <= candidate_count <= 16:
+        raise ValueError("Candidate count must be between 1 and 16")
+    if candidate_prompt_files and len(candidate_prompt_files) != candidate_count:
+        raise ValueError("Candidate prompt count differs from the search width")
+    incumbent, _ = load_claude_harness(harness_root, executable, backend_model_root)
+    evolve = read_record(baseline_evolve_path, AgentEvaluationReport)
+    baseline = read_record(baseline_select_path, AgentEvaluationReport)
+    repeat = read_record(baseline_repeat_path, AgentEvaluationReport)
+    task_set = load_tir_task_set(task_root)
+    if (
+        evolve.split is not RsiSplit.HARNESS_EVOLVE
+        or evolve.harness_id != incumbent.harness_id
+        or evolve.task_set_id != task_set.task_set_id
+        or baseline.harness_id != incumbent.harness_id
+        or baseline.task_set_id != task_set.task_set_id
+        or repeat.task_set_id != task_set.task_set_id
+    ):
+        raise ValueError("Agent search baseline differs from the frozen inputs")
+    output_root.mkdir(parents=True, exist_ok=True)
+
+    def branch(index: int) -> AgentEvaluationReport | AgentHarnessAttemptFailure:
+        root = output_root / f"candidate-{index:02d}"
+        candidate_root = root / "harness"
+        if candidate_root.exists():
+            load_claude_harness(candidate_root, executable, backend_model_root)
+        elif candidate_prompt_files:
+            root.mkdir(parents=True)
+            freeze_claude_harness(
+                candidate_prompt_files[index],
+                executable,
+                backend_model_root,
+                candidate_root,
+                model=incumbent.model,
+                timeout_seconds=incumbent.timeout_seconds,
+                max_budget_usd=incumbent.max_budget_usd,
+            )
+        else:
+            failure_path = root / "failure.json"
+            if failure_path.exists():
+                return read_record(failure_path, AgentHarnessAttemptFailure)
+            try:
+                propose_claude_harness(
+                    task_root,
+                    baseline_evolve_path,
+                    harness_root,
+                    executable,
+                    backend_model_root,
+                    backend_url,
+                    root,
+                    max_cases=max_cases,
+                    proposal_index=index,
+                )
+            except (ClaudeOutputLimit, subprocess.TimeoutExpired, ValueError) as error:
+                root.mkdir(parents=True, exist_ok=True)
+                if isinstance(error, ClaudeOutputLimit):
+                    write_bytes(
+                        root / "proposal.trajectory.jsonl", error.transcript, immutable=True
+                    )
+                failure = AgentHarnessAttemptFailure(index, str(error))
+                write_bytes(failure_path, json_bytes(failure), immutable=True)
+                return failure
+        return evaluate_claude(
+            task_root,
+            candidate_root,
+            executable,
+            backend_model_root,
+            backend_url,
+            root / "selection.json",
+            split=RsiSplit.HARNESS_SELECT,
+            trial_id=f"candidate_{index:02d}_select",
+            runner_root=runner_root,
+            workers=workers_per_candidate,
+        )
+
+    with ThreadPoolExecutor(max_workers=candidate_count) as pool:
+        results = tuple(pool.map(branch, range(candidate_count)))
+    reports = tuple(result for result in results if isinstance(result, AgentEvaluationReport))
+    failures = tuple(result for result in results if isinstance(result, AgentHarnessAttemptFailure))
+    decision = replace(
+        select_agent_harnesses(
+            baseline,
+            repeat,
+            reports,
+            on_no_improvement=on_no_improvement,
+        ),
+        failures=failures,
+    )
+    write_bytes(output_root / "decision.json", json_bytes(decision), immutable=True)
+    return decision
 
 
 def main() -> None:
@@ -555,6 +838,7 @@ def main() -> None:
     run.add_argument("--split", type=RsiSplit, required=True)
     run.add_argument("--trial-id", required=True)
     run.add_argument("--runner-root", type=Path, required=True)
+    run.add_argument("--workers", type=int, default=1)
     propose = actions.add_parser("propose")
     propose.add_argument("--task-set-root", type=Path, required=True)
     propose.add_argument("--baseline-report", type=Path, required=True)
@@ -564,6 +848,23 @@ def main() -> None:
     propose.add_argument("--backend-url", required=True)
     propose.add_argument("--output-root", type=Path, required=True)
     propose.add_argument("--max-cases", type=int, default=8)
+    propose.add_argument("--proposal-index", type=int, default=0)
+    search = actions.add_parser("search")
+    search.add_argument("--task-set-root", type=Path, required=True)
+    search.add_argument("--baseline-evolve", type=Path, required=True)
+    search.add_argument("--baseline-select", type=Path, required=True)
+    search.add_argument("--baseline-repeat", type=Path, required=True)
+    search.add_argument("--harness-root", type=Path, required=True)
+    search.add_argument("--claude-cli", type=Path, required=True)
+    search.add_argument("--backend-model-root", type=Path, required=True)
+    search.add_argument("--backend-url", required=True)
+    search.add_argument("--output-root", type=Path, required=True)
+    search.add_argument("--runner-root", type=Path, required=True)
+    search.add_argument("--candidate-count", type=int, required=True)
+    search.add_argument("--max-cases", type=int, default=8)
+    search.add_argument("--on-no-improvement", choices=("reuse", "stop"), default="reuse")
+    search.add_argument("--workers-per-candidate", type=int, default=1)
+    search.add_argument("--candidate-prompt", type=Path, action="append", default=[])
     args = parser.parse_args()
     if args.action == "freeze":
         spec = freeze_claude_harness(
@@ -586,8 +887,36 @@ def main() -> None:
             args.backend_url,
             args.output_root,
             max_cases=args.max_cases,
+            proposal_index=args.proposal_index,
         )
         print(json_bytes(proposal).decode())
+    elif args.action == "search":
+        decision = search_claude_harnesses(
+            args.task_set_root,
+            args.baseline_evolve,
+            args.baseline_select,
+            args.baseline_repeat,
+            args.harness_root,
+            args.claude_cli,
+            args.backend_model_root,
+            args.backend_url,
+            args.output_root,
+            candidate_count=args.candidate_count,
+            runner_root=args.runner_root,
+            max_cases=args.max_cases,
+            on_no_improvement=args.on_no_improvement,
+            workers_per_candidate=args.workers_per_candidate,
+            candidate_prompt_files=tuple(args.candidate_prompt),
+        )
+        print(
+            json.dumps(
+                {
+                    "selected_harness_id": decision.selected_harness_id,
+                    "continue_to_training": decision.continue_to_training,
+                    "candidate_scores": [choice.correct for choice in decision.candidates],
+                }
+            )
+        )
     else:
         evaluation = evaluate_claude(
             args.task_set_root,
@@ -599,6 +928,7 @@ def main() -> None:
             split=args.split,
             trial_id=args.trial_id,
             runner_root=args.runner_root,
+            workers=args.workers,
         )
         print(json.dumps({"score": evaluation.score, "cases": len(evaluation.cases)}))
 

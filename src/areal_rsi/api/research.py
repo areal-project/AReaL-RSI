@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
-from areal_rsi.api.records import RsiEvaluationReport, valid_digest
+from areal_rsi.api.records import AgentEvaluationReport, RsiEvaluationReport, valid_digest
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +56,39 @@ class HarnessNoiseEvidence:
             or self.effective_noise_band < self.observed_score_spread
         ):
             raise ValueError("Harness A/A evidence is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class AgentHarnessChoice:
+    candidate_harness_id: str
+    correct: float
+    score_gain: float
+    relative_token_cost: float
+    accepted: bool
+    reason: str
+    report: AgentEvaluationReport
+
+
+@dataclass(frozen=True, slots=True)
+class AgentHarnessAttemptFailure:
+    branch_index: int
+    reason: str
+
+    def __post_init__(self) -> None:
+        if self.branch_index < 0 or not self.reason:
+            raise ValueError("Invalid Agent Harness attempt failure")
+
+
+@dataclass(frozen=True, slots=True)
+class AgentHarnessSearchDecision:
+    baseline: AgentEvaluationReport
+    baseline_repeat: AgentEvaluationReport
+    candidates: tuple[AgentHarnessChoice, ...]
+    selected_harness_id: str
+    noise_band: float
+    on_no_improvement: Literal["reuse", "stop"]
+    continue_to_training: bool
+    failures: tuple[AgentHarnessAttemptFailure, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

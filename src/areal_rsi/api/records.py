@@ -65,9 +65,19 @@ class TaskSetVersion:
             )
         ):
             raise ValueError("Invalid task set identity")
-        ids = [task_id for split in RsiSplit for task_id in getattr(self, split.value).task_ids]
-        if len(set(ids)) != len(ids):
-            raise ValueError("Task IDs overlap across frozen splits")
+        evolve = set(self.harness_evolve.task_ids)
+        select = set(self.harness_select.task_ids)
+        train = set(self.model_train.task_ids)
+        dev = set(self.model_dev.task_ids)
+        sealed = set(self.sealed_test.task_ids)
+        # Harness search may use predeclared subsets of model_train. Development
+        # and sealed monitoring remain disjoint from every training/search split.
+        if (
+            evolve & select
+            or dev & (evolve | select | train | sealed)
+            or sealed & (evolve | select | train)
+        ):
+            raise ValueError("Task IDs overlap across protected frozen splits")
 
 
 @dataclass(frozen=True, slots=True)

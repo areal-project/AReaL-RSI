@@ -215,6 +215,109 @@ def freeze_tir_task_set(
     return version
 
 
+def freeze_shared_tir_task_set(
+    parent_root: Path,
+    destination: Path,
+    *,
+    seed: int,
+    train_count: int = 512,
+    evolve_count: int = 384,
+    select_count: int = 128,
+) -> TaskSetVersion:
+    """Freeze one training pool with predeclared Harness search subsets."""
+    if (
+        type(seed) is not int
+        or seed < 0
+        or type(train_count) is not int
+        or type(evolve_count) is not int
+        or type(select_count) is not int
+        or min(train_count, evolve_count, select_count) < 1
+        or evolve_count + select_count != train_count
+    ):
+        raise ValueError("Shared task set needs a valid seed and partition sizes")
+    parent = load_tir_task_set(parent_root)
+    if destination.exists():
+        raise FileExistsError(destination)
+    if train_count > len(parent.model_train.task_ids):
+        raise ValueError("Parent has too few frozen model training questions")
+    answers: dict[str, str] = json.loads(_regular_bytes(parent_root / "private/answers.json"))
+    training = sorted(
+        public_tir_tasks(parent_root, RsiSplit.MODEL_TRAIN),
+        key=lambda task: hashlib.sha256(f"{seed}:{task.task_id}".encode()).digest(),
+    )[:train_count]
+    selected = tuple(
+        TirCase(task.task_id, task.input["messages"][0]["content"], answers[task.task_id])
+        for task in training
+    )
+    provenance = json_bytes(
+        {
+            "parent_task_set_id": parent.task_set_id,
+            "parent_source_train_digest": parent.source_train_digest,
+            "seed": seed,
+            "model_train_ids": [case.task_id for case in selected],
+            "harness_evolve_ids": [case.task_id for case in selected[:evolve_count]],
+            "harness_select_ids": [case.task_id for case in selected[evolve_count:]],
+        }
+    )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=destination.parent, prefix=".tir-shared-") as temporary:
+        staged = Path(temporary) / "taskset"
+        public, private = staged / "public", staged / "private"
+        public.mkdir(parents=True)
+        private.mkdir(mode=0o700)
+        partitions: dict[RsiSplit, TaskPartition] = {}
+        groups = {
+            RsiSplit.HARNESS_EVOLVE: selected[:evolve_count],
+            RsiSplit.HARNESS_SELECT: selected[evolve_count:],
+            RsiSplit.MODEL_TRAIN: selected,
+        }
+        for split in RsiSplit:
+            path = public / f"{split.value}.jsonl"
+            if split in groups:
+                partitions[split] = _partition(groups[split], path)
+            else:
+                write_bytes(
+                    path,
+                    _regular_bytes(parent_root / "public" / f"{split.value}.jsonl"),
+                    immutable=True,
+                )
+                partitions[split] = getattr(parent, split.value)
+        answer_ids = {task_id for split in RsiSplit for task_id in partitions[split].task_ids}
+        answer_bytes = json_bytes(
+            {task_id: answer for task_id, answer in answers.items() if task_id in answer_ids}
+        )
+        if set(json.loads(answer_bytes)) != answer_ids:
+            raise ValueError("Shared task set answers do not match its public questions")
+        write_bytes(private / "answers.json", answer_bytes, immutable=True)
+        os.chmod(private / "answers.json", 0o600)
+        provisional = TaskSetVersion(
+            "taskset_pending",
+            _sha256(provenance),
+            parent.source_test_digest,
+            _sha256(answer_bytes),
+            partitions[RsiSplit.HARNESS_EVOLVE],
+            partitions[RsiSplit.HARNESS_SELECT],
+            partitions[RsiSplit.MODEL_TRAIN],
+            partitions[RsiSplit.MODEL_DEV],
+            partitions[RsiSplit.SEALED_TEST],
+        )
+        version = TaskSetVersion(
+            _identity(provisional),
+            provisional.source_train_digest,
+            provisional.source_test_digest,
+            provisional.answers_digest,
+            provisional.harness_evolve,
+            provisional.harness_select,
+            provisional.model_train,
+            provisional.model_dev,
+            provisional.sealed_test,
+        )
+        write_bytes(staged / "manifest.json", json_bytes(version), immutable=True)
+        write_bytes(staged / "shared-provenance.json", provenance, immutable=True)
+        staged.rename(destination)
+    return load_tir_task_set(destination)
+
+
 def load_tir_task_set(root: Path) -> TaskSetVersion:
     """Reject changed public questions, answers, and task identities."""
 
@@ -247,6 +350,19 @@ def load_tir_task_set(root: Path) -> TaskSetVersion:
         or any(not isinstance(answer, str) or not answer.strip() for answer in answers.values())
     ):
         raise ValueError("TIR private answer identities do not match the task set")
+    shared_path = root / "shared-provenance.json"
+    if shared_path.exists():
+        shared_bytes = _regular_bytes(shared_path)
+        shared = json.loads(shared_bytes)
+        if (
+            _sha256(shared_bytes) != version.source_train_digest
+            or shared.get("model_train_ids") != list(version.model_train.task_ids)
+            or shared.get("harness_evolve_ids") != list(version.harness_evolve.task_ids)
+            or shared.get("harness_select_ids") != list(version.harness_select.task_ids)
+            or set(version.harness_evolve.task_ids) | set(version.harness_select.task_ids)
+            != set(version.model_train.task_ids)
+        ):
+            raise ValueError("Shared task set provenance changed")
     return version
 
 

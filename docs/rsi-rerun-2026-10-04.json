@@ -1,0 +1,108 @@
+{
+  "model_family": "Qwen2.5-Math-1.5B",
+  "solver": "Claude Code",
+  "train_cases": 512,
+  "test_cases": 256,
+  "epochs_per_generation": 2,
+  "candidate_branches": 4,
+  "generations": [
+    {
+      "generation": 1,
+      "candidate_correct_out_of_512": [
+        10.0,
+        13.0,
+        5.0,
+        9.0
+      ],
+      "reused_incumbent": true,
+      "test_correct_out_of_256": 2.0,
+      "decision": "continue_to_generation_2",
+      "decision_path": "/storage/openpsi/users/fenghui/projects/AReaL-RSI-trainonly-20261003/data/trainonly-v2/g1-eval/decision.json",
+      "decision_digest": "sha256:691627a363de6fbffb9a43d21e2b5b1dcb96275ccac8ab160d723bbae23d4aa2"
+    },
+    {
+      "generation": 2,
+      "candidate_correct_out_of_512": [
+        7.0,
+        2.0,
+        5.0,
+        6.0
+      ],
+      "reused_incumbent": true,
+      "test_correct_out_of_256": 51.0,
+      "decision": "continue_to_generation_3",
+      "decision_path": "/storage/openpsi/users/fenghui/projects/AReaL-RSI-trainonly-20261003/data/trainonly-v2/g2-eval/decision.json",
+      "decision_digest": "sha256:ba9598f56bcefcc278a7777f2158b6f8e2d3d80d64ad1100ef5634c2014e92f8"
+    },
+    {
+      "generation": 3,
+      "candidate_correct_out_of_512": [
+        113.0,
+        118.0,
+        123.0,
+        130.0
+      ],
+      "reused_incumbent": false,
+      "test_correct_out_of_256": 50.0,
+      "decision": "continue_to_generation_4",
+      "decision_path": "/storage/openpsi/users/fenghui/projects/AReaL-RSI-verifier-20261004/data/verifier-continuation-v1/g3-eval/decision.json",
+      "decision_digest": "sha256:05178e16058f677a5dd49beb8a34757fe7c3ee3888beb3bc5f5a717d5b688c1d"
+    },
+    {
+      "generation": 4,
+      "candidate_correct_out_of_512": [
+        146.0,
+        148.0,
+        161.0,
+        164.0
+      ],
+      "reused_incumbent": true,
+      "test_correct_out_of_256": 46.0,
+      "decision": "continue_to_generation_5",
+      "decision_path": "/storage/openpsi/users/fenghui/projects/AReaL-RSI-verifier-20261004/data/verifier-continuation-v1/g4-eval/decision.json",
+      "decision_digest": "sha256:cbaa4e38c37fcef2766c628669e8a8737e4d26fd20d254a2b715ef71aec84a05"
+    },
+    {
+      "generation": 5,
+      "candidate_correct_out_of_512": [
+        174.0,
+        170.0,
+        155.0,
+        164.0
+      ],
+      "reused_incumbent": false,
+      "test_correct_out_of_256": 38.0,
+      "decision": "stop_weight_loop",
+      "decision_path": "/storage/openpsi/users/fenghui/projects/AReaL-RSI-verifier-20261004/data/verifier-continuation-v1/g5-eval/decision.json",
+      "decision_digest": "sha256:0892331028c2588420b211760226312a80c8c9e06183fc3562762c6a9624b75a"
+    }
+  ],
+  "terminal_state": {
+    "correct_counts": {
+      "m0_h0": 45.0,
+      "m0_selected": 49.0,
+      "m1_h0": 39.0,
+      "m1_selected": 38.0
+    },
+    "decision": "stop_weight_loop",
+    "development_cases": 256,
+    "generation": 5,
+    "paired_selected_harness_delta": -0.04296875,
+    "report_digests": {
+      "m0_h0": "sha256:9f66b6f1b35ad9b7e953dbab7e6fdde59e71676c0e4c5384a6d9954637f6bf9d",
+      "m0_selected": "sha256:2f865229c5d5c26e6a4bcd073d10a963390fc4567c4c0d13b8cbafc5ead73bdd",
+      "m1_h0": "sha256:179de3fa17384d258093ecdb8995e3b76847d5f145451e722a3db8dad7533941",
+      "m1_selected": "sha256:ccb4f76385e3daf8376800b74b8f090f3c9330d4e18ac41b3c5914f8ff7773c8"
+    },
+    "retained_harness_root": "/storage/openpsi/users/fenghui/projects/AReaL-RSI-verifier-20261004/data/verifier-continuation-v1/g5-search/model-candidates/candidate-00/harness",
+    "retained_model_root": "/storage/openpsi/users/fenghui/projects/AReaL-RSI-verifier-20261004/data/verifier-continuation-v1/areal-experiments/checkpoints/root/rsi-shared512-pilot/g4-shared512-2ep-20261003/default/epoch1epochstep15globalstep31",
+    "selected_is_incumbent": false,
+    "stop_on_paired_development_drop": 0.02,
+    "task_set_id": "taskset_02fa6911291112ce814d2cf483f3289f9660f119f6e1d830c11f431263090959"
+  },
+  "limitations": [
+    "Single seeded run with 256 test cases; scores are descriptive, not a statistical significance claim.",
+    "Generations 3–5 use bounded factorial verification after the first generation-3 attempt encountered a verifier timeout; failed records remain unchanged."
+  ],
+  "synthetic_comparison_status": "not_started"
+}

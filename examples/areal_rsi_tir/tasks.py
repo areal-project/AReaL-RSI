@@ -222,7 +222,7 @@ def freeze_shared_tir_task_set(
     seed: int,
     train_count: int = 512,
 ) -> TaskSetVersion:
-    """Freeze a shared training pool and reuse the parent's development pool."""
+    """Freeze one training pool for harness optimization and model training."""
     if type(seed) is not int or seed < 0 or type(train_count) is not int or train_count < 1:
         raise ValueError("Shared task set needs a valid seed and partition sizes")
     parent = load_tir_task_set(parent_root)
@@ -246,7 +246,7 @@ def freeze_shared_tir_task_set(
             "seed": seed,
             "model_train_ids": [case.task_id for case in selected],
             "harness_evolve_ids": [case.task_id for case in selected],
-            "harness_select_ids": list(parent.model_dev.task_ids),
+            "harness_select_ids": [case.task_id for case in selected],
         }
     )
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -258,6 +258,7 @@ def freeze_shared_tir_task_set(
         partitions: dict[RsiSplit, TaskPartition] = {}
         groups = {
             RsiSplit.HARNESS_EVOLVE: selected,
+            RsiSplit.HARNESS_SELECT: selected,
             RsiSplit.MODEL_TRAIN: selected,
         }
         for split in RsiSplit:
@@ -265,13 +266,12 @@ def freeze_shared_tir_task_set(
             if split in groups:
                 partitions[split] = _partition(groups[split], path)
             else:
-                source_split = RsiSplit.MODEL_DEV if split == RsiSplit.HARNESS_SELECT else split
                 write_bytes(
                     path,
-                    _regular_bytes(parent_root / "public" / f"{source_split.value}.jsonl"),
+                    _regular_bytes(parent_root / "public" / f"{split.value}.jsonl"),
                     immutable=True,
                 )
-                partitions[split] = getattr(parent, source_split.value)
+                partitions[split] = getattr(parent, split.value)
         answer_ids = {task_id for split in RsiSplit for task_id in partitions[split].task_ids}
         answer_bytes = json_bytes(
             {task_id: answer for task_id, answer in answers.items() if task_id in answer_ids}
@@ -350,7 +350,7 @@ def load_tir_task_set(root: Path) -> TaskSetVersion:
             or shared.get("harness_evolve_ids") != list(version.harness_evolve.task_ids)
             or shared.get("harness_select_ids") != list(version.harness_select.task_ids)
             or version.harness_evolve.task_ids != version.model_train.task_ids
-            or version.harness_select.task_ids != version.model_dev.task_ids
+            or version.harness_select.task_ids != version.model_train.task_ids
         ):
             raise ValueError("Shared task set provenance changed")
     return version

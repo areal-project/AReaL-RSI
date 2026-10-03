@@ -251,8 +251,9 @@ def test_parallel_agent_selection_uses_best_passing_candidate_and_fallback() -> 
     assert not no_candidates.continue_to_training
 
 
-def test_invalid_same_model_proposal_uses_public_failure_fallback(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("valid", [False, True])
+def test_model_proposal_preserves_valid_output_and_rejects_invalid_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, valid: bool
 ) -> None:
     from areal_rsi_tir import claude_code
     from areal_rsi_tir.tasks import TirSplitSizes, freeze_tir_task_set, public_tir_tasks
@@ -319,11 +320,12 @@ def test_invalid_same_model_proposal_uses_public_failure_fallback(
     )
     baseline_path = tmp_path / "baseline.json"
     baseline_path.write_bytes(json_bytes(baseline))
+    instruction = "Verify the requested quantity and check signs before giving the final answer."
     raw = json_bytes(
         {
             "type": "result",
             "is_error": False,
-            "result": "Let's write Python code to solve an example.",
+            "result": instruction if valid else "Let's write Python code to solve an example.",
             "usage": {"input_tokens": 20, "output_tokens": 12},
             "total_cost_usd": 0.0,
             "duration_ms": 100,
@@ -332,7 +334,7 @@ def test_invalid_same_model_proposal_uses_public_failure_fallback(
     monkeypatch.setattr(claude_code, "_call", lambda *args, **kwargs: raw)
     for index in (0, 1):
         output = tmp_path / f"candidate-{index}"
-        claude_code.propose_claude_harness(
+        arguments = (
             task_root,
             baseline_path,
             harness,
@@ -340,14 +342,20 @@ def test_invalid_same_model_proposal_uses_public_failure_fallback(
             backend,
             "http://127.0.0.1:31950",
             output,
-            proposal_index=index,
         )
+        if valid:
+            claude_code.propose_claude_harness(*arguments, proposal_index=index)
+            candidate = (output / "candidate.txt").read_text()
+            assert "Check arithmetic." in candidate
+            assert instruction in candidate
+        else:
+            with pytest.raises(ValueError, match="not a valid reusable solver instruction"):
+                claude_code.propose_claude_harness(*arguments, proposal_index=index)
+            assert not (output / "candidate.txt").exists()
+            assert not (output / "harness").exists()
         origin = json.loads((output / "proposal-origin.json").read_bytes())
-        candidate = (output / "candidate.txt").read_text()
-        assert origin["origin"] == "public_failure_fallback"
-        assert "Check arithmetic." in candidate
-        assert origin["instruction"] in candidate
-        assert "Python" not in candidate
+        assert origin["origin"] == ("same_model_proposal" if valid else "invalid_model_proposal")
+        assert (output / "proposal.trajectory.jsonl").read_bytes() == raw
         assert (
             len(
                 json.loads((output / "request.json").read_bytes())["public_failure_feedback"][
@@ -356,9 +364,6 @@ def test_invalid_same_model_proposal_uses_public_failure_fallback(
             )
             == 2
         )
-    assert (tmp_path / "candidate-0/candidate.txt").read_bytes() != (
-        tmp_path / "candidate-1/candidate.txt"
-    ).read_bytes()
 
 
 def test_claude_cli_evaluation_records_real_subprocess_trace_and_rejects_drift(

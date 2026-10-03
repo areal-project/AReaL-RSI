@@ -664,27 +664,19 @@ def propose_claude_harness(
             for task in tasks
         )
     )
-    if not valid:
-        instructions = (
-            "Reserve enough output space to state the requested quantity once "
-            "in a final boxed answer.",
-            "Identify the requested quantity before computing and verify "
-            "signs and units before boxing it.",
-            "Use the calculator only for exact arithmetic, then check that "
-            "its result fits the problem.",
-            "Write the shortest valid chain of equations, then finish with a single boxed answer.",
-        )[proposal_index % 4]
     write_bytes(
         output_root / "proposal-origin.json",
         json_bytes(
             {
-                "origin": "same_model_proposal" if valid else "public_failure_fallback",
+                "origin": "same_model_proposal" if valid else "invalid_model_proposal",
                 "instruction": instructions,
                 "proposal_trajectory_digest": digest_bytes(raw),
             }
         ),
         immutable=True,
     )
+    if not valid:
+        raise ValueError("Model proposal is not a valid reusable solver instruction")
     incumbent_prefix = template.split("User: {prompt}", 1)[0].rstrip()
     candidate = (
         incumbent_prefix

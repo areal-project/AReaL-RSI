@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT=/storage/openpsi/users/fenghui/projects/AReaL-RSI-shared512-20261003
+ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 AREAL=/storage/openpsi/users/fenghui/projects/AReaL-dev-0928
 IMAGE=/storage/openpsi/images/areal-dev-sglang-0821.sif
 PYTHON=/storage/openpsi/users/fenghui/rsi-tir-0929/venv/bin/python

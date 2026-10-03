@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT=/storage/openpsi/users/fenghui/projects/AReaL-RSI-shared512-20261003
+ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 MAIN=/storage/openpsi/users/fenghui/projects/AReaL-RSI-dev-0928
 SYNTH=/storage/openpsi/users/fenghui/projects/AReaL-RSI-synth-20261002
 AREAL=/storage/openpsi/users/fenghui/projects/AReaL-dev-0928
@@ -27,7 +27,7 @@ task_set = load_tir_task_set(Path(sys.argv[1]))
 assert len(task_set.model_train.task_ids) == 512
 assert len(task_set.model_dev.task_ids) == 256
 assert task_set.harness_evolve == task_set.model_train
-assert task_set.harness_select == task_set.model_dev
+assert task_set.harness_select == task_set.model_train
 write_bytes(Path(sys.argv[1]).parent / 'plan-loop-v1.json', json_bytes({
     'task_set_id': task_set.task_set_id,
     'training_cases': 512,

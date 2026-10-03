@@ -70,12 +70,12 @@ class TaskSetVersion:
         train = set(self.model_train.task_ids)
         dev = set(self.model_dev.task_ids)
         sealed = set(self.sealed_test.task_ids)
-        # Harness evolution may share model_train; Harness selection may share
-        # model_dev. Training and development remain disjoint, as does monitoring.
+        # All harness optimization may share the same training pool. Evaluation
+        # questions must never participate in generation, selection, or training.
+        shared_training = self.harness_evolve == self.harness_select == self.model_train
         if (
-            evolve & select
-            or dev & (evolve | train | sealed)
-            or select & train
+            (not shared_training and (evolve & select or select & train))
+            or dev & (evolve | select | train | sealed)
             or sealed & (evolve | select | train)
         ):
             raise ValueError("Task IDs overlap across protected frozen splits")

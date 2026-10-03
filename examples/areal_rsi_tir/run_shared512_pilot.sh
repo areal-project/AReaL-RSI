@@ -7,16 +7,18 @@ AREAL=/storage/openpsi/users/fenghui/projects/AReaL-dev-0928
 IMAGE=/storage/openpsi/images/areal-dev-sglang-0821.sif
 PYTHON=/storage/openpsi/users/fenghui/rsi-tir-0929/venv/bin/python
 CLAUDE=/storage/openpsi/users/fenghui/claude
-MODEL=/storage/openpsi/models/Qwen__Qwen2.5-Math-1.5B
-DATA=$ROOT/data/trainonly-v2
-TASKS=$DATA/taskset-v2
-PROMPT=$MAIN/data/claude-unified-1p5b-2epoch/g1-current-search/incumbent-harness/prompt.txt
+PARENT=/storage/openpsi/users/fenghui/projects/AReaL-RSI-trainonly-20261003/data/trainonly-v2
+MODEL=$PARENT/areal-experiments/checkpoints/root/rsi-shared512-pilot/g2-shared512-2ep-20261003/default/epoch1epochstep15globalstep31
+DATA=$ROOT/data/verifier-continuation-v1
+TASKS=$PARENT/taskset-v2
+PROMPT=$PARENT/g2-eval/m1-selected-dev/harness/prompt.txt
 
 export PYTHONPATH="$AREAL:$ROOT/src:$ROOT/examples"
 export NO_PROXY='*' no_proxy='*' HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
 cd "$ROOT"
-"$PYTHON" - "$TASKS" <<'PY'
+"$PYTHON" - "$TASKS" "$DATA" "$PARENT/g2-eval/decision.json" <<'PY'
+import hashlib
 import sys
 from pathlib import Path
 from areal_rsi.api.control import json_bytes
@@ -27,7 +29,11 @@ assert len(task_set.model_train.task_ids) == 512
 assert len(task_set.model_dev.task_ids) == 256
 assert task_set.harness_evolve == task_set.model_train
 assert task_set.harness_select == task_set.model_train
-write_bytes(Path(sys.argv[1]).parent / 'plan-loop-v1.json', json_bytes({
+write_bytes(Path(sys.argv[2]) / 'plan-loop-v1.json', json_bytes({
+    'first_generation': 3,
+    'parent_decision_path': sys.argv[3],
+    'parent_decision_digest': 'sha256:' + hashlib.sha256(Path(sys.argv[3]).read_bytes()).hexdigest(),
+    'continuation_reason': 'Re-evaluate generation 3 after exact factorial comparison repair.',
     'task_set_id': task_set.task_set_id,
     'training_cases': 512,
     'test_cases': 256,
@@ -41,7 +47,7 @@ write_bytes(Path(sys.argv[1]).parent / 'plan-loop-v1.json', json_bytes({
 }), immutable=True)
 PY
 
-for GENERATION in 1 2 3 4 5 6; do
+for GENERATION in 3 4 5 6; do
 SEARCH=$DATA/g${GENERATION}-search
 EVAL=$DATA/g${GENERATION}-eval
 CONFIG=$DATA/train-g${GENERATION}-2ep.yaml

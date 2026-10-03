@@ -84,7 +84,7 @@ config['actor']['scheduling_spec'][0]['env_vars']['PYTHONPATH'] = ':'.join(
 write_bytes(config_path, yaml.safe_dump(config, sort_keys=False).encode(), immutable=True)
 task_set = load_tir_task_set(tasks)
 harness, _ = load_claude_harness(selected, Path('/storage/openpsi/users/fenghui/claude'), model)
-decision = json.loads((search / 'candidates/decision.json').read_bytes())
+decision = json.loads((search / 'model-candidates/decision.json').read_bytes())
 if decision['selected_harness_id'] != harness.harness_id:
     raise ValueError('Selected Harness differs from frozen search')
 def digest(path):
@@ -96,7 +96,7 @@ lock = {
     'harness_id': harness.harness_id,
     'selected_harness_root': str(selected),
     'training_config_digest': digest(config_path),
-    'search_decision_digest': digest(search / 'candidates/decision.json'),
+    'search_decision_digest': digest(search / 'model-candidates/decision.json'),
     'experiment_plan_digest': digest(tasks.parent / 'plan-loop-v1.json'),
     'decision_source_digests': {name: digest(main / 'data/claude-unified-1p5b' / name) for name in (
         'decide-next-generation.py', 'g1-c10-plan.json', 'plan-native4k-v2.json',

@@ -654,30 +654,8 @@ def propose_claude_harness(
         raise ValueError("Proposal completion model, count, or termination differs")
     instructions = decode(str, choices[0].get("text"))
     instructions = " ".join(instructions.split())
-    first_word = instructions.split(" ", 1)[0].rstrip(".,:").casefold()
     valid = (
         5 <= len(instructions.split()) <= 30
-        and first_word
-        in {
-            "always",
-            "carefully",
-            "double-check",
-            "focus",
-            "provide",
-            "box",
-            "check",
-            "compute",
-            "confirm",
-            "finish",
-            "identify",
-            "keep",
-            "reserve",
-            "solve",
-            "state",
-            "use",
-            "verify",
-            "write",
-        }
         and not any(character in instructions for character in '{}\\"`')
         and not re.search(r"\b(?:code|python|today|print|example)\b", instructions, re.I)
         and not any(

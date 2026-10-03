@@ -57,16 +57,16 @@ done
   --baseline-evolve "$OUT/h0-evolve.json" \
   --baseline-select "$OUT/h0-select.json" \
   --baseline-repeat "$OUT/h0-repeat.json" \
-  --output-root "$OUT/candidates" --candidate-count 4 \
+  --output-root "$OUT/model-candidates" --candidate-count 4 \
   --workers-per-candidate 1 --on-no-improvement reuse
 SELECTED=$("$PYTHON" - "$OUT" <<'PY'
 import json
 import sys
 from pathlib import Path
 root = Path(sys.argv[1])
-decision = json.loads((root / 'candidates/decision.json').read_bytes())
+decision = json.loads((root / 'model-candidates/decision.json').read_bytes())
 selected_id = decision['selected_harness_id']
-choices = [root / 'incumbent-harness'] + sorted((root / 'candidates').glob('candidate-*/harness'))
+choices = [root / 'incumbent-harness'] + sorted((root / 'model-candidates').glob('candidate-*/harness'))
 selected = [path for path in choices if (path / 'manifest.json').is_file()
             and json.loads((path / 'manifest.json').read_bytes())['harness_id'] == selected_id]
 if len(selected) != 1 or not decision['continue_to_training']:

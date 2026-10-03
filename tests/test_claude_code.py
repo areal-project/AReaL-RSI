@@ -251,9 +251,16 @@ def test_parallel_agent_selection_uses_best_passing_candidate_and_fallback() -> 
     assert not no_candidates.continue_to_training
 
 
-@pytest.mark.parametrize("valid", [False, True])
+@pytest.mark.parametrize(
+    ("instruction", "valid"),
+    [
+        ("Review work for accuracy and completeness before submitting.", True),
+        ("Read the problem statement carefully and ensure all parts are answered.", True),
+        ("Let's write Python code to solve an example.", False),
+    ],
+)
 def test_model_proposal_preserves_valid_output_and_rejects_invalid_output(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, valid: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, instruction: str, valid: bool
 ) -> None:
     from areal_rsi_tir import claude_code
     from areal_rsi_tir.tasks import TirSplitSizes, freeze_tir_task_set, public_tir_tasks
@@ -320,7 +327,6 @@ def test_model_proposal_preserves_valid_output_and_rejects_invalid_output(
     )
     baseline_path = tmp_path / "baseline.json"
     baseline_path.write_bytes(json_bytes(baseline))
-    instruction = "Verify the requested quantity and check signs before giving the final answer."
     raw = json_bytes(
         {
             "model": "qwen-test",

@@ -54,6 +54,21 @@ def test_large_integer_comparison_has_exact_inequality_fallback() -> None:
     assert strict_math_reward(tower, tower) == 1.0
 
 
+def test_nested_factorial_comparison_does_not_expand_huge_integer() -> None:
+    pytest.importorskip("math_verify")
+    assert strict_math_reward(r"\boxed{11!!}", r"\boxed{2}") == 0.0
+    assert strict_math_reward(r"\boxed{3!}", r"\boxed{6}") == 1.0
+    sympy = pytest.importorskip("sympy")
+    from areal_rsi_tir.verifier import _integer_bound_counterexample
+
+    for argument, expected in [(0, 1), (1, 1), (3, 6)]:
+        value = sympy.factorial(argument, evaluate=False)
+        assert not _integer_bound_counterexample(sympy.Integer(expected), value)
+    assert not _integer_bound_counterexample(
+        sympy.Integer(2), sympy.factorial(sympy.Symbol("n"), evaluate=False)
+    )
+
+
 def test_integer_bounds_do_not_confuse_zero_or_negative_powers() -> None:
     sympy = pytest.importorskip("sympy")
     from areal_rsi_tir.verifier import _integer_bound_counterexample

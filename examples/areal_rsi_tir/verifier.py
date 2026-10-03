@@ -57,12 +57,27 @@ def _constant_counterexample(expected: Any, actual: Any) -> bool:
 
 def _capped_nonnegative_integer(expression: Any, cap: int, depth: int = 64) -> int | None:
     """Return min(expression, cap) for nonnegative integer arithmetic, or unknown."""
-    from sympy import Add, Integer, Mul, Pow
+    from sympy import Add, Integer, Mul, Pow, factorial
 
     if depth == 0:
         return None
     if isinstance(expression, Integer):
         return min(int(expression), cap) if expression >= 0 else None
+    if isinstance(expression, factorial):
+        # Find the smallest n with n! >= cap without expanding the argument.
+        threshold, value = 0, 1
+        while value < cap:
+            threshold += 1
+            value *= threshold
+        argument = _capped_nonnegative_integer(expression.args[0], threshold, depth - 1)
+        if argument is None:
+            return None
+        if argument == threshold:
+            return cap
+        value = 1
+        for factor in range(2, argument + 1):
+            value *= factor
+        return value
     if isinstance(expression, (Add, Mul)):
         addition = isinstance(expression, Add)
         value = 0 if addition else 1

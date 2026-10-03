@@ -3,7 +3,6 @@ set -euo pipefail
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 MAIN=/storage/openpsi/users/fenghui/projects/AReaL-RSI-dev-0928
-SYNTH=/storage/openpsi/users/fenghui/projects/AReaL-RSI-synth-20261002
 AREAL=/storage/openpsi/users/fenghui/projects/AReaL-dev-0928
 IMAGE=/storage/openpsi/images/areal-dev-sglang-0821.sif
 PYTHON=/storage/openpsi/users/fenghui/rsi-tir-0929/venv/bin/python
@@ -106,6 +105,9 @@ lock = {
         'src/areal_rsi/api/records.py',
         'examples/areal_rsi_tir/tasks.py',
         'examples/areal_rsi_tir/claude_code.py',
+        'examples/areal_rsi_tir/claude_backend.py',
+        'examples/areal_rsi_tir/run_shared512_search.sh',
+        'examples/areal_rsi_tir/run_shared512_eval.sh',
         'examples/areal_rsi_tir/claude_train.py',
         'examples/areal_rsi_tir/run_shared512_pilot.sh',
     )},
@@ -193,5 +195,3 @@ write_bytes(output, json_bytes({
     'task_set_root': str(tasks),
 }), immutable=True)
 PY
-export RSI_RETAINED_STATE_PATH="$EVAL/retained-state.json"
-bash "$SYNTH/data/synthetic-experiment/run-after-loop.sh"

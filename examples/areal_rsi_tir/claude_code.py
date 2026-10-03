@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
 
-from areal_rsi.api.control import json_bytes, read_record, safe_name
+from areal_rsi.api.control import decode, json_bytes, read_record, safe_name
 from areal_rsi.api.records import (
     AgentCaseRecord,
     AgentEvaluationReport,
@@ -38,7 +38,7 @@ from areal_rsi_tir.assets import (
     source_files_digest,
     tir_verifier_files,
 )
-from areal_rsi_tir.claude_backend import local_adapter
+from areal_rsi_tir.claude_backend import complete_instruction, local_adapter
 from areal_rsi_tir.harness import validate_tir_prompt
 from areal_rsi_tir.harness_selection import select_agent_harnesses
 from areal_rsi_tir.tasks import load_tir_task_set, public_tir_tasks
@@ -604,14 +604,16 @@ def propose_claude_harness(
         "write only essential equations before the final boxed result",
     )[proposal_index % 4]
     request = (
-        "System: You edit the instructions of a math-solving agent. "
-        "Do not solve any math problem. Reply with exactly one short imperative sentence "
-        "in English, without markup or explanation.\n"
-        "Write one new instruction for the solver. Keep its calculator available. "
-        f"Public failure summary: {len(sampled)} incorrect answers; "
-        f"{missing_box} omitted a boxed final answer and {wrong_box} boxed an incorrect answer. "
-        f"Focus on how to {focus}.\n"
-        "Instruction:"
+        "A guide to improving mathematical problem solving.\n\n"
+        "Observed error: The solution rounds intermediate calculations "
+        "and gets an inaccurate answer.\n"
+        "Advice: Keep intermediate values exact and round only the final answer.\n\n"
+        "Observed error: The solution stops before stating its conclusion.\n"
+        "Advice: State the requested final answer clearly after completing the calculation.\n\n"
+        f"Observed error: {len(sampled)} incorrect answers; "
+        f"{missing_box} omitted a boxed final answer and {wrong_box} boxed an incorrect answer.\n"
+        f"Review focus: {focus}.\n"
+        "Advice:"
     )
     output_root.mkdir(parents=True)
     write_bytes(
@@ -621,6 +623,9 @@ def propose_claude_harness(
                 "baseline_report_digest": digest_bytes(baseline_path.read_bytes()),
                 "harness_id": spec.harness_id,
                 "proposal_index": proposal_index,
+                "proposer_transport": "local_text_completion",
+                "model": spec.model,
+                "sampling_seed": 1700 + proposal_index,
                 "public_failure_feedback": {
                     "sampled_task_ids": [case.task_id for case in sampled],
                     "missing_box": missing_box,
@@ -631,10 +636,23 @@ def propose_claude_harness(
         ),
         immutable=True,
     )
-    calculator = Path(__file__).with_name("claude_calculator.py")
-    raw = _call(executable, spec, request, calculator, python, backend_url)
-    write_bytes(output_root / "proposal.trajectory.jsonl", raw, immutable=True)
-    instructions, _, _, _, _ = _result(raw)
+    raw = complete_instruction(
+        backend_url,
+        spec.model,
+        request,
+        seed=1700 + proposal_index,
+        timeout=spec.timeout_seconds,
+    )
+    write_bytes(output_root / "proposal.response.json", raw, immutable=True)
+    response = decode(dict[str, Any], json.loads(raw))
+    choices = decode(list[dict[str, Any]], response.get("choices"))
+    if (
+        response.get("model") != spec.model
+        or len(choices) != 1
+        or choices[0].get("finish_reason") != "stop"
+    ):
+        raise ValueError("Proposal completion model, count, or termination differs")
+    instructions = decode(str, choices[0].get("text"))
     instructions = " ".join(instructions.split())
     first_word = instructions.split(" ", 1)[0].rstrip(".,:").casefold()
     valid = (
@@ -642,6 +660,10 @@ def propose_claude_harness(
         and first_word
         in {
             "always",
+            "carefully",
+            "double-check",
+            "focus",
+            "provide",
             "box",
             "check",
             "compute",
@@ -670,7 +692,7 @@ def propose_claude_harness(
             {
                 "origin": "same_model_proposal" if valid else "invalid_model_proposal",
                 "instruction": instructions,
-                "proposal_trajectory_digest": digest_bytes(raw),
+                "proposal_response_digest": digest_bytes(raw),
             }
         ),
         immutable=True,

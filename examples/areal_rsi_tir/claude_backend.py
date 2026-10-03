@@ -9,9 +9,51 @@ from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 from typing import Any
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener, urlopen
+
+from areal_rsi.api.control import json_bytes
+
+
+def complete_instruction(
+    backend_url: str, model: str, prompt: str, *, seed: int, timeout: float
+) -> bytes:
+    """Sample a base-model continuation from the same local inference service."""
+    parsed = urlparse(backend_url)
+    if (
+        parsed.scheme != "http"
+        or parsed.hostname not in {"127.0.0.1", "localhost"}
+        or parsed.username
+        or parsed.password
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("Proposal completion requires a local HTTP backend")
+    request = Request(
+        backend_url.rstrip("/") + "/v1/completions",
+        data=json_bytes(
+            {
+                "model": model,
+                "prompt": prompt,
+                "max_tokens": 96,
+                "temperature": 0.6,
+                "seed": seed,
+                "stop": ["\n"],
+                "stream": False,
+            }
+        ),
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with build_opener(ProxyHandler({})).open(request, timeout=timeout) as response:
+            raw = response.read(1024 * 1024 + 1)
+    except (URLError, TimeoutError) as error:
+        raise ValueError("Local proposal completion failed") from error
+    if not isinstance(raw, bytes) or len(raw) > 1024 * 1024:
+        raise ValueError("Local proposal response exceeds its size limit")
+    return raw
 
 
 def adapt_messages(

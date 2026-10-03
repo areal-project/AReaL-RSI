@@ -323,15 +323,18 @@ def test_model_proposal_preserves_valid_output_and_rejects_invalid_output(
     instruction = "Verify the requested quantity and check signs before giving the final answer."
     raw = json_bytes(
         {
-            "type": "result",
-            "is_error": False,
-            "result": instruction if valid else "Let's write Python code to solve an example.",
-            "usage": {"input_tokens": 20, "output_tokens": 12},
-            "total_cost_usd": 0.0,
-            "duration_ms": 100,
+            "model": "qwen-test",
+            "choices": [
+                {
+                    "text": instruction
+                    if valid
+                    else "Let's write Python code to solve an example.",
+                    "finish_reason": "stop",
+                }
+            ],
         }
     )
-    monkeypatch.setattr(claude_code, "_call", lambda *args, **kwargs: raw)
+    monkeypatch.setattr(claude_code, "complete_instruction", lambda *args, **kwargs: raw)
     for index in (0, 1):
         output = tmp_path / f"candidate-{index}"
         arguments = (
@@ -355,7 +358,7 @@ def test_model_proposal_preserves_valid_output_and_rejects_invalid_output(
             assert not (output / "harness").exists()
         origin = json.loads((output / "proposal-origin.json").read_bytes())
         assert origin["origin"] == ("same_model_proposal" if valid else "invalid_model_proposal")
-        assert (output / "proposal.trajectory.jsonl").read_bytes() == raw
+        assert (output / "proposal.response.json").read_bytes() == raw
         assert (
             len(
                 json.loads((output / "request.json").read_bytes())["public_failure_feedback"][

@@ -70,11 +70,12 @@ class TaskSetVersion:
         train = set(self.model_train.task_ids)
         dev = set(self.model_dev.task_ids)
         sealed = set(self.sealed_test.task_ids)
-        # Harness search may use predeclared subsets of model_train. Development
-        # and sealed monitoring remain disjoint from every training/search split.
+        # Harness evolution may share model_train; Harness selection may share
+        # model_dev. Training and development remain disjoint, as does monitoring.
         if (
             evolve & select
-            or dev & (evolve | select | train | sealed)
+            or dev & (evolve | train | sealed)
+            or select & train
             or sealed & (evolve | select | train)
         ):
             raise ValueError("Task IDs overlap across protected frozen splits")

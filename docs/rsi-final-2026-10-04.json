@@ -1,0 +1,256 @@
+{
+  "date": "2026-10-04",
+  "status": "completed",
+  "source_commit": "d089e24eeb7abc13e125b4c4f5e63f2366302bb6",
+  "model_family": "Qwen2.5-Math-1.5B",
+  "harness": "Claude Code",
+  "train_cases": 512,
+  "test_cases": 256,
+  "epochs_per_training": 2,
+  "rsi_generations": [
+    {
+      "generation": 1,
+      "candidate_correct_out_of_512": [
+        10.0,
+        13.0,
+        5.0,
+        9.0
+      ],
+      "reused_incumbent": true,
+      "test_correct_out_of_256": 2.0,
+      "decision": "continue_to_generation_2",
+      "decision_path": "/storage/openpsi/users/fenghui/projects/AReaL-RSI-trainonly-20261003/data/trainonly-v2/g1-eval/decision.json",
+      "decision_digest": "sha256:691627a363de6fbffb9a43d21e2b5b1dcb96275ccac8ab160d723bbae23d4aa2"
+    },
+    {
+      "generation": 2,
+      "candidate_correct_out_of_512": [
+        7.0,
+        2.0,
+        5.0,
+        6.0
+      ],
+      "reused_incumbent": true,
+      "test_correct_out_of_256": 51.0,
+      "decision": "continue_to_generation_3",
+      "decision_path": "/storage/openpsi/users/fenghui/projects/AReaL-RSI-trainonly-20261003/data/trainonly-v2/g2-eval/decision.json",
+      "decision_digest": "sha256:ba9598f56bcefcc278a7777f2158b6f8e2d3d80d64ad1100ef5634c2014e92f8"
+    },
+    {
+      "generation": 3,
+      "candidate_correct_out_of_512": [
+        113.0,
+        118.0,
+        123.0,
+        130.0
+      ],
+      "reused_incumbent": false,
+      "test_correct_out_of_256": 50.0,
+      "decision": "continue_to_generation_4",
+      "decision_path": "/storage/openpsi/users/fenghui/projects/AReaL-RSI-verifier-20261004/data/verifier-continuation-v1/g3-eval/decision.json",
+      "decision_digest": "sha256:05178e16058f677a5dd49beb8a34757fe7c3ee3888beb3bc5f5a717d5b688c1d"
+    },
+    {
+      "generation": 4,
+      "candidate_correct_out_of_512": [
+        146.0,
+        148.0,
+        161.0,
+        164.0
+      ],
+      "reused_incumbent": true,
+      "test_correct_out_of_256": 46.0,
+      "decision": "continue_to_generation_5",
+      "decision_path": "/storage/openpsi/users/fenghui/projects/AReaL-RSI-verifier-20261004/data/verifier-continuation-v1/g4-eval/decision.json",
+      "decision_digest": "sha256:cbaa4e38c37fcef2766c628669e8a8737e4d26fd20d254a2b715ef71aec84a05"
+    },
+    {
+      "generation": 5,
+      "candidate_correct_out_of_512": [
+        174.0,
+        170.0,
+        155.0,
+        164.0
+      ],
+      "reused_incumbent": false,
+      "test_correct_out_of_256": 38.0,
+      "decision": "stop_weight_loop",
+      "decision_path": "/storage/openpsi/users/fenghui/projects/AReaL-RSI-verifier-20261004/data/verifier-continuation-v1/g5-eval/decision.json",
+      "decision_digest": "sha256:0892331028c2588420b211760226312a80c8c9e06183fc3562762c6a9624b75a"
+    }
+  ],
+  "terminal_state": {
+    "correct_counts": {
+      "m0_h0": 45.0,
+      "m0_selected": 49.0,
+      "m1_h0": 39.0,
+      "m1_selected": 38.0
+    },
+    "decision": "stop_weight_loop",
+    "development_cases": 256,
+    "generation": 5,
+    "paired_selected_harness_delta": -0.04296875,
+    "report_digests": {
+      "m0_h0": "sha256:9f66b6f1b35ad9b7e953dbab7e6fdde59e71676c0e4c5384a6d9954637f6bf9d",
+      "m0_selected": "sha256:2f865229c5d5c26e6a4bcd073d10a963390fc4567c4c0d13b8cbafc5ead73bdd",
+      "m1_h0": "sha256:179de3fa17384d258093ecdb8995e3b76847d5f145451e722a3db8dad7533941",
+      "m1_selected": "sha256:ccb4f76385e3daf8376800b74b8f090f3c9330d4e18ac41b3c5914f8ff7773c8"
+    },
+    "retained_harness_root": "/storage/openpsi/users/fenghui/projects/AReaL-RSI-verifier-20261004/data/verifier-continuation-v1/g5-search/model-candidates/candidate-00/harness",
+    "retained_model_root": "/storage/openpsi/users/fenghui/projects/AReaL-RSI-verifier-20261004/data/verifier-continuation-v1/areal-experiments/checkpoints/root/rsi-shared512-pilot/g4-shared512-2ep-20261003/default/epoch1epochstep15globalstep31",
+    "selected_is_incumbent": false,
+    "stop_on_paired_development_drop": 0.02,
+    "task_set_id": "taskset_02fa6911291112ce814d2cf483f3289f9660f119f6e1d830c11f431263090959"
+  },
+  "paired_experiment": {
+    "paired_verifier_digest": "sha256:5771723919bb675e15f46c3840c7ffb8e4dd8a0503ad1067ed8f6c13a7a11e5a",
+    "postloop_training_task_set_generation": 5,
+    "retained_generation": 4,
+    "test_cases": 256,
+    "test_control_correct": 38.0,
+    "test_control_report_digest": "sha256:a4444cd01baf07c715d86bee1df15607f8d4485bf1a992dc735537a25a7f1cb7",
+    "test_decision_digest": "sha256:c03cf7b6e883d6c4af2d260d137c1e1ba2be12b411d9d21f11ee9d4fb9420bde",
+    "test_synthetic_correct": 49.0,
+    "test_synthetic_report_digest": "sha256:95b5ac6edab2df00dd1213e8a670454131815b45338f1ce22db9c7cade1a827b"
+  },
+  "synthetic_minus_control_percentage_points": 4.296875,
+  "synthetic_provenance": {
+    "families": {
+      "discount": 130,
+      "linear": 74,
+      "machines": 50,
+      "ratio": 35,
+      "rectangle": 32,
+      "remaining_fraction": 88,
+      "sequence": 52,
+      "tickets": 51
+    },
+    "generator_source_digest": "sha256:c51a4328ccaf5f75d43e868160c27d48edc706238f39176a7ba29a0541aaf869",
+    "original_train_cases": 0,
+    "parent_task_set_id": "taskset_02fa6911291112ce814d2cf483f3289f9660f119f6e1d830c11f431263090959",
+    "probe_report_digests": [
+      "sha256:11f83743d54772ec68bcab8241f2f5712f49a1f2c8c8fe06ba9672906a29329c",
+      "sha256:bf8497d7cee5221fbeb1fd7c415bea42e8d8f049a6922bf3bc977de7efa5c220",
+      "sha256:f41b5e142ce4112703504a90d2757de3e0ba6604a7f4d552dc236f3494d67603",
+      "sha256:5a06e497c98285d49c27793cd36a7b1efdcdaf6c698252e088925ce2b5e78b79"
+    ],
+    "probe_task_set_ids": [
+      "taskset_1faa391a8c359afcadd4ba6bd25590cca28aa75f4bdab740f3c16ff37ca39adf",
+      "taskset_05ac2bae2e871010b4ddd02fbc01d52bb8b8c55f9e18a2d1a7bb75ec2a2abefb"
+    ],
+    "seed": 20261002,
+    "selected_pass_counts_zero_one": [
+      0,
+      512
+    ],
+    "synthetic_source_digest": "sha256:0bcba828270ec11c2d6d63cc71971a5f01863b7506ea2c032f42e7f8361950bc",
+    "synthetic_train_cases": 512
+  },
+  "paired_plan": "/storage/openpsi/users/fenghui/projects/AReaL-RSI-paired-20261004/data/synthetic-experiment/plan-v1.json",
+  "paired_plan_digest": "sha256:69a0de1f37c3b686f4ca97e056326000bd08417ce6e11fd68f7c568e7247814b",
+  "requirement_evidence": {
+    "one_model": {
+      "verified": "All twenty branch reports use the generation training model; both final checkpoints have the 1.5B architecture.",
+      "generation_configs": [
+        {
+          "generation": 1,
+          "config": "/storage/openpsi/users/fenghui/projects/AReaL-RSI-trainonly-20261003/data/trainonly-v2/train-g1-2ep.yaml",
+          "config_digest": "sha256:d59e2050458bf02d3b2afb1fc4c21fe2267951b73c54585cdc848ad8da3fa7b0",
+          "epochs": 2,
+          "updates": 32,
+          "training_model_matches_search": true
+        },
+        {
+          "generation": 2,
+          "config": "/storage/openpsi/users/fenghui/projects/AReaL-RSI-trainonly-20261003/data/trainonly-v2/train-g2-2ep.yaml",
+          "config_digest": "sha256:64631c4c3f5c87ff3fc537817021a79f67b68cac7a817ff78695389cab88a696",
+          "epochs": 2,
+          "updates": 32,
+          "training_model_matches_search": true
+        },
+        {
+          "generation": 3,
+          "config": "/storage/openpsi/users/fenghui/projects/AReaL-RSI-verifier-20261004/data/verifier-continuation-v1/train-g3-2ep.yaml",
+          "config_digest": "sha256:c1c6d58290d0235813df520dddd7451db18bc8fb1920581e4681d4eae6d6c76b",
+          "epochs": 2,
+          "updates": 32,
+          "training_model_matches_search": true
+        },
+        {
+          "generation": 4,
+          "config": "/storage/openpsi/users/fenghui/projects/AReaL-RSI-verifier-20261004/data/verifier-continuation-v1/train-g4-2ep.yaml",
+          "config_digest": "sha256:48472d879beb492ad4a25ec8b1219bbe2e9edda646168329277d2442e2515b21",
+          "epochs": 2,
+          "updates": 32,
+          "training_model_matches_search": true
+        },
+        {
+          "generation": 5,
+          "config": "/storage/openpsi/users/fenghui/projects/AReaL-RSI-verifier-20261004/data/verifier-continuation-v1/train-g5-2ep.yaml",
+          "config_digest": "sha256:b6c0af7f31fcd0bcc83f50efa9eadc822b3f1b4d7fc614c72245e66ae6d667a4",
+          "epochs": 2,
+          "updates": 32,
+          "training_model_matches_search": true
+        }
+      ]
+    },
+    "loop_limit": {
+      "maximum": 6,
+      "completed": 5,
+      "stop": "Generation 5 selected harness: 49/256 before training, 38/256 after training; drop 4.296875pp exceeds frozen 2pp threshold."
+    },
+    "parallel_harnesses": {
+      "branches": 4,
+      "implementation": "examples/areal_rsi_tir/claude_code.py: search uses ThreadPoolExecutor(max_workers=candidate_count)",
+      "selection": "Highest scoring candidate that passes improvement/noise and cost gates",
+      "default_no_improvement": "reuse",
+      "alternative": "stop",
+      "behavior_test": "tests/test_claude_code.py::test_parallel_agent_selection_uses_best_passing_candidate_and_fallback"
+    },
+    "commit_before_synthesis": {
+      "verified_rerun_commit": "d86337f",
+      "subsequent_synthesis_commit": "f6b068b"
+    },
+    "independent_synthesis_module": "examples/areal_rsi_tir/synthesis.py",
+    "pipeline_integration": "examples/areal_rsi_tir/synthetic_experiment.py",
+    "difficulty": "Two same-model probes; exclude both-correct and execution failures; all selected 512 had exactly one correct response.",
+    "split_invariants": "Synthetic evolve/select/train files identical (512); original test256 byte-identical; 0 original training questions mixed into synthetic arm.",
+    "paired_report_verification": "verify_locks() and compare_reports(MODEL_DEV) passed: source/config/calibration locks, ordered test IDs, expected checkpoints, same prompt, Claude executable and verifier.",
+    "training_completion": "Both arms logged Epoch 2/2, Train step 32/32 done, Training completes; final checkpoints and reports present.",
+    "make_check": {
+      "result": "passed",
+      "tests_passed": 46,
+      "tests_skipped": 4,
+      "skip_reason": "AREAL_CHECKOUT not configured",
+      "log": "/tmp/rsi-paired-final-check.log"
+    },
+    "original_workflow_alignment": {
+      "reference_config": "/storage/openpsi/users/fenghui/projects/AReaL-RSI-dev-0928/data/torl-generation5/areal-experiments/logs/root/rsi-tir-0929/rsi_torl_generation5_train_20260930/config.yaml",
+      "shared_settings": [
+        "batch_size=32",
+        "n_samples=4",
+        "max_new_tokens=512",
+        "temperature=1.0",
+        "Adam lr=1.7e-5, weight_decay=0.017",
+        "eps_clip=0.4",
+        "reward_scaling=10",
+        "kl_ctl=0"
+      ],
+      "requested_changes": [
+        "model=Qwen2.5-Math-1.5B",
+        "512 shared training cases",
+        "2 epochs",
+        "Claude Code harness",
+        "4 parallel candidates"
+      ]
+    }
+  },
+  "limitations": [
+    "Single seeded run with 256 test cases; scores are descriptive, not a statistical significance claim.",
+    "Generations 3–5 use bounded factorial verification after the first generation-3 attempt encountered a verifier timeout; failed records remain unchanged.",
+    "Synthetic versus control is one post-loop paired comparison, not multiple synthetic RSI generations.",
+    "Generation-5 retained model+harness scored 49/256 before paired training; synthetic matches that descriptive score, while control scores lower.",
+    "Initial 3072 candidates plus 256 targeted supplements were completed; adaptive initial1024/top-up stopping has been discussed but is not implemented by this frozen experiment."
+  ],
+  "conclusion": "Pure synthetic512: 49/256 (19.14%); original512: 38/256 (14.84%); +11 questions, +4.30 percentage points in this single comparison."
+}

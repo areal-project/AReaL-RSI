@@ -353,6 +353,24 @@ def load_tir_task_set(root: Path) -> TaskSetVersion:
             or version.harness_select.task_ids != version.model_train.task_ids
         ):
             raise ValueError("Shared task set provenance changed")
+    derivation_path = root / "private" / "train-derivation.json"
+    provenance_path = root / "synthetic-provenance.json"
+    synthetic_source_path = root / "private" / "synthetic-source.jsonl"
+    synthetic_paths = (derivation_path, provenance_path, synthetic_source_path)
+    if any(path.exists() for path in synthetic_paths):
+        if not all(path.exists() for path in synthetic_paths):
+            raise ValueError("Synthetic training derivation is incomplete")
+        derivation_bytes = _regular_bytes(derivation_path)
+        derivation = json.loads(derivation_bytes)
+        provenance_bytes = _regular_bytes(provenance_path)
+        synthetic_source = _regular_bytes(synthetic_source_path)
+        if (
+            not isinstance(derivation, dict)
+            or _sha256(derivation_bytes) != version.source_train_digest
+            or derivation.get("provenance_digest") != _sha256(provenance_bytes)
+            or derivation.get("synthetic_source_digest") != _sha256(synthetic_source)
+        ):
+            raise ValueError("Synthetic training derivation changed")
     return version
 
 

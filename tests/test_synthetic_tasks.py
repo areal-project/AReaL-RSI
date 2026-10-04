@@ -187,3 +187,38 @@ def test_fractional_linear_answers_satisfy_unique_equations() -> None:
         assert coefficient != 0
         expected = (rhs - Fraction(b, d) + Fraction(e, f)) / coefficient
         assert Fraction(item.case.answer) == expected
+
+
+def test_supplement_answers_follow_ratio_and_production_constraints() -> None:
+    from areal_rsi_tir.synthesis import synthesize_tir_supplement
+
+    cases = synthesize_tir_supplement(seed=20261004)
+    assert len(cases) == len({item.case.task_id for item in cases}) == 256
+    assert cases == synthesize_tir_supplement(seed=20261004)
+    for item in cases:
+        q = item.case.question
+        if item.family.value == "ratio":
+            values = list(map(int, re.findall(r"\d+", q)))
+            red, blue, added, after_red, after_blue = values
+            total = Fraction(item.case.answer)
+            initial_blue = total * blue / (red + blue)
+            initial_red = total - initial_blue
+            assert initial_blue.denominator == initial_red.denominator == 1
+            assert (initial_red + added) / initial_blue == Fraction(after_red, after_blue)
+            assert Fraction(red, blue) != Fraction(after_red, after_blue)
+        else:
+            match = re.fullmatch(
+                r"(\d+) identical machines produce (\d+) parts in (\d+) hours at a constant rate. "
+                r"A new shift starts with (\d+) machines working at that rate for (\d+) hours. "
+                r"Then (\d+) machines stop; each remaining machine works at (\d+(?:/\d+)?) "
+                r"times its original rate for (\d+) more hours. How many parts are produced "
+                r"during the new shift\? Give an exact integer or reduced fraction\.",
+                q,
+            )
+            assert match is not None
+            machines, parts, hours, active, first_hours, stopped = map(int, match.groups()[:6])
+            rate = Fraction(parts, machines * hours)
+            factor, second_hours = Fraction(match.group(7)), int(match.group(8))
+            first_stage = sum(rate * first_hours for _ in range(active))
+            second_stage = sum(rate * factor * second_hours for _ in range(active - stopped))
+            assert Fraction(item.case.answer) == first_stage + second_stage

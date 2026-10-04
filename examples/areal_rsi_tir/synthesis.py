@@ -180,6 +180,50 @@ def synthesize_tir_math_cases(*, seed: int, count: int) -> tuple[SyntheticMathCa
     return tuple(cases)
 
 
+def synthesize_tir_supplement(*, seed: int, count: int = 256) -> tuple[SyntheticMathCase, ...]:
+    """Add two-stage ratio and production problems after easy-family calibration."""
+    if type(seed) is not int or seed < 0 or type(count) is not int or count < 2 or count % 2:
+        raise ValueError("Supplement needs a nonnegative seed and a positive even count")
+    rng = random.Random(seed)
+    cases: list[SyntheticMathCase] = []
+    seen: set[str] = set()
+    while len(cases) < count:
+        if len(cases) % 2 == 0:
+            family = SyntheticMathFamily.RATIO
+            red, blue, scale = rng.randint(2, 11), rng.randint(2, 11), rng.randint(7, 43)
+            addition = rng.randint(5, 60)
+            after = Fraction(red * scale + addition, blue * scale)
+            question = (
+                f"Initially red and blue beads are in the ratio {red}:{blue}. "
+                f"After adding {addition} red beads and no blue beads, the ratio is "
+                f"{after.numerator}:{after.denominator}. How many beads were there initially?"
+            )
+            answer = str((red + blue) * scale)
+        else:
+            family = SyntheticMathFamily.MACHINES
+            machines, hours, rate = rng.randint(2, 7), rng.randint(2, 8), rng.randint(3, 17)
+            active, first_hours = rng.randint(4, 11), rng.randint(2, 7)
+            stopped, second_hours = rng.randint(1, active - 1), rng.randint(2, 9)
+            factor = Fraction(rng.randint(2, 7), rng.randint(2, 7))
+            question = (
+                f"{machines} identical machines produce {machines * hours * rate} parts in "
+                f"{hours} hours at a constant rate. A new shift starts with {active} machines "
+                f"working at that rate for {first_hours} hours. Then {stopped} machines stop; "
+                f"each remaining machine works at {factor} times its original rate for "
+                f"{second_hours} more hours. How many parts are produced during the new shift? "
+                "Give an exact integer or reduced fraction."
+            )
+            answer = str(
+                active * first_hours * rate + (active - stopped) * second_hours * rate * factor
+            )
+        task_id = hashlib.sha256(" ".join(question.casefold().split()).encode()).hexdigest()
+        if task_id in seen:
+            continue
+        seen.add(task_id)
+        cases.append(SyntheticMathCase(family, TirCase(task_id, question, answer)))
+    return tuple(cases)
+
+
 def select_model_calibrated_cases(
     candidates: tuple[SyntheticMathCase, ...],
     successes: tuple[int | None, ...],
@@ -352,9 +396,14 @@ def freeze_tir_synthetic_probe(
     seed: int,
     count: int,
     excluded_task_set_roots: tuple[Path, ...],
+    candidates: tuple[SyntheticMathCase, ...] | None = None,
 ) -> TaskSetVersion:
     """Freeze public synthetic candidates for blind retained-model difficulty probes."""
-    cases = synthesize_tir_math_cases(seed=seed, count=count)
+    cases = (
+        candidates if candidates is not None else synthesize_tir_math_cases(seed=seed, count=count)
+    )
+    if len(cases) != count or len({item.case.task_id for item in cases}) != count:
+        raise ValueError("Probe candidates must have the requested number of unique tasks")
     _check_exclusions(cases, (parent_root, *excluded_task_set_roots))
     source = _source_bytes(cases)
     provenance = json_bytes(

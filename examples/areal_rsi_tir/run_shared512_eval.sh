@@ -39,7 +39,7 @@ setsid env CUDA_VISIBLE_DEVICES=0 singularity exec --no-eval --nv --bind /storag
   --env 'HF_HUB_OFFLINE=1,TRANSFORMERS_OFFLINE=1,NO_PROXY=*,no_proxy=*,CUDA_VISIBLE_DEVICES=0' \
   "$IMAGE" python3 -m sglang.launch_server \
   --model-path "$MODEL" --host 127.0.0.1 --port 31950 \
-  --mem-fraction-static 0.35 --context-length 4096 \
+  --mem-fraction-static "${RSI_EVAL_MEMORY_FRACTION:-0.35}" --context-length 4096 \
   --tool-call-parser qwen --disable-piecewise-cuda-graph \
   >> "$OUT/server.log" 2>&1 &
 SERVER_PID=$!

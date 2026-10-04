@@ -9,15 +9,14 @@ from pathlib import Path
 
 from areal_rsi.api.control import json_bytes
 from areal_rsi.api.records import RsiSplit
+from areal_rsi.infra.storage.artifacts import checkpoint_digest, source_files_digest
 from areal_rsi.infra.storage.files import write_bytes
 from areal_rsi.scripts.jobs import digest_bytes
 from areal_rsi_tir.assets import (
     RSI_REWARD_MAX_RETRIES,
     RSI_REWARD_TIMEOUT_SECONDS,
-    checkpoint_digest,
     evaluation_rows,
     load_frozen_tir_inputs,
-    source_files_digest,
     tir_verifier_files,
     validate_areal_import_root,
     validate_frozen_model,

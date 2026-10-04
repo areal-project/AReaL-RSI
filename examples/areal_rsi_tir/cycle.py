@@ -20,35 +20,35 @@ from areal_rsi.api.research import (
     ReleaseRecord,
     RsiTrainResult,
 )
+from areal_rsi.infra.coordination.policies.harness import (
+    assess_harness_noise,
+    select_harness,
+)
+from areal_rsi.infra.coordination.policies.promotion import (
+    confirm_promotion,
+    propose_promotion,
+)
 from areal_rsi.infra.coordination.releases import (
     active_release,
     publish,
     release_ancestry,
     rollback,
 )
-from areal_rsi.infra.storage.files import write_bytes
-from areal_rsi.scripts.jobs import AReaLJobRunner, digest_bytes
-from areal_rsi.scripts.slurm import check_slurm
-from areal_rsi_tir.assets import (
+from areal_rsi.infra.storage.artifacts import (
     checkpoint_digest,
     rollout_dump_evidence,
     source_files_digest,
-    tir_verifier_files,
 )
+from areal_rsi.infra.storage.files import write_bytes
+from areal_rsi.scripts.jobs import AReaLJobRunner, digest_bytes
+from areal_rsi.scripts.slurm import check_slurm
+from areal_rsi_tir.assets import tir_verifier_files
 from areal_rsi_tir.contracts import TirTraceBundle
 from areal_rsi_tir.evaluation import assess_tir_training_signal
 from areal_rsi_tir.harness import (
     TirHarnessSpec,
     freeze_tir_harness,
     load_tir_harness,
-)
-from areal_rsi_tir.harness_selection import (
-    assess_harness_noise,
-    select_harness,
-)
-from areal_rsi_tir.promotion import (
-    confirm_promotion,
-    propose_promotion,
 )
 from areal_rsi_tir.proposer import propose_tir_prompt
 from areal_rsi_tir.tasks import load_tir_task_set, public_tir_tasks

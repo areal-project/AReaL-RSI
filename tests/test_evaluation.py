@@ -5,11 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from areal_rsi_tir.assets import (
-    checkpoint_digest,
-    source_files_digest,
-    tir_verifier_files,
-)
+from areal_rsi_tir.assets import tir_verifier_files
 from areal_rsi_tir.contracts import TirTraceBundle, TirTrajectory
 from areal_rsi_tir.cycle import TirCycle
 from areal_rsi_tir.evaluation import (
@@ -24,6 +20,7 @@ from areal_rsi_tir.verifier import strict_math_reward
 from areal_rsi.api.control import json_bytes, read_record
 from areal_rsi.api.records import RsiCaseScore, RsiSplit
 from areal_rsi.api.research import GenerationSpec, HarnessSelectionRule, RsiPromotionRule
+from areal_rsi.infra.storage.artifacts import checkpoint_digest, source_files_digest
 from areal_rsi.scripts.jobs import AReaLJobRunner, digest_bytes
 
 

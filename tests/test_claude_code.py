@@ -8,18 +8,19 @@ import sys
 from pathlib import Path
 
 import pytest
-from areal_rsi_tir.claude_backend import adapt_messages
 from areal_rsi_tir.claude_calculator import calculate
 from areal_rsi_tir.claude_code import (
     _claude_math_reward,
-    _result,
     _training_claude_math_reward,
     freeze_claude_harness,
     load_claude_harness,
 )
-from areal_rsi_tir.harness_selection import select_agent_harnesses
 
+from areal_rsi.api.execution import AgentRunResult
 from areal_rsi.api.records import AgentCaseRecord, AgentEvaluationReport, RsiSplit
+from areal_rsi.infra.coordination.policies.harness import select_agent_harnesses
+from areal_rsi.infra.runtime.anthropic import adapt_messages
+from areal_rsi.infra.runtime.claude import read_result
 
 
 def test_claude_reward_parses_fullwidth_digit_without_changing_answer() -> None:
@@ -164,10 +165,10 @@ def test_claude_result_requires_success_and_usage() -> None:
         + b"\n"
         + json.dumps(event).encode()
     )
-    assert _result(raw) == ("\\boxed{3}", 20, 8, 0.001, 500)
+    assert read_result(raw) == AgentRunResult("\\boxed{3}", 20, 8, 0.001, 500)
     event["is_error"] = True
     with pytest.raises(ValueError, match="successful"):
-        _result(json.dumps(event).encode())
+        read_result(json.dumps(event).encode())
 
 
 def test_parallel_agent_selection_uses_best_passing_candidate_and_fallback() -> None:
@@ -485,11 +486,13 @@ def test_claude_timeout_scores_one_case_zero_and_continues(
     tasks = tmp_path / "tasks"
     freeze_tir_task_set(train, test, tasks, sizes=TirSplitSizes(2, 1, 1, 1), seed=2)
     first = public_tir_tasks(tasks, RsiSplit.HARNESS_EVOLVE)[0]
+    # Leave room for interpreter startup on the shared filesystem; only the
+    # deliberately sleeping case should hit the real subprocess deadline.
     cli = tmp_path / "fake-claude"
     cli.write_text(
         f"#!{sys.executable}\n"
         "import json,sys,time\n"
-        f"if {first.input['messages'][0]['content']!r} in sys.argv[-1]: time.sleep(2)\n"
+        f"if {first.input['messages'][0]['content']!r} in sys.argv[-1]: time.sleep(10)\n"
         "print(json.dumps({'type':'result','is_error':False,'result':'\\\\boxed{2}',"
         "'usage':{'input_tokens':10,'output_tokens':3},"
         "'total_cost_usd':0.0,'duration_ms':100}))\n"
@@ -502,7 +505,7 @@ def test_claude_timeout_scores_one_case_zero_and_continues(
     prompt = tmp_path / "prompt.txt"
     prompt.write_text("Solve. User: {prompt}\nAssistant:\n")
     harness = tmp_path / "harness"
-    freeze_claude_harness(prompt, cli, backend, harness, model="qwen-test", timeout_seconds=1)
+    freeze_claude_harness(prompt, cli, backend, harness, model="qwen-test", timeout_seconds=5)
     monkeypatch.setattr(claude_code, "source_files_digest", lambda _: "sha256:" + "a" * 64)
     monkeypatch.setattr(claude_code, "tir_verifier_files", lambda _: ())
     report = claude_code.evaluate_claude(
@@ -522,7 +525,7 @@ def test_claude_timeout_scores_one_case_zero_and_continues(
     assert report.cases[0].failure_reason == "cli_timeout"
     assert json.loads(Path(report.cases[0].transcript_path).read_bytes().splitlines()[-1]) == {
         "type": "local_timeout",
-        "timeout_seconds": 1,
+        "timeout_seconds": 5,
     }
 
 

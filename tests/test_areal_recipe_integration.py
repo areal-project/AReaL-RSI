@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from areal_rsi_tir.assets import checkpoint_digest
 from areal_rsi_tir.contracts import TirTraceBundle
 from areal_rsi_tir.evaluate import main as eval_main
 from areal_rsi_tir.harness import freeze_tir_harness
@@ -19,6 +18,7 @@ from areal_rsi_tir.train_rl import main as train_main
 from areal_rsi.api.control import read_record
 from areal_rsi.api.records import RsiEvaluationReport
 from areal_rsi.api.research import RsiTrainResult
+from areal_rsi.infra.storage.artifacts import checkpoint_digest
 from areal_rsi.scripts.jobs import digest_bytes
 
 

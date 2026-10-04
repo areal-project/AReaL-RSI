@@ -7,22 +7,19 @@ import asyncio
 import hashlib
 import json
 import logging
-import os
 import re
 import stat
 import subprocess
 import sys
-import tempfile
 import unicodedata
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-from contextlib import nullcontext
 from dataclasses import replace
 from multiprocessing import get_context
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import urlparse
 
 from areal_rsi.api.control import decode, json_bytes, read_record, safe_name
+from areal_rsi.api.execution import McpTool
 from areal_rsi.api.records import (
     AgentCaseRecord,
     AgentEvaluationReport,
@@ -31,21 +28,22 @@ from areal_rsi.api.records import (
     Task,
 )
 from areal_rsi.api.research import AgentHarnessAttemptFailure, AgentHarnessSearchDecision
+from areal_rsi.infra.coordination.policies.harness import select_agent_harnesses
+from areal_rsi.infra.runtime.anthropic import complete_instruction
+from areal_rsi.infra.runtime.claude import (
+    CLAUDE_MAX_OUTPUT_TOKENS,
+    ClaudeOutputLimit,
+    final_event,
+    read_result,
+    run_claude,
+)
+from areal_rsi.infra.storage.artifacts import source_files_digest
 from areal_rsi.infra.storage.files import write_bytes
 from areal_rsi.scripts.jobs import digest_bytes
-from areal_rsi_tir.assets import (
-    _gold_answer,
-    source_files_digest,
-    tir_verifier_files,
-)
-from areal_rsi_tir.claude_backend import complete_instruction, local_adapter
+from areal_rsi_tir.assets import _gold_answer, tir_verifier_files
 from areal_rsi_tir.harness import validate_tir_prompt
-from areal_rsi_tir.harness_selection import select_agent_harnesses
 from areal_rsi_tir.tasks import load_tir_task_set, public_tir_tasks
 from areal_rsi_tir.verifier import strict_math_reward
-
-CLAUDE_MAX_OUTPUT_TOKENS = 4096
-COMPACT_BACKEND_MAX_TOKENS = 512
 
 
 def _claude_math_reward(response: str, answer: str) -> float:
@@ -95,12 +93,6 @@ def _training_claude_math_reward(response: str, answer: str) -> float:
             response[:256],
         )
         return 0.0
-
-
-class ClaudeOutputLimit(RuntimeError):
-    def __init__(self, transcript: bytes) -> None:
-        super().__init__("Claude Code exhausted its output token budget")
-        self.transcript = transcript
 
 
 def _regular_bytes(path: Path) -> bytes:
@@ -200,165 +192,6 @@ def load_claude_harness(
     return spec, prompt.decode()
 
 
-def _final_event(raw: bytes) -> dict[str, Any]:
-    events = [json.loads(line) for line in raw.splitlines() if line.strip()]
-    final = [event for event in events if isinstance(event, dict) and event.get("type") == "result"]
-    if len(final) != 1 or final[0].get("is_error") is not False:
-        raise ValueError("Claude Code did not return one successful final result")
-    return final[0]
-
-
-def _result(raw: bytes) -> tuple[str, int, int, float, int]:
-    event = _final_event(raw)
-    usage = event.get("usage")
-    if not isinstance(usage, dict):
-        raise ValueError("Claude Code omitted token usage")
-    response = event.get("result")
-    input_tokens, output_tokens = usage.get("input_tokens"), usage.get("output_tokens")
-    cost, duration = event.get("total_cost_usd"), event.get("duration_ms")
-    if (
-        not isinstance(response, str)
-        or not response.strip()
-        or type(input_tokens) is not int
-        or type(output_tokens) is not int
-        or not isinstance(cost, (float, int))
-        or isinstance(cost, bool)
-        or type(duration) is not int
-    ):
-        raise ValueError("Claude Code returned incomplete result metadata")
-    return response, input_tokens, output_tokens, float(cost), duration
-
-
-def _call(
-    executable: Path,
-    spec: AgentHarnessSpec,
-    prompt: str,
-    calculator: Path,
-    python: Path,
-    backend_url: str,
-    *,
-    api_key: str | None = None,
-) -> bytes:
-    parsed = urlparse(backend_url)
-    if (
-        parsed.scheme not in {"http", "https"}
-        or not parsed.hostname
-        or parsed.username
-        or parsed.password
-        or parsed.fragment
-        or (
-            api_key is None
-            and (parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"})
-        )
-        or (api_key is not None and not api_key)
-    ):
-        raise ValueError("Claude Code backend must be local HTTP or an authenticated proxy")
-    with tempfile.TemporaryDirectory(prefix="tir-claude-case-") as temporary:
-        work = Path(temporary)
-        mcp = work / "mcp.json"
-        mcp.write_bytes(
-            json_bytes(
-                {
-                    "mcpServers": {
-                        "tir_calculator": {
-                            "command": str(python),
-                            "args": [str(calculator)],
-                        }
-                    }
-                }
-            )
-        )
-        compact_system: str | None = None
-        if prompt.startswith("System: "):
-            first_line, prompt = prompt.split("\n", 1)
-            compact_system = first_line.removeprefix("System: ").strip()
-            if not compact_system:
-                raise ValueError("Frozen Claude system prompt is empty")
-        command = [
-            str(executable),
-            "--print",
-            "--output-format",
-            "stream-json",
-            "--verbose",
-            "--no-session-persistence",
-            "--no-chrome",
-            "--strict-mcp-config",
-            "--setting-sources",
-            "",
-            "--mcp-config",
-            str(mcp),
-            "--permission-mode",
-            "dontAsk",
-            "--tools",
-            "",
-            "--allowedTools",
-            "mcp__tir_calculator__calculate",
-            "--model",
-            spec.model,
-            "--max-budget-usd",
-            str(spec.max_budget_usd),
-        ]
-        if compact_system is not None:
-            command.extend(("--system-prompt", compact_system))
-        command.append(prompt)
-        env = os.environ.copy()
-        for name in (
-            "HTTP_PROXY",
-            "HTTPS_PROXY",
-            "ALL_PROXY",
-            "http_proxy",
-            "https_proxy",
-            "all_proxy",
-        ):
-            env.pop(name, None)
-        env.update(
-            {
-                "ANTHROPIC_BASE_URL": backend_url,
-                "ANTHROPIC_API_KEY": api_key or "local-inference-only",
-                "NO_PROXY": "*",
-                "no_proxy": "*",
-                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-                "CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(CLAUDE_MAX_OUTPUT_TOKENS),
-            }
-        )
-        adapter = (
-            local_adapter(backend_url, max_tokens=COMPACT_BACKEND_MAX_TOKENS)
-            if compact_system is not None
-            else nullcontext(backend_url)
-        )
-        with adapter as local_url:
-            env["ANTHROPIC_BASE_URL"] = local_url
-            completed = subprocess.run(
-                command,
-                env=env,
-                cwd=work,
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                timeout=spec.timeout_seconds,
-                check=False,
-            )
-        if completed.returncode != 0:
-            result_events = []
-            for line in completed.stdout.splitlines():
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(event, dict) and event.get("type") == "result":
-                    result_events.append(event)
-            result_error = str(result_events[-1].get("result", "")) if result_events else ""
-            if (
-                f"Claude's response exceeded the {CLAUDE_MAX_OUTPUT_TOKENS} output token maximum"
-                in result_error
-            ):
-                raise ClaudeOutputLimit(completed.stdout)
-            raise RuntimeError(
-                f"Claude Code exited {completed.returncode}: "
-                f"{result_error[:1000]} {completed.stderr.decode(errors='replace')[:1000]}"
-            )
-        return completed.stdout
-
-
 class FrozenClaudeWorkflow:
     """Run the frozen Claude Code solver through AReaL's rollout proxy."""
 
@@ -403,12 +236,16 @@ class FrozenClaudeWorkflow:
         question = messages[0]["content"]
         try:
             raw = await asyncio.to_thread(
-                _call,
+                run_claude,
                 self.executable,
                 self.spec,
                 self.template.format(prompt=question),
-                Path(__file__).with_name("claude_calculator.py"),
-                Path(sys.executable),
+                McpTool(
+                    "tir_calculator",
+                    "calculate",
+                    sys.executable,
+                    (str(Path(__file__).with_name("claude_calculator.py")),),
+                ),
                 url,
                 api_key=api_key,
             )
@@ -416,7 +253,7 @@ class FrozenClaudeWorkflow:
             return 0.0
         except ClaudeOutputLimit:
             return 0.0
-        response = _final_event(raw).get("result")
+        response = final_event(raw).get("result")
         if not isinstance(response, str) or not response.strip():
             return 0.0
         score = asyncio.get_running_loop().run_in_executor(
@@ -473,12 +310,11 @@ def evaluate_claude(
                 raise ValueError("Invalid public question")
             failure_reason: str | None
             try:
-                raw = _call(
+                raw = run_claude(
                     executable,
                     spec,
                     template.format(prompt=question),
-                    calculator,
-                    python,
+                    McpTool("tir_calculator", "calculate", str(python), (str(calculator),)),
                     backend_url,
                 )
             except subprocess.TimeoutExpired as error:
@@ -508,7 +344,10 @@ def evaluate_claude(
                 duration = 0
                 failure_reason = "cli_output_limit"
             else:
-                response, input_tokens, output_tokens, cost, duration = _result(raw)
+                result = read_result(raw)
+                response = result.response
+                input_tokens, output_tokens = result.input_tokens, result.output_tokens
+                cost, duration = result.cost_usd, result.duration_ms
                 failure_reason = None
             transcript = case_root / f"{task.task_id}.jsonl"
             write_bytes(transcript, raw, immutable=True)

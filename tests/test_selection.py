@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from areal_rsi_tir.harness_selection import (
+from areal_rsi.api.records import RsiCaseScore, RsiEvaluationReport, RsiSplit
+from areal_rsi.api.research import HarnessSelectionRule
+from areal_rsi.infra.coordination.policies.harness import (
     assess_harness_noise,
     select_harness,
 )
-
-from areal_rsi.api.records import RsiCaseScore, RsiEvaluationReport, RsiSplit
-from areal_rsi.api.research import HarnessSelectionRule
 
 
 def _report(harness_id: str, seed: int, score: float) -> RsiEvaluationReport:

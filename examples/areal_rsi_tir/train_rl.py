@@ -12,16 +12,18 @@ from pathlib import Path
 
 from areal_rsi.api.control import json_bytes, read_record, safe_name
 from areal_rsi.api.research import RsiTrainIntent, RsiTrainResult
+from areal_rsi.infra.storage.artifacts import (
+    checkpoint_digest,
+    latest_hf_checkpoint,
+    rollout_dump_evidence,
+    rollout_dump_roots,
+    source_files_digest,
+)
 from areal_rsi.infra.storage.files import write_bytes
 from areal_rsi_tir.assets import (
     RSI_REWARD_MAX_RETRIES,
     RSI_REWARD_TIMEOUT_SECONDS,
-    checkpoint_digest,
-    latest_hf_checkpoint,
     load_frozen_tir_inputs,
-    rollout_dump_evidence,
-    rollout_dump_roots,
-    source_files_digest,
     tir_verifier_files,
     validate_areal_import_root,
     validate_frozen_model,

@@ -3,10 +3,38 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 from areal_rsi.api.control import safe_name
 from areal_rsi.api.records import valid_digest
+
+
+@dataclass(frozen=True, slots=True)
+class McpTool:
+    """One explicitly allowed tool exposed by a local stdio MCP server."""
+
+    server: str
+    name: str
+    command: str
+    arguments: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        from pathlib import Path
+
+        safe_name(self.server)
+        safe_name(self.name)
+        if not Path(self.command).is_absolute():
+            raise ValueError("MCP command must be absolute")
+
+
+@dataclass(frozen=True, slots=True)
+class AgentRunResult:
+    response: str
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float
+    duration_ms: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,3 +136,9 @@ class SlurmPreflight:
             )
         ):
             raise ValueError("Slurm preflight lacks command or shared-path evidence")
+
+
+@dataclass(frozen=True, slots=True)
+class TrustedSourceFile:
+    label: str
+    path: Path

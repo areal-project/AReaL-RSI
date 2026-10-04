@@ -4,7 +4,6 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from areal_rsi_tir.assets import checkpoint_digest
 from areal_rsi_tir.cycle import TirCycle
 from areal_rsi_tir.harness import TirHarnessSpec
 
@@ -17,6 +16,7 @@ from areal_rsi.api.research import (
     RsiTrainResult,
 )
 from areal_rsi.infra.coordination.releases import active_release, rollback
+from areal_rsi.infra.storage.artifacts import checkpoint_digest
 
 
 def _spec(frozen: tuple[Path, Path, Path, Path], candidate: Path) -> GenerationSpec:

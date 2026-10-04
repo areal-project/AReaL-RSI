@@ -10,11 +10,8 @@ import areal  # type: ignore[import-not-found]
 from examples.tir import tir_workflow  # type: ignore[import-not-found]
 from examples.tir.tir_workflow import TIRWorkflow  # type: ignore[import-not-found]
 
-from areal_rsi_tir.assets import (
-    attest_worker_inputs,
-    checkpoint_digest,
-    validate_areal_import_root,
-)
+from areal_rsi.infra.storage.artifacts import checkpoint_digest
+from areal_rsi_tir.assets import attest_worker_inputs, validate_areal_import_root
 
 
 @lru_cache(maxsize=8)

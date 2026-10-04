@@ -22,6 +22,7 @@ from areal_rsi_tir.synthesis import (
     freeze_tir_synthetic_training,
     select_model_calibrated_cases,
     synthesize_tir_math_cases,
+    synthesize_tir_supplement,
 )
 from areal_rsi_tir.tasks import load_tir_task_set
 
@@ -145,49 +146,104 @@ def prepare_probe() -> None:
     )
 
 
-def calibrated_cases() -> tuple[tuple[SyntheticMathCase, ...], tuple[str, str], tuple[int, int]]:
+@dataclass(frozen=True, slots=True)
+class ProbeBatch:
+    root: str
+    seed: int
+    count: int
+    supplement: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class CalibratedCases:
+    cases: tuple[SyntheticMathCase, ...]
+    report_digests: tuple[str, ...]
+    task_set_ids: tuple[str, ...]
+    report_paths: tuple[str, ...]
+    pass_counts: tuple[int, int]
+
+
+def calibrated_cases() -> CalibratedCases:
     state = retained_state()
-    probe_root = ROOT / "probe-taskset"
-    probe = load_tir_task_set(probe_root)
-    candidates = synthesize_tir_math_cases(seed=SYNTHETIC_SEED, count=PROBE_CASES)
-    expected_ids = tuple(item.case.task_id for item in candidates)
-    if probe.harness_evolve.task_ids != expected_ids:
-        raise ValueError("Difficulty probe candidate IDs changed")
-    reports = tuple(
-        read_record(ROOT / f"probe-{name}/report.json", AgentEvaluationReport)
-        for name in ("first", "second")
+    batches_path = os.environ.get("RSI_PROBE_BATCHES_PATH")
+    batches = (
+        decode(tuple[ProbeBatch, ...], json.loads(Path(batches_path).read_bytes()))
+        if batches_path
+        else (ProbeBatch(str(ROOT), SYNTHETIC_SEED, PROBE_CASES),)
     )
+    if not batches:
+        raise ValueError("Calibration requires at least one probe batch")
     harness, _ = load_claude_harness(Path(state.harness_root), CLAUDE, Path(state.model_root))
-    for report in reports:
+    candidates: list[SyntheticMathCase] = []
+    successes: list[int | None] = []
+    report_digests: list[str] = []
+    report_paths: list[str] = []
+    task_set_ids: list[str] = []
+    for batch in batches:
+        root = Path(batch.root)
+        probe = load_tir_task_set(root / "probe-taskset")
+        generated = (
+            synthesize_tir_supplement(seed=batch.seed, count=batch.count)
+            if batch.supplement
+            else synthesize_tir_math_cases(seed=batch.seed, count=batch.count)
+        )
+        expected_ids = tuple(item.case.task_id for item in generated)
+        if probe.harness_evolve.task_ids != expected_ids:
+            raise ValueError("Difficulty probe candidate IDs changed")
+        # Historical batches may differ in synthesis code, but execution code must match.
+        source_root = root.parents[1]
+        for folder in ("src", "examples/areal_rsi_tir"):
+            for source in (SYNTH_ROOT / folder).rglob("*.py"):
+                if source.name in ("synthesis.py", "synthetic_experiment.py"):
+                    continue
+                relative = source.relative_to(SYNTH_ROOT)
+                if digest(source) != digest(source_root / relative):
+                    raise ValueError("Calibration batches used different execution source")
+        reports = tuple(
+            read_record(root / f"probe-{name}/report.json", AgentEvaluationReport)
+            for name in ("first", "second")
+        )
+        for report in reports:
+            if (
+                report.split is not RsiSplit.HARNESS_EVOLVE
+                or report.task_set_id != probe.task_set_id
+                or report.model != state.model_root
+                or report.harness_id != harness.harness_id
+                or report.backend_model_digest != harness.backend_model_digest
+                or tuple(case.task_id for case in report.cases) != expected_ids
+                or any(case.score not in (0.0, 1.0) for case in report.cases)
+            ):
+                raise ValueError("Difficulty probe changed frozen model, Harness or questions")
         if (
-            report.split is not RsiSplit.HARNESS_EVOLVE
-            or report.task_set_id != probe.task_set_id
-            or report.model != state.model_root
-            or report.harness_id != harness.harness_id
-            or tuple(case.task_id for case in report.cases) != expected_ids
-            or any(case.score not in (0.0, 1.0) for case in report.cases)
+            reports[0].verifier_digest != reports[1].verifier_digest
+            or reports[0].executable_digest != reports[1].executable_digest
+            or reports[0].backend_model_digest != reports[1].backend_model_digest
         ):
-            raise ValueError("Difficulty probe changed frozen model, Harness or questions")
-    if (
-        reports[0].verifier_digest != reports[1].verifier_digest
-        or reports[0].executable_digest != reports[1].executable_digest
-        or reports[0].backend_model_digest != reports[1].backend_model_digest
-    ):
-        raise ValueError("Difficulty probe runs used different execution inputs")
-    successes = tuple(
-        int(first.score + second.score)
-        if first.failure_reason is None and second.failure_reason is None
-        else None
-        for first, second in zip(reports[0].cases, reports[1].cases, strict=True)
-    )
+            raise ValueError("Difficulty probe runs used different execution inputs")
+        candidates.extend(generated)
+        successes.extend(
+            int(first.score + second.score)
+            if first.failure_reason is None and second.failure_reason is None
+            else None
+            for first, second in zip(reports[0].cases, reports[1].cases, strict=True)
+        )
+        report_digests.extend(
+            digest(root / f"probe-{name}/report.json") for name in ("first", "second")
+        )
+        report_paths.extend(str(root / f"probe-{name}/report.json") for name in ("first", "second"))
+        task_set_ids.append(probe.task_set_id)
+    if len({item.case.task_id for item in candidates}) != len(candidates):
+        raise ValueError("Calibration batches contain duplicate questions")
     selected = select_model_calibrated_cases(
-        candidates, successes, count=TRAIN_CASES, seed=SYNTHETIC_SEED
+        tuple(candidates), tuple(successes), count=TRAIN_CASES, seed=SYNTHETIC_SEED
     )
-    digests = (
-        digest(ROOT / "probe-first/report.json"),
-        digest(ROOT / "probe-second/report.json"),
+    return CalibratedCases(
+        selected.cases,
+        tuple(report_digests),
+        tuple(task_set_ids),
+        tuple(report_paths),
+        (selected.zero_passes, selected.one_pass),
     )
-    return selected.cases, digests, (selected.zero_passes, selected.one_pass)
 
 
 def arm_config(arm: str, state: RetainedState, task_root: Path) -> tuple[Path, Path]:
@@ -236,7 +292,12 @@ def arm_config(arm: str, state: RetainedState, task_root: Path) -> tuple[Path, P
 
 def prepare() -> PreparedExperiment:
     state = retained_state()
-    selected, probe_digests, pass_counts = calibrated_cases()
+    calibrated = calibrated_cases()
+    selected, probe_digests, pass_counts = (
+        calibrated.cases,
+        calibrated.report_digests,
+        calibrated.pass_counts,
+    )
     excluded = (Path(state.task_set_root),)
     synthetic_root = ROOT / "taskset"
     if not synthetic_root.exists():
@@ -245,7 +306,7 @@ def prepare() -> PreparedExperiment:
             synthetic_root,
             selected,
             seed=SYNTHETIC_SEED,
-            probe_task_set_id=load_tir_task_set(ROOT / "probe-taskset").task_set_id,
+            probe_task_set_ids=calibrated.task_set_ids,
             probe_report_digests=probe_digests,
             selected_pass_counts=pass_counts,
             excluded_task_set_roots=excluded,
@@ -299,6 +360,9 @@ def prepare() -> PreparedExperiment:
             "retained_harness_id": harness.harness_id,
             "config": str(config),
             "config_digest": digest(config),
+            "calibration_reports": dict(
+                zip(calibrated.report_paths, calibrated.report_digests, strict=True)
+            ),
         }
         write_bytes(ROOT / f"{arm}-source-lock.json", json_bytes(lock), immutable=True)
     return prepared
@@ -321,6 +385,10 @@ def verify_locks() -> None:
             or lock["config_digest"] != digest(Path(config))
             or lock["terminal_decision_digest"] != digest(Path(prepared.retained.decision_path))
             or lock["experiment_plan_digest"] != digest(PLAN)
+            or any(
+                digest(Path(path)) != expected
+                for path, expected in lock["calibration_reports"].items()
+            )
         ):
             raise ValueError(f"{arm} source lock changed")
 

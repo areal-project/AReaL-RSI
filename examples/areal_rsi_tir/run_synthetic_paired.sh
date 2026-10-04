@@ -20,6 +20,7 @@ for ((i=0; i<180; i++)); do
 done
 test -z "$(nvidia-smi --query-compute-apps=pid --format=csv,noheader)"
 
+if [[ -z "${RSI_PROBE_BATCHES_PATH:-}" ]]; then
 "$PYTHON" -m areal_rsi_tir.synthetic_experiment prepare-probe > "$DATA/prepare-probe.log"
 readarray -t PROBE < <("$PYTHON" - "$DATA/probe-state.json" <<'PY'
 import json
@@ -35,6 +36,8 @@ for RUN in first second; do
     "${PROBE[0]}" "${PROBE[1]}" harness_evolve "synthetic-probe-$RUN" \
     "$DATA/probe-$RUN" "${PROBE[2]}"
 done
+
+fi
 
 "$PYTHON" -m areal_rsi_tir.synthetic_experiment prepare > "$DATA/prepare.log"
 "$PYTHON" -m areal_rsi_tir.synthetic_experiment verify

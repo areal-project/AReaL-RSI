@@ -433,8 +433,8 @@ def freeze_tir_synthetic_training(
     selected: tuple[SyntheticMathCase, ...],
     *,
     seed: int,
-    probe_task_set_id: str,
-    probe_report_digests: tuple[str, str],
+    probe_task_set_ids: tuple[str, ...],
+    probe_report_digests: tuple[str, ...],
     selected_pass_counts: tuple[int, int],
     excluded_task_set_roots: tuple[Path, ...],
 ) -> TaskSetVersion:
@@ -456,7 +456,7 @@ def freeze_tir_synthetic_training(
             "synthetic_train_cases": len(selected),
             "synthetic_source_digest": _sha256(source),
             "generator_source_digest": _sha256(_regular_bytes(Path(__file__))),
-            "probe_task_set_id": probe_task_set_id,
+            "probe_task_set_ids": list(probe_task_set_ids),
             "probe_report_digests": probe_report_digests,
             "selected_pass_counts_zero_one": selected_pass_counts,
             "families": {

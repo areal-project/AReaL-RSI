@@ -131,7 +131,7 @@ def test_synthetic_training_is_pure_and_keeps_frozen_evaluation_splits(tmp_path:
         derived_root,
         synthesize_tir_math_cases(seed=41, count=16),
         seed=41,
-        probe_task_set_id=probe.task_set_id,
+        probe_task_set_ids=(probe.task_set_id,),
         probe_report_digests=("sha256:first", "sha256:second"),
         selected_pass_counts=(8, 8),
         excluded_task_set_roots=(parent_root,),

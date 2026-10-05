@@ -88,6 +88,25 @@ def test_model_calibration_excludes_trivial_cases_and_requires_borderline_cases(
         select_model_calibrated_cases(candidates, (2,) * 32, count=8, seed=41)
 
 
+def test_low_success_calibration_can_relax_only_the_borderline_minimum() -> None:
+    candidates = synthesize_tir_math_cases(seed=41, count=64)
+    scores = (1,) + (0,) * 31 + (2,) * 16 + (None,) * 16
+    with pytest.raises(ValueError, match="Too few borderline"):
+        select_model_calibrated_cases(candidates, scores, count=16, seed=41)
+    selected = select_model_calibrated_cases(
+        candidates, scores, count=16, seed=41, minimum_one_pass=1
+    )
+    assert selected.one_pass == 1 and selected.zero_passes == 15
+    assert selected.eligible_cases == 32
+    assert candidates[0] in selected.cases
+    assert set(selected.cases).issubset(candidates[:32])
+    assert {item.family for item in selected.cases} == {item.family for item in candidates}
+    with pytest.raises(ValueError, match="Too few borderline"):
+        select_model_calibrated_cases(candidates, (0,) * 64, count=16, seed=41, minimum_one_pass=1)
+    with pytest.raises(ValueError, match="Invalid minimum"):
+        select_model_calibrated_cases(candidates, scores, count=16, seed=41, minimum_one_pass=0)
+
+
 def test_synthetic_training_is_pure_and_keeps_frozen_evaluation_splits(tmp_path: Path) -> None:
     source = tmp_path / "train.jsonl"
     source.write_text(

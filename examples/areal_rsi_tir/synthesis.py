@@ -230,6 +230,7 @@ def select_model_calibrated_cases(
     *,
     count: int,
     seed: int,
+    minimum_one_pass: int | None = None,
 ) -> SyntheticSelection:
     """Prefer borderline cases; exclude incomplete probes and twice-solved cases."""
     if (
@@ -245,6 +246,9 @@ def select_model_calibrated_cases(
         )
     ):
         raise ValueError("Invalid synthetic difficulty probe inputs")
+    required_one_pass = count // 4 if minimum_one_pass is None else minimum_one_pass
+    if type(required_one_pass) is not int or not 1 <= required_one_pass <= count:
+        raise ValueError("Invalid minimum borderline case count")
     eligible = tuple(
         (item, value)
         for item, value in zip(candidates, successes, strict=True)
@@ -273,7 +277,7 @@ def select_model_calibrated_cases(
     )
     chosen.extend(remaining[: count - len(chosen)])
     one_pass = sum(value == 1 for _, value in chosen)
-    if one_pass < count // 4:
+    if one_pass < required_one_pass:
         raise ValueError("Too few borderline cases; current generator misses model difficulty")
     chosen.sort(
         key=lambda pair: hashlib.sha256(f"train:{seed}:{pair[0].case.task_id}".encode()).digest()

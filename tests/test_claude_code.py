@@ -459,8 +459,9 @@ def test_claude_cli_evaluation_records_real_subprocess_trace_and_rejects_drift(
         )
 
 
-def test_claude_timeout_scores_one_case_zero_and_continues(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("failure", ["timeout", "budget"])
+def test_claude_limit_scores_one_case_zero_and_continues(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
     from areal_rsi_tir import claude_code
     from areal_rsi_tir.tasks import TirSplitSizes, freeze_tir_task_set, public_tir_tasks
@@ -488,11 +489,22 @@ def test_claude_timeout_scores_one_case_zero_and_continues(
     first = public_tir_tasks(tasks, RsiSplit.HARNESS_EVOLVE)[0]
     # Leave room for interpreter startup on the shared filesystem; only the
     # deliberately sleeping case should hit the real subprocess deadline.
+    budget_event = {
+        "type": "result",
+        "subtype": "error_max_budget_usd",
+        "is_error": True,
+        "errors": ["Reached maximum budget ($1)"],
+    }
+    failed_action = (
+        "time.sleep(10)"
+        if failure == "timeout"
+        else (f"print({json.dumps(budget_event)!r}); sys.exit(1)")
+    )
     cli = tmp_path / "fake-claude"
     cli.write_text(
         f"#!{sys.executable}\n"
         "import json,sys,time\n"
-        f"if {first.input['messages'][0]['content']!r} in sys.argv[-1]: time.sleep(10)\n"
+        f"if {first.input['messages'][0]['content']!r} in sys.argv[-1]: {failed_action}\n"
         "print(json.dumps({'type':'result','is_error':False,'result':'\\\\boxed{2}',"
         "'usage':{'input_tokens':10,'output_tokens':3},"
         "'total_cost_usd':0.0,'duration_ms':100}))\n"
@@ -522,11 +534,15 @@ def test_claude_timeout_scores_one_case_zero_and_continues(
     )
     assert len(report.cases) == 2
     assert [case.score for case in report.cases] == [0.0, 1.0]
-    assert report.cases[0].failure_reason == "cli_timeout"
-    assert json.loads(Path(report.cases[0].transcript_path).read_bytes().splitlines()[-1]) == {
-        "type": "local_timeout",
-        "timeout_seconds": 5,
-    }
+    assert report.cases[0].failure_reason == f"cli_{failure}" + (
+        "_limit" if failure == "budget" else ""
+    )
+    expected = (
+        {"type": "local_timeout", "timeout_seconds": 5} if failure == "timeout" else budget_event
+    )
+    assert (
+        json.loads(Path(report.cases[0].transcript_path).read_bytes().splitlines()[-1]) == expected
+    )
 
 
 def test_frozen_claude_workflow_uses_areal_session_proxy(

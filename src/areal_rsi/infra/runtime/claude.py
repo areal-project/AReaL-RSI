@@ -26,6 +26,12 @@ class ClaudeOutputLimit(RuntimeError):
         self.transcript = transcript
 
 
+class ClaudeBudgetLimit(RuntimeError):
+    def __init__(self, transcript: bytes) -> None:
+        super().__init__("Claude Code exhausted its monetary budget")
+        self.transcript = transcript
+
+
 def final_event(raw: bytes) -> dict[str, Any]:
     events = [json.loads(line) for line in raw.splitlines() if line.strip()]
     final = [event for event in events if isinstance(event, dict) and event.get("type") == "result"]
@@ -171,6 +177,8 @@ def run_claude(
                     continue
                 if isinstance(event, dict) and event.get("type") == "result":
                     result_events.append(event)
+            if result_events and result_events[-1].get("subtype") == "error_max_budget_usd":
+                raise ClaudeBudgetLimit(completed.stdout)
             result_error = str(result_events[-1].get("result", "")) if result_events else ""
             if (
                 f"Claude's response exceeded the {CLAUDE_MAX_OUTPUT_TOKENS} output token maximum"

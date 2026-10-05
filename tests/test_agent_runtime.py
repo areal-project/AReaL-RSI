@@ -39,3 +39,42 @@ def test_runtime_routes_a_nonmath_tool_and_decodes_result(tmp_path: Path) -> Non
         "http://127.0.0.1:1",
     )
     assert read_result(raw) == AgentRunResult("HELLO", 1, 1, 0.0, 1)
+
+
+def test_budget_exhaustion_preserves_transcript_and_other_errors_still_raise(
+    tmp_path: Path,
+) -> None:
+    import json
+
+    import pytest
+
+    from areal_rsi.infra.runtime.claude import ClaudeBudgetLimit
+
+    cli = tmp_path / "claude"
+    digest = "sha256:" + "a" * 64
+    spec = AgentHarnessSpec(
+        "harness_" + "a" * 64, digest, digest, digest, digest, "test-model", 10, 1.0
+    )
+    tool = McpTool("text", "uppercase", sys.executable, ())
+    event = {
+        "type": "result",
+        "subtype": "error_max_budget_usd",
+        "is_error": True,
+        "errors": ["Reached maximum budget ($1)"],
+        "num_turns": 54,
+        "stop_reason": "tool_use",
+    }
+    raw = (json.dumps(event) + "\n").encode()
+    cli.write_text(
+        f"#!{sys.executable}\nimport sys\nsys.stdout.buffer.write({raw!r})\nsys.exit(1)\n"
+    )
+    cli.chmod(0o755)
+    with pytest.raises(ClaudeBudgetLimit) as failure:
+        run_claude(cli, spec, "hello", tool, "http://127.0.0.1:1")
+    assert failure.value.transcript == raw
+    cli.write_text(
+        f"#!{sys.executable}\nimport sys\nsys.stderr.write('connection refused')\nsys.exit(1)\n"
+    )
+    with pytest.raises(RuntimeError, match="connection refused") as failure:
+        run_claude(cli, spec, "hello", tool, "http://127.0.0.1:1")
+    assert not isinstance(failure.value, ClaudeBudgetLimit)

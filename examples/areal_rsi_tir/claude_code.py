@@ -32,6 +32,7 @@ from areal_rsi.infra.coordination.policies.harness import select_agent_harnesses
 from areal_rsi.infra.runtime.anthropic import complete_instruction
 from areal_rsi.infra.runtime.claude import (
     CLAUDE_MAX_OUTPUT_TOKENS,
+    ClaudeBudgetLimit,
     ClaudeOutputLimit,
     final_event,
     read_result,
@@ -251,7 +252,7 @@ class FrozenClaudeWorkflow:
             )
         except subprocess.TimeoutExpired:
             return 0.0
-        except ClaudeOutputLimit:
+        except (ClaudeBudgetLimit, ClaudeOutputLimit):
             return 0.0
         response = final_event(raw).get("result")
         if not isinstance(response, str) or not response.strip():
@@ -328,6 +329,11 @@ def evaluate_claude(
                 response, input_tokens, output_tokens, cost = "", 0, 0, 0.0
                 duration = spec.timeout_seconds * 1000
                 failure_reason = "cli_timeout"
+            except ClaudeBudgetLimit as error:
+                raw = error.transcript
+                response, input_tokens, output_tokens, cost = "", 0, 0, 0.0
+                duration = 0
+                failure_reason = "cli_budget_limit"
             except ClaudeOutputLimit as error:
                 raw = (
                     error.transcript.rstrip(b"\n")
@@ -609,9 +615,14 @@ def search_claude_harnesses(
                     max_cases=max_cases,
                     proposal_index=index,
                 )
-            except (ClaudeOutputLimit, subprocess.TimeoutExpired, ValueError) as error:
+            except (
+                ClaudeBudgetLimit,
+                ClaudeOutputLimit,
+                subprocess.TimeoutExpired,
+                ValueError,
+            ) as error:
                 root.mkdir(parents=True, exist_ok=True)
-                if isinstance(error, ClaudeOutputLimit):
+                if isinstance(error, (ClaudeBudgetLimit, ClaudeOutputLimit)):
                     write_bytes(
                         root / "proposal.trajectory.jsonl", error.transcript, immutable=True
                     )

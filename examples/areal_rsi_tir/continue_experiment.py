@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import subprocess
 import time
@@ -12,7 +13,7 @@ from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]
 
-from areal_rsi.api.control import json_bytes, read_record, safe_name
+from areal_rsi.api.control import decode, json_bytes, read_record, safe_name
 from areal_rsi.api.records import AgentEvaluationReport, AgentHarnessSpec, RsiSplit
 from areal_rsi.api.research import AgentHarnessSearchDecision
 from areal_rsi.infra.storage.files import write_bytes
@@ -107,6 +108,7 @@ def prepare_config(
             "per_layer_optim_step": True,
         }
         config["ref"]["fsdp"] = {"memory_efficient_load": True}
+        config["rollout"]["agent"]["chat_template_kwargs"] = {"enable_thinking": False}
     path = output / f"train-g{generation}.yaml"
     write_bytes(path, yaml.safe_dump(config, sort_keys=False).encode(), immutable=True)
     checkpoint = output / (
@@ -185,6 +187,17 @@ def main() -> None:
         and len(tasks.model_dev.task_ids) == 256
     ):
         raise ValueError("Expected shared train512 and test256")
+    chat_template = None
+    if plan.large_model:
+        # Match AReaL rollout rendering despite SGLang Anthropic ignoring template kwargs.
+        tokenizer_config = json.loads((Path(plan.model) / "tokenizer_config.json").read_bytes())
+        template = decode(str, tokenizer_config["chat_template"])
+        chat_template = output / "nonthinking.jinja"
+        write_bytes(
+            chat_template,
+            ("{%- set enable_thinking = false -%}\n" + template).encode(),
+            immutable=True,
+        )
     frozen = sources()
     write_bytes(
         output / "source-lock.json",
@@ -194,6 +207,7 @@ def main() -> None:
                 "plan": digest(args.plan),
                 "template": digest(Path(plan.template)),
                 "task_set_id": tasks.task_set_id,
+                "chat_template": digest(chat_template) if chat_template else None,
             }
         ),
         immutable=True,
@@ -211,6 +225,8 @@ def main() -> None:
             "RSI_EVAL_MEMORY_FRACTION": str(plan.eval_memory_fraction),
         }
     )
+    if chat_template is not None:
+        env["RSI_EVAL_CHAT_TEMPLATE"] = str(chat_template)
     model, prompt = Path(plan.model), Path(plan.prompt)
     for generation in range(1, plan.maximum_rounds + 1):
         if sources() != frozen:

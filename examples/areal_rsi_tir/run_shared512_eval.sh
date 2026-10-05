@@ -35,12 +35,16 @@ prompt_digest = "sha256:" + hashlib.sha256(Path(sys.argv[2]).read_bytes()).hexdi
 if manifest["prompt_digest"] != prompt_digest:
     raise ValueError("Checkpoint evaluation Harness prompt differs from the selected prompt")
 PY
+template_args=()
+if [[ -n "${RSI_EVAL_CHAT_TEMPLATE:-}" ]]; then
+  template_args=(--chat-template "$RSI_EVAL_CHAT_TEMPLATE")
+fi
 setsid env CUDA_VISIBLE_DEVICES=0 singularity exec --no-eval --nv --bind /storage:/storage \
   --env 'HF_HUB_OFFLINE=1,TRANSFORMERS_OFFLINE=1,NO_PROXY=*,no_proxy=*,CUDA_VISIBLE_DEVICES=0' \
   "$IMAGE" python3 -m sglang.launch_server \
   --model-path "$MODEL" --host 127.0.0.1 --port 31950 \
   --mem-fraction-static "${RSI_EVAL_MEMORY_FRACTION:-0.35}" --context-length 4096 \
-  --tool-call-parser qwen --disable-piecewise-cuda-graph \
+  --tool-call-parser qwen --disable-piecewise-cuda-graph "${template_args[@]}" \
   >> "$OUT/server.log" 2>&1 &
 SERVER_PID=$!
 trap 'kill -- -"$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true' EXIT

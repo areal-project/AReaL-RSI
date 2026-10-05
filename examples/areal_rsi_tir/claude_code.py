@@ -350,11 +350,18 @@ def evaluate_claude(
                 duration = 0
                 failure_reason = "cli_output_limit"
             else:
-                result = read_result(raw)
-                response = result.response
-                input_tokens, output_tokens = result.input_tokens, result.output_tokens
-                cost, duration = result.cost_usd, result.duration_ms
-                failure_reason = None
+                try:
+                    result = read_result(raw)
+                except ValueError:
+                    # Preserve malformed CLI output as evidence; it is not a solver answer.
+                    response, input_tokens, output_tokens, cost = "", 0, 0, 0.0
+                    duration = 0
+                    failure_reason = "cli_invalid_result"
+                else:
+                    response = result.response
+                    input_tokens, output_tokens = result.input_tokens, result.output_tokens
+                    cost, duration = result.cost_usd, result.duration_ms
+                    failure_reason = None
             transcript = case_root / f"{task.task_id}.jsonl"
             write_bytes(transcript, raw, immutable=True)
             if failure_reason:

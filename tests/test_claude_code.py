@@ -459,7 +459,7 @@ def test_claude_cli_evaluation_records_real_subprocess_trace_and_rejects_drift(
         )
 
 
-@pytest.mark.parametrize("failure", ["timeout", "budget"])
+@pytest.mark.parametrize("failure", ["timeout", "budget", "invalid_result"])
 def test_claude_limit_scores_one_case_zero_and_continues(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
@@ -495,11 +495,14 @@ def test_claude_limit_scores_one_case_zero_and_continues(
         "is_error": True,
         "errors": ["Reached maximum budget ($1)"],
     }
+    invalid_event = {"type": "result", "is_error": False, "result": "", "usage": {}}
     failed_action = (
         "time.sleep(10)"
         if failure == "timeout"
         else (f"print({json.dumps(budget_event)!r}); sys.exit(1)")
     )
+    if failure == "invalid_result":
+        failed_action = f"print({json.dumps(invalid_event)!r}); sys.exit(0)"
     cli = tmp_path / "fake-claude"
     cli.write_text(
         f"#!{sys.executable}\n"
@@ -540,6 +543,8 @@ def test_claude_limit_scores_one_case_zero_and_continues(
     expected = (
         {"type": "local_timeout", "timeout_seconds": 5} if failure == "timeout" else budget_event
     )
+    if failure == "invalid_result":
+        expected = invalid_event
     assert (
         json.loads(Path(report.cases[0].transcript_path).read_bytes().splitlines()[-1]) == expected
     )

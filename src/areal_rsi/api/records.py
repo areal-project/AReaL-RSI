@@ -215,7 +215,13 @@ class AgentCaseRecord:
             or not self.transcript_path.startswith("/")
             or not valid_digest(self.transcript_digest)
             or self.failure_reason
-            not in (None, "cli_timeout", "cli_output_limit", "cli_budget_limit")
+            not in (
+                None,
+                "cli_timeout",
+                "cli_output_limit",
+                "cli_budget_limit",
+                "cli_invalid_result",
+            )
             or (
                 self.failure_reason is not None
                 and (self.response or self.score != 0 or self.input_tokens or self.output_tokens)

@@ -84,6 +84,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--plan", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--first-round-calibration", type=Path)
     args = parser.parse_args()
     plan = read_record(args.plan, ContinuationPlan)
     if plan.large_model or plan.minimum_rounds != 3 or plan.maximum_rounds != 3:
@@ -96,10 +97,22 @@ def main() -> None:
         raise ValueError("Expected train512/test256")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
+    inherited = args.first_round_calibration
+    if inherited is not None and not (inherited / "selection.json").is_file():
+        raise ValueError("Inherited first-round calibration must have a frozen selection")
     frozen = sources()
     write_bytes(
         output / "source-lock.json",
-        json_bytes({"sources": frozen, "plan": digest(args.plan)}),
+        json_bytes(
+            {
+                "sources": frozen,
+                "plan": digest(args.plan),
+                "first_round_calibration": str(inherited) if inherited else None,
+                "inherited_selection_digest": digest(inherited / "selection.json")
+                if inherited
+                else None,
+            }
+        ),
         immutable=True,
     )
     env = dict(os.environ)
@@ -118,11 +131,14 @@ def main() -> None:
         scores: list[int | None] = []
         report_digests: list[str] = []
         probe_ids: list[str] = []
-        selected_root = round_root / "taskset"
+        calibration_root = inherited if generation == 1 and inherited is not None else round_root
+        selected_root = calibration_root / "taskset"
         for batch in range(8):
             seed = 20261005 + generation * 10000 + batch * 100
             fresh = fresh_candidates(seed, excluded)
-            probe = round_root / f"batch{batch}/taskset"
+            probe = calibration_root / f"batch{batch}/taskset"
+            if calibration_root != round_root and not probe.exists():
+                raise ValueError("Inherited calibration is incomplete")
             if not probe.exists():
                 freeze_tir_synthetic_probe(
                     parent,
@@ -139,9 +155,11 @@ def main() -> None:
                 probe / "private/candidate-metadata.json", json_bytes(fresh), immutable=True
             )
             reports = tuple(
-                round_root / f"batch{batch}/probe-{repeat}/report.json" for repeat in (1, 2)
+                calibration_root / f"batch{batch}/probe-{repeat}/report.json" for repeat in (1, 2)
             )
             for repeat, report in enumerate(reports, 1):
+                if calibration_root != round_root and not report.exists():
+                    raise ValueError("Inherited calibration report is missing")
                 if not report.exists():
                     run(
                         [
@@ -174,6 +192,8 @@ def main() -> None:
             except ValueError as error:
                 print(f"Round {generation} batch {batch}: {error}", flush=True)
                 continue
+            if calibration_root != round_root and not selected_root.exists():
+                raise ValueError("Inherited selected task set is missing")
             if not selected_root.exists():
                 freeze_tir_synthetic_training(
                     parent,

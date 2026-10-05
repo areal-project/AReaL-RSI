@@ -37,9 +37,12 @@ class ContinuationPlan:
     stop_drop: float
     eval_memory_fraction: float
     large_model: bool
+    context_length: int
 
     def __post_init__(self) -> None:
         safe_name(self.name)
+        if not 4096 <= self.context_length <= 32768:
+            raise ValueError("Invalid context length")
         if not 1 <= self.minimum_rounds <= self.maximum_rounds <= 6:
             raise ValueError("Invalid round limits")
         if not 0 < self.stop_drop < 1 or not 0 < self.eval_memory_fraction < 1:
@@ -95,6 +98,8 @@ def prepare_config(
     config["cluster"]["name_resolve"]["nfs_record_root"] = str(output / "name-resolve")
     config["actor"]["path"] = config["ref"]["path"] = str(model)
     config["total_train_epochs"] = 2
+    config["gconfig"]["max_tokens"] = plan.context_length
+    config["sglang"]["context_length"] = plan.context_length
     for section, split in (("train_dataset", "model_train"), ("valid_dataset", "model_dev")):
         config[section]["path"] = str(Path(plan.task_set) / f"public/{split}.jsonl")
         config[section]["batch_size"] = 32
@@ -223,6 +228,7 @@ def main() -> None:
             "HF_HUB_OFFLINE": "1",
             "TRANSFORMERS_OFFLINE": "1",
             "RSI_EVAL_MEMORY_FRACTION": str(plan.eval_memory_fraction),
+            "RSI_EVAL_CONTEXT_LENGTH": str(plan.context_length),
         }
     )
     if chat_template is not None:

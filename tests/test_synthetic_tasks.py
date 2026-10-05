@@ -241,3 +241,127 @@ def test_supplement_answers_follow_ratio_and_production_constraints() -> None:
             first_stage = sum(rate * first_hours for _ in range(active))
             second_stage = sum(rate * factor * second_hours for _ in range(active - stopped))
             assert Fraction(item.case.answer) == first_stage + second_stage
+
+
+def test_dynamic_candidates_exclude_all_earlier_rounds() -> None:
+    from collections import Counter
+
+    from areal_rsi_tir.dynamic_synthesis import fresh_candidates
+
+    previous = fresh_candidates(20271005, set())
+    excluded = {item.case.task_id for item in previous}
+    # Reusing a seed must still remove every previously seen question.
+    current = fresh_candidates(20271005, excluded)
+    assert len(current) == 1024
+    assert not excluded.intersection(item.case.task_id for item in current)
+    assert set(Counter(item.family for item in current).values()) == {128}
+    assert current == fresh_candidates(20271005, excluded)
+
+
+def test_diverse_selection_caps_templates_and_excludes_solved_tasks() -> None:
+    from collections import Counter
+
+    from areal_rsi_tir.synthesis import synthesize_diverse_math_cases
+
+    cases = synthesize_diverse_math_cases(seed=91)
+    assert len({c.recipe for c in cases}) == 16
+    scores = tuple(2 if i < 128 else 1 for i in range(1024))
+    selected = select_model_calibrated_cases(
+        cases, scores, count=512, seed=91, maximum_per_recipe=48
+    )
+    assert selected.one_pass == 512
+    assert max(Counter(c.recipe for c in selected.cases).values()) <= 48
+    assert min(Counter(c.family for c in selected.cases).values()) >= 32
+    assert not {c.case.task_id for c in cases[:128]}.intersection(
+        c.case.task_id for c in selected.cases
+    )
+    with pytest.raises(ValueError, match="Too few diverse"):
+        select_model_calibrated_cases(cases, scores, count=512, seed=91, maximum_per_recipe=16)
+
+
+def test_new_math_answers_against_independent_computations() -> None:
+    from itertools import product
+    from math import comb
+
+    from areal_rsi_tir.synthesis import synthesize_diverse_math_cases
+
+    for item in synthesize_diverse_math_cases(seed=49, count=32):
+        q, answer = item.case.question, Fraction(item.case.answer)
+        nums = [int(n) for n in re.findall(r"(?<![a-zA-Z_])-?\d+", q)]
+        if item.recipe == "algebra_0":
+            total, prod = map(int, re.search(r"x\+y=(\d+) and xy=(\d+)", q).groups())
+            assert answer == total**3 - 3 * total * prod
+        elif item.recipe == "algebra_1":
+            a, pa, b, pb, target = map(int, re.findall(r"-?\d+", q))
+            coefficient = Fraction(pb - pa - (b * b - a * a), b - a)
+            constant = pa - a * a - coefficient * a
+            assert answer == target * target + coefficient * target + constant
+        elif item.recipe == "number_theory_0":
+            a, n, b, m, modulus = nums
+            assert answer == (a**n + b**m) % modulus
+        elif item.recipe == "number_theory_1":
+            lower, r1, p, r2, qmod = nums
+            assert answer == next(
+                i for i in range(lower + 1, lower + p * qmod + 1) if i % p == r1 and i % qmod == r2
+            )
+        elif item.recipe == "counting_0":
+            k, n = int(re.search(r"size (\d+)", q)[1]), int(re.search(r"\.\.\.,(\d+)", q)[1])
+            dp = [[0] * (k + 1) for _ in range(n + 1)]
+            for i in range(n + 1):
+                dp[i][0] = 1
+                for j in range(1, k + 1):
+                    dp[i][j] = (dp[i - 1][j] if i else 0) + (
+                        dp[i - 2][j - 1] if i >= 2 else int(i == 1 and j == 1)
+                    )
+            assert answer == dp[n][k]
+        elif item.recipe == "counting_1":
+            total, bound = nums
+            assert answer == sum(total - x + 1 for x in range(bound + 1))
+        elif item.recipe.startswith("probability"):
+            red, blue = nums[:2]
+            k = nums[2] if item.recipe.endswith("0") else 2
+            weights = [comb(red, j) * comb(blue, k - j) for j in range(k + 1)]
+            denominator = sum(weights) if k != 2 else sum(weights[1:])
+            assert answer == Fraction(weights[2], denominator)
+        elif item.recipe == "geometry_0":
+            x1, y1, x2, _y2, _x3, y3 = nums
+            leg1, leg2 = abs(x2 - x1), abs(y3 - y1)
+            hyp = int((leg1**2 + leg2**2) ** 0.5)
+            assert answer == Fraction(leg1 * leg2, leg1 + leg2 + hyp)
+        elif item.recipe == "geometry_1":
+            w, h, cut = nums
+            assert 2 * cut <= min(w, h)
+            assert answer == w * h - 4 * Fraction(cut * cut, 2)
+        elif item.recipe == "recurrence_0":
+            a = int(re.search(r"u_1=(\d+)", q)[1])
+            mult, b = map(int, re.search(r"=(\d+)u_n\+(\d+)", q).groups())
+            n = int(re.search(r"Find u_(\d+)", q)[1])
+            assert answer == a * mult ** (n - 1) + b * sum(mult**j for j in range(n - 1))
+        elif item.recipe == "recurrence_1":
+            a, b = map(int, re.search(r"u_1=(\d+), u_2=(\d+)", q).groups())
+            d = int(re.search(r"u_n=(\d+)", q)[1])
+            n = int(re.search(r"Find u_(\d+)", q)[1])
+            sequence = [a, b]
+            while len(sequence) < n:
+                sequence.append(2 * sequence[-1] - sequence[-2] + d)
+            assert answer == sequence[-1]
+        elif item.recipe == "optimization_0":
+            total = nums[0]
+            assert answer == max((x + 1) * (total - x) for x in range(1, total))
+        elif item.recipe == "optimization_1":
+            a, b, budget, c, d = nums
+            assert answer == max(
+                c * x + d * y
+                for x, y in product(range(budget // a + 1), range(budget // b + 1))
+                if a * x + b * y <= budget
+            )
+        elif item.recipe == "rates_0":
+            a, b, t = nums
+            assert answer / a + Fraction(t, b) == 1
+        elif item.recipe == "rates_1":
+            speed, distance, _, current = nums
+            assert answer == Fraction(2 * distance) / (
+                Fraction(distance, speed + current) + Fraction(distance, speed - current)
+            )
+        else:
+            raise AssertionError(item.recipe)

@@ -10,7 +10,7 @@ import tempfile
 from dataclasses import dataclass
 from enum import StrEnum
 from fractions import Fraction
-from math import gcd
+from math import comb, gcd, lcm
 from pathlib import Path
 
 from areal_rsi.api.control import json_bytes
@@ -37,10 +37,23 @@ class SyntheticMathFamily(StrEnum):
     LINEAR = "linear"
 
 
+class DiverseMathFamily(StrEnum):
+    ALGEBRA = "algebra"
+    NUMBER_THEORY = "number_theory"
+    COUNTING = "counting"
+    PROBABILITY = "probability"
+    GEOMETRY = "geometry"
+    RECURRENCE = "recurrence"
+    OPTIMIZATION = "optimization"
+    RATES = "rates"
+
+
 @dataclass(frozen=True, slots=True)
 class SyntheticMathCase:
-    family: SyntheticMathFamily
+    family: SyntheticMathFamily | DiverseMathFamily
     case: TirCase
+    recipe: str = "legacy"
+    difficulty: int = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -231,6 +244,7 @@ def select_model_calibrated_cases(
     count: int,
     seed: int,
     minimum_one_pass: int | None = None,
+    maximum_per_recipe: int | None = None,
 ) -> SyntheticSelection:
     """Prefer borderline cases; exclude incomplete probes and twice-solved cases."""
     if (
@@ -264,18 +278,44 @@ def select_model_calibrated_cases(
             hashlib.sha256(f"{seed}:{item.case.task_id}".encode()).digest(),
         )
 
-    minimum_per_family = count // 16
+    if maximum_per_recipe is not None and maximum_per_recipe < 1:
+        raise ValueError("Invalid recipe cap")
+    families = tuple(dict.fromkeys(item.family for item in candidates))
+    minimum_per_family = count // (2 * len(families))
+    recipe_counts: dict[str, int] = {}
+
+    def admit(pair: tuple[SyntheticMathCase, int]) -> bool:
+        recipe = pair[0].recipe
+        if maximum_per_recipe is not None and recipe_counts.get(recipe, 0) >= maximum_per_recipe:
+            return False
+        recipe_counts[recipe] = recipe_counts.get(recipe, 0) + 1
+        chosen.append(pair)
+        return True
+
     chosen: list[tuple[SyntheticMathCase, int]] = []
-    for family in SyntheticMathFamily:
+    for family in families:
+        if minimum_per_family == 0:
+            continue
         group = sorted((pair for pair in eligible if pair[0].family is family), key=rank)
         if len(group) < minimum_per_family:
             raise ValueError(f"Too few model-calibrated cases in family {family.value}")
-        chosen.extend(group[:minimum_per_family])
+        admitted = 0
+        for pair in group:
+            admitted += admit(pair)
+            if admitted == minimum_per_family:
+                break
+        if admitted < minimum_per_family:
+            raise ValueError(f"Too few diverse calibrated cases in family {family.value}")
     chosen_ids = {item.case.task_id for item, _ in chosen}
     remaining = sorted(
         (pair for pair in eligible if pair[0].case.task_id not in chosen_ids), key=rank
     )
-    chosen.extend(remaining[: count - len(chosen)])
+    for pair in remaining:
+        if len(chosen) == count:
+            break
+        admit(pair)
+    if len(chosen) != count:
+        raise ValueError("Too few diverse calibrated cases under recipe cap")
     one_pass = sum(value == 1 for _, value in chosen)
     if one_pass < required_one_pass:
         raise ValueError("Too few borderline cases; current generator misses model difficulty")
@@ -465,7 +505,7 @@ def freeze_tir_synthetic_training(
             "selected_pass_counts_zero_one": selected_pass_counts,
             "families": {
                 family.value: sum(item.family is family for item in selected)
-                for family in SyntheticMathFamily
+                for family in dict.fromkeys(item.family for item in selected)
             },
         }
     )
@@ -487,3 +527,173 @@ def freeze_tir_synthetic_training(
         provenance=provenance,
         derivation=derivation,
     )
+
+
+def _diverse_problem(
+    family: DiverseMathFamily, variant: int, rng: random.Random
+) -> tuple[str, str]:
+    """Exact-answer constructions; each variant changes the mathematical structure."""
+    a, b, c = (rng.randint(3, 100) for _ in range(3))
+    if family is DiverseMathFamily.ALGEBRA:
+        if variant == 0:
+            return (
+                f"Real numbers x and y satisfy x+y={a + b} and xy={a * b}. Find x^3+y^3.",
+                str(a**3 + b**3),
+            )
+        return (
+            f"A monic quadratic polynomial P satisfies P({a})={a * a + b * a + c} and "
+            f"P({a + 2})={(a + 2) ** 2 + b * (a + 2) + c}. Find P({-b}).",
+            str(c),
+        )
+    if family is DiverseMathFamily.NUMBER_THEORY:
+        if variant == 0:
+            modulus = rng.choice((7, 11, 13, 17, 19, 23))
+            exponent = rng.randint(23, 120)
+            return (
+                f"Find the least nonnegative remainder of {a}^{exponent}+{b}^{exponent + 1} "
+                f"when divided by {modulus}.",
+                str((pow(a, exponent, modulus) + pow(b, exponent + 1, modulus)) % modulus),
+            )
+        p, q = rng.sample((3, 5, 7, 11, 13, 17), 2)
+        target = rng.randint(1, p * q - 1)
+        lower = rng.randint(3, 30) * p * q
+        return (
+            f"Find the smallest integer n greater than {lower} such that n leaves remainder "
+            f"{target % p} modulo {p} and remainder {target % q} modulo {q}.",
+            str(lower + target),
+        )
+    if family is DiverseMathFamily.COUNTING:
+        if variant == 0:
+            n, k = rng.randint(25, 200), rng.randint(3, 12)
+            return (
+                f"How many subsets of size {k} of {{1,2,...,{n}}} "
+                "contain no two consecutive integers?",
+                str(comb(n - k + 1, k)),
+            )
+        total, bound = rng.randint(15, 200), rng.randint(3, 14)
+        return (
+            f"How many ordered triples (x,y,z) of nonnegative integers satisfy "
+            f"x+y+z={total} and x<={bound}?",
+            str(comb(total + 2, 2) - comb(total - bound + 1, 2)),
+        )
+    if family is DiverseMathFamily.PROBABILITY:
+        red, blue = rng.randint(5, 60), rng.randint(5, 60)
+        if variant == 0:
+            k = rng.randint(3, 5)
+            return (
+                f"A bag contains {red} red and {blue} blue balls. Draw {k} balls uniformly "
+                "without replacement. What is the probability of exactly two red balls? "
+                "Give a reduced fraction.",
+                str(Fraction(comb(red, 2) * comb(blue, k - 2), comb(red + blue, k))),
+            )
+        return (
+            f"A bag contains {red} red and {blue} blue balls. Two balls are drawn uniformly "
+            "without replacement. Given that at least one is red, what is the probability "
+            "that both are red? Give a reduced fraction.",
+            str(Fraction(comb(red, 2), comb(red + blue, 2) - comb(blue, 2))),
+        )
+    if family is DiverseMathFamily.GEOMETRY:
+        if variant == 0:
+            scale = rng.randint(2, 35)
+            x, y = rng.randint(-30, 30), rng.randint(-30, 30)
+            return (
+                f"A triangle has vertices ({x},{y}), ({x + 3 * scale},{y}), and "
+                f"({x},{y + 4 * scale}). Find the radius of its inscribed circle.",
+                str(scale),
+            )
+        width, height = rng.randint(5, 30), rng.randint(5, 30)
+        cut = rng.randint(1, min(width, height) // 2)
+        return (
+            f"A rectangle has width {width} and height {height}. From each corner a "
+            f"right isosceles triangle with both legs {cut} along the sides is removed. "
+            "Find the area remaining.",
+            str(width * height - 2 * cut * cut),
+        )
+    if family is DiverseMathFamily.RECURRENCE:
+        if variant == 0:
+            n = rng.randint(5, 12)
+            ratio = rng.randint(2, 4)
+            answer = a
+            for _ in range(n - 1):
+                answer = ratio * answer + b
+            return (
+                f"A sequence satisfies u_1={a} and u_(n+1)={ratio}u_n+{b} for n>=1. Find u_{n}.",
+                str(answer),
+            )
+        n = rng.randint(8, 24)
+        return (
+            f"A sequence satisfies u_1={a}, u_2={a + b + c}, and "
+            f"u_(n+2)-2u_(n+1)+u_n={2 * c}. Find u_{n}.",
+            str(a + (n - 1) * b + c * (n - 1) ** 2),
+        )
+    if family is DiverseMathFamily.OPTIMIZATION:
+        if variant == 0:
+            total = rng.randint(20, 2000)
+            return (
+                f"Positive integers x,y satisfy x+y={total}. Find the maximum value of xy+x.",
+                str(max(x * (total - x) + x for x in range(1, total))),
+            )
+        budget = rng.randint(100, 400)
+        cost1, cost2 = rng.sample(range(7, 25), 2)
+        reward1, reward2 = rng.randint(10, 30), rng.randint(10, 30)
+        best = max(
+            reward1 * x + reward2 * y
+            for x in range(budget // cost1 + 1)
+            for y in range((budget - cost1 * x) // cost2 + 1)
+        )
+        return (
+            f"Nonnegative integers x,y satisfy {cost1}x+{cost2}y<={budget}. "
+            f"Find the maximum value of {reward1}x+{reward2}y.",
+            str(best),
+        )
+    if family is DiverseMathFamily.RATES:
+        if variant == 0:
+            t1, t2 = rng.randint(15, 40), rng.randint(15, 40)
+            elapsed = rng.randint(2, 6)
+            remaining = 1 - Fraction(elapsed, t1) - Fraction(elapsed, t2)
+            return (
+                f"Pipe A fills a tank in {t1} hours and pipe B in {t2} hours. Both "
+                f"start filling an empty tank. After {elapsed} hours B is closed. "
+                "How many total hours from the start are needed to fill the tank? "
+                "Give an exact answer.",
+                str(elapsed + remaining * t1),
+            )
+        speed, current = rng.randint(15, 40), rng.randint(2, 8)
+        distance = lcm(speed - current, speed + current) * rng.randint(1, 5)
+        return (
+            f"A boat travels at {speed} km/h in still water. It travels {distance} km "
+            f"downstream then {distance} km upstream in a current of {current} km/h. "
+            "Find its average speed for the whole trip in km/h as a reduced fraction.",
+            str(
+                Fraction(
+                    2 * distance,
+                    Fraction(distance, speed + current) + Fraction(distance, speed - current),
+                )
+            ),
+        )
+    raise ValueError(f"Unsupported family {family}")
+
+
+def synthesize_diverse_math_cases(*, seed: int, count: int = 1024) -> tuple[SyntheticMathCase, ...]:
+    if count < 16 or count % 16 or seed < 0:
+        raise ValueError("Diverse synthesis requires a nonnegative seed and a multiple of 16")
+    rng = random.Random(seed)
+    families = tuple(DiverseMathFamily)
+    result: list[SyntheticMathCase] = []
+    seen: set[str] = set()
+    for index in range(count):
+        family, variant = families[index % 8], (index // 8) % 2
+        for _ in range(1000):
+            question, answer = _diverse_problem(family, variant, rng)
+            task_id = hashlib.sha256(" ".join(question.casefold().split()).encode()).hexdigest()
+            if task_id not in seen:
+                break
+        else:
+            raise ValueError("Diverse recipe exhausted")
+        seen.add(task_id)
+        result.append(
+            SyntheticMathCase(
+                family, TirCase(task_id, question, answer), f"{family.value}_{variant}", 2 + variant
+            )
+        )
+    return tuple(result)

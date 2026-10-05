@@ -44,7 +44,7 @@ setsid env CUDA_VISIBLE_DEVICES=0 singularity exec --no-eval --nv --bind /storag
   "$IMAGE" python3 -m sglang.launch_server \
   --model-path "$MODEL" --host 127.0.0.1 --port 31950 \
   --mem-fraction-static "${RSI_EVAL_MEMORY_FRACTION:-0.35}" --context-length "${RSI_EVAL_CONTEXT_LENGTH:-4096}" \
-  --tool-call-parser qwen --disable-piecewise-cuda-graph "${template_args[@]}" \
+  --tool-call-parser qwen --disable-piecewise-cuda-graph ${template_args[@]+"${template_args[@]}"} \
   >> "$OUT/server.log" 2>&1 &
 SERVER_PID=$!
 trap 'kill -- -"$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true' EXIT

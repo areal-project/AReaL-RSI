@@ -4,8 +4,9 @@ import json
 from pathlib import Path
 
 import pytest
-from areal_rsi_tir.harness import TIR_RUNNER_FILES, freeze_tir_harness
-from areal_rsi_tir.tasks import TirSplitSizes, freeze_tir_task_set
+
+from areal_rsi.infra.coordination.evaluation.harness import TIR_RUNNER_FILES, freeze_prompt_harness
+from areal_rsi.infra.coordination.evaluation.tasks import SplitSizes, freeze_task_set
 
 
 @pytest.fixture
@@ -38,13 +39,11 @@ def frozen_inputs(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     train_source.write_text("\n".join(row(i) for i in range(4)) + "\n")
     test_source.write_text(row(10) + "\n")
     task_root = tmp_path / "taskset"
-    freeze_tir_task_set(
-        train_source, test_source, task_root, sizes=TirSplitSizes(1, 1, 1, 1), seed=42
-    )
+    freeze_task_set(train_source, test_source, task_root, sizes=SplitSizes(1, 1, 1, 1), seed=42)
     prompt = tmp_path / "h0.txt"
     prompt.write_text("Solve with the calculator. Final answer in \\boxed{{}}. {prompt}\n")
     h0_root = tmp_path / "h0"
-    freeze_tir_harness(prompt, runner, h0_root)
+    freeze_prompt_harness(prompt, runner, h0_root)
     model = tmp_path / "model"
     model.mkdir()
     (model / "config.json").write_text('{"model_type":"gpt2"}')

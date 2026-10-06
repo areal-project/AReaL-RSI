@@ -12,19 +12,22 @@ license = { text = "Apache-2.0" }
 dependencies = []
 
 [project.scripts]
-areal-rsi-tir = "areal_rsi_tir.cycle:main"
+areal-rsi-tir = "areal_rsi.examples.tir.cycle:main"
+areal-rsi-classification = "areal_rsi.examples.classification:cycle"
+areal-rsi-train = "areal_rsi.scripts.train:main"
+areal-rsi-adaptation = "areal_rsi.examples.adaptation:main"
 
 [project.optional-dependencies]
 train = ["datasets>=3,<5", "math-verify>=0.8,<1", "pyarrow>=17,<24"]
 dev = ["pytest>=8,<10", "ruff>=0.11,<1", "mypy>=1.15,<2"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/areal_rsi", "examples/areal_rsi_tir"]
+packages = ["src/areal_rsi"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
-pythonpath = ["src", "examples"]
+pythonpath = ["src"]
 
 [tool.ruff]
 target-version = "py311"
@@ -37,5 +40,5 @@ ignore = ["RUF001", "RUF002", "RUF003"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
-files = ["src", "examples/areal_rsi_tir"]
-mypy_path = ["src", "examples"]
+files = ["src"]
+mypy_path = ["src"]

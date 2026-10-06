@@ -8,19 +8,19 @@ import sys
 from pathlib import Path
 
 import pytest
-from areal_rsi_tir.claude_calculator import calculate
-from areal_rsi_tir.claude_code import (
+
+from areal_rsi.api.execution import AgentRunResult
+from areal_rsi.api.records import AgentCaseRecord, AgentEvaluationReport, RsiSplit
+from areal_rsi.infra.coordination.policies.harness import select_agent_harnesses
+from areal_rsi.infra.coordination.tools.calculator import calculate
+from areal_rsi.infra.runtime.anthropic import adapt_messages
+from areal_rsi.infra.runtime.claude import read_result
+from areal_rsi.infra.runtime.claude_solver import (
     _claude_math_reward,
     _training_claude_math_reward,
     freeze_claude_harness,
     load_claude_harness,
 )
-
-from areal_rsi.api.execution import AgentRunResult
-from areal_rsi.api.records import AgentCaseRecord, AgentEvaluationReport, RsiSplit
-from areal_rsi.infra.coordination.policies.harness import select_agent_harnesses
-from areal_rsi.infra.runtime.anthropic import adapt_messages
-from areal_rsi.infra.runtime.claude import read_result
 
 
 def test_claude_reward_parses_fullwidth_digit_without_changing_answer() -> None:
@@ -44,25 +44,27 @@ def test_training_reward_contains_math_comparison_timeout(monkeypatch: pytest.Mo
     def timeout(response: str, answer: str) -> float:
         raise TimeoutException("undecidable comparison")
 
-    monkeypatch.setattr("areal_rsi_tir.claude_code.strict_math_reward", timeout)
+    monkeypatch.setattr("areal_rsi.infra.runtime.claude_solver.strict_math_reward", timeout)
     assert _training_claude_math_reward(r"\boxed{\int x\,dx}", "0") == 0.0
 
     def malformed(response: str, answer: str) -> float:
         raise ValueError('String "٣٣" does not denote a Number')
 
-    monkeypatch.setattr("areal_rsi_tir.claude_code.strict_math_reward", malformed)
+    monkeypatch.setattr("areal_rsi.infra.runtime.claude_solver.strict_math_reward", malformed)
     assert _training_claude_math_reward(r"\boxed{٣٣}", "33") == 0.0
 
     def invalid_gold(response: str, answer: str) -> float:
         raise ValueError("Frozen TIR gold answer cannot be parsed")
 
-    monkeypatch.setattr("areal_rsi_tir.claude_code.strict_math_reward", invalid_gold)
+    monkeypatch.setattr("areal_rsi.infra.runtime.claude_solver.strict_math_reward", invalid_gold)
     with pytest.raises(ValueError, match="Frozen TIR gold"):
         _training_claude_math_reward(r"\boxed{1}", "bad gold")
 
 
 def test_calculator_mcp_stdio_handles_exact_math_and_rejects_code() -> None:
-    server = Path(__file__).resolve().parents[1] / "examples/areal_rsi_tir/claude_calculator.py"
+    server = (
+        Path(__file__).resolve().parents[1] / "src/areal_rsi/infra/coordination/tools/calculator.py"
+    )
     requests = [
         {
             "jsonrpc": "2.0",
@@ -263,10 +265,13 @@ def test_parallel_agent_selection_uses_best_passing_candidate_and_fallback() -> 
 def test_model_proposal_preserves_valid_output_and_rejects_invalid_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, instruction: str, valid: bool
 ) -> None:
-    from areal_rsi_tir import claude_code
-    from areal_rsi_tir.tasks import TirSplitSizes, freeze_tir_task_set, public_tir_tasks
-
     from areal_rsi.api.control import json_bytes
+    from areal_rsi.infra.coordination.evaluation.tasks import (
+        SplitSizes,
+        freeze_task_set,
+        public_tasks,
+    )
+    from areal_rsi.infra.runtime import claude_solver as claude_code
 
     train = tmp_path / "train.jsonl"
     test = tmp_path / "test.jsonl"
@@ -284,7 +289,7 @@ def test_model_proposal_preserves_valid_output_and_rejects_invalid_output(
         + "\n"
     )
     task_root = tmp_path / "tasks"
-    freeze_tir_task_set(train, test, task_root, sizes=TirSplitSizes(2, 1, 1, 1), seed=2)
+    freeze_task_set(train, test, task_root, sizes=SplitSizes(2, 1, 1, 1), seed=2)
     cli = tmp_path / "claude"
     cli.write_bytes(b"fake executable")
     backend = tmp_path / "backend"
@@ -295,7 +300,7 @@ def test_model_proposal_preserves_valid_output_and_rejects_invalid_output(
     prompt.write_text("System: Solve math.\nCheck arithmetic.\nUser: {prompt}\nAssistant:\n")
     harness = tmp_path / "harness"
     spec = freeze_claude_harness(prompt, cli, backend, harness, model="qwen-test")
-    tasks = public_tir_tasks(task_root, RsiSplit.HARNESS_EVOLVE)
+    tasks = public_tasks(task_root, RsiSplit.HARNESS_EVOLVE)
     digest = "sha256:" + "a" * 64
     cases = tuple(
         AgentCaseRecord(
@@ -381,10 +386,9 @@ def test_claude_cli_evaluation_records_real_subprocess_trace_and_rejects_drift(
 ) -> None:
     from concurrent.futures import ThreadPoolExecutor
 
-    from areal_rsi_tir import claude_code
-    from areal_rsi_tir.tasks import TirSplitSizes, freeze_tir_task_set
-
     from areal_rsi.api.records import RsiSplit
+    from areal_rsi.infra.coordination.evaluation.tasks import SplitSizes, freeze_task_set
+    from areal_rsi.infra.runtime import claude_solver as claude_code
 
     train, test = tmp_path / "train.jsonl", tmp_path / "test.jsonl"
 
@@ -396,7 +400,7 @@ def test_claude_cli_evaluation_records_real_subprocess_trace_and_rejects_drift(
     train.write_text("\n".join(row(i) for i in range(4)) + "\n")
     test.write_text(row(4) + "\n")
     task_root = tmp_path / "taskset"
-    freeze_tir_task_set(train, test, task_root, sizes=TirSplitSizes(1, 1, 1, 1), seed=2)
+    freeze_task_set(train, test, task_root, sizes=SplitSizes(1, 1, 1, 1), seed=2)
     backend = tmp_path / "backend"
     backend.mkdir()
     (backend / "config.json").write_text('{"model_type":"qwen2"}')
@@ -422,7 +426,7 @@ def test_claude_cli_evaluation_records_real_subprocess_trace_and_rejects_drift(
     harness_root = tmp_path / "harness"
     freeze_claude_harness(prompt, cli, backend, harness_root, model="qwen-test-pinned")
     monkeypatch.setattr(claude_code, "source_files_digest", lambda _: "sha256:" + "a" * 64)
-    monkeypatch.setattr(claude_code, "tir_verifier_files", lambda _: ())
+    monkeypatch.setattr(claude_code, "verifier_sources", lambda _: ())
     output = tmp_path / "report.json"
     kwargs = dict(split=RsiSplit.MODEL_DEV, trial_id="trial1", runner_root=tmp_path)
     report = claude_code.evaluate_claude(
@@ -463,10 +467,13 @@ def test_claude_cli_evaluation_records_real_subprocess_trace_and_rejects_drift(
 def test_claude_limit_scores_one_case_zero_and_continues(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
-    from areal_rsi_tir import claude_code
-    from areal_rsi_tir.tasks import TirSplitSizes, freeze_tir_task_set, public_tir_tasks
-
     from areal_rsi.api.records import RsiSplit
+    from areal_rsi.infra.coordination.evaluation.tasks import (
+        SplitSizes,
+        freeze_task_set,
+        public_tasks,
+    )
+    from areal_rsi.infra.runtime import claude_solver as claude_code
 
     train, test = tmp_path / "train.jsonl", tmp_path / "test.jsonl"
     train.write_text(
@@ -485,8 +492,8 @@ def test_claude_limit_scores_one_case_zero_and_continues(
         json.dumps({"messages": [{"role": "user", "content": "2+2"}], "answer": "4"}) + "\n"
     )
     tasks = tmp_path / "tasks"
-    freeze_tir_task_set(train, test, tasks, sizes=TirSplitSizes(2, 1, 1, 1), seed=2)
-    first = public_tir_tasks(tasks, RsiSplit.HARNESS_EVOLVE)[0]
+    freeze_task_set(train, test, tasks, sizes=SplitSizes(2, 1, 1, 1), seed=2)
+    first = public_tasks(tasks, RsiSplit.HARNESS_EVOLVE)[0]
     # Leave room for interpreter startup on the shared filesystem; only the
     # deliberately sleeping case should hit the real subprocess deadline.
     budget_event = {
@@ -522,7 +529,7 @@ def test_claude_limit_scores_one_case_zero_and_continues(
     harness = tmp_path / "harness"
     freeze_claude_harness(prompt, cli, backend, harness, model="qwen-test", timeout_seconds=5)
     monkeypatch.setattr(claude_code, "source_files_digest", lambda _: "sha256:" + "a" * 64)
-    monkeypatch.setattr(claude_code, "tir_verifier_files", lambda _: ())
+    monkeypatch.setattr(claude_code, "verifier_sources", lambda _: ())
     report = claude_code.evaluate_claude(
         tasks,
         harness,
@@ -555,10 +562,13 @@ def test_frozen_claude_workflow_uses_areal_session_proxy(
 ) -> None:
     import asyncio
 
-    from areal_rsi_tir.claude_code import FrozenClaudeWorkflow
-    from areal_rsi_tir.tasks import TirSplitSizes, freeze_tir_task_set, public_tir_tasks
-
     from areal_rsi.api.records import RsiSplit
+    from areal_rsi.infra.coordination.evaluation.tasks import (
+        SplitSizes,
+        freeze_task_set,
+        public_tasks,
+    )
+    from areal_rsi.infra.runtime.claude_solver import FrozenClaudeWorkflow
 
     train, test = tmp_path / "train.jsonl", tmp_path / "test.jsonl"
     train.write_text(
@@ -577,7 +587,7 @@ def test_frozen_claude_workflow_uses_areal_session_proxy(
         json.dumps({"messages": [{"role": "user", "content": "2+2"}], "answer": "4"}) + "\n"
     )
     tasks = tmp_path / "tasks"
-    task_set = freeze_tir_task_set(train, test, tasks, sizes=TirSplitSizes(1, 1, 1, 1), seed=2)
+    task_set = freeze_task_set(train, test, tasks, sizes=SplitSizes(1, 1, 1, 1), seed=2)
     backend = tmp_path / "backend"
     backend.mkdir()
     (backend / "config.json").write_text('{"model_type":"qwen2"}')
@@ -613,7 +623,7 @@ def test_frozen_claude_workflow_uses_areal_session_proxy(
         task_set_id=task_set.task_set_id,
         harness_id=spec.harness_id,
     )
-    task = public_tir_tasks(tasks, RsiSplit.MODEL_TRAIN)[0]
+    task = public_tasks(tasks, RsiSplit.MODEL_TRAIN)[0]
     row = {"task_id": task.task_id, "messages": task.input["messages"], "answer": "\\boxed{2}"}
     assert (
         asyncio.run(workflow.run(row, base_url="http://proxy.example:3123", api_key="session-key"))

@@ -1,18 +1,37 @@
 # AReaL RSI
 
-从空历史重建的模型与 Harness RSI 实验项目。首个目标是数学 TIR Agent 的单代闭环：冻结任务与 `M0/H0`，搜索并选择 `H1`，在固定 `H1` 下用 AReaL GRPO 训练 `M1`，配对评测四种组合并记录发布决定。
+在冻结的数据、模型和 Harness 上执行候选研究、GRPO 训练、配对评测与版本发布。首版部署使用 Slurm，训练和推理由 AReaL v2 控制器创建 worker。
 
-当前已有从候选生成/选版到 AReaL 2.0 GRPO recipe、配对评测与原子发布的代码和 CPU 行为测试。**尚未在 Slurm GPU 集群执行真实推理、训练或封存评测**；CPU 模拟结果不能代表能力提升。运行准备见 [Slurm TIR 示例](examples/areal_rsi_tir/README.md)，验收事实见 [实现状态](docs/implementation-status.md)，实验约束见 [架构](docs/architecture.md) 与 [研发计划](docs/roadmap.md)。旧项目保留在原分支作为实现参考，不属于本分支历史。
+代码安装为一个 `areal_rsi` 包：
 
-首版只支持 Slurm：控制器运行在能调用 `sbatch` 的集群环境，AReaL 负责提交 GPU worker。数据合成和 SFT 是后续独立实验，不进入首个闭环的关键路径。
+| 目录 | 职责 |
+| --- | --- |
+| `api/` | 现有领域契约与 JSON 校验；不依赖实现 |
+| `infra/coordination/` | 可恢复的代际流程与发布记录 |
+| `infra/coordination/policies/` | 公开反馈提案、选择、噪声和晋升策略 |
+| `infra/coordination/evaluation/` | 冻结题集与 Harness、可信轨迹和训练收据；数学合成/评分在 `tir/` |
+| `infra/coordination/tools/` | 计算器和候选源码工具 |
+| `infra/runtime/` | Claude 执行及有冻结校验的 AReaL workflow |
+| `scripts/` | 任务无关的 AReaL v2 trainer、推理批次、Slurm 提交与作业收据 |
+| `examples/` | 任务 profile、奖励、提示词及配置装配，位于 `src/areal_rsi/` 内 |
 
-## 公共运行层（2026-10-05）
+[数学 TIR 示例](src/areal_rsi/examples/tir/README.md)的 `cycle.py` 只绑定数学 profile。普通分类示例使用同一个 `GenerationCycle`，包含相同的候选选择、混合奖励门槛、训练收据、四组 dev/sealed 评测和发布/回滚流程。
 
-- `api/execution.py` 定义外部执行、MCP 工具配置和结果契约；`api/research.py` 定义选择策略的输入输出。
-- `infra/runtime/claude.py` 执行 Claude Code 子进程，接受明确的 MCP 工具配置；`anthropic.py` 适配本地推理服务。两者不依赖数学题或 example。
-- `infra/coordination/policies/` 负责候选选择、噪声门槛和版本晋升；`infra/storage/artifacts.py` 负责模型、轨迹和源码证据。
-- `examples/areal_rsi_tir/` 保留数学题集、合成题、计算器、答案验证、TIR/Claude 训练配方和实验编排。最小执行入口仍是 `cycle.py`。
+接入新的 prompt/answer 数据集时，将数据规范化为 `messages` 与 `answer` JSONL，复用冻结工具；在 example 中配置 `PromptProfile` 的工作流、奖励/独立验证函数、答案格式和研究员指令。更换模型只改运行配置的模型路径和资源参数。原始数据格式的转换可留在 example，通用冻结、调度、训练与评测无需复制。
 
-新任务可以直接使用公共执行函数和具名契约，提供自己的 MCP 工具、题集和评分实现；无需导入 TIR example。非数学工具调用由 `tests/test_agent_runtime.py` 验证。没有新增单实现 Protocol 或旧 import 路径的转发层。
+也可以先用共享单轮 RLVR 路径训练本地数据，JSONL 格式为 `{"task_id":"one","prompt":"问题","answer":"答案"}`：
 
-迁移后的 Python 包仍随 wheel 完整安装。TIR 评分器的来源摘要覆盖整个 `areal_rsi` 包和 example 包；移动文件后需要冻结新的实验记录。历史源码锁、题集和分数留在原工作区，不迁移或覆盖。
+```bash
+python -m areal_rsi.examples.arithmetic --data /shared/arithmetic.jsonl \
+  --config src/areal_rsi/examples/grpo.yaml actor.path=/shared/models/math-model
+python -m areal_rsi.examples.classification --data /shared/labels.jsonl \
+  --config src/areal_rsi/examples/grpo.yaml actor.path=/shared/models/chat-model
+```
+
+这两个 example 共用数据校验和 trainer，只选择自己的奖励函数。部署到容器时使用 `scripts/submit_train.sh`，设置共享源码、镜像、配置、挂载和 `RECIPE`，并把数据参数传给脚本；分区、reservation 和 GPU 布局由站点环境与 AReaL 配置决定。配置须显式设置 `actor._version: v2`、`rollout._version: v2` 和 `scheduler.type: slurm`。
+
+```bash
+PATH="$PWD/.venv/bin:$PATH" make check
+```
+
+CPU 测试验证流程和故障路径；可选 AReaL 契约测试使用真实 checkout 的配置解析与工作流，训练器/推理引擎使用替身，不代表 GPU 训练或能力提升。历史数据目录、候选摘要、冻结协议及 source-lock 留在原 worktree；迁移源码后，新实验应重新冻结源码身份。

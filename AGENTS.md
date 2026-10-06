@@ -2,7 +2,7 @@
 
 - 契约放 `api/`，核心实现放 `infra/`，`ui/` 仅是可选入口；不增加顶层 base/modules/app 层。
 - `api/records.py`、`research.py`、`execution.py` 放数据契约，`interfaces.py` 仅在存在真实多个实现时放协议，`control.py` 放控制请求和 JSON 边界校验。
-- 最小 demo 的执行入口在 `examples/areal_rsi_tir/cycle.py`；`api/` 与 `scripts/` 保持任务无关，API 不导入 infra，infra 不导入 UI 或示例。
+- 最小 demo 的执行入口在 `src/areal_rsi/examples/tir/cycle.py`；`api/` 与 `scripts/` 保持任务无关，API 不导入 infra，infra 不导入 UI 或示例。
 - 优先删减重复逻辑、合并薄模块；不为目录对称、潜在扩展或缩短文件新增层次。
 - 不增加单实现注入接口、转发类、空生命周期方法或兼容壳；需要抽象时先说明真实复用点。
 - 固定业务结构使用具名 dataclass/enum，禁止用多层 `dict[str, Any]` 承载内部状态、重试和结果；字典仅用于按 ID 索引、同类型映射或 JSON/插件边界。边界解码后使用类型字段。

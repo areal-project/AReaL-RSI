@@ -8,20 +8,20 @@ from fractions import Fraction
 from pathlib import Path
 
 import pytest
-from areal_rsi_tir.synthesis import (
+
+from areal_rsi.api.records import RsiSplit
+from areal_rsi.infra.coordination.evaluation.tasks import (
+    SplitSizes,
+    freeze_task_set,
+    load_task_set,
+)
+from areal_rsi.infra.coordination.evaluation.tir.synthesis import (
     freeze_tir_synthetic_probe,
     freeze_tir_synthetic_training,
     select_model_calibrated_cases,
     synthesize_tir_math_cases,
 )
-from areal_rsi_tir.synthetic_experiment import retained_state
-from areal_rsi_tir.tasks import (
-    TirSplitSizes,
-    freeze_tir_task_set,
-    load_tir_task_set,
-)
-
-from areal_rsi.api.records import RsiSplit
+from areal_rsi.infra.coordination.synthetic_experiment import retained_state
 
 
 def test_synthesis_rejects_a_nonterminal_weight_loop(
@@ -127,11 +127,11 @@ def test_synthetic_training_is_pure_and_keeps_frozen_evaluation_splits(tmp_path:
         + "\n"
     )
     parent_root, derived_root = tmp_path / "parent", tmp_path / "derived"
-    parent = freeze_tir_task_set(
+    parent = freeze_task_set(
         source,
         test,
         parent_root,
-        sizes=TirSplitSizes(2, 2, 16, 3),
+        sizes=SplitSizes(2, 2, 16, 3),
         seed=11,
     )
     probe_root = tmp_path / "probe"
@@ -144,7 +144,7 @@ def test_synthetic_training_is_pure_and_keeps_frozen_evaluation_splits(tmp_path:
     )
     assert len(probe.harness_evolve.task_ids) == 32
     assert probe.model_train == probe.harness_evolve == probe.harness_select
-    assert load_tir_task_set(probe_root) == probe
+    assert load_task_set(probe_root) == probe
     derived = freeze_tir_synthetic_training(
         parent_root,
         derived_root,
@@ -166,7 +166,7 @@ def test_synthetic_training_is_pure_and_keeps_frozen_evaluation_splits(tmp_path:
         assert (derived_root / "public" / f"{split.value}.jsonl").read_bytes() == (
             parent_root / "public" / f"{split.value}.jsonl"
         ).read_bytes()
-    assert load_tir_task_set(derived_root) == derived
+    assert load_task_set(derived_root) == derived
     provenance = json.loads((derived_root / "synthetic-provenance.json").read_bytes())
     assert provenance["synthetic_train_cases"] == 16
     assert provenance["original_train_cases"] == 0
@@ -174,19 +174,19 @@ def test_synthetic_training_is_pure_and_keeps_frozen_evaluation_splits(tmp_path:
     original_synthetic = synthetic_path.read_bytes()
     synthetic_path.write_bytes(original_synthetic + b"\n")
     with pytest.raises(ValueError, match="Synthetic training derivation changed"):
-        load_tir_task_set(derived_root)
+        load_task_set(derived_root)
     synthetic_path.write_bytes(original_synthetic)
     derivation_path = derived_root / "private/train-derivation.json"
     original_derivation = derivation_path.read_bytes()
     derivation_path.unlink()
     with pytest.raises(ValueError, match="Synthetic training derivation is incomplete"):
-        load_tir_task_set(derived_root)
+        load_task_set(derived_root)
     derivation_path.write_bytes(original_derivation)
     train_path = derived_root / "public/model_train.jsonl"
     train_path.chmod(0o600)
     train_path.write_bytes(train_path.read_bytes() + b"\n")
     with pytest.raises(ValueError, match="public split changed"):
-        load_tir_task_set(derived_root)
+        load_task_set(derived_root)
 
 
 def test_fractional_linear_answers_satisfy_unique_equations() -> None:
@@ -209,7 +209,7 @@ def test_fractional_linear_answers_satisfy_unique_equations() -> None:
 
 
 def test_supplement_answers_follow_ratio_and_production_constraints() -> None:
-    from areal_rsi_tir.synthesis import synthesize_tir_supplement
+    from areal_rsi.infra.coordination.evaluation.tir.synthesis import synthesize_tir_supplement
 
     cases = synthesize_tir_supplement(seed=20261004)
     assert len(cases) == len({item.case.task_id for item in cases}) == 256
@@ -246,7 +246,7 @@ def test_supplement_answers_follow_ratio_and_production_constraints() -> None:
 def test_dynamic_candidates_exclude_all_earlier_rounds() -> None:
     from collections import Counter
 
-    from areal_rsi_tir.dynamic_synthesis import fresh_candidates
+    from areal_rsi.infra.coordination.evaluation.tir.dynamic_synthesis import fresh_candidates
 
     previous = fresh_candidates(20271005, set())
     excluded = {item.case.task_id for item in previous}
@@ -261,7 +261,7 @@ def test_dynamic_candidates_exclude_all_earlier_rounds() -> None:
 def test_diverse_selection_caps_templates_and_excludes_solved_tasks() -> None:
     from collections import Counter
 
-    from areal_rsi_tir.synthesis import synthesize_diverse_math_cases
+    from areal_rsi.infra.coordination.evaluation.tir.synthesis import synthesize_diverse_math_cases
 
     cases = synthesize_diverse_math_cases(seed=91)
     assert len({c.recipe for c in cases}) == 16
@@ -283,7 +283,7 @@ def test_new_math_answers_against_independent_computations() -> None:
     from itertools import product
     from math import comb
 
-    from areal_rsi_tir.synthesis import synthesize_diverse_math_cases
+    from areal_rsi.infra.coordination.evaluation.tir.synthesis import synthesize_diverse_math_cases
 
     for item in synthesize_diverse_math_cases(seed=49, count=32):
         q, answer = item.case.question, Fraction(item.case.answer)

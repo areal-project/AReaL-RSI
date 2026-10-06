@@ -6,11 +6,40 @@ import dataclasses
 import json
 import re
 import types
-from enum import Enum
+from enum import Enum, StrEnum
 from pathlib import Path
 from typing import Any, Literal, TypeVar, cast, get_args, get_origin, get_type_hints
 
 T = TypeVar("T")
+
+
+class WorkspaceOperation(StrEnum):
+    LIST = "list"
+    READ = "read"
+    WRITE = "write"
+    REPLACE = "replace"
+    CHECK = "check"
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class WorkspaceRequest:
+    """A bounded file operation within an explicitly assigned candidate workspace."""
+
+    operation: WorkspaceOperation
+    path: str
+    content: str = ""
+    search: str = ""
+    start_line: int = 1
+    max_lines: int = 200
+
+    def __post_init__(self) -> None:
+        if (
+            len(self.content.encode()) > 2 * 1024 * 1024
+            or self.start_line < 1
+            or not 1 <= self.max_lines <= 500
+            or (self.operation is WorkspaceOperation.REPLACE and not self.search)
+        ):
+            raise ValueError("Invalid workspace operation limits")
 
 
 def safe_name(value: str) -> str:

@@ -5,10 +5,10 @@ import json
 from urllib.request import Request
 
 import pytest
-from areal_rsi_tir import proposer as harness
 
 from areal_rsi.api.records import RsiCaseScore, RsiEvaluationReport, RsiSplit, Task
 from areal_rsi.api.research import ResearcherSpec
+from areal_rsi.infra.coordination.policies import prompt as harness
 
 
 def test_researcher_receives_only_public_question_and_failure(
@@ -40,11 +40,12 @@ def test_researcher_receives_only_public_question_and_failure(
         )
 
     monkeypatch.setattr(harness, "_open", fake_open)
-    result = harness.propose_tir_prompt(
+    result = harness.propose_prompt(
         ResearcherSpec("http://127.0.0.1:8000/v1/chat/completions", "researcher", None),
         "Original {prompt}",
         (task,),
         report,
+        instruction="Improve the prompt and retain one {prompt} field.",
     )
     assert result == "Use the calculator. {prompt}\n"
     body = json.loads(sent[0].data)
@@ -80,11 +81,12 @@ def test_researcher_rejects_question_copy(monkeypatch: pytest.MonkeyPatch) -> No
 
     monkeypatch.setattr(harness, "_open", fake_open)
     with pytest.raises(ValueError, match="copied"):
-        harness.propose_tir_prompt(
+        harness.propose_prompt(
             ResearcherSpec("http://localhost:8000/v1/chat/completions", "m", None),
             "Original {prompt}",
             (task,),
             report,
+            instruction="Improve the prompt and retain one {prompt} field.",
         )
 
 
@@ -114,9 +116,10 @@ def test_researcher_rejects_unusable_template(monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.setattr(harness, "_open", fake_open)
     with pytest.raises(ValueError, match="exactly one"):
-        harness.propose_tir_prompt(
+        harness.propose_prompt(
             ResearcherSpec("http://127.0.0.1:8000/v1/chat/completions", "researcher", None),
             "Original {prompt}",
             (task,),
             report,
+            instruction="Improve the prompt and retain one {prompt} field.",
         )

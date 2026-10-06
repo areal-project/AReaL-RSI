@@ -11,7 +11,7 @@ from threading import Thread
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import ProxyHandler, Request, build_opener, urlopen
+from urllib.request import ProxyHandler, Request, build_opener
 
 from areal_rsi.api.control import json_bytes
 
@@ -132,7 +132,7 @@ def _server(
                 if key.lower() not in {"host", "content-length", "connection", "accept-encoding"}
             }
             try:
-                with urlopen(
+                with build_opener(ProxyHandler({})).open(
                     Request(
                         f"{upstream_url.rstrip('/')}{self.path}",
                         data=body,

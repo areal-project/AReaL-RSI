@@ -2,12 +2,36 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 from areal_rsi.api.control import safe_name
 from areal_rsi.api.records import valid_digest
+
+
+@dataclass(frozen=True, slots=True)
+class AgentExecutionSpec:
+    """Execution limits shared by task-specific Claude Code harnesses."""
+
+    model: str
+    timeout_seconds: int | None = None
+    max_budget_usd: float | None = None
+
+    def __post_init__(self) -> None:
+        if (
+            not self.model.strip()
+            or (
+                self.timeout_seconds is not None
+                and (type(self.timeout_seconds) is not int or self.timeout_seconds < 1)
+            )
+            or (
+                self.max_budget_usd is not None
+                and (not math.isfinite(self.max_budget_usd) or self.max_budget_usd <= 0)
+            )
+        ):
+            raise ValueError("Invalid agent execution limits")
 
 
 @dataclass(frozen=True, slots=True)

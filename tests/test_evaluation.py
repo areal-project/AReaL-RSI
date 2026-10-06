@@ -5,21 +5,22 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from areal_rsi_tir.assets import tir_verifier_files
-from areal_rsi_tir.contracts import TirTraceBundle, TirTrajectory
-from areal_rsi_tir.cycle import TirCycle
-from areal_rsi_tir.evaluation import (
-    complete_tir_report,
-    tir_trajectory,
-    verified_tir_case,
-)
-from areal_rsi_tir.harness import load_tir_harness
-from areal_rsi_tir.tasks import load_tir_task_set
-from areal_rsi_tir.verifier import strict_math_reward
 
 from areal_rsi.api.control import json_bytes, read_record
 from areal_rsi.api.records import RsiCaseScore, RsiSplit
 from areal_rsi.api.research import GenerationSpec, HarnessSelectionRule, RsiPromotionRule
+from areal_rsi.examples.tir.profile import PROFILE
+from areal_rsi.infra.coordination.evaluation.assets import verifier_sources
+from areal_rsi.infra.coordination.evaluation.contracts import TraceBundle, Trajectory
+from areal_rsi.infra.coordination.evaluation.evaluation import (
+    complete_report,
+    decode_trajectory,
+    verified_case,
+)
+from areal_rsi.infra.coordination.evaluation.harness import load_prompt_harness
+from areal_rsi.infra.coordination.evaluation.tasks import load_task_set
+from areal_rsi.infra.coordination.evaluation.tir.verifier import strict_math_reward
+from areal_rsi.infra.coordination.generation import GenerationCycle
 from areal_rsi.infra.storage.artifacts import checkpoint_digest, source_files_digest
 from areal_rsi.scripts.jobs import AReaLJobRunner, digest_bytes
 
@@ -56,7 +57,7 @@ def test_nested_factorial_comparison_does_not_expand_huge_integer() -> None:
     assert strict_math_reward(r"\boxed{11!!}", r"\boxed{2}") == 0.0
     assert strict_math_reward(r"\boxed{3!}", r"\boxed{6}") == 1.0
     sympy = pytest.importorskip("sympy")
-    from areal_rsi_tir.verifier import _integer_bound_counterexample
+    from areal_rsi.infra.coordination.evaluation.tir.verifier import _integer_bound_counterexample
 
     for argument, expected in [(0, 1), (1, 1), (3, 6)]:
         value = sympy.factorial(argument, evaluate=False)
@@ -68,7 +69,7 @@ def test_nested_factorial_comparison_does_not_expand_huge_integer() -> None:
 
 def test_integer_bounds_do_not_confuse_zero_or_negative_powers() -> None:
     sympy = pytest.importorskip("sympy")
-    from areal_rsi_tir.verifier import _integer_bound_counterexample
+    from areal_rsi.infra.coordination.evaluation.tir.verifier import _integer_bound_counterexample
 
     tower = sympy.Pow(2003, sympy.Pow(2002, 2001, evaluate=False), evaluate=False)
     assert _integer_bound_counterexample(sympy.Integer(4003), tower)
@@ -122,7 +123,7 @@ def test_comparison_retry_preserves_equality_and_propagates_failure(monkeypatch)
 
 def test_training_reward_contains_persistent_math_timeout(monkeypatch) -> None:
     errors = pytest.importorskip("math_verify.errors")
-    from areal_rsi_tir import verifier
+    from areal_rsi.infra.coordination.evaluation.tir import verifier
 
     def timed_out(response: str, answer: str) -> float:
         raise errors.TimeoutException("persistent comparison timeout")
@@ -143,7 +144,7 @@ def test_tir_verification_excludes_tool_observation_tokens() -> None:
         assert answer == "24"
         return float(response == answer)
 
-    case = verified_tir_case(
+    case = verified_case(
         "case1",
         trajectory,
         answer="24",
@@ -153,13 +154,13 @@ def test_tir_verification_excludes_tool_observation_tokens() -> None:
     assert case.response == "24"
     assert case.generated_tokens == 2
     assert case.score == 1.0
-    evidence = tir_trajectory("case1", trajectory)
+    evidence = decode_trajectory("case1", trajectory)
     assert evidence.input_ids == (1, 2, 3, 4)
     assert evidence.loss_mask == (0, 1, 0, 1)
     assert evidence.attention_mask == (1, 1, 1, 1)
     trajectory["rewards"] = [0.0]
     with pytest.raises(ValueError, match="disagrees"):
-        verified_tir_case(
+        verified_case(
             "case1",
             trajectory,
             answer="24",
@@ -175,8 +176,8 @@ def test_trace_bundle_preserves_binary_masks_without_gold_answers(tmp_path: Path
         "attention_mask": [[True, True, True]],
         "rewards": [0.0],
     }
-    trace = tir_trajectory("case1", localized)
-    bundle = TirTraceBundle(
+    trace = decode_trajectory("case1", localized)
+    bundle = TraceBundle(
         1,
         "taskset_t0",
         RsiSplit.HARNESS_EVOLVE,
@@ -191,10 +192,10 @@ def test_trace_bundle_preserves_binary_masks_without_gold_answers(tmp_path: Path
     assert json.loads(encoded)["trajectories"][0]["attention_mask"] == [1, 1, 1]
     path = tmp_path / "trace.json"
     path.write_bytes(encoded)
-    assert read_record(path, TirTraceBundle) == bundle
+    assert read_record(path, TraceBundle) == bundle
     assert digest_bytes(encoded).startswith("sha256:")
     path.write_bytes(json_bytes(replace(bundle, trajectories=(replace(trace, reward=1.0),))))
-    assert read_record(path, TirTraceBundle) != bundle
+    assert read_record(path, TraceBundle) != bundle
     assert digest_bytes(path.read_bytes()) != digest_bytes(encoded)
 
 
@@ -206,10 +207,10 @@ def test_controller_rejects_a_report_with_changed_trace_bundle(
     tampered: bool,
 ) -> None:
     task_root, h0_root, runner, model = frozen_inputs
-    task_set = load_tir_task_set(task_root)
-    harness, _ = load_tir_harness(h0_root, runner)
+    task_set = load_task_set(task_root)
+    harness, _ = load_prompt_harness(h0_root, runner)
     model_digest = checkpoint_digest(model)
-    verifier_digest = source_files_digest(tir_verifier_files(runner))
+    verifier_digest = source_files_digest(verifier_sources(runner))
     candidate = tmp_path / "candidate.txt"
     candidate.write_text("Candidate {prompt}")
     spec = GenerationSpec(
@@ -236,8 +237,8 @@ def test_controller_rejects_a_report_with_changed_trace_bundle(
     def fake_run(stage: str, command: tuple[str, ...], output: Path) -> Path:
         del stage, command
         bundle_path = output.with_suffix(".trajectories.json")
-        trace = TirTrajectory(task_id, (1, 2), (0, 1), (1, 1), 0.0)
-        bundle = TirTraceBundle(
+        trace = Trajectory(task_id, (1, 2), (0, 1), (1, 1), 0.0)
+        bundle = TraceBundle(
             1,
             task_set.task_set_id,
             RsiSplit.HARNESS_EVOLVE,
@@ -250,7 +251,7 @@ def test_controller_rejects_a_report_with_changed_trace_bundle(
         encoded = json_bytes(bundle)
         bundle_path.parent.mkdir(parents=True, exist_ok=True)
         bundle_path.write_bytes(encoded)
-        report = complete_tir_report(
+        report = complete_report(
             task_set,
             RsiSplit.HARNESS_EVOLVE,
             (RsiCaseScore(task_id, 0.0, "wrong", 1),),
@@ -274,7 +275,7 @@ def test_controller_rejects_a_report_with_changed_trace_bundle(
     monkeypatch.setattr(jobs, "run", fake_run)
 
     def action() -> object:
-        return TirCycle(tmp_path / "data")._evaluate(
+        return GenerationCycle(tmp_path / "data", PROFILE)._evaluate(
             jobs,
             spec,
             task_set,

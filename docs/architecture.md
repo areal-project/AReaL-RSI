@@ -40,7 +40,8 @@ flowchart LR
 | `src/areal_rsi/api/control.py` | JSON 边界解码、ID/路径校验、控制请求 |
 | `src/areal_rsi/infra/coordination/` | 原子发布及版本谱系 |
 | `src/areal_rsi/scripts/` | AReaL recipe 进程收据与 Slurm 控制端预检 |
-| `examples/areal_rsi_tir/` | ToRL/TIR 的题集、Harness、reward、workflow、AReaL 训练/推理 recipe 与运行入口；仅在这里锁定同一实验并执行选版 |
+| `infra/coordination/evaluation/` | 通用题集、Harness、轨迹和收据校验；数学专有合成与评分在 `tir/` |
+| `src/areal_rsi/examples/` | profile、奖励与提示词装配；TIR 和分类共用 infra 中的代际流程 |
 
 API 不依赖 infra；infra 不依赖 UI。系统不复制 AReaL 的调度器或训练器。TIR 示例 recipe 直接调用 AReaL 的 `PPOTrainer`、`TIRWorkflow` 和 `SlurmScheduler`，经 `areal_rsi/scripts/` 留下作业意图与回执；通用核心不导入 TIR 示例，也不设置通用研究系统。当前旧分支的实现可作为参考，但不整包搬迁旧 Web UI、pass@k 控制层或 Ray 适配。
 

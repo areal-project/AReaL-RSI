@@ -1,11 +1,10 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from areal_rsi_tir.cycle import TirCycle
-from areal_rsi_tir.harness import TirHarnessSpec
 
 from areal_rsi.api.records import RsiCaseScore, RsiEvaluationReport, RsiSplit, TaskSetVersion
 from areal_rsi.api.research import (
@@ -15,6 +14,12 @@ from areal_rsi.api.research import (
     RsiRolloutEvidence,
     RsiTrainResult,
 )
+from areal_rsi.examples.classification import PROFILE as CLASSIFICATION_PROFILE
+from areal_rsi.examples.tir.profile import PROFILE
+from areal_rsi.infra.coordination.evaluation.harness import PromptHarnessSpec, freeze_prompt_harness
+from areal_rsi.infra.coordination.evaluation.profile import PromptProfile
+from areal_rsi.infra.coordination.evaluation.tasks import SplitSizes, freeze_task_set
+from areal_rsi.infra.coordination.generation import GenerationCycle
 from areal_rsi.infra.coordination.releases import active_release, rollback
 from areal_rsi.infra.storage.artifacts import checkpoint_digest
 
@@ -41,15 +46,47 @@ def _spec(frozen: tuple[Path, Path, Path, Path], candidate: Path) -> GenerationS
     )
 
 
+@pytest.mark.parametrize(
+    "profile", [PROFILE, CLASSIFICATION_PROFILE], ids=["tir", "classification"]
+)
 @pytest.mark.parametrize("mixed", [True, False])
 def test_generation_promotes_only_after_signal_and_sealed_gate(
     frozen_inputs: tuple[Path, Path, Path, Path],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     mixed: bool,
+    profile: PromptProfile,
 ) -> None:
+    if profile == CLASSIFICATION_PROFILE:
+        _, _, tir_runner, model = frozen_inputs
+        runner = tir_runner.parents[1] / "areal"
+        (runner / "workflow").mkdir()
+        (runner / "workflow/rlvr.py").write_text("# pinned RLVR source\n")
+        (runner / "config.yaml").write_text("scheduler:\n  type: slurm\n")
+        rows = [
+            {"messages": [{"role": "user", "content": question}], "answer": label}
+            for question, label in (
+                ("A wonderful movie", "positive"),
+                ("An awful book", "negative"),
+                ("A boring game", "negative"),
+                ("A lovely day", "positive"),
+                ("An exciting trip", "positive"),
+            )
+        ]
+        train_source, test_source = tmp_path / "labels-train.jsonl", tmp_path / "labels-test.jsonl"
+        train_source.write_text("\n".join(json.dumps(row) for row in rows[:4]) + "\n")
+        test_source.write_text(json.dumps(rows[4]) + "\n")
+        task_root = tmp_path / "labels"
+        freeze_task_set(train_source, test_source, task_root, sizes=SplitSizes(1, 1, 1, 1), seed=42)
+        prompt = tmp_path / "label-prompt.txt"
+        prompt.write_text("Classify as positive or negative: {prompt}")
+        h0_root = tmp_path / "label-h0"
+        freeze_prompt_harness(prompt, runner, h0_root, enabled_tools=())
+        frozen_inputs = task_root, h0_root, runner, model
     candidate = tmp_path / "candidate.txt"
     candidate.write_text("Reason and use the calculator. Final answer in \\boxed{{}}. {prompt}\n")
+    if profile == CLASSIFICATION_PROFILE:
+        candidate.write_text("Read the sentiment carefully and return only the label. {prompt}")
     spec = _spec(frozen_inputs, candidate)
     model1 = tmp_path / "trained"
     model1.mkdir()
@@ -59,11 +96,11 @@ def test_generation_promotes_only_after_signal_and_sealed_gate(
     seen: list[str] = []
 
     def fake_evaluate(
-        self: TirCycle,
+        self: GenerationCycle,
         jobs: object,
         spec: GenerationSpec,
         task_set: TaskSetVersion,
-        harness: TirHarnessSpec,
+        harness: PromptHarnessSpec,
         harness_root: Path,
         model_root: Path,
         model_digest: str,
@@ -105,11 +142,11 @@ def test_generation_promotes_only_after_signal_and_sealed_gate(
         )
 
     def fake_train(
-        self: TirCycle,
+        self: GenerationCycle,
         jobs: object,
         spec: GenerationSpec,
         task_set: TaskSetVersion,
-        harness: TirHarnessSpec,
+        harness: PromptHarnessSpec,
         harness_root: Path,
         model_digest: str,
         verifier_digest: str,
@@ -132,10 +169,10 @@ def test_generation_promotes_only_after_signal_and_sealed_gate(
             RsiRolloutEvidence("/shared/rollout", "sha256:" + "2" * 64, 2, 1),
         )
 
-    monkeypatch.setattr(TirCycle, "_evaluate", fake_evaluate)
-    monkeypatch.setattr(TirCycle, "_train", fake_train)
-    monkeypatch.setattr(TirCycle, "_preflight", staticmethod(lambda _spec, _root: None))
-    cycle = TirCycle(tmp_path / "data")
+    monkeypatch.setattr(GenerationCycle, "_evaluate", fake_evaluate)
+    monkeypatch.setattr(GenerationCycle, "_train", fake_train)
+    monkeypatch.setattr(GenerationCycle, "_preflight", staticmethod(lambda _spec, _root: None))
+    cycle = GenerationCycle(tmp_path / "data", profile)
     outcome = cycle.run(spec)
     if mixed:
         assert outcome.status == "promoted"
@@ -146,6 +183,10 @@ def test_generation_promotes_only_after_signal_and_sealed_gate(
         count = len(seen)
         assert cycle.run(spec) == outcome
         assert len(seen) == count
+        changed_profile = replace(profile, researcher_instruction="Changed task instructions")
+        with pytest.raises(ValueError, match="Immutable record changed"):
+            GenerationCycle(cycle.data_root, changed_profile).run(spec)
+        assert cycle.run(spec) == outcome
         next_spec = replace(
             spec,
             run_id="demo2",

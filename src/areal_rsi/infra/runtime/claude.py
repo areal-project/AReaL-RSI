@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import tempfile
 from contextlib import nullcontext
 from pathlib import Path
@@ -12,24 +11,29 @@ from typing import Any
 from urllib.parse import urlparse
 
 from areal_rsi.api.control import json_bytes
-from areal_rsi.api.execution import AgentRunResult, McpTool
+from areal_rsi.api.execution import AgentExecutionSpec, AgentRunResult, McpTool
 from areal_rsi.api.records import AgentHarnessSpec
+from areal_rsi.infra.runtime import run_process
 from areal_rsi.infra.runtime.anthropic import local_adapter
 
 CLAUDE_MAX_OUTPUT_TOKENS = 4096
 COMPACT_BACKEND_MAX_TOKENS = 512
 
 
-class ClaudeOutputLimit(RuntimeError):
-    def __init__(self, transcript: bytes) -> None:
-        super().__init__("Claude Code exhausted its output token budget")
+class ClaudeExecutionError(RuntimeError):
+    def __init__(self, reason: str, transcript: bytes) -> None:
+        super().__init__(reason)
         self.transcript = transcript
 
 
-class ClaudeBudgetLimit(RuntimeError):
+class ClaudeOutputLimit(ClaudeExecutionError):
     def __init__(self, transcript: bytes) -> None:
-        super().__init__("Claude Code exhausted its monetary budget")
-        self.transcript = transcript
+        super().__init__("Claude Code exhausted its output token budget", transcript)
+
+
+class ClaudeBudgetLimit(ClaudeExecutionError):
+    def __init__(self, transcript: bytes) -> None:
+        super().__init__("Claude Code exhausted its monetary budget", transcript)
 
 
 def final_event(raw: bytes) -> dict[str, Any]:
@@ -63,12 +67,14 @@ def read_result(raw: bytes) -> AgentRunResult:
 
 def run_claude(
     executable: Path,
-    spec: AgentHarnessSpec,
+    spec: AgentHarnessSpec | AgentExecutionSpec,
     prompt: str,
     tool: McpTool,
     backend_url: str,
     *,
     api_key: str | None = None,
+    cwd: Path | None = None,
+    transcript_path: Path | None = None,
 ) -> bytes:
     parsed = urlparse(backend_url)
     if (
@@ -100,7 +106,7 @@ def run_claude(
             )
         )
         compact_system: str | None = None
-        if prompt.startswith("System: "):
+        if isinstance(spec, AgentHarnessSpec) and prompt.startswith("System: "):
             first_line, prompt = prompt.split("\n", 1)
             compact_system = first_line.removeprefix("System: ").strip()
             if not compact_system:
@@ -111,24 +117,32 @@ def run_claude(
             "--output-format",
             "stream-json",
             "--verbose",
-            "--no-session-persistence",
-            "--no-chrome",
-            "--strict-mcp-config",
-            "--setting-sources",
-            "",
             "--mcp-config",
             str(mcp),
-            "--permission-mode",
-            "dontAsk",
-            "--tools",
-            "",
-            "--allowedTools",
-            f"mcp__{tool.server}__{tool.name}",
-            "--model",
-            spec.model,
-            "--max-budget-usd",
-            str(spec.max_budget_usd),
         ]
+        if isinstance(spec, AgentHarnessSpec):
+            command.extend(
+                (
+                    "--no-session-persistence",
+                    "--no-chrome",
+                    "--strict-mcp-config",
+                    "--setting-sources",
+                    "",
+                    "--permission-mode",
+                    "dontAsk",
+                    "--tools",
+                    "",
+                    "--allowedTools",
+                    f"mcp__{tool.server}__{tool.name}",
+                    "--max-budget-usd",
+                    str(spec.max_budget_usd),
+                )
+            )
+        else:
+            command.extend(
+                ("--permission-mode", "bypassPermissions", "--disallowedTools", "WebSearch,Agent")
+            )
+        command.extend(("--model", spec.model))
         if compact_system is not None:
             command.extend(("--system-prompt", compact_system))
         command.append(prompt)
@@ -148,10 +162,18 @@ def run_claude(
                 "ANTHROPIC_API_KEY": api_key or "local-inference-only",
                 "NO_PROXY": "*",
                 "no_proxy": "*",
-                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
                 "CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(CLAUDE_MAX_OUTPUT_TOKENS),
             }
         )
+        if isinstance(spec, AgentExecutionSpec):
+            for name in (
+                "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+                "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+                "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
+            ):
+                env.pop(name, None)
+        else:
+            env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
         adapter = (
             local_adapter(backend_url, max_tokens=COMPACT_BACKEND_MAX_TOKENS)
             if compact_system is not None
@@ -159,15 +181,20 @@ def run_claude(
         )
         with adapter as local_url:
             env["ANTHROPIC_BASE_URL"] = local_url
-            completed = subprocess.run(
-                command,
-                env=env,
-                cwd=work,
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                timeout=spec.timeout_seconds,
-                check=False,
-            )
+            if transcript_path is None:
+                completed = run_process(
+                    command, env=env, cwd=cwd or work, timeout=spec.timeout_seconds
+                )
+            else:
+                with transcript_path.open("xb") as transcript:
+                    completed = run_process(
+                        command,
+                        env=env,
+                        cwd=cwd or work,
+                        timeout=spec.timeout_seconds,
+                        stdout=transcript,
+                    )
+                completed.stdout = transcript_path.read_bytes()
         if completed.returncode != 0:
             result_events = []
             for line in completed.stdout.splitlines():
@@ -185,8 +212,9 @@ def run_claude(
                 in result_error
             ):
                 raise ClaudeOutputLimit(completed.stdout)
-            raise RuntimeError(
+            raise ClaudeExecutionError(
                 f"Claude Code exited {completed.returncode}: "
-                f"{result_error[:1000]} {completed.stderr.decode(errors='replace')[:1000]}"
+                f"{result_error[:1000]} {completed.stderr.decode(errors='replace')[:1000]}",
+                completed.stdout,
             )
         return completed.stdout

@@ -9,21 +9,24 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from areal_rsi_tir.contracts import TirTraceBundle
-from areal_rsi_tir.evaluate import main as eval_main
-from areal_rsi_tir.harness import freeze_tir_harness
-from areal_rsi_tir.tasks import TirSplitSizes, freeze_tir_task_set
-from areal_rsi_tir.train_rl import main as train_main
 
-from areal_rsi.api.control import read_record
+from areal_rsi.api.control import json_bytes, read_record
 from areal_rsi.api.records import RsiEvaluationReport
 from areal_rsi.api.research import RsiTrainResult
+from areal_rsi.examples.classification import PROFILE as CLASSIFICATION_PROFILE
+from areal_rsi.examples.tir.profile import PROFILE
+from areal_rsi.infra.coordination.evaluation.contracts import TraceBundle
+from areal_rsi.infra.coordination.evaluation.evaluate import main as eval_main
+from areal_rsi.infra.coordination.evaluation.harness import freeze_prompt_harness
+from areal_rsi.infra.coordination.evaluation.profile import PromptProfile
+from areal_rsi.infra.coordination.evaluation.tasks import SplitSizes, freeze_task_set
 from areal_rsi.infra.storage.artifacts import checkpoint_digest
 from areal_rsi.scripts.jobs import digest_bytes
+from areal_rsi.scripts.train import main as train_main
 
 
-def _math_inputs(
-    tmp_path: Path, runner: Path, *, evolve_size: int = 1
+def _prompt_inputs(
+    tmp_path: Path, runner: Path, profile: PromptProfile, *, evolve_size: int = 1
 ) -> tuple[Path, Path, Path, Path]:
     train = tmp_path / "train.jsonl"
     test = tmp_path / "test.jsonl"
@@ -31,19 +34,30 @@ def _math_inputs(
     def case(index: int) -> str:
         return json.dumps(
             {
-                "messages": [{"role": "user", "content": f"What is {index}+1?"}],
-                "answer": str(index + 1),
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": f"What is {index}+1?"
+                        if profile.enabled_tools
+                        else f"Review {index}: a wonderful day",
+                    }
+                ],
+                "answer": str(index + 1) if profile.enabled_tools else "positive",
             }
         )
 
     train.write_text("\n".join(case(index) for index in range(3 + evolve_size)) + "\n")
     test.write_text(case(3 + evolve_size) + "\n")
     task_root = tmp_path / "taskset"
-    freeze_tir_task_set(train, test, task_root, sizes=TirSplitSizes(evolve_size, 1, 1, 1), seed=42)
+    freeze_task_set(train, test, task_root, sizes=SplitSizes(evolve_size, 1, 1, 1), seed=42)
     prompt = tmp_path / "prompt.txt"
-    prompt.write_text("Solve with calculator. {prompt} Final answer in \\boxed{{}}.")
+    prompt.write_text(
+        "Solve with calculator. {prompt} Final answer in \\boxed{{}}."
+        if profile.enabled_tools
+        else "Return a sentiment label. {prompt}"
+    )
     harness_root = tmp_path / "h0"
-    freeze_tir_harness(prompt, runner, harness_root)
+    freeze_prompt_harness(prompt, runner, harness_root, enabled_tools=profile.enabled_tools)
     model = tmp_path / "model"
     model.mkdir()
     (model / "config.json").write_text('{"model_type":"gpt2"}')
@@ -52,11 +66,13 @@ def _math_inputs(
 
 
 @pytest.mark.skipif(not os.environ.get("AREAL_CHECKOUT"), reason="AReaL checkout not configured")
-@pytest.mark.parametrize("scheduler_type", ["slurm", "local"])
+@pytest.mark.parametrize(
+    "profile", [PROFILE, CLASSIFICATION_PROFILE], ids=["tir", "classification"]
+)
 def test_eval_recipe_writes_linked_report_and_trajectories(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    scheduler_type: str,
+    profile: PromptProfile,
 ) -> None:
     import areal.engine  # type: ignore[import-not-found]
     import areal.infra  # type: ignore[import-not-found]
@@ -65,9 +81,11 @@ def test_eval_recipe_writes_linked_report_and_trajectories(
     from areal.infra.staleness_manager import StalenessManager  # type: ignore[import-not-found]
 
     checkout = Path(os.environ["AREAL_CHECKOUT"]).resolve()
-    runner = checkout / "examples/tir"
+    runner = checkout / profile.runner_directory
     assert runner.is_dir()
-    task_root, harness_root, model, prompt = _math_inputs(tmp_path, runner, evolve_size=40)
+    task_root, harness_root, model, prompt = _prompt_inputs(
+        tmp_path, runner, profile, evolve_size=40
+    )
 
     class CharTokenizer:
         def encode(self, value: str, **_kwargs: Any) -> list[int]:
@@ -91,7 +109,7 @@ def test_eval_recipe_writes_linked_report_and_trajectories(
             assert role == "eval-rollout" and server_args is not None
 
         def submit(self, data: dict[str, Any], **kwargs: Any) -> int:
-            assert kwargs["workflow"] == "areal_rsi_tir.workflow.FrozenTIRWorkflow"
+            assert kwargs["workflow"] == profile.workflow
             assert kwargs["group_size"] == 1 and kwargs["is_eval"]
             assert kwargs["task_id"] == len(self.submissions)
             self.submissions.append(data)
@@ -143,14 +161,18 @@ def test_eval_recipe_writes_linked_report_and_trajectories(
     monkeypatch.setattr(areal.engine, "RemoteSGLangEngine", FakeEngineType)
     monkeypatch.setattr(
         areal.infra,
-        "LocalScheduler" if scheduler_type == "local" else "SlurmScheduler",
+        "SlurmScheduler",
         lambda exp_config: object(),
     )
     monkeypatch.setattr(areal.utils.hf_utils, "load_hf_tokenizer", lambda _path: tokenizer)
     output = tmp_path / "evaluation.json"
-    config = Path(__file__).resolve().parents[1] / "examples/areal_rsi_tir/tir_grpo.yaml"
+    config = Path(__file__).resolve().parents[1] / "src/areal_rsi/examples/grpo.yaml"
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_bytes(json_bytes(profile))
     eval_main(
         [
+            "--profile",
+            str(profile_path),
             "--task-set-root",
             str(task_root),
             "--harness-root",
@@ -163,13 +185,13 @@ def test_eval_recipe_writes_linked_report_and_trajectories(
             str(output),
             "--config",
             str(config),
-            f"scheduler.type={scheduler_type}",
+            "scheduler.type=slurm",
             "trial_name=cpu_eval",
             f"actor.path={model}",
             f"ref.path={model}",
             f"tokenizer_path={model}",
             f"sglang.model_path={model}",
-            "tir.enable_tools=calculator",
+            *(("++tir.enable_tools=calculator",) if profile.enabled_tools else ()),
             f"train_dataset.path={task_root / 'public/model_train.jsonl'}",
             f"valid_dataset.path={task_root / 'public/model_dev.jsonl'}",
             "gconfig.n_samples=1",
@@ -177,7 +199,7 @@ def test_eval_recipe_writes_linked_report_and_trajectories(
         ]
     )
     report = read_record(output, RsiEvaluationReport)
-    bundle = read_record(output.with_suffix(".trajectories.json"), TirTraceBundle)
+    bundle = read_record(output.with_suffix(".trajectories.json"), TraceBundle)
     assert controller.destroyed
     assert len(controller.submissions) == len(report.cases) == len(bundle.trajectories) == 40
     assert all(case.score == 1.0 for case in report.cases)
@@ -188,18 +210,22 @@ def test_eval_recipe_writes_linked_report_and_trajectories(
 
 
 @pytest.mark.skipif(not os.environ.get("AREAL_CHECKOUT"), reason="AReaL checkout not configured")
+@pytest.mark.parametrize(
+    "profile", [PROFILE, CLASSIFICATION_PROFILE], ids=["tir", "classification"]
+)
 @pytest.mark.parametrize("epochs", [1, 3])
 def test_grpo_recipe_writes_checkpoint_and_task_covered_rollout_receipt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     epochs: int,
+    profile: PromptProfile,
 ) -> None:
     import areal  # type: ignore[import-not-found]
     import areal.utils.hf_utils  # type: ignore[import-not-found]
     from areal.utils.saver import Saver  # type: ignore[import-not-found]
 
-    runner = Path(os.environ["AREAL_CHECKOUT"]).resolve() / "examples/tir"
-    task_root, harness_root, model, _prompt = _math_inputs(tmp_path, runner)
+    runner = Path(os.environ["AREAL_CHECKOUT"]).resolve() / profile.runner_directory
+    task_root, harness_root, model, _prompt = _prompt_inputs(tmp_path, runner, profile)
 
     class CharTokenizer:
         def encode(self, value: str, **_kwargs: Any) -> list[int]:
@@ -218,7 +244,7 @@ def test_grpo_recipe_writes_checkpoint_and_task_covered_rollout_receipt(
             pass
 
         def train(self, **kwargs: Any) -> None:
-            assert kwargs["workflow"] == "areal_rsi_tir.workflow.FrozenTIRWorkflow"
+            assert kwargs["workflow"] == profile.workflow
             assert kwargs["workflow_kwargs"]["task_set_root"] == str(task_root)
             assert kwargs["workflow_kwargs"]["model_digest"] == checkpoint_digest(model)
             checkpoint = Path(
@@ -250,9 +276,15 @@ def test_grpo_recipe_writes_checkpoint_and_task_covered_rollout_receipt(
 
     monkeypatch.setattr(areal, "PPOTrainer", FakeTrainer)
     monkeypatch.setattr(areal.utils.hf_utils, "load_hf_tokenizer", lambda _path: CharTokenizer())
-    config = Path(__file__).resolve().parents[1] / "examples/areal_rsi_tir/tir_grpo.yaml"
+    config = Path(__file__).resolve().parents[1] / "src/areal_rsi/examples/grpo.yaml"
     receipt_path = tmp_path / "train.json"
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_bytes(json_bytes(profile))
     train_args = [
+        "--recipe",
+        "areal_rsi.infra.coordination.evaluation.train.prepare",
+        "--profile",
+        str(profile_path),
         "--task-set-root",
         str(task_root),
         "--harness-root",
@@ -273,7 +305,7 @@ def test_grpo_recipe_writes_checkpoint_and_task_covered_rollout_receipt(
         f"ref.path={model}",
         f"tokenizer_path={model}",
         f"sglang.model_path={model}",
-        "tir.enable_tools=calculator",
+        *(("++tir.enable_tools=calculator",) if profile.enabled_tools else ()),
         f"train_dataset.path={task_root / 'public/model_train.jsonl'}",
         f"valid_dataset.path={task_root / 'public/model_dev.jsonl'}",
         f"total_train_epochs={epochs}",
@@ -298,3 +330,66 @@ def test_grpo_recipe_writes_checkpoint_and_task_covered_rollout_receipt(
     receipt_path.unlink()
     with pytest.raises(ValueError, match="original training intent"):
         train_main(["--reconcile-only", *train_args, "actor.optimizer.lr=0.000123"])
+
+
+@pytest.mark.skipif(not os.environ.get("AREAL_CHECKOUT"), reason="AReaL checkout not configured")
+@pytest.mark.parametrize(
+    "profile", [PROFILE, CLASSIFICATION_PROFILE], ids=["tir", "classification"]
+)
+def test_native_workflow_formats_frozen_prompt_and_rejects_changed_snapshot(
+    tmp_path: Path,
+    profile: PromptProfile,
+) -> None:
+    import importlib
+
+    from areal.api.cli_args import GenerationHyperparameters  # type: ignore[import-not-found]
+
+    from areal_rsi.infra.coordination.evaluation.assets import load_frozen_inputs, verifier_sources
+    from areal_rsi.infra.coordination.evaluation.profile import workflow_kwargs
+    from areal_rsi.infra.storage.artifacts import source_files_digest
+    from areal_rsi.scripts.train import load_config
+
+    runner = Path(os.environ["AREAL_CHECKOUT"]).resolve() / profile.runner_directory
+    task_root, harness_root, model, prompt = _prompt_inputs(tmp_path, runner, profile)
+    frozen = load_frozen_inputs(
+        task_root, harness_root, runner, boxed_answers=profile.boxed_answers
+    )
+    config_file = Path(__file__).resolve().parents[1] / "src/areal_rsi/examples/grpo.yaml"
+    config = load_config(
+        ["--config", str(config_file), f"actor.path={model}"],
+        profile.config_class,
+    )
+    kwargs = workflow_kwargs(
+        profile,
+        config,
+        prompt_template=frozen.prompt_template,
+        task_set_root=task_root,
+        harness_root=harness_root,
+        task_set_id=frozen.task_set.task_set_id,
+        harness_id=frozen.harness.harness_id,
+        runner_digest=frozen.harness.runner_digest,
+        verifier_digest=source_files_digest(verifier_sources(runner)),
+        model_digest=checkpoint_digest(model),
+    )
+
+    class CharTokenizer:
+        pad_token_id = 0
+        eos_token_id = 1
+
+        def encode(self, value: str, **_kwargs: Any) -> list[int]:
+            return [ord(character) for character in value]
+
+    kwargs["tokenizer"] = CharTokenizer()
+    kwargs["gconfig"] = GenerationHyperparameters()
+    if profile.enabled_tools:
+        config.tir.enable_tools = "calculator"
+    module, name = profile.workflow.rsplit(".", 1)
+    workflow_type = getattr(importlib.import_module(module), name)
+    workflow = workflow_type(**kwargs)
+    if not profile.enabled_tools:
+        ids = workflow.get_input_ids_fn(frozen.train_rows[0], kwargs["tokenizer"], False)
+        question = frozen.train_rows[0]["messages"][0]["content"]
+        assert "".join(chr(token) for token in ids) == prompt.read_text().format(prompt=question)
+    kwargs["model_digest"] = "sha256:" + "0" * 64
+    with pytest.raises(ValueError, match="model snapshot"):
+        workflow_type(**kwargs)

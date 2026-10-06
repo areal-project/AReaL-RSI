@@ -1,0 +1,9 @@
+{
+  "namespace": "dh183333/gwwedm",
+  "timezone": "Asia/Shanghai",
+  "lookback_days": 7,
+  "arxiv_query": "all:\"recursive self-improvement\" OR all:\"self-evolving agent\" OR all:\"self-improving agent\" OR all:\"automated scientific discovery\" OR all:\"harness optimization\"",
+  "github_queries": ["\"recursive self-improvement\"", "\"self-evolving agent\"", "\"harness optimization\""],
+  "watch_repos": ["hexo-ai/sia", "Darwin-Agent/HarnessX", "selfimproving-agent/Awesome-Self-Improving-Agents"],
+  "web_queries": ["site:arxiv.org recursive self-improvement", "site:github.com self-improving agent", "site:mp.weixin.qq.com 递归自我改进", "site:mp.weixin.qq.com 自进化 Agent", "site:xiaohongshu.com RSI 智能体", "site:xiaohongshu.com 自进化 Agent 自动科研"]
+}

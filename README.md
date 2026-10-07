@@ -22,6 +22,7 @@
 也可以先用共享单轮 RLVR 路径训练本地数据，JSONL 格式为 `{"task_id":"one","prompt":"问题","answer":"答案"}`：
 
 ```bash
+export AREAL_ADMIN_API_KEY=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')
 python -m areal_rsi.examples.arithmetic --data /shared/arithmetic.jsonl \
   --config src/areal_rsi/examples/grpo.yaml actor.path=/shared/models/math-model
 python -m areal_rsi.examples.classification --data /shared/labels.jsonl \
@@ -29,6 +30,8 @@ python -m areal_rsi.examples.classification --data /shared/labels.jsonl \
 ```
 
 这两个 example 共用数据校验和 trainer，只选择自己的奖励函数。部署到容器时使用 `scripts/submit_train.sh`，设置共享源码、镜像、配置、挂载和 `RECIPE`，并把数据参数传给脚本；分区、reservation 和 GPU 布局由站点环境与 AReaL 配置决定。配置须显式设置 `actor._version: v2`、`rollout._version: v2` 和 `scheduler.type: slurm`。
+
+提交脚本生成并传递 `AREAL_ADMIN_API_KEY`，示例配置用它设置 v2 的 `actor.admin_api_key`、`ref.admin_api_key` 和 `rollout.admin_api_key`。自定义配置也需设置这些字段；`rollout.agent.admin_api_key` 不适用于 v2。训练入口将控制器容器自动导出的挂载替换为 `WORKER_MOUNTS`，worker 的其他挂载使用 AReaL scheduler 配置，避免将控制器内的路径带到 GPU 宿主机。
 
 ```bash
 PATH="$PWD/.venv/bin:$PATH" make check

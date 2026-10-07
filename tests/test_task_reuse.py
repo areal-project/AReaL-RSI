@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,7 +13,7 @@ from typing import Any
 import pytest
 
 from areal_rsi.infra.coordination.evaluation import rlvr
-from areal_rsi.scripts.train import train, validate_v2
+from areal_rsi.scripts.train import TrainingPlan, train, validate_v2
 
 
 @pytest.mark.parametrize(
@@ -97,3 +98,40 @@ def test_duplicate_dataset_identity_is_rejected(tmp_path: Path) -> None:
     data.write_text(row + "\n" + row + "\n")
     with pytest.raises(ValueError, match="unique task identities"):
         rlvr.dataset_rows(data)
+
+
+@pytest.mark.parametrize("worker_mounts", [None, "/shared:/shared,/models:/models"])
+def test_worker_startup_does_not_inherit_controller_container_mounts(
+    monkeypatch: pytest.MonkeyPatch, worker_mounts: str | None
+) -> None:
+    controller_mounts = "/container/libmunge.so.2:/container/libmunge.so.2"
+    monkeypatch.setenv("SINGULARITY_BIND", controller_mounts)
+    monkeypatch.delenv("APPTAINER_BIND", raising=False)
+    if worker_mounts is None:
+        monkeypatch.delenv("WORKER_MOUNTS", raising=False)
+    else:
+        monkeypatch.setenv("WORKER_MOUNTS", worker_mounts)
+    config = SimpleNamespace(
+        scheduler=SimpleNamespace(type="slurm"),
+        actor=SimpleNamespace(_version="v2"),
+        rollout=SimpleNamespace(_version="v2"),
+    )
+
+    class Dataset:
+        @staticmethod
+        def from_list(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            return rows
+
+    class FailedTrainer:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            assert os.environ.get("SINGULARITY_BIND") == worker_mounts
+            assert os.environ.get("APPTAINER_BIND") == worker_mounts
+            raise RuntimeError("worker startup failure")
+
+    monkeypatch.setitem(sys.modules, "areal", SimpleNamespace(PPOTrainer=FailedTrainer))
+    monkeypatch.setitem(sys.modules, "datasets", SimpleNamespace(Dataset=Dataset))
+    plan = TrainingPlan(config, ({"prompt": "one"},), None, "workflow", {})
+    with pytest.raises(RuntimeError, match="worker startup failure"):
+        train(plan)
+    assert os.environ["SINGULARITY_BIND"] == controller_mounts
+    assert "APPTAINER_BIND" not in os.environ

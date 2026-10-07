@@ -17,6 +17,10 @@ done
 : "${WORKER_MOUNTS:?Set worker container mounts for source, model and output}"
 [[ -s "$CONFIG_PATH" && -r "$TRAIN_IMAGE" ]] || { echo "Config and image must exist" >&2; exit 2; }
 export RECIPE TRAIN_PYTHON CONTAINER_BIN CONTROLLER_MOUNTS WORKER_MOUNTS
+if [[ -z ${AREAL_ADMIN_API_KEY:-} ]]; then
+  AREAL_ADMIN_API_KEY=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')
+fi
+export AREAL_ADMIN_API_KEY
 export PYTHONPATH="$AREAL_ROOT:$RSI_ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
 export SLURM_EXPORT_ENV=ALL
 mkdir -p "$RUN_ROOT"

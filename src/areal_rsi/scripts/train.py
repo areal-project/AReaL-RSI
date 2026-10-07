@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import os
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -54,6 +56,28 @@ def load_tokenizer(path: str) -> Any:
     return load_hf_tokenizer(path)
 
 
+@contextmanager
+def _worker_mount_environment() -> Iterator[None]:
+    # Container runtimes export their resolved controller mounts in *_BIND.
+    # Slurm workers run on hosts, where those container-side sources may not exist.
+    names = ("SINGULARITY_BIND", "APPTAINER_BIND")
+    previous = {name: os.environ.get(name) for name in names}
+    mounts = os.environ.get("WORKER_MOUNTS")
+    try:
+        for name in names:
+            if mounts:
+                os.environ[name] = mounts
+            else:
+                os.environ.pop(name, None)
+        yield
+    finally:
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
 def train(plan: TrainingPlan) -> None:
     """AReaL owns scheduling, worker creation, updates and trainer lifetime."""
     validate_v2(plan.config)
@@ -70,7 +94,10 @@ def train(plan: TrainingPlan) -> None:
     }
     if valid is not None:
         kwargs.update(eval_workflow=plan.workflow, eval_workflow_kwargs=plan.workflow_kwargs)
-    with PPOTrainer(plan.config, dataset, valid_dataset=valid) as trainer:
+    with (
+        _worker_mount_environment(),
+        PPOTrainer(plan.config, dataset, valid_dataset=valid) as trainer,
+    ):
         trainer.train(**kwargs)
     if plan.finalize is not None:
         plan.finalize()

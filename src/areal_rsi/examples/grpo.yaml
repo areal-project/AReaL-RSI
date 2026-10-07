@@ -17,6 +17,7 @@ scheduler:
 
 rollout:
   _version: v2
+  admin_api_key: ${oc.env:AREAL_ADMIN_API_KEY,areal-admin-key}
   backend: "sglang:d4p1t1"
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
@@ -39,6 +40,7 @@ gconfig:
 
 actor:
   _version: v2
+  admin_api_key: ${oc.env:AREAL_ADMIN_API_KEY,areal-admin-key}
   backend: "fsdp:d4p1t1"
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
@@ -87,6 +89,7 @@ actor:
       env_vars: {}
 
 ref:
+  admin_api_key: ${actor.admin_api_key}
   backend: ${actor.backend}
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}

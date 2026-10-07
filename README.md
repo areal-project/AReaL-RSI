@@ -39,6 +39,8 @@ v2 接受带 `run()` 方法的 Agent。共享 `PromptRewardAgent` 通过会话�
 
 提交脚本生成并传递 `AREAL_ADMIN_API_KEY`，示例配置用它设置 v2 的 `actor.admin_api_key`、`ref.admin_api_key` 和 `rollout.admin_api_key`。自定义配置也需设置这些字段；`rollout.agent.admin_api_key` 不适用于 v2。训练入口将控制器容器自动导出的挂载替换为 `WORKER_MOUNTS`，worker 的其他挂载使用 AReaL scheduler 配置，避免将控制器内的路径带到 GPU 宿主机。
 
+提交端使用 Python 3.11+ 将参数写入规范 JSON 并拒绝覆盖已有参数记录。宿主默认 Python 较旧时，设置 `SUBMIT_PYTHON=/shared/venv/bin/python`；镜像内解释器由 `TRAIN_PYTHON` 指定，默认为 `python3`。提交端无需启动容器，Slurm CPU 控制器在镜像内校验参数并调用同一个训练入口。
+
 ```bash
 PATH="$PWD/.venv/bin:$PATH" make check
 ```

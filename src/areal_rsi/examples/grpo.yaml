@@ -41,7 +41,7 @@ gconfig:
 actor:
   _version: v2
   admin_api_key: ${oc.env:AREAL_ADMIN_API_KEY,areal-admin-key}
-  backend: "fsdp:d4p1t1"
+  backend: "megatron:d4p1t1"
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
   path: Qwen/Qwen2.5-Math-1.5B
@@ -79,6 +79,7 @@ actor:
   adv_norm:
     mean_level: batch
     std_level: batch
+  weight_update_mode: xccl
   max_new_tokens: ${gconfig.max_new_tokens}
   scheduling_spec:
     - task_type: worker

@@ -1,6 +1,6 @@
 # AReaL RSI
 
-在冻结的数据、模型和 Harness 上执行候选研究、GRPO 训练、配对评测与版本发布。首版部署使用 Slurm，训练和推理由 AReaL v2 控制器创建 worker。
+在冻结的数据、模型和 Harness 上执行候选研究、GRPO 训练、配对评测与版本发布。首版部署使用 Slurm，训练和推理由 AReaL v2 控制器创建 worker；示例使用 Megatron 训练并通过 XCCL/NCCL 同步推理权重。
 
 代码安装为一个 `areal_rsi` 包：
 

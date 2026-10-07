@@ -18,8 +18,13 @@ from areal_rsi.api.control import json_bytes
 from areal_rsi.infra.coordination import continuation
 from areal_rsi.infra.coordination.evaluation import rlvr
 from areal_rsi.infra.coordination.evaluation.tasks import load_task_set
+from areal_rsi.infra.coordination.evaluation.tir.dynamic_synthesis import (
+    CompletedDynamicRounds,
+    completed_rounds,
+)
 from areal_rsi.infra.storage.artifacts import checkpoint_digest
 from areal_rsi.scripts.train import TrainingPlan, train, validate_v2
+from areal_rsi.scripts.train import main as train_main
 
 
 def test_completed_first_training_is_reused_without_rewriting_its_frozen_evidence(
@@ -330,12 +335,132 @@ def test_training_rejects_unsupported_deployment_before_trainer_import() -> None
         validate_v2(config)
 
 
+@pytest.mark.parametrize("disable_evaluation", [False, True])
+def test_training_cli_can_omit_validation_without_changing_training(
+    monkeypatch: pytest.MonkeyPatch, disable_evaluation: bool
+) -> None:
+    config = SimpleNamespace(
+        scheduler=SimpleNamespace(type="slurm"),
+        actor=SimpleNamespace(_version="v2"),
+        rollout=SimpleNamespace(_version="v2"),
+        valid_dataset=SimpleNamespace(batch_size=32),
+        evaluator=SimpleNamespace(
+            freq_epochs=1, freq_steps=None, freq_secs=None, eval_before_train=False
+        ),
+        total_train_epochs=2,
+        gconfig=SimpleNamespace(n_samples=4),
+    )
+    train_rows = ({"prompt": "training question"},)
+    valid_rows = ({"prompt": "validation question"},)
+    completed: list[str] = []
+
+    class Dataset:
+        @staticmethod
+        def from_list(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            if disable_evaluation:
+                assert rows == list(train_rows)
+            return rows
+
+    class Trainer:
+        def __init__(self, settings: Any, rows: Any, valid_dataset: Any) -> None:
+            assert rows == list(train_rows)
+            assert valid_dataset == (None if disable_evaluation else list(valid_rows))
+            assert settings.total_train_epochs == 2 and settings.gconfig.n_samples == 4
+            if disable_evaluation:
+                assert settings.valid_dataset is None
+                assert settings.evaluator.freq_epochs is None
+                assert settings.evaluator.freq_steps is None
+                assert settings.evaluator.freq_secs is None
+                assert not settings.evaluator.eval_before_train
+
+        def __enter__(self) -> Trainer:
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            completed.append("closed")
+
+        def train(self, **kwargs: Any) -> None:
+            assert kwargs["workflow"] == "workflow"
+            assert ("eval_workflow" in kwargs) is not disable_evaluation
+            completed.append("trained")
+
+    plan = TrainingPlan(
+        config, train_rows, valid_rows, "workflow", {}, lambda: completed.append("finalized")
+    )
+
+    def prepare(args: list[str]) -> TrainingPlan:
+        assert args == ["--config", "settings.yaml"]
+        return plan
+
+    monkeypatch.setattr("areal_rsi.scripts.train.import_symbol", lambda _name: prepare)
+    monkeypatch.setitem(sys.modules, "areal", SimpleNamespace(PPOTrainer=Trainer))
+    monkeypatch.setitem(sys.modules, "datasets", SimpleNamespace(Dataset=Dataset))
+    train_main(
+        [
+            "--recipe",
+            "example.prepare",
+            "--config",
+            "settings.yaml",
+            *(["--no-training-eval"] if disable_evaluation else []),
+        ]
+    )
+    assert completed == ["trained", "closed", "finalized"]
+
+
 def test_duplicate_dataset_identity_is_rejected(tmp_path: Path) -> None:
     data = tmp_path / "data.jsonl"
     row = json.dumps({"task_id": "one", "prompt": "A wonderful movie", "answer": "positive"})
     data.write_text(row + "\n" + row + "\n")
     with pytest.raises(ValueError, match="unique task identities"):
         rlvr.dataset_rows(data)
+
+
+def test_dynamic_resume_rejects_changed_parent_results(
+    frozen_inputs: tuple[Path, Path, Path, Path], tmp_path: Path
+) -> None:
+    tasks, harness, _, model = frozen_inputs
+    plan = continuation.ContinuationPlan(
+        "dynamic",
+        str(model),
+        str(harness / "prompt.txt"),
+        str(tasks),
+        str(tmp_path / "template.yaml"),
+        3,
+        3,
+        0.1,
+        0.5,
+        False,
+        4096,
+    )
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_bytes(json_bytes(plan))
+    source = tmp_path / "source"
+    (source / "src").mkdir(parents=True)
+    (source / "src/train.py").write_text("# frozen source\n")
+    root = tmp_path / "parent"
+    (root / "g1").mkdir(parents=True)
+    result = root / "g1/result.json"
+    result.write_bytes(b"original result")
+    lock = root / "source-lock.json"
+    lock.write_bytes(
+        json_bytes(
+            {
+                "sources": continuation.sources(source),
+                "plan": continuation.digest(plan_path),
+            }
+        )
+    )
+    receipt = CompletedDynamicRounds(
+        str(source),
+        str(root),
+        continuation.digest(plan_path),
+        continuation.digest(lock),
+        {"1": continuation.digest(result)},
+    )
+    result.write_bytes(b"changed result")
+    with pytest.raises(ValueError, match="round result changed"):
+        completed_rounds(receipt, plan, plan_path)
+    assert result.read_bytes() == b"changed result"
 
 
 @pytest.mark.parametrize("worker_mounts", [None, "/shared:/shared,/models:/models"])

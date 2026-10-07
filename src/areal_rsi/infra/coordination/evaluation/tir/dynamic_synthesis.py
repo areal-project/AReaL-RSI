@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
 
-from areal_rsi.api.control import json_bytes, read_record
+import yaml  # type: ignore[import-untyped]
+
+from areal_rsi.api.control import decode, json_bytes, read_record
 from areal_rsi.api.records import AgentEvaluationReport, RsiSplit
 from areal_rsi.infra.coordination.continuation import (
     ROOT,
@@ -18,6 +22,7 @@ from areal_rsi.infra.coordination.continuation import (
     run,
     run_gpu,
     sources,
+    training_config,
 )
 from areal_rsi.infra.coordination.evaluation.tasks import load_task_set
 from areal_rsi.infra.coordination.evaluation.tir.synthesis import (
@@ -28,7 +33,96 @@ from areal_rsi.infra.coordination.evaluation.tir.synthesis import (
     select_model_calibrated_cases,
     synthesize_diverse_math_cases,
 )
+from areal_rsi.infra.runtime.claude_solver import _backend_model_digest
+from areal_rsi.infra.storage.artifacts import validate_hf_model_files
 from areal_rsi.infra.storage.files import write_bytes
+
+
+@dataclass(frozen=True, slots=True)
+class CompletedDynamicRounds:
+    """Frozen parent evidence for continuing only the remaining dynamic rounds."""
+
+    source_root: str
+    output_root: str
+    plan_digest: str
+    source_lock_digest: str
+    result_digests: dict[str, str]
+
+
+def completed_rounds(
+    receipt: CompletedDynamicRounds, plan: ContinuationPlan, plan_path: Path
+) -> tuple[RoundResult, ...]:
+    root = Path(receipt.output_root)
+    lock = root / "source-lock.json"
+    if digest(plan_path) != receipt.plan_digest or digest(lock) != receipt.source_lock_digest:
+        raise ValueError("Completed dynamic plan or source lock changed")
+    frozen = read_record(lock, dict[str, Any])
+    if frozen["plan"] != receipt.plan_digest or decode(
+        dict[str, str], frozen["sources"]
+    ) != sources(Path(receipt.source_root)):
+        raise ValueError("Completed dynamic source changed")
+    count = len(receipt.result_digests)
+    if count not in (1, 2) or set(receipt.result_digests) != {str(n) for n in range(1, count + 1)}:
+        raise ValueError("Completed dynamic rounds must be consecutive, with a round remaining")
+    fixed = load_task_set(Path(plan.task_set))
+    model, prompt = plan.model, Path(plan.prompt)
+    results: list[RoundResult] = []
+    for generation in range(1, count + 1):
+        round_root = root / f"g{generation}"
+        result_path = round_root / "result.json"
+        if digest(result_path) != receipt.result_digests[str(generation)]:
+            raise ValueError("Completed dynamic round result changed")
+        result = read_record(result_path, RoundResult)
+        inner = read_record(round_root / "run/g1-result.json", RoundResult)
+        round_plan = read_record(round_root / "plan.json", ContinuationPlan)
+        actual_config = decode(
+            dict[str, Any], yaml.safe_load((round_root / "run/train-g1.yaml").read_bytes())
+        )
+        expected_config = training_config(
+            round_plan,
+            round_root / "run",
+            Path(model),
+            1,
+            source_root=Path(receipt.source_root),
+        )
+        if json_bytes(actual_config) != json_bytes(expected_config):
+            raise ValueError("Completed dynamic training configuration changed")
+        tasks = load_task_set(Path(round_plan.task_set))
+        report_path = round_root / "run/g1-eval/report.json"
+        report = read_record(report_path, AgentEvaluationReport)
+        log = (round_root / "run/g1-train.log").read_text()
+        if (
+            result != replace(inner, generation=generation, stop=False)
+            or round_plan.model != model
+            or Path(round_plan.prompt).read_bytes() != prompt.read_bytes()
+            or tasks.model_dev != fixed.model_dev
+            or len(tasks.model_train.task_ids) != 512
+            or result.test_cases != 256
+            or digest(report_path) != inner.report_digests["after"]
+            or report.model != result.next_model
+            or report.task_set_id != tasks.task_set_id
+            or tuple(c.task_id for c in report.cases) != fixed.model_dev.task_ids
+            or sum(c.score for c in report.cases) != result.after_correct
+            or Path(result.next_prompt).read_bytes()
+            != (report_path.parent / "harness/prompt.txt").read_bytes()
+            or "Training completes!" not in log
+        ):
+            raise ValueError("Completed dynamic round does not prove the trained continuation")
+        updates = tuple(
+            int(v)
+            for v in re.findall(r"Weight update completed for pair 'actor-rollout' v(\d+) ", log)
+        )
+        if updates != tuple(range(1, 33)):
+            raise ValueError("Completed dynamic round must prove all 32 weight updates")
+        validate_hf_model_files(Path(result.next_model))
+        if _backend_model_digest(Path(result.next_model)) != report.backend_model_digest:
+            raise ValueError("Completed dynamic checkpoint differs from its evaluation")
+        for case in report.cases:
+            if digest(Path(case.transcript_path)) != case.transcript_digest:
+                raise ValueError("Completed dynamic evaluation transcript changed")
+        results.append(result)
+        model, prompt = result.next_model, Path(result.next_prompt)
+    return tuple(results)
 
 
 def fresh_candidates(seed: int, excluded: set[str]) -> tuple[SyntheticMathCase, ...]:
@@ -86,6 +180,8 @@ def main() -> None:
     parser.add_argument("--plan", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--first-round-calibration", type=Path)
+    parser.add_argument("--no-training-eval", action="store_true")
+    parser.add_argument("--completed-rounds", type=Path)
     args = parser.parse_args()
     plan = read_record(args.plan, ContinuationPlan)
     if plan.large_model or plan.minimum_rounds != 3 or plan.maximum_rounds != 3:
@@ -98,6 +194,14 @@ def main() -> None:
         raise ValueError("Expected train512/test256")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
+    completed = (
+        read_record(args.completed_rounds, CompletedDynamicRounds)
+        if args.completed_rounds is not None
+        else None
+    )
+    reused = completed_rounds(completed, plan, args.plan) if completed is not None else ()
+    if completed is not None:
+        write_bytes(output / "completed-rounds.json", json_bytes(completed), immutable=True)
     inherited = args.first_round_calibration
     if inherited is not None and not (inherited / "selection.json").is_file():
         raise ValueError("Inherited first-round calibration must have a frozen selection")
@@ -111,6 +215,10 @@ def main() -> None:
                 "first_round_calibration": str(inherited) if inherited else None,
                 "inherited_selection_digest": digest(inherited / "selection.json")
                 if inherited
+                else None,
+                "training_evaluation": not args.no_training_eval,
+                "completed_rounds_digest": digest(args.completed_rounds)
+                if args.completed_rounds is not None
                 else None,
             }
         ),
@@ -126,6 +234,16 @@ def main() -> None:
     for generation in range(1, 4):
         if sources() != frozen:
             raise ValueError("Source changed during dynamic experiment")
+        if generation <= len(reused) and completed is not None:
+            prior = Path(completed.output_root) / f"g{generation}"
+            for probe in sorted(prior.glob("batch*/taskset")):
+                excluded.update(load_task_set(probe).harness_evolve.task_ids)
+            selected = prior / "taskset"
+            excluded.update(load_task_set(selected).model_train.task_ids)
+            previous.append(selected)
+            result = reused[generation - 1]
+            model, prompt = result.next_model, Path(result.next_prompt)
+            continue
         round_root = output / f"g{generation}"
         round_root.mkdir(parents=True, exist_ok=True)
         candidates: list[SyntheticMathCase] = []
@@ -270,6 +388,7 @@ def main() -> None:
                 str(plan_path),
                 "--output",
                 str(round_root / "run"),
+                *(["--no-training-eval"] if args.no_training_eval else []),
             ],
             env,
         )

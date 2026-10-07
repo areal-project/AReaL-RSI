@@ -76,6 +76,7 @@ class ContinuationSources:
     template: str
     task_set_id: str
     chat_template: str | None
+    training_evaluation: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -326,6 +327,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--reuse-first-training", type=Path)
     parser.add_argument("--reuse-first-evaluation", type=Path)
+    parser.add_argument("--no-training-eval", action="store_true")
     args = parser.parse_args()
     if args.reuse_first_evaluation is not None and args.reuse_first_training is None:
         parser.error("--reuse-first-evaluation requires --reuse-first-training")
@@ -360,6 +362,7 @@ def main() -> None:
                 digest(Path(plan.template)),
                 tasks.task_set_id,
                 digest(chat_template) if chat_template else None,
+                training_evaluation=not args.no_training_eval,
             )
         ),
         immutable=True,
@@ -479,6 +482,8 @@ def main() -> None:
                     "--config",
                     str(config),
                 ]
+                if args.no_training_eval:
+                    command.append("--no-training-eval")
                 run([*command, "--validate-only"], env)
                 log = output / f"g{generation}-train.log"
                 complete = log.exists() and "Training completes!" in log.read_text()

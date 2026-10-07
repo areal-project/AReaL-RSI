@@ -78,16 +78,26 @@ def _worker_mount_environment() -> Iterator[None]:
                 os.environ[name] = value
 
 
-def train(plan: TrainingPlan) -> None:
+def train(plan: TrainingPlan, *, evaluate_during_training: bool = True) -> None:
     """AReaL owns scheduling, worker creation, updates and trainer lifetime."""
     validate_v2(plan.config)
     if not plan.train_rows:
         raise ValueError("AReaL training needs a nonempty dataset")
+    if not evaluate_during_training:
+        plan.config.valid_dataset = None
+        plan.config.evaluator.freq_epochs = None
+        plan.config.evaluator.freq_steps = None
+        plan.config.evaluator.freq_secs = None
+        plan.config.evaluator.eval_before_train = False
     PPOTrainer = importlib.import_module("areal").PPOTrainer
     Dataset = importlib.import_module("datasets").Dataset
 
     dataset = Dataset.from_list(list(plan.train_rows))
-    valid = Dataset.from_list(list(plan.valid_rows)) if plan.valid_rows is not None else None
+    valid = (
+        Dataset.from_list(list(plan.valid_rows))
+        if evaluate_during_training and plan.valid_rows is not None
+        else None
+    )
     kwargs: dict[str, Any] = {
         "workflow": plan.workflow,
         "workflow_kwargs": plan.workflow_kwargs,
@@ -108,6 +118,11 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--recipe", required=True, help="Import path of a recipe preparation function"
     )
+    parser.add_argument(
+        "--no-training-eval",
+        action="store_true",
+        help="Train without validation workers or evaluations",
+    )
     args, recipe_args = parser.parse_known_args(argv)
     prepare = cast(
         Callable[[list[str]], TrainingPlan | None],
@@ -115,7 +130,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     plan = prepare(recipe_args)
     if plan is not None:
-        train(plan)
+        train(plan, evaluate_during_training=not args.no_training_eval)
 
 
 if __name__ == "__main__":

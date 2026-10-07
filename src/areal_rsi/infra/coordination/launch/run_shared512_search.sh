@@ -4,19 +4,19 @@ set -euo pipefail
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../../../.." && pwd)
 AREAL=/storage/openpsi/users/fenghui/projects/AReaL-dev-0928
 IMAGE=/storage/openpsi/images/areal-dev-sglang-0821.sif
-PYTHON=/storage/openpsi/users/fenghui/rsi-tir-0929/venv/bin/python
+PYTHON=${RSI_EVAL_PYTHON:-/storage/openpsi/users/fenghui/rsi-tir-0929/venv/bin/python}
 CLAUDE=/storage/openpsi/users/fenghui/claude
 MODEL=$(realpath "${1:?base model or checkpoint}")
 TASKS=$(realpath "${2:?frozen shared task set}")
 PROMPT=$(realpath "${3:?incumbent prompt}")
 OUT=$(realpath -m "${4:?search output}")
-PORT=31950
+PORT=${RSI_EVAL_PORT:-$((20000 + ${SLURM_JOB_ID:-0} % 30000))}
 
 export PYTHONPATH="$ROOT/src"
 export NO_PROXY='*' no_proxy='*' HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
 if curl -fsSI "http://127.0.0.1:$PORT/" >/dev/null 2>&1; then
-  echo 'Port 31950 already serves another model' >&2
+  echo "Port $PORT already serves another model" >&2
   exit 1
 fi
 mkdir -p "$OUT"
@@ -30,8 +30,8 @@ template_args=()
 if [[ -n "${RSI_EVAL_CHAT_TEMPLATE:-}" ]]; then
   template_args=(--chat-template "$RSI_EVAL_CHAT_TEMPLATE")
 fi
-setsid env CUDA_VISIBLE_DEVICES=0 singularity exec --no-eval --nv --bind /storage:/storage \
-  --env 'HF_HUB_OFFLINE=1,TRANSFORMERS_OFFLINE=1,NO_PROXY=*,no_proxy=*,CUDA_VISIBLE_DEVICES=0' \
+setsid singularity exec --no-eval --nv --bind /storage:/storage \
+  --env 'HF_HUB_OFFLINE=1,TRANSFORMERS_OFFLINE=1,NO_PROXY=*,no_proxy=*' \
   "$IMAGE" python3 -m sglang.launch_server \
   --model-path "$MODEL" --host 127.0.0.1 --port "$PORT" \
   --mem-fraction-static "${RSI_EVAL_MEMORY_FRACTION:-0.35}" --context-length "${RSI_EVAL_CONTEXT_LENGTH:-4096}" \

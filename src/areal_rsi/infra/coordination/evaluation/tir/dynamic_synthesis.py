@@ -16,6 +16,7 @@ from areal_rsi.infra.coordination.continuation import (
     RoundResult,
     digest,
     run,
+    run_gpu,
     sources,
 )
 from areal_rsi.infra.coordination.evaluation.tasks import load_task_set
@@ -116,7 +117,7 @@ def main() -> None:
         immutable=True,
     )
     env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join((str(ROOT / "src"), str(ROOT / "src")))
+    env["PYTHONPATH"] = str(ROOT / "src")
     env["RSI_EVAL_MEMORY_FRACTION"] = str(plan.eval_memory_fraction)
     env["RSI_EVAL_CONTEXT_LENGTH"] = str(plan.context_length)
     excluded = {task_id for split in RsiSplit for task_id in getattr(tasks, split.value).task_ids}
@@ -161,7 +162,7 @@ def main() -> None:
                 if calibration_root != round_root and not report.exists():
                     raise ValueError("Inherited calibration report is missing")
                 if not report.exists():
-                    run(
+                    run_gpu(
                         [
                             "bash",
                             str(

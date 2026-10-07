@@ -1,4 +1,4 @@
-"""Run a frozen Claude Code RSI plan inside an existing Slurm allocation."""
+"""Run a frozen Claude Code RSI plan from a CPU Slurm controller."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ import hashlib
 import json
 import os
 import subprocess
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -87,6 +86,29 @@ def run(command: list[str], env: dict[str, str], log: Path | None = None) -> Non
             subprocess.run(command, cwd=ROOT, env=env, stdout=stream, stderr=stream, check=True)
 
 
+def run_gpu(command: list[str], env: dict[str, str], *, gpus: int = 1) -> None:
+    # A CPU controller's allocation cannot host GPU steps. Start a fresh allocation.
+    allocation_env = {key: value for key, value in env.items() if not key.startswith("SLURM_")}
+    allocation_env["SLURM_EXPORT_ENV"] = "ALL"
+    run(
+        [
+            "srun",
+            "--mpi=none",
+            "--nodes=1",
+            "--ntasks=1",
+            "--cpus-per-task=8",
+            "--mem=64G",
+            f"--gres=gpu:{gpus}",
+            "--time=08:00:00",
+            f"--partition={env['RSI_SLURM_PARTITION']}",
+            f"--reservation={env['RSI_SLURM_RESERVATION']}",
+            "--job-name=rsi-gpu-stage",
+            *command,
+        ],
+        allocation_env,
+    )
+
+
 def prepare_config(
     plan: ContinuationPlan, output: Path, model: Path, generation: int
 ) -> tuple[Path, Path]:
@@ -95,20 +117,24 @@ def prepare_config(
     config["actor"]["_version"] = "v2"
     config["rollout"]["_version"] = "v2"
     config["scheduler"]["type"] = "slurm"
+    # Native Slurm schedules the two d4 roles independently, four GPUs per job.
+    config["cluster"]["n_gpus_per_node"] = 4
     config["experiment_name"] = "rsi-continuation-20261005"
     config["trial_name"] = trial
     config["cluster"]["fileroot"] = str(output / "areal-experiments")
     config["cluster"]["name_resolve"]["nfs_record_root"] = str(output / "name-resolve")
     config["actor"]["path"] = config["ref"]["path"] = str(model)
+    config["rollout"]["model"] = str(model)
     config["total_train_epochs"] = 2
     config["gconfig"]["max_tokens"] = plan.context_length
     config["sglang"]["context_length"] = plan.context_length
     for section, split in (("train_dataset", "model_train"), ("valid_dataset", "model_dev")):
         config[section]["path"] = str(Path(plan.task_set) / f"public/{split}.jsonl")
         config[section]["batch_size"] = 32
-    config["actor"]["scheduling_spec"][0]["env_vars"]["PYTHONPATH"] = os.pathsep.join(
-        (str(AREAL), str(ROOT / "src"), str(ROOT / "src"))
-    )
+    scheduling = config["actor"]["scheduling_spec"][0]
+    scheduling["reservation"] = os.environ["RSI_SLURM_RESERVATION"]
+    scheduling["srun_additional_args"] = "--unbuffered --mpi=none -K"
+    scheduling["env_vars"]["PYTHONPATH"] = os.pathsep.join((str(AREAL), str(ROOT / "src")))
     if plan.large_model:
         # Keep optimizer and effective batch fixed; reduce initialization/optimizer peaks.
         config["actor"]["fsdp"] = {
@@ -225,7 +251,7 @@ def main() -> None:
         env.pop(key, None)
     env.update(
         {
-            "PYTHONPATH": os.pathsep.join((str(AREAL), str(ROOT / "src"), str(ROOT / "src"))),
+            "PYTHONPATH": os.pathsep.join((str(AREAL), str(ROOT / "src"))),
             "NO_PROXY": "*",
             "no_proxy": "*",
             "HF_HUB_OFFLINE": "1",
@@ -246,7 +272,7 @@ def main() -> None:
         if result_path.exists():
             result = read_record(result_path, RoundResult)
         else:
-            run(
+            run_gpu(
                 [
                     "bash",
                     str(ROOT / "src/areal_rsi/infra/coordination/launch/run_shared512_search.sh"),
@@ -263,12 +289,13 @@ def main() -> None:
                 "singularity",
                 "exec",
                 "--no-eval",
-                "--nv",
+                "--pid",
+                "--writable-tmpfs",
                 "--bind",
-                "/storage:/storage",
+                env["CONTROLLER_MOUNTS"],
                 "--env",
                 f"PYTHONPATH={env['PYTHONPATH']},HF_HUB_OFFLINE=1,"
-                "TRANSFORMERS_OFFLINE=1,NO_PROXY=*,no_proxy=*",
+                "TRANSFORMERS_OFFLINE=1,NO_PROXY=*,no_proxy=*,LD_LIBRARY_PATH=/usr/lib64/slurm",
                 IMAGE,
                 "python3",
                 "-m",
@@ -288,18 +315,12 @@ def main() -> None:
             log = output / f"g{generation}-train.log"
             complete = log.exists() and "Training completes!" in log.read_text()
             if not complete:
+                # Wait for the eight-GPU budget before AReaL's bounded worker startup.
+                run_gpu(["true"], env, gpus=8)
                 run(command, env, log)
             if not (checkpoint / "model.safetensors").is_file():
                 raise ValueError("Completed training has no checkpoint")
-            for _ in range(180):
-                if not subprocess.check_output(
-                    ["nvidia-smi", "--query-compute-apps=pid", "--format=csv,noheader"], text=True
-                ).strip():
-                    break
-                time.sleep(2)
-            else:
-                raise RuntimeError("Training GPU processes did not exit")
-            run(
+            run_gpu(
                 [
                     "bash",
                     str(ROOT / "src/areal_rsi/infra/coordination/launch/run_shared512_eval.sh"),

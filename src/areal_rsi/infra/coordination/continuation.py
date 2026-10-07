@@ -90,7 +90,6 @@ class CompletedFirstTraining:
     log_digest: str
     checkpoint_digest: str
     search_digests: dict[str, str]
-    evaluation: SavedEvaluation | None = None
 
 
 def digest(path: Path) -> str:
@@ -326,7 +325,10 @@ def main() -> None:
     parser.add_argument("--plan", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--reuse-first-training", type=Path)
+    parser.add_argument("--reuse-first-evaluation", type=Path)
     args = parser.parse_args()
+    if args.reuse_first_evaluation is not None and args.reuse_first_training is None:
+        parser.error("--reuse-first-evaluation requires --reuse-first-training")
     plan = read_record(args.plan, ContinuationPlan)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -380,11 +382,14 @@ def main() -> None:
         env["RSI_EVAL_CHAT_TEMPLATE"] = str(chat_template)
     reuse_paths = None
     reuse = None
+    saved_evaluation = None
     if args.reuse_first_training is not None:
         reuse = read_record(args.reuse_first_training, CompletedFirstTraining)
         reuse_paths = reuse_first_training(plan, args.plan, reuse)
         # The new execution records references; parent records stay in place.
         write_bytes(output / "g1-training-reuse.json", json_bytes(reuse), immutable=True)
+    if args.reuse_first_evaluation is not None:
+        saved_evaluation = read_record(args.reuse_first_evaluation, SavedEvaluation)
     model, prompt = Path(plan.model), Path(plan.prompt)
     for generation in range(1, plan.maximum_rounds + 1):
         if sources() != frozen:
@@ -399,7 +404,7 @@ def main() -> None:
         else:
             if generation == 1 and reuse_paths is not None:
                 search, checkpoint = reuse_paths
-                if reuse is not None and reuse.evaluation is not None:
+                if reuse is not None and saved_evaluation is not None:
                     selected = Path((search / "selected-harness-path.txt").read_text().strip())
                     original_before = (
                         "m0-h0-dev.json"
@@ -426,7 +431,7 @@ def main() -> None:
                             model=str(checkpoint),
                         )
                     reverify_claude_report(
-                        reuse.evaluation,
+                        saved_evaluation,
                         Path(plan.task_set),
                         post / "report.json",
                         runner_root=AREAL / "areal",

@@ -187,13 +187,14 @@ def test_completed_first_training_is_reused_without_rewriting_its_frozen_evidenc
     # A saved post-training evaluation is also reverified without GPU generation.
     saved_after = tmp_path / "saved-after.json"
     saved_after.write_bytes(json_bytes({"saved": "after evaluation"}))
-    receipt = replace(
-        receipt,
-        evaluation=continuation.SavedEvaluation(
-            str(saved_after), continuation.digest(saved_after), str(source_root)
-        ),
+    evaluation_path = tmp_path / "saved-evaluation.json"
+    evaluation_path.write_bytes(
+        json_bytes(
+            continuation.SavedEvaluation(
+                str(saved_after), continuation.digest(saved_after), str(source_root)
+            )
+        )
     )
-    receipt_path.write_bytes(json_bytes(receipt))
     replayed: list[tuple[continuation.SavedEvaluation, Path]] = []
 
     def replay(saved: continuation.SavedEvaluation, _task_root: Path, path: Path, **_: Any) -> None:
@@ -223,6 +224,8 @@ def test_completed_first_training_is_reused_without_rewriting_its_frozen_evidenc
             str(replay_output),
             "--reuse-first-training",
             str(receipt_path),
+            "--reuse-first-evaluation",
+            str(evaluation_path),
         ],
     )
     continuation.main()
@@ -232,6 +235,23 @@ def test_completed_first_training_is_reused_without_rewriting_its_frozen_evidenc
     ]
     assert decisions == [replay_output / "g1-before-reverified.json"]
     assert before == {str(path): path.read_bytes() for path in output.rglob("*") if path.is_file()}
+    orphan_output = tmp_path / "orphan-evaluation"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "continuation",
+            "--plan",
+            str(plan_path),
+            "--output",
+            str(orphan_output),
+            "--reuse-first-evaluation",
+            str(evaluation_path),
+        ],
+    )
+    with pytest.raises(SystemExit) as rejected:
+        continuation.main()
+    assert rejected.value.code == 2 and not orphan_output.exists()
 
 
 @pytest.mark.parametrize(

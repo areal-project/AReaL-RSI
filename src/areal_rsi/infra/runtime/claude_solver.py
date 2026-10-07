@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import asyncio
 import hashlib
 import json
@@ -13,7 +14,7 @@ import subprocess
 import sys
 import unicodedata
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from multiprocessing import get_context
 from pathlib import Path
 from typing import Any, Literal
@@ -408,6 +409,121 @@ def evaluate_claude(
         cases,
     )
     write_bytes(output, json_bytes(report), immutable=True)
+    return report
+
+
+@dataclass(frozen=True, slots=True)
+class SavedEvaluation:
+    report_path: str
+    report_digest: str
+    source_root: str
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluationReverification:
+    original: SavedEvaluation
+    original_verifier_digest: str
+    verifier_digest: str
+    report_digest: str
+    cases: int
+
+
+def reverify_claude_report(
+    saved: SavedEvaluation, task_root: Path, output: Path, *, runner_root: Path
+) -> AgentEvaluationReport:
+    """Recheck authentic saved answers after a source move, without generating new answers."""
+
+    original_path = Path(saved.report_path)
+    if digest_bytes(_regular_bytes(original_path)) != saved.report_digest:
+        raise ValueError("Saved evaluation report changed")
+    original = read_record(original_path, AgentEvaluationReport)
+    parent_package = Path(saved.source_root) / "src/areal_rsi"
+    if original.verifier_digest != source_files_digest(
+        verifier_sources(runner_root, rsi_package=parent_package)
+    ):
+        raise ValueError("Saved evaluation source bundle changed")
+    import areal_rsi
+
+    current_package = Path(areal_rsi.__file__).resolve().parent
+    # Preserve the entire source bundle as evidence. Also establish that the
+    # actual scorer and transcript parser have not changed across the move.
+    for relative in (
+        "infra/coordination/evaluation/tir/verifier.py",
+        "infra/runtime/claude.py",
+    ):
+        if _regular_bytes(parent_package / relative) != _regular_bytes(current_package / relative):
+            raise ValueError("Saved evaluation grading or parsing policy changed")
+    for relative, name in (
+        ("infra/runtime/claude_solver.py", "_claude_math_reward"),
+        ("infra/coordination/evaluation/assets.py", "_gold_answer"),
+    ):
+        definitions = []
+        for package in (parent_package, current_package):
+            text = _regular_bytes(package / relative).decode()
+            definition = next(
+                (
+                    node
+                    for node in ast.parse(text).body
+                    if isinstance(node, ast.FunctionDef) and node.name == name
+                ),
+                None,
+            )
+            if definition is None:
+                raise ValueError("Saved evaluation grading policy changed")
+            definitions.append(ast.get_source_segment(text, definition))
+        if definitions[0] != definitions[1]:
+            raise ValueError("Saved evaluation grading policy changed")
+    tasks = load_task_set(task_root)
+    if (
+        original.split is not RsiSplit.MODEL_DEV
+        or original.task_set_id != tasks.task_set_id
+        or tuple(case.task_id for case in original.cases) != tasks.model_dev.task_ids
+    ):
+        raise ValueError("Saved evaluation does not match the frozen dev questions")
+    answers = decode(dict[str, str], json.loads((task_root / "private/answers.json").read_bytes()))
+    source_digest = source_files_digest(verifier_sources(runner_root))
+    cases = []
+    with ProcessPoolExecutor(max_workers=2, mp_context=get_context("spawn")) as pool:
+        for case in original.cases:
+            transcript = Path(case.transcript_path)
+            raw = _regular_bytes(transcript)
+            if (
+                digest_bytes(raw) != case.transcript_digest
+                or read_record(transcript.with_suffix(".json"), AgentCaseRecord) != case
+            ):
+                raise ValueError("Saved evaluation case or transcript changed")
+            score = 0.0
+            if case.failure_reason is None:
+                result = read_result(raw)
+                if (
+                    result.response != case.response
+                    or result.input_tokens != case.input_tokens
+                    or result.output_tokens != case.output_tokens
+                    or result.cost_usd != case.cost_usd
+                    or result.duration_ms != case.duration_ms
+                ):
+                    raise ValueError("Saved evaluation response differs from its transcript")
+                score = pool.submit(
+                    _claude_math_reward, result.response, _gold_answer(answers[case.task_id])
+                ).result(timeout=45)
+            if score != case.score:
+                raise ValueError("Saved evaluation score could not be reproduced")
+            cases.append(replace(case, verifier_digest=source_digest))
+    report = replace(original, verifier_digest=source_digest, cases=tuple(cases))
+    write_bytes(output, json_bytes(report), immutable=True)
+    write_bytes(
+        output.with_name(output.stem + "-reverification.json"),
+        json_bytes(
+            EvaluationReverification(
+                saved,
+                original.verifier_digest,
+                source_digest,
+                digest_bytes(json_bytes(report)),
+                len(report.cases),
+            )
+        ),
+        immutable=True,
+    )
     return report
 
 

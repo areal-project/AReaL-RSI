@@ -88,6 +88,7 @@ def test_completed_first_training_is_reused_without_rewriting_its_frozen_evidenc
     (search / "model-candidates").mkdir(parents=True)
     (search / "selected-harness-path.txt").write_text(str(harness))
     (search / "model-candidates/decision.json").write_bytes(json_bytes({"decision": "reuse"}))
+    (search / "m0-selected-dev.json").write_bytes(json_bytes({"saved": "before evaluation"}))
     checkpoint = output / (
         "areal-experiments/checkpoints/root/rsi-continuation-20261005/"
         "paired-g1/default/epoch1epochstep15globalstep31"
@@ -158,7 +159,7 @@ def test_completed_first_training_is_reused_without_rewriting_its_frozen_evidenc
     result = continuation.RoundResult(
         1, 1.0, 2.0, 256, (), True, False, str(checkpoint), str(harness / "prompt.txt"), {}
     )
-    monkeypatch.setattr(continuation, "decide", lambda *_args: result)
+    monkeypatch.setattr(continuation, "decide", lambda *_args, **_kwargs: result)
     receipt_path = tmp_path / "completed-training.json"
     receipt_path.write_bytes(json_bytes(receipt))
     new_output = tmp_path / "new-execution"
@@ -181,6 +182,55 @@ def test_completed_first_training_is_reused_without_rewriting_its_frozen_evidenc
     assert gpu_commands[0][2] == str(checkpoint)
     assert (new_output / "g1-training-reuse.json").read_bytes() == json_bytes(receipt)
     assert (new_output / "g1-result.json").read_bytes() == json_bytes(result)
+    assert before == {str(path): path.read_bytes() for path in output.rglob("*") if path.is_file()}
+
+    # A saved post-training evaluation is also reverified without GPU generation.
+    saved_after = tmp_path / "saved-after.json"
+    saved_after.write_bytes(json_bytes({"saved": "after evaluation"}))
+    receipt = replace(
+        receipt,
+        evaluation=continuation.SavedEvaluation(
+            str(saved_after), continuation.digest(saved_after), str(source_root)
+        ),
+    )
+    receipt_path.write_bytes(json_bytes(receipt))
+    replayed: list[tuple[continuation.SavedEvaluation, Path]] = []
+
+    def replay(saved: continuation.SavedEvaluation, _task_root: Path, path: Path, **_: Any) -> None:
+        replayed.append((saved, path))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(json_bytes({"original": saved.report_path}))
+
+    monkeypatch.setattr(continuation, "reverify_claude_report", replay)
+    monkeypatch.setattr(continuation, "freeze_claude_harness", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(continuation, "run_gpu", reject_training)
+    decisions: list[Path | None] = []
+
+    def decision(*_args: Any, before_path: Path | None = None) -> continuation.RoundResult:
+        decisions.append(before_path)
+        return result
+
+    monkeypatch.setattr(continuation, "decide", decision)
+    replay_output = tmp_path / "reverified-execution"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "continuation",
+            "--plan",
+            str(plan_path),
+            "--output",
+            str(replay_output),
+            "--reuse-first-training",
+            str(receipt_path),
+        ],
+    )
+    continuation.main()
+    assert [saved.report_path for saved, _ in replayed] == [
+        str(search / "m0-selected-dev.json"),
+        str(saved_after),
+    ]
+    assert decisions == [replay_output / "g1-before-reverified.json"]
     assert before == {str(path): path.read_bytes() for path in output.rglob("*") if path.is_file()}
 
 

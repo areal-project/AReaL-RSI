@@ -37,10 +37,12 @@ def _gold_answer(answer: str) -> str:
     return answer if answer.startswith("\\boxed{") else f"\\boxed{{{answer}}}"
 
 
-def verifier_sources(runner_root: Path) -> tuple[TrustedSourceFile, ...]:
+def verifier_sources(
+    runner_root: Path, *, rsi_package: Path | None = None
+) -> tuple[TrustedSourceFile, ...]:
     import areal_rsi
 
-    rsi_package = Path(areal_rsi.__file__).resolve().parent
+    rsi_package = rsi_package or Path(areal_rsi.__file__).resolve().parent
     return (
         TrustedSourceFile(
             "areal/api/reward_api.py", areal_checkout(runner_root) / "areal/api/reward_api.py"

@@ -17,6 +17,11 @@ from areal_rsi.api.control import decode, json_bytes, read_record, safe_name
 from areal_rsi.api.records import AgentEvaluationReport, AgentHarnessSpec, RsiSplit
 from areal_rsi.api.research import AgentHarnessSearchDecision
 from areal_rsi.infra.coordination.evaluation.tasks import load_task_set
+from areal_rsi.infra.runtime.claude_solver import (
+    SavedEvaluation,
+    freeze_claude_harness,
+    reverify_claude_report,
+)
 from areal_rsi.infra.storage.artifacts import checkpoint_digest, validate_hf_model_files
 from areal_rsi.infra.storage.files import write_bytes
 
@@ -85,6 +90,7 @@ class CompletedFirstTraining:
     log_digest: str
     checkpoint_digest: str
     search_digests: dict[str, str]
+    evaluation: SavedEvaluation | None = None
 
 
 def digest(path: Path) -> str:
@@ -256,12 +262,18 @@ def reuse_first_training(
 
 
 def decide(
-    plan: ContinuationPlan, generation: int, search: Path, post: Path, checkpoint: Path
+    plan: ContinuationPlan,
+    generation: int,
+    search: Path,
+    post: Path,
+    checkpoint: Path,
+    *,
+    before_path: Path | None = None,
 ) -> RoundResult:
     task_set = load_task_set(Path(plan.task_set))
     selected = Path((search / "selected-harness-path.txt").read_text().strip())
     reused = selected == search / "incumbent-harness"
-    before_path = search / ("m0-h0-dev.json" if reused else "m0-selected-dev.json")
+    before_path = before_path or search / ("m0-h0-dev.json" if reused else "m0-selected-dev.json")
     after_path = post / "report.json"
     before = read_record(before_path, AgentEvaluationReport)
     after = read_record(after_path, AgentEvaluationReport)
@@ -367,6 +379,7 @@ def main() -> None:
     if chat_template is not None:
         env["RSI_EVAL_CHAT_TEMPLATE"] = str(chat_template)
     reuse_paths = None
+    reuse = None
     if args.reuse_first_training is not None:
         reuse = read_record(args.reuse_first_training, CompletedFirstTraining)
         reuse_paths = reuse_first_training(plan, args.plan, reuse)
@@ -379,11 +392,46 @@ def main() -> None:
         search = output / f"g{generation}-search"
         post = output / f"g{generation}-eval"
         result_path = output / f"g{generation}-result.json"
+        before_path = None
+        restored_evaluation = False
         if result_path.exists():
             result = read_record(result_path, RoundResult)
         else:
             if generation == 1 and reuse_paths is not None:
                 search, checkpoint = reuse_paths
+                if reuse is not None and reuse.evaluation is not None:
+                    selected = Path((search / "selected-harness-path.txt").read_text().strip())
+                    original_before = (
+                        "m0-h0-dev.json"
+                        if selected == search / "incumbent-harness"
+                        else "m0-selected-dev.json"
+                    )
+                    before_path = output / "g1-before-reverified.json"
+                    reverify_claude_report(
+                        SavedEvaluation(
+                            str(search / original_before),
+                            reuse.search_digests[original_before],
+                            reuse.source_root,
+                        ),
+                        Path(plan.task_set),
+                        before_path,
+                        runner_root=AREAL / "areal",
+                    )
+                    if not (post / "harness").exists():
+                        freeze_claude_harness(
+                            selected / "prompt.txt",
+                            Path(CLAUDE),
+                            checkpoint,
+                            post / "harness",
+                            model=str(checkpoint),
+                        )
+                    reverify_claude_report(
+                        reuse.evaluation,
+                        Path(plan.task_set),
+                        post / "report.json",
+                        runner_root=AREAL / "areal",
+                    )
+                    restored_evaluation = True
             else:
                 run_gpu(
                     [
@@ -435,20 +483,21 @@ def main() -> None:
                     run(command, env, log)
                 validate_hf_model_files(checkpoint)
             selected = (search / "selected-harness-path.txt").read_text().strip()
-            run_gpu(
-                [
-                    "bash",
-                    str(ROOT / "src/areal_rsi/infra/coordination/launch/run_shared512_eval.sh"),
-                    str(checkpoint),
-                    plan.task_set,
-                    "model_dev",
-                    f"{plan.name}-g{generation}",
-                    str(post),
-                    str(Path(selected) / "prompt.txt"),
-                ],
-                env,
-            )
-            result = decide(plan, generation, search, post, checkpoint)
+            if not restored_evaluation:
+                run_gpu(
+                    [
+                        "bash",
+                        str(ROOT / "src/areal_rsi/infra/coordination/launch/run_shared512_eval.sh"),
+                        str(checkpoint),
+                        plan.task_set,
+                        "model_dev",
+                        f"{plan.name}-g{generation}",
+                        str(post),
+                        str(Path(selected) / "prompt.txt"),
+                    ],
+                    env,
+                )
+            result = decide(plan, generation, search, post, checkpoint, before_path=before_path)
             if sources() != frozen:
                 raise ValueError("Execution source changed before final report")
             write_bytes(result_path, json_bytes(result), immutable=True)

@@ -37,6 +37,8 @@ v2 接受带 `run()` 方法的 Agent。共享 `PromptRewardAgent` 通过会话�
 
 若旧控制器在第1轮的32次训练更新及检查点导出完成后退出，新执行可向 `areal_rsi.infra.coordination.continuation` 传入 `--reuse-first-training`，引用 `CompletedFirstTraining` 记录。控制器会核对原计划、源码锁、配置、完成日志、提示筛选记录及检查点摘要，然后只启动该轮训练后评测；原目录保持只读，后续轮次写入新输出目录。
 
+若训练后评测也已完成，恢复记录的 `evaluation` 可引用 `SavedEvaluation`，包含原报表路径、摘要和源码根目录。恢复入口会核验原源码包、评分与解析规则、题序、逐题记录和原始轨迹，并复算每道题，要求分数与原记录一致；失败题保留零分。训练前后报表在新目录中重新绑定当前完整源码摘要，保留原报表出处，随后执行原有严格轮次校验。这个路径不会重新生成答案或训练首轮，也不会改写旧报表。
+
 提交脚本生成并传递 `AREAL_ADMIN_API_KEY`，示例配置用它设置 v2 的 `actor.admin_api_key`、`ref.admin_api_key` 和 `rollout.admin_api_key`。自定义配置也需设置这些字段；`rollout.agent.admin_api_key` 不适用于 v2。训练入口将控制器容器自动导出的挂载替换为 `WORKER_MOUNTS`，worker 的其他挂载使用 AReaL scheduler 配置，避免将控制器内的路径带到 GPU 宿主机。
 
 提交端使用 Python 3.11+ 将参数写入规范 JSON 并拒绝覆盖已有参数记录。宿主默认 Python 较旧时，设置 `SUBMIT_PYTHON=/shared/venv/bin/python`；镜像内解释器由 `TRAIN_PYTHON` 指定，默认为 `python3`。提交端无需启动容器，Slurm CPU 控制器在镜像内校验参数并调用同一个训练入口。

@@ -5,10 +5,13 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
+from shutil import copytree, ignore_patterns
 
 import pytest
 
+from areal_rsi.api.control import json_bytes
 from areal_rsi.api.execution import AgentRunResult
 from areal_rsi.api.records import AgentCaseRecord, AgentEvaluationReport, RsiSplit
 from areal_rsi.infra.coordination.policies.harness import select_agent_harnesses
@@ -387,7 +390,12 @@ def test_claude_cli_evaluation_records_real_subprocess_trace_and_rejects_drift(
     from concurrent.futures import ThreadPoolExecutor
 
     from areal_rsi.api.records import RsiSplit
-    from areal_rsi.infra.coordination.evaluation.tasks import SplitSizes, freeze_task_set
+    from areal_rsi.infra.coordination.evaluation.assets import verifier_sources
+    from areal_rsi.infra.coordination.evaluation.tasks import (
+        SplitSizes,
+        freeze_task_set,
+        public_tasks,
+    )
     from areal_rsi.infra.runtime import claude_solver as claude_code
 
     train, test = tmp_path / "train.jsonl", tmp_path / "test.jsonl"
@@ -397,10 +405,11 @@ def test_claude_cli_evaluation_records_real_subprocess_trace_and_rejects_drift(
             {"messages": [{"role": "user", "content": f"What is 1+1? Variant {i}"}], "answer": "2"}
         )
 
-    train.write_text("\n".join(row(i) for i in range(4)) + "\n")
-    test.write_text(row(4) + "\n")
+    train.write_text("\n".join(row(i) for i in range(5)) + "\n")
+    test.write_text(row(5) + "\n")
     task_root = tmp_path / "taskset"
-    freeze_task_set(train, test, task_root, sizes=SplitSizes(1, 1, 1, 1), seed=2)
+    freeze_task_set(train, test, task_root, sizes=SplitSizes(1, 1, 1, 2), seed=2)
+    failed_question = public_tasks(task_root, RsiSplit.MODEL_DEV)[1].input["messages"][0]["content"]
     backend = tmp_path / "backend"
     backend.mkdir()
     (backend / "config.json").write_text('{"model_type":"qwen2"}')
@@ -416,6 +425,8 @@ def test_claude_cli_evaluation_records_real_subprocess_trace_and_rejects_drift(
         "assert '--allowedTools' in sys.argv and 'mcp__tir_calculator__calculate' in sys.argv\n"
         "assert '--system-prompt' in sys.argv and 'You solve math.' in sys.argv\n"
         "assert 'What is 1+1?' in sys.argv[-1]\n"
+        f"if {failed_question!r} in sys.argv[-1]:\n"
+        "    print('{}'); sys.exit(0)\n"
         "print(json.dumps({'type':'result','is_error':False,'result':'\\\\boxed{2}',"
         "'usage':{'input_tokens':100,'output_tokens':10},"
         "'total_cost_usd':0.002,'duration_ms':300}))\n"
@@ -425,16 +436,28 @@ def test_claude_cli_evaluation_records_real_subprocess_trace_and_rejects_drift(
     prompt.write_text("System: You solve math.\nUser: {prompt}\nAssistant:\n")
     harness_root = tmp_path / "harness"
     freeze_claude_harness(prompt, cli, backend, harness_root, model="qwen-test-pinned")
-    monkeypatch.setattr(claude_code, "source_files_digest", lambda _: "sha256:" + "a" * 64)
-    monkeypatch.setattr(claude_code, "verifier_sources", lambda _: ())
+    runner = tmp_path / "areal-checkout/areal"
+    (runner / "api").mkdir(parents=True)
+    (runner / "api/reward_api.py").write_text("# frozen external reward API\n")
+    parent = tmp_path / "parent-source"
+    parent_package = parent / "src/areal_rsi"
+    copytree(
+        Path(claude_code.__file__).resolve().parents[2],
+        parent_package,
+        ignore=ignore_patterns("__pycache__", "*.pyc"),
+    )
+    (parent_package / "old_controller.py").write_text("# previous orchestration source\n")
+    parent_sources = verifier_sources(runner, rsi_package=parent_package)
+    monkeypatch.setattr(claude_code, "verifier_sources", lambda _: parent_sources)
     output = tmp_path / "report.json"
-    kwargs = dict(split=RsiSplit.MODEL_DEV, trial_id="trial1", runner_root=tmp_path)
+    kwargs = dict(split=RsiSplit.MODEL_DEV, trial_id="trial1", runner_root=runner)
     report = claude_code.evaluate_claude(
         task_root, harness_root, cli, backend, "http://127.0.0.1:31930", output, **kwargs
     )
-    assert report.score == 1
-    assert report.cases[0].output_tokens == 10
-    assert Path(report.cases[0].transcript_path).is_file()
+    assert report.score == 0.5
+    normal = next(case for case in report.cases if case.failure_reason is None)
+    assert normal.output_tokens == 10
+    assert Path(normal.transcript_path).is_file()
     with ThreadPoolExecutor(max_workers=1) as pool:
         threaded = pool.submit(
             claude_code.evaluate_claude,
@@ -446,17 +469,91 @@ def test_claude_cli_evaluation_records_real_subprocess_trace_and_rejects_drift(
             tmp_path / "thread-report.json",
             split=RsiSplit.MODEL_DEV,
             trial_id="threaded_trial",
-            runner_root=tmp_path,
+            runner_root=runner,
             workers=1,
         ).result()
-    assert threaded.score == 1
+    assert threaded.score == 0.5
     assert (
         claude_code.evaluate_claude(
             task_root, harness_root, cli, backend, "http://127.0.0.1:31930", output, **kwargs
         )
         == report
     )
-    Path(report.cases[0].transcript_path).write_text("tampered")
+    # Recheck the original answers under the moved source bundle. No new CLI
+    # generations or changes to parent evidence are allowed.
+    monkeypatch.setattr(claude_code, "verifier_sources", verifier_sources)
+    original_files = {p: p.read_bytes() for p in (output, *output.with_suffix(".cases").iterdir())}
+
+    def reject_generation(*args: object, **kwargs: object) -> None:
+        raise AssertionError("Saved evaluation must not generate again")
+
+    monkeypatch.setattr(claude_code, "run_claude", reject_generation)
+    saved = claude_code.SavedEvaluation(
+        str(output), claude_code.digest_bytes(output.read_bytes()), str(parent)
+    )
+    replayed = claude_code.reverify_claude_report(
+        saved, task_root, tmp_path / "reverified.json", runner_root=runner
+    )
+    assert replayed.verifier_digest != report.verifier_digest
+    assert replayed.score == report.score
+    assert tuple(replace(c, verifier_digest=report.verifier_digest) for c in replayed.cases) == (
+        report.cases
+    )
+    assert original_files == {p: p.read_bytes() for p in original_files}
+
+    # An authenticated transcript cannot support an arbitrary recorded score.
+    wrong = replace(normal, score=0.0)
+    wrong_report = replace(
+        report, cases=tuple(wrong if c.task_id == normal.task_id else c for c in report.cases)
+    )
+    wrong_path = tmp_path / "wrong-score.json"
+    wrong_path.write_bytes(json_bytes(wrong_report))
+    case_path = Path(normal.transcript_path).with_suffix(".json")
+    case_bytes = case_path.read_bytes()
+    case_path.write_bytes(json_bytes(wrong))
+    with pytest.raises(ValueError, match="score could not be reproduced"):
+        claude_code.reverify_claude_report(
+            replace(
+                saved,
+                report_path=str(wrong_path),
+                report_digest=claude_code.digest_bytes(wrong_path.read_bytes()),
+            ),
+            task_root,
+            tmp_path / "wrong-score-reverified.json",
+            runner_root=runner,
+        )
+    assert not (tmp_path / "wrong-score-reverified.json").exists()
+    case_path.write_bytes(case_bytes)
+
+    # Even a correctly attested older bundle with a different scorer is rejected.
+    (parent_package / "infra/coordination/evaluation/tir/verifier.py").write_text(
+        "# altered grading policy\n"
+    )
+    changed_digest = claude_code.source_files_digest(
+        verifier_sources(runner, rsi_package=parent_package)
+    )
+    changed_report = replace(
+        report,
+        verifier_digest=changed_digest,
+        cases=tuple(replace(c, verifier_digest=changed_digest) for c in report.cases),
+    )
+    changed_path = tmp_path / "changed-policy.json"
+    changed_path.write_bytes(json_bytes(changed_report))
+    with pytest.raises(ValueError, match="grading or parsing policy changed"):
+        claude_code.reverify_claude_report(
+            replace(
+                saved,
+                report_path=str(changed_path),
+                report_digest=claude_code.digest_bytes(changed_path.read_bytes()),
+            ),
+            task_root,
+            tmp_path / "changed-policy-reverified.json",
+            runner_root=runner,
+        )
+
+    # The original cache still refuses a changed trace.
+    monkeypatch.setattr(claude_code, "verifier_sources", lambda _: parent_sources)
+    Path(normal.transcript_path).write_text("tampered")
     with pytest.raises(ValueError, match="trace changed"):
         claude_code.evaluate_claude(
             task_root, harness_root, cli, backend, "http://127.0.0.1:31930", output, **kwargs

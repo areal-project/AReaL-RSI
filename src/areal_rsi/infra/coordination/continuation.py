@@ -89,7 +89,9 @@ def run(command: list[str], env: dict[str, str], log: Path | None = None) -> Non
 def run_gpu(command: list[str], env: dict[str, str], *, gpus: int = 1) -> None:
     # A CPU controller's allocation cannot host GPU steps. Start a fresh allocation.
     allocation_env = {key: value for key, value in env.items() if not key.startswith("SLURM_")}
+    allocation_env.pop("SBATCH_RESERVATION", None)
     allocation_env["SLURM_EXPORT_ENV"] = "ALL"
+    reservation = env.get("RSI_SLURM_RESERVATION")
     run(
         [
             "srun",
@@ -101,7 +103,7 @@ def run_gpu(command: list[str], env: dict[str, str], *, gpus: int = 1) -> None:
             f"--gres=gpu:{gpus}",
             "--time=08:00:00",
             f"--partition={env['RSI_SLURM_PARTITION']}",
-            f"--reservation={env['RSI_SLURM_RESERVATION']}",
+            *([f"--reservation={reservation}"] if reservation else []),
             "--job-name=rsi-gpu-stage",
             *command,
         ],
@@ -132,7 +134,7 @@ def prepare_config(
         config[section]["path"] = str(Path(plan.task_set) / f"public/{split}.jsonl")
         config[section]["batch_size"] = 32
     scheduling = config["actor"]["scheduling_spec"][0]
-    scheduling["reservation"] = os.environ["RSI_SLURM_RESERVATION"]
+    scheduling["reservation"] = os.environ.get("RSI_SLURM_RESERVATION") or None
     scheduling["srun_additional_args"] = "--unbuffered --mpi=none -K"
     scheduling["env_vars"]["PYTHONPATH"] = os.pathsep.join((str(AREAL), str(ROOT / "src")))
     if plan.large_model:

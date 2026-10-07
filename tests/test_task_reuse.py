@@ -6,14 +6,182 @@ import importlib
 import json
 import os
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import yaml
 
+from areal_rsi.api.control import json_bytes
+from areal_rsi.infra.coordination import continuation
 from areal_rsi.infra.coordination.evaluation import rlvr
+from areal_rsi.infra.coordination.evaluation.tasks import load_task_set
+from areal_rsi.infra.storage.artifacts import checkpoint_digest
 from areal_rsi.scripts.train import TrainingPlan, train, validate_v2
+
+
+def test_completed_first_training_is_reused_without_rewriting_its_frozen_evidence(
+    frozen_inputs: tuple[Path, Path, Path, Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tasks, harness, _, model = frozen_inputs
+    source_root = tmp_path / "parent-source"
+    (source_root / "src").mkdir(parents=True)
+    (source_root / "src/controller.py").write_text("# frozen parent controller\n")
+    output = tmp_path / "parent-run"
+    output.mkdir()
+    template = tmp_path / "template.yaml"
+    template.write_bytes(
+        json_bytes(
+            {
+                "actor": {"scheduling_spec": [{"env_vars": {}}]},
+                "ref": {},
+                "rollout": {},
+                "scheduler": {},
+                "cluster": {"name_resolve": {}},
+                "gconfig": {},
+                "sglang": {},
+                "train_dataset": {},
+                "valid_dataset": {},
+            }
+        )
+    )
+    monkeypatch.delenv("RSI_SLURM_RESERVATION", raising=False)
+    plan = continuation.ContinuationPlan(
+        "paired",
+        str(model),
+        str(harness / "prompt.txt"),
+        str(tasks),
+        str(template),
+        1,
+        1,
+        0.02,
+        0.5,
+        False,
+        4096,
+    )
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_bytes(json_bytes(plan))
+    lock = continuation.ContinuationSources(
+        continuation.sources(source_root),
+        continuation.digest(plan_path),
+        continuation.digest(template),
+        load_task_set(tasks).task_set_id,
+        None,
+    )
+    lock_path = output / "source-lock.json"
+    lock_path.write_bytes(json_bytes(lock))
+    config = continuation.training_config(plan, output, model, 1, source_root=source_root)
+    config_path = output / "train-g1.yaml"
+    config_path.write_text(yaml.safe_dump(config))
+    log_path = output / "g1-train.log"
+    completed_log = (
+        "Weight update completed for pair 'actor-rollout' v32 (74ms)\n"
+        "Skipping rollout resume after final training step (global_step=31)\n"
+        "Training completes!\n"
+    )
+    log_path.write_text(completed_log)
+    search = output / "g1-search"
+    (search / "model-candidates").mkdir(parents=True)
+    (search / "selected-harness-path.txt").write_text(str(harness))
+    (search / "model-candidates/decision.json").write_bytes(json_bytes({"decision": "reuse"}))
+    checkpoint = output / (
+        "areal-experiments/checkpoints/root/rsi-continuation-20261005/"
+        "paired-g1/default/epoch1epochstep15globalstep31"
+    )
+    checkpoint.mkdir(parents=True)
+    (checkpoint / "config.json").write_bytes(json_bytes({"model_type": "qwen2"}))
+    shard = checkpoint / "model-00001-of-00001.safetensors"
+    shard.write_bytes(b"completed-megatron-export")
+    (checkpoint / "model.safetensors.index.json").write_bytes(
+        json_bytes({"weight_map": {"layer": shard.name}})
+    )
+    receipt = continuation.CompletedFirstTraining(
+        str(source_root),
+        str(output),
+        continuation.digest(plan_path),
+        continuation.digest(lock_path),
+        continuation.digest(config_path),
+        continuation.digest(log_path),
+        checkpoint_digest(checkpoint),
+        continuation.search_digests(search),
+    )
+    before = {str(path): path.read_bytes() for path in output.rglob("*") if path.is_file()}
+    assert continuation.reuse_first_training(plan, plan_path, receipt) == (search, checkpoint)
+    assert before == {str(path): path.read_bytes() for path in output.rglob("*") if path.is_file()}
+
+    # A completion marker alone must not authorize skipping unfinished training.
+    log_path.write_text("Training completes!\n")
+    with pytest.raises(ValueError, match="all 32 updates"):
+        continuation.reuse_first_training(
+            plan, plan_path, replace(receipt, log_digest=continuation.digest(log_path))
+        )
+    log_path.write_text(completed_log)
+    config["total_train_epochs"] = 1
+    config_path.write_text(yaml.safe_dump(config))
+    with pytest.raises(ValueError, match="configuration differs"):
+        continuation.reuse_first_training(
+            plan, plan_path, replace(receipt, config_digest=continuation.digest(config_path))
+        )
+    config["total_train_epochs"] = 2
+    config_path.write_text(yaml.safe_dump(config))
+    shard.write_bytes(b"changed-megatron-export")
+    with pytest.raises(ValueError, match="checkpoint changed"):
+        continuation.reuse_first_training(plan, plan_path, receipt)
+    shard.write_bytes(b"completed-megatron-export")
+    (search / "selected-harness-path.txt").write_text("different-harness")
+    with pytest.raises(ValueError, match="search evidence changed"):
+        continuation.reuse_first_training(plan, plan_path, receipt)
+    (search / "selected-harness-path.txt").write_text(str(harness))
+
+    # Exercise the real controller entry point: only post-training evaluation is
+    # submitted, and provenance is written exclusively under the new output.
+    train_ids = SimpleNamespace(task_ids=tuple(str(i) for i in range(512)))
+    task_set = SimpleNamespace(
+        task_set_id=lock.task_set_id,
+        harness_evolve=train_ids,
+        harness_select=train_ids,
+        model_train=train_ids,
+        model_dev=SimpleNamespace(task_ids=tuple(str(i) for i in range(256))),
+    )
+    monkeypatch.setattr(continuation, "load_task_set", lambda _: task_set)
+    gpu_commands: list[list[str]] = []
+    monkeypatch.setattr(continuation, "run_gpu", lambda command, _: gpu_commands.append(command))
+
+    def reject_training(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("Completed first-round training must not be launched again")
+
+    monkeypatch.setattr(continuation, "run", reject_training)
+    result = continuation.RoundResult(
+        1, 1.0, 2.0, 256, (), True, False, str(checkpoint), str(harness / "prompt.txt"), {}
+    )
+    monkeypatch.setattr(continuation, "decide", lambda *_args: result)
+    receipt_path = tmp_path / "completed-training.json"
+    receipt_path.write_bytes(json_bytes(receipt))
+    new_output = tmp_path / "new-execution"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "continuation",
+            "--plan",
+            str(plan_path),
+            "--output",
+            str(new_output),
+            "--reuse-first-training",
+            str(receipt_path),
+        ],
+    )
+    continuation.main()
+    assert len(gpu_commands) == 1
+    assert gpu_commands[0][1].endswith("run_shared512_eval.sh")
+    assert gpu_commands[0][2] == str(checkpoint)
+    assert (new_output / "g1-training-reuse.json").read_bytes() == json_bytes(receipt)
+    assert (new_output / "g1-result.json").read_bytes() == json_bytes(result)
+    assert before == {str(path): path.read_bytes() for path in output.rglob("*") if path.is_file()}
 
 
 @pytest.mark.parametrize(

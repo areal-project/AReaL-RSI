@@ -9,6 +9,7 @@ import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 
@@ -16,7 +17,7 @@ from areal_rsi.api.control import decode, json_bytes, read_record, safe_name
 from areal_rsi.api.records import AgentEvaluationReport, AgentHarnessSpec, RsiSplit
 from areal_rsi.api.research import AgentHarnessSearchDecision
 from areal_rsi.infra.coordination.evaluation.tasks import load_task_set
-from areal_rsi.infra.storage.artifacts import validate_hf_model_files
+from areal_rsi.infra.storage.artifacts import checkpoint_digest, validate_hf_model_files
 from areal_rsi.infra.storage.files import write_bytes
 
 ROOT = Path(os.environ.get("RSI_ROOT", str(Path.cwd()))).resolve()
@@ -63,15 +64,38 @@ class RoundResult:
     report_digests: dict[str, str]
 
 
+@dataclass(frozen=True, slots=True)
+class ContinuationSources:
+    sources: dict[str, str]
+    plan: str
+    template: str
+    task_set_id: str
+    chat_template: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class CompletedFirstTraining:
+    """Read-only provenance for a completed training stage awaiting evaluation."""
+
+    source_root: str
+    output_root: str
+    plan_digest: str
+    source_lock_digest: str
+    config_digest: str
+    log_digest: str
+    checkpoint_digest: str
+    search_digests: dict[str, str]
+
+
 def digest(path: Path) -> str:
     return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def sources() -> dict[str, str]:
+def sources(root: Path = ROOT) -> dict[str, str]:
     return {
-        str(p.relative_to(ROOT)): digest(p)
+        str(p.relative_to(root)): digest(p)
         for folder in ("src",)
-        for p in sorted((ROOT / folder).rglob("*"))
+        for p in sorted((root / folder).rglob("*"))
         if p.suffix in (".py", ".sh")
     }
 
@@ -112,10 +136,17 @@ def run_gpu(command: list[str], env: dict[str, str], *, gpus: int = 1) -> None:
     )
 
 
-def prepare_config(
-    plan: ContinuationPlan, output: Path, model: Path, generation: int
-) -> tuple[Path, Path]:
-    config = yaml.safe_load(Path(plan.template).read_text())
+def training_config(
+    plan: ContinuationPlan,
+    output: Path,
+    model: Path,
+    generation: int,
+    *,
+    source_root: Path = ROOT,
+) -> dict[str, Any]:
+    """Render the native AReaL YAML boundary for launch or provenance verification."""
+
+    config = decode(dict[str, Any], yaml.safe_load(Path(plan.template).read_text()))
     trial = f"{plan.name}-g{generation}"
     config["actor"]["_version"] = "v2"
     config["rollout"]["_version"] = "v2"
@@ -137,9 +168,17 @@ def prepare_config(
     scheduling = config["actor"]["scheduling_spec"][0]
     scheduling["reservation"] = os.environ.get("RSI_SLURM_RESERVATION") or None
     scheduling["srun_additional_args"] = "--unbuffered --mpi=none -K"
-    scheduling["env_vars"]["PYTHONPATH"] = os.pathsep.join((str(AREAL), str(ROOT / "src")))
+    scheduling["env_vars"]["PYTHONPATH"] = os.pathsep.join((str(AREAL), str(source_root / "src")))
     if plan.large_model:
         config["rollout"]["agent"]["chat_template_kwargs"] = {"enable_thinking": False}
+    return config
+
+
+def prepare_config(
+    plan: ContinuationPlan, output: Path, model: Path, generation: int
+) -> tuple[Path, Path]:
+    config = training_config(plan, output, model, generation)
+    trial = config["trial_name"]
     path = output / f"train-g{generation}.yaml"
     write_bytes(path, yaml.safe_dump(config, sort_keys=False).encode(), immutable=True)
     checkpoint = output / (
@@ -147,6 +186,73 @@ def prepare_config(
         f"{trial}/default/epoch1epochstep15globalstep31"
     )
     return path, checkpoint
+
+
+def search_digests(search: Path) -> dict[str, str]:
+    return {
+        path.relative_to(search).as_posix(): digest(path)
+        for path in sorted(search.rglob("*"))
+        if path.is_file()
+        and path.suffix in (".json", ".txt")
+        and not any(part.endswith(".cases") for part in path.relative_to(search).parts)
+    }
+
+
+def reuse_first_training(
+    plan: ContinuationPlan, plan_path: Path, receipt: CompletedFirstTraining
+) -> tuple[Path, Path]:
+    """Verify saved training without writing to its source, search or checkpoint."""
+
+    output = Path(receipt.output_root).resolve(strict=True)
+    lock_path = output / "source-lock.json"
+    config_path, log_path = output / "train-g1.yaml", output / "g1-train.log"
+    if (
+        digest(plan_path) != receipt.plan_digest
+        or digest(lock_path) != receipt.source_lock_digest
+        or digest(config_path) != receipt.config_digest
+        or digest(log_path) != receipt.log_digest
+    ):
+        raise ValueError("Completed training provenance changed")
+    lock = read_record(lock_path, ContinuationSources)
+    if (
+        lock.plan != receipt.plan_digest
+        or lock.template != digest(Path(plan.template))
+        or lock.task_set_id != load_task_set(Path(plan.task_set)).task_set_id
+        or lock.chat_template
+        != (digest(output / "nonthinking.jinja") if plan.large_model else None)
+        or not lock.sources
+        or lock.sources != sources(Path(receipt.source_root))
+    ):
+        raise ValueError("Completed training source or inputs changed")
+    config = yaml.safe_load(config_path.read_bytes())
+    expected = training_config(
+        plan, output, Path(plan.model), 1, source_root=Path(receipt.source_root)
+    )
+    if config != expected:
+        raise ValueError("Completed training configuration differs from the requested round")
+    log = log_path.read_text()
+    if (
+        "Training completes!" not in log
+        or "final training step (global_step=31)" not in log
+        or "Weight update completed for pair 'actor-rollout' v32" not in log
+    ):
+        raise ValueError("First training round has not completed all 32 updates")
+    search = output / "g1-search"
+    if (
+        not (search / "selected-harness-path.txt").is_file()
+        or not (search / "model-candidates/decision.json").is_file()
+        or not receipt.search_digests
+        or receipt.search_digests != search_digests(search)
+    ):
+        raise ValueError("Completed training search evidence changed or is incomplete")
+    checkpoint = output / (
+        "areal-experiments/checkpoints/root/rsi-continuation-20261005/"
+        f"{plan.name}-g1/default/epoch1epochstep15globalstep31"
+    )
+    validate_hf_model_files(checkpoint)
+    if checkpoint_digest(checkpoint) != receipt.checkpoint_digest:
+        raise ValueError("Completed training checkpoint changed")
+    return search, checkpoint
 
 
 def decide(
@@ -207,6 +313,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--plan", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--reuse-first-training", type=Path)
     args = parser.parse_args()
     plan = read_record(args.plan, ContinuationPlan)
     output = args.output.resolve()
@@ -233,13 +340,13 @@ def main() -> None:
     write_bytes(
         output / "source-lock.json",
         json_bytes(
-            {
-                "sources": frozen,
-                "plan": digest(args.plan),
-                "template": digest(Path(plan.template)),
-                "task_set_id": tasks.task_set_id,
-                "chat_template": digest(chat_template) if chat_template else None,
-            }
+            ContinuationSources(
+                frozen,
+                digest(args.plan),
+                digest(Path(plan.template)),
+                tasks.task_set_id,
+                digest(chat_template) if chat_template else None,
+            )
         ),
         immutable=True,
     )
@@ -259,6 +366,12 @@ def main() -> None:
     )
     if chat_template is not None:
         env["RSI_EVAL_CHAT_TEMPLATE"] = str(chat_template)
+    reuse_paths = None
+    if args.reuse_first_training is not None:
+        reuse = read_record(args.reuse_first_training, CompletedFirstTraining)
+        reuse_paths = reuse_first_training(plan, args.plan, reuse)
+        # The new execution records references; parent records stay in place.
+        write_bytes(output / "g1-training-reuse.json", json_bytes(reuse), immutable=True)
     model, prompt = Path(plan.model), Path(plan.prompt)
     for generation in range(1, plan.maximum_rounds + 1):
         if sources() != frozen:
@@ -269,53 +382,59 @@ def main() -> None:
         if result_path.exists():
             result = read_record(result_path, RoundResult)
         else:
-            run_gpu(
-                [
-                    "bash",
-                    str(ROOT / "src/areal_rsi/infra/coordination/launch/run_shared512_search.sh"),
-                    str(model),
+            if generation == 1 and reuse_paths is not None:
+                search, checkpoint = reuse_paths
+            else:
+                run_gpu(
+                    [
+                        "bash",
+                        str(
+                            ROOT / "src/areal_rsi/infra/coordination/launch/run_shared512_search.sh"
+                        ),
+                        str(model),
+                        plan.task_set,
+                        str(prompt),
+                        str(search),
+                    ],
+                    env,
+                )
+                selected = (search / "selected-harness-path.txt").read_text().strip()
+                config, checkpoint = prepare_config(plan, output, model, generation)
+                command = [
+                    "singularity",
+                    "exec",
+                    "--no-eval",
+                    "--pid",
+                    "--writable-tmpfs",
+                    "--bind",
+                    env["CONTROLLER_MOUNTS"],
+                    "--env",
+                    f"PYTHONPATH={env['PYTHONPATH']},HF_HUB_OFFLINE=1,"
+                    "TRANSFORMERS_OFFLINE=1,NO_PROXY=*,no_proxy=*,LD_LIBRARY_PATH=/usr/lib64/slurm",
+                    IMAGE,
+                    "python3",
+                    "-m",
+                    "areal_rsi.scripts.train",
+                    "--recipe",
+                    "areal_rsi.infra.coordination.evaluation.tir.claude_train.prepare",
+                    "--task-set-root",
                     plan.task_set,
-                    str(prompt),
-                    str(search),
-                ],
-                env,
-            )
+                    "--harness-root",
+                    selected,
+                    "--claude-cli",
+                    CLAUDE,
+                    "--config",
+                    str(config),
+                ]
+                run([*command, "--validate-only"], env)
+                log = output / f"g{generation}-train.log"
+                complete = log.exists() and "Training completes!" in log.read_text()
+                if not complete:
+                    # Wait for the eight-GPU budget before AReaL's bounded worker startup.
+                    run_gpu(["true"], env, gpus=8)
+                    run(command, env, log)
+                validate_hf_model_files(checkpoint)
             selected = (search / "selected-harness-path.txt").read_text().strip()
-            config, checkpoint = prepare_config(plan, output, model, generation)
-            command = [
-                "singularity",
-                "exec",
-                "--no-eval",
-                "--pid",
-                "--writable-tmpfs",
-                "--bind",
-                env["CONTROLLER_MOUNTS"],
-                "--env",
-                f"PYTHONPATH={env['PYTHONPATH']},HF_HUB_OFFLINE=1,"
-                "TRANSFORMERS_OFFLINE=1,NO_PROXY=*,no_proxy=*,LD_LIBRARY_PATH=/usr/lib64/slurm",
-                IMAGE,
-                "python3",
-                "-m",
-                "areal_rsi.scripts.train",
-                "--recipe",
-                "areal_rsi.infra.coordination.evaluation.tir.claude_train.prepare",
-                "--task-set-root",
-                plan.task_set,
-                "--harness-root",
-                selected,
-                "--claude-cli",
-                CLAUDE,
-                "--config",
-                str(config),
-            ]
-            run([*command, "--validate-only"], env)
-            log = output / f"g{generation}-train.log"
-            complete = log.exists() and "Training completes!" in log.read_text()
-            if not complete:
-                # Wait for the eight-GPU budget before AReaL's bounded worker startup.
-                run_gpu(["true"], env, gpus=8)
-                run(command, env, log)
-            validate_hf_model_files(checkpoint)
             run_gpu(
                 [
                     "bash",

@@ -65,7 +65,7 @@ def test_dataset_and_model_swap_only_changes_example_recipe(
             pass
 
         def train(self, *, workflow: str, workflow_kwargs: dict[str, Any]) -> None:
-            assert workflow == "areal.workflow.rlvr.RLVRWorkflow"
+            assert workflow == "areal_rsi.infra.runtime.prompt.PromptRewardAgent"
             assert self.rows[0]["messages"] == [{"role": "user", "content": prompt}]
             module, name = workflow_kwargs["reward_fn"].rsplit(".", 1)
             reward = getattr(importlib.import_module(module), name)

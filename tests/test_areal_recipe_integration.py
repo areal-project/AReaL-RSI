@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -386,10 +387,186 @@ def test_native_workflow_formats_frozen_prompt_and_rejects_changed_snapshot(
     module, name = profile.workflow.rsplit(".", 1)
     workflow_type = getattr(importlib.import_module(module), name)
     workflow = workflow_type(**kwargs)
-    if not profile.enabled_tools:
-        ids = workflow.get_input_ids_fn(frozen.train_rows[0], kwargs["tokenizer"], False)
-        question = frozen.train_rows[0]["messages"][0]["content"]
-        assert "".join(chr(token) for token in ids) == prompt.read_text().format(prompt=question)
+    from areal.v2.inference_service.controller.controller import RolloutControllerV2
+
+    controller = SimpleNamespace(external_mode=False, _wrap_agent=lambda agent, **_kwargs: agent)
+    assert RolloutControllerV2._resolve_workflow(controller, workflow) is workflow
+    question = frozen.train_rows[0]["messages"][0]["content"]
+    assert workflow.messages(frozen.train_rows[0])[0]["content"] == prompt.read_text().format(
+        prompt=question
+    )
     kwargs["model_digest"] = "sha256:" + "0" * 64
     with pytest.raises(ValueError, match="model snapshot"):
         workflow_type(**kwargs)
+
+
+@pytest.mark.skipif(not os.environ.get("AREAL_CHECKOUT"), reason="AReaL checkout not configured")
+@pytest.mark.parametrize(
+    ("reward", "answer"),
+    [
+        ("areal_rsi.infra.coordination.evaluation.rlvr.exact_reward", "positive"),
+        ("areal_rsi.infra.coordination.evaluation.tir.verifier.arithmetic_reward", "3"),
+    ],
+)
+def test_native_v2_prompt_agent_uses_proxy_and_scores_correct_and_wrong_answers(
+    reward: str,
+    answer: str,
+) -> None:
+    import asyncio
+
+    import httpx
+    from areal.api.cli_args import GenerationHyperparameters
+    from areal.v2.inference_service.controller.controller import RolloutControllerV2
+
+    from areal_rsi.infra.runtime.prompt import PromptRewardAgent
+
+    class Tokenizer:
+        def encode(self, value: str, **_kwargs: Any) -> list[int]:
+            return [ord(c) for c in value]
+
+        def apply_chat_template(self, messages: Any, **_kwargs: Any) -> str:
+            return "".join(message["content"] for message in messages)
+
+    replies = iter([answer, "wrong"])
+    requests: list[dict[str, Any]] = []
+
+    def respond(request: Any) -> Any:
+        assert request.headers["authorization"] == "Bearer test-session"
+        assert request.url.path == "/chat/completions"
+        payload = json.loads(request.content)
+        requests.append(payload)
+        assert payload["n"] == 1
+        assert payload["max_completion_tokens"] == 64
+        assert payload["max_total_tokens"] == 512
+        assert payload["extra_body"]["chat_template_kwargs"]["enable_thinking"] is False
+        return httpx.Response(
+            200,
+            json={
+                "id": "test-completion",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "default",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": next(replies)},
+                    }
+                ],
+            },
+        )
+
+    agent = PromptRewardAgent(
+        reward_fn=reward,
+        tokenizer=Tokenizer(),
+        gconfig=GenerationHyperparameters(n_samples=2, max_tokens=512, max_new_tokens=64),
+    )
+    controller = SimpleNamespace(external_mode=False, _wrap_agent=lambda agent, **_kwargs: agent)
+    assert RolloutControllerV2._resolve_workflow(controller, agent) is agent
+
+    async def run() -> list[float]:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            data = {"messages": [{"role": "user", "content": "question"}], "answer": answer}
+            return [
+                await agent.run(
+                    data, base_url="http://proxy", api_key="test-session", http_client=client
+                )
+                for _ in range(2)
+            ]
+
+    assert asyncio.run(run()) == [1.0, 0.0]
+    assert requests[0]["messages"] == [{"role": "user", "content": "question"}]
+
+
+@pytest.mark.skipif(not os.environ.get("AREAL_CHECKOUT"), reason="AReaL checkout not configured")
+@pytest.mark.parametrize("generation_fails", [False, True])
+def test_native_v2_calculator_agent_keeps_tool_result_and_cleans_up_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    generation_fails: bool,
+) -> None:
+    import asyncio
+
+    import httpx
+    from areal.api.cli_args import GenerationHyperparameters
+    from examples.tir.tool_manager import ToolManager
+
+    from areal_rsi.infra.runtime.prompt import PromptRewardAgent
+    from areal_rsi.infra.runtime.tir import FrozenTIRWorkflow
+
+    class Tokenizer:
+        def encode(self, value: str, **_kwargs: Any) -> list[int]:
+            return [ord(c) for c in value]
+
+        def apply_chat_template(self, messages: Any, **_kwargs: Any) -> str:
+            return "".join(message["content"] for message in messages)
+
+    agent = object.__new__(FrozenTIRWorkflow)
+    PromptRewardAgent.__init__(
+        agent,
+        reward_fn="areal_rsi.infra.coordination.evaluation.tir.verifier.strict_tir_reward_fn",
+        tokenizer=Tokenizer(),
+        prompt_template="User: {prompt}\nAssistant:",
+        gconfig=GenerationHyperparameters(max_new_tokens=64, max_tokens=512),
+    )
+    agent.tir_config = SimpleNamespace(
+        max_turns=2,
+        max_length=256,
+        tool_timeout=5,
+        enable_tools="calculator",
+    )
+    cleaned: list[bool] = []
+    original_cleanup = ToolManager.acleanup
+
+    async def cleanup(manager: Any) -> None:
+        cleaned.append(True)
+        await original_cleanup(manager)
+
+    monkeypatch.setattr(ToolManager, "acleanup", cleanup)
+    requests: list[dict[str, Any]] = []
+
+    def respond(request: Any) -> Any:
+        payload = json.loads(request.content)
+        requests.append(payload)
+        assert payload["max_total_tokens"] == 256
+        if len(requests) == 1:
+            text = "<calculator>1+2</calculator>"
+            assert payload["messages"] == [{"role": "user", "content": "User: 1+2\nAssistant:"}]
+        else:
+            assert payload["messages"][-1] == {"role": "user", "content": "\n```output\n3\n```\n"}
+            if generation_fails:
+                raise httpx.ReadTimeout("generation timeout", request=request)
+            text = "\\boxed{3}"
+        return httpx.Response(
+            200,
+            json={
+                "id": "test-completion",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "default",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": text},
+                    }
+                ],
+            },
+        )
+
+    async def run() -> float:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            return await agent.run(
+                {"messages": [{"role": "user", "content": "1+2"}], "answer": "3"},
+                base_url="http://proxy",
+                api_key="test-session",
+                http_client=client,
+            )
+
+    if generation_fails:
+        from openai import APITimeoutError
+
+        with pytest.raises(APITimeoutError):
+            asyncio.run(run())
+    else:
+        assert asyncio.run(run()) == 1.0
+    assert len(requests) == 2 and cleaned == [True]

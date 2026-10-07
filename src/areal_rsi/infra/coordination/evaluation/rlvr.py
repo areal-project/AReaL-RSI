@@ -69,7 +69,7 @@ def prepare_training(argv: list[str], *, reward_fn: str) -> TrainingPlan | None:
         config,
         rows,
         valid,
-        "areal.workflow.rlvr.RLVRWorkflow",
+        "areal_rsi.infra.runtime.prompt.PromptRewardAgent",
         {
             "reward_fn": reward_fn,
             "gconfig": config.gconfig,

@@ -70,6 +70,9 @@ def workflow_kwargs(
         "model_digest": model_digest,
     }
     if profile.enabled_tools:
+        # One calculator episode must export one complete trajectory for paired evaluation.
+        config.rollout.agent.chat_template_type = "concat"
+        config.rollout.agent.export_style = "concat"
         result.update(
             tir_config=config.tir,
             fail_on_reward_timeout=True,

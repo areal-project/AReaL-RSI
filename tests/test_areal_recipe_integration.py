@@ -570,3 +570,120 @@ def test_native_v2_calculator_agent_keeps_tool_result_and_cleans_up_on_failure(
     else:
         assert asyncio.run(run()) == 1.0
     assert len(requests) == 2 and cleaned == [True]
+
+
+@pytest.mark.skipif(
+    not os.environ.get("AREAL_CHECKOUT") or not os.environ.get("RSI_TEST_MODEL"),
+    reason="Native AReaL and local tokenizer not configured",
+)
+@pytest.mark.parametrize("chunked_tool", [False, True])
+def test_calculator_episode_exports_one_native_v2_trajectory_with_tool_tokens_masked(
+    monkeypatch: pytest.MonkeyPatch, chunked_tool: bool
+) -> None:
+    import asyncio
+
+    import httpx
+    from areal.api import ModelResponse
+    from areal.api.cli_args import GenerationHyperparameters
+    from areal.experimental.openai import ArealOpenAI
+    from areal.infra.rpc.serialization import deserialize_value
+    from areal.v2.inference_service.data_proxy.app import create_app
+    from areal.v2.inference_service.data_proxy.config import DataProxyConfig
+    from areal.v2.inference_service.data_proxy.session import SessionStore
+
+    from areal_rsi.infra.runtime.prompt import PromptRewardAgent
+    from areal_rsi.infra.runtime.tir import FrozenTIRWorkflow
+    from areal_rsi.scripts.train import load_tokenizer
+
+    tokenizer = load_tokenizer(os.environ["RSI_TEST_MODEL"])
+    texts = (
+        ["<calculator>1+", "2</calculator>", r"\boxed{3}"]
+        if chunked_tool
+        else ["<calculator>1+2</calculator>", r"\boxed{3}"]
+    )
+    requests: list[Any] = []
+
+    class Engine:
+        async def agenerate(self, req: Any) -> Any:
+            index = len(requests)
+            requests.append(req)
+            tokens = tokenizer.encode(texts[index], add_special_tokens=False)
+            truncated = chunked_tool and index == 0
+            if not truncated:
+                tokens.append(tokenizer.eos_token_id)
+            return ModelResponse(
+                input_tokens=req.input_ids,
+                output_tokens=tokens,
+                output_logprobs=[-0.5] * len(tokens),
+                output_versions=[0] * len(tokens),
+                stop_reason="length" if truncated else "stop",
+                tokenizer=tokenizer,
+            )
+
+    app = create_app(DataProxyConfig(chat_template_type="concat"))
+    app.state.areal_client = ArealOpenAI(
+        engine=Engine(), tokenizer=tokenizer, chat_template_type="concat", api_key="test-only"
+    )
+    app.state.session_store = SessionStore()
+    app.state.session_store.set_admin_key("test-admin")
+    app.state.tokenizer = SimpleNamespace(_tok=tokenizer)
+    app.state.inf_bridge = None
+    app.state.version = 0
+    monkeypatch.setattr(
+        "areal.v2.inference_service.data_proxy.app.RTensor.remotize",
+        lambda obj, node_addr: obj,
+    )
+    agent = object.__new__(FrozenTIRWorkflow)
+    PromptRewardAgent.__init__(
+        agent,
+        reward_fn="areal_rsi.infra.coordination.evaluation.tir.verifier.strict_tir_reward_fn",
+        tokenizer=tokenizer,
+        prompt_template="User: {prompt}\nAssistant:",
+        gconfig=GenerationHyperparameters(max_new_tokens=64, max_tokens=512),
+    )
+    agent.tir_config = SimpleNamespace(
+        max_turns=2, max_length=256, tool_timeout=5, enable_tools="calculator"
+    )
+
+    async def run() -> Any:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://proxy"
+        ) as client:
+            admin = {"Authorization": "Bearer test-admin"}
+            started = await client.post(
+                "/rl/start_session", json={"task_id": "calculator"}, headers=admin
+            )
+            assert started.status_code == 201, started.text
+            credentials = started.json()["sessions"][0]
+            reward = await agent.run(
+                {"messages": [{"role": "user", "content": "1+2"}], "answer": "3"},
+                base_url="http://proxy",
+                api_key=credentials["session_api_key"],
+                http_client=client,
+            )
+            assert reward == 1.0
+            rewarded = await client.post(
+                "/rl/set_reward",
+                json={"reward": reward},
+                headers={"Authorization": "Bearer " + credentials["session_api_key"]},
+            )
+            assert rewarded.status_code == 200, rewarded.text
+            exported = await client.post(
+                "/export_trajectories",
+                json={"session_ids": [credentials["session_id"]], "style": "concat"},
+                headers=admin,
+            )
+            assert exported.status_code == 200, exported.text
+            return deserialize_value(exported.json()["traj"])
+
+    trajectory = asyncio.run(run())
+    assert len(requests) == len(texts)
+    assert trajectory["input_ids"].shape[0] == 1
+    assert trajectory["rewards"].tolist() == [1.0]
+    ids, mask = trajectory["input_ids"][0], trajectory["loss_mask"][0]
+    generated = tokenizer.decode(ids[mask.bool()].tolist(), skip_special_tokens=True)
+    observation = tokenizer.decode(ids[~mask.bool()].tolist(), skip_special_tokens=True)
+    assert "<calculator>1+2</calculator>" in generated
+    assert r"\boxed{3}" in generated
+    assert "```output\n3\n```" in observation
+    assert "```output" not in generated

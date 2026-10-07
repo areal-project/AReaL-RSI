@@ -9,6 +9,7 @@ import re
 import stat
 from pathlib import Path
 
+from areal_rsi.api.control import decode
 from areal_rsi.api.execution import TrustedSourceFile
 from areal_rsi.api.research import RsiRolloutEvidence
 
@@ -68,6 +69,34 @@ def validate_hf_model_files(root: Path) -> str:
     ]
     if not weights or any(path.stat().st_size < 1 for path in weights):
         raise ValueError("Frozen model checkpoint has no nonempty weight shard")
+    for prefix, suffix in (("model", ".safetensors"), ("pytorch_model", ".bin")):
+        index_path = root / f"{prefix}{suffix}.index.json"
+        sharded = any(path.name.startswith(prefix + "-") for path in weights)
+        if not index_path.exists():
+            if sharded:
+                raise ValueError("Frozen model checkpoint lacks its weight shard index")
+            continue
+        try:
+            index = json.loads(index_path.read_bytes())
+            if not isinstance(index, dict):
+                raise ValueError("Weight shard index must be an object")
+            weight_map = decode(dict[str, str], index.get("weight_map"))
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError) as exc:
+            raise ValueError("Frozen model weight shard index is malformed") from exc
+        if not weight_map:
+            raise ValueError("Frozen model weight shard index is empty")
+        for filename in set(weight_map.values()):
+            shard = root / filename
+            if (
+                shard.parent != root
+                or not filename.startswith(prefix + "-")
+                or not filename.endswith(suffix)
+                or not shard.is_file()
+                or shard.stat().st_size < 1
+            ):
+                raise ValueError(
+                    f"Frozen model weight index references an invalid shard: {filename}"
+                )
     return model_type
 
 
@@ -173,7 +202,7 @@ def latest_hf_checkpoint(save_root: Path, *, require_unique: bool = False) -> tu
             and path.is_dir()
             and not path.is_symlink()
             and (path / "config.json").is_file()
-            and any(path.glob("*.safetensors"))
+            and (any(path.glob("*.safetensors")) or any(path.glob("pytorch_model*.bin")))
         ):
             candidates.append((int(match[1]), path))
     if not candidates:
@@ -183,5 +212,5 @@ def latest_hf_checkpoint(save_root: Path, *, require_unique: bool = False) -> tu
     step_index, selected = max(candidates, key=lambda item: item[0])
     # AReaL names the checkpoint with a zero-based update index. The receipt
     # records the number of completed updates, so the first save is step 1.
-    checkpoint_digest(selected)
+    validate_hf_model_files(selected)
     return selected, step_index + 1

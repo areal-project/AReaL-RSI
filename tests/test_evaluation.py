@@ -21,8 +21,56 @@ from areal_rsi.infra.coordination.evaluation.harness import load_prompt_harness
 from areal_rsi.infra.coordination.evaluation.tasks import load_task_set
 from areal_rsi.infra.coordination.evaluation.tir.verifier import strict_math_reward
 from areal_rsi.infra.coordination.generation import GenerationCycle
-from areal_rsi.infra.storage.artifacts import checkpoint_digest, source_files_digest
+from areal_rsi.infra.storage.artifacts import (
+    checkpoint_digest,
+    latest_hf_checkpoint,
+    source_files_digest,
+    validate_hf_model_files,
+)
 from areal_rsi.scripts.jobs import AReaLJobRunner, digest_bytes
+
+
+@pytest.mark.parametrize("format", ["safetensors", "bin"])
+def test_sharded_checkpoint_can_be_selected_but_incomplete_export_is_rejected(
+    tmp_path: Path, format: str
+) -> None:
+    prefix = "model" if format == "safetensors" else "pytorch_model"
+    checkpoint = tmp_path / "epoch1epochstep15globalstep31"
+    checkpoint.mkdir()
+    (checkpoint / "config.json").write_bytes(json_bytes({"model_type": "qwen2"}))
+    shards = [checkpoint / f"{prefix}-{i:05d}-of-00002.{format}" for i in (1, 2)]
+    for shard in shards:
+        shard.write_bytes(b"exported-weight")
+    index = checkpoint / f"{prefix}.{format}.index.json"
+    index.write_bytes(
+        json_bytes({"weight_map": {"layer1": shards[0].name, "layer2": shards[1].name}})
+    )
+    assert validate_hf_model_files(checkpoint) == "qwen2"
+    assert latest_hf_checkpoint(tmp_path) == (checkpoint, 32)
+    shards[1].unlink()
+    with pytest.raises(ValueError, match="invalid shard"):
+        latest_hf_checkpoint(tmp_path)
+    shards[1].write_bytes(b"")
+    with pytest.raises(ValueError, match="nonempty weight shard"):
+        validate_hf_model_files(checkpoint)
+    shards[1].write_bytes(b"exported-weight")
+    index.unlink()
+    with pytest.raises(ValueError, match="lacks its weight shard index"):
+        validate_hf_model_files(checkpoint)
+
+
+def test_checkpoint_index_cannot_reference_weights_outside_the_export(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    (checkpoint / "config.json").write_bytes(json_bytes({"model_type": "qwen3"}))
+    (checkpoint / "model.safetensors").write_bytes(b"single-file-export")
+    assert validate_hf_model_files(checkpoint) == "qwen3"
+    (tmp_path / "model-00001-of-00001.safetensors").write_bytes(b"outside-weight")
+    (checkpoint / "model.safetensors.index.json").write_bytes(
+        json_bytes({"weight_map": {"layer": "../model-00001-of-00001.safetensors"}})
+    )
+    with pytest.raises(ValueError, match="invalid shard"):
+        validate_hf_model_files(checkpoint)
 
 
 def test_clock_answer_is_not_division_by_zero() -> None:

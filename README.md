@@ -31,7 +31,9 @@ python -m areal_rsi.examples.classification --data /shared/labels.jsonl \
 
 这两个 example 共用数据校验和 trainer，只选择自己的奖励函数。部署到容器时使用 `scripts/submit_train.sh`，设置共享源码、镜像、配置、挂载和 `RECIPE`，并把数据参数传给脚本；分区、reservation 和 GPU 布局由站点环境与 AReaL 配置决定。配置须显式设置 `actor._version: v2`、`rollout._version: v2` 和 `scheduler.type: slurm`。
 
-v2 接受带 `run()` 方法的 Agent。共享 `PromptRewardAgent` 通过会话代理生成并评分，轨迹、logprobs 与训练由 AReaL 记录和执行；数学与分类示例只选择奖励函数。冻结 prompt 保持原模板，计算器多轮任务使用 concat 导出完整轨迹。
+v2 接受带 `run()` 方法的 Agent。共享 `PromptRewardAgent` 通过会话代理生成并评分，轨迹、logprobs 与训练由 AReaL 记录和执行；数学与分类示例只选择奖励函数。冻结 prompt 的首次输入保持原模板，计算器多轮任务使用 assistant EOS 边界和 concat 导出完整轨迹，工具反馈不计入生成 token 的损失。
+
+训练后的 HuggingFace 检查点支持单文件和带索引的 Megatron 分片导出；公共校验会检查索引引用的所有分片，缺失或空分片会阻止评测和续训。检查点保存用于评测、下一轮加载；训练期间权重更新使用 XCCL/NCCL。
 
 提交脚本生成并传递 `AREAL_ADMIN_API_KEY`，示例配置用它设置 v2 的 `actor.admin_api_key`、`ref.admin_api_key` 和 `rollout.admin_api_key`。自定义配置也需设置这些字段；`rollout.agent.admin_api_key` 不适用于 v2。训练入口将控制器容器自动导出的挂载替换为 `WORKER_MOUNTS`，worker 的其他挂载使用 AReaL scheduler 配置，避免将控制器内的路径带到 GPU 宿主机。
 

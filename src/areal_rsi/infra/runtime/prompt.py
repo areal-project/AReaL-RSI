@@ -36,8 +36,13 @@ class PromptRewardAgent:
         self.chat_template_kwargs: dict[str, Any] = {"enable_thinking": enable_thinking}
         if prompt_template is not None:
             # Preserve the frozen prompt verbatim instead of adding a model chat wrapper.
+            # Native concat aligns later turns at assistant EOS boundaries, including
+            # length-truncated completions. The first user prompt stays unchanged.
             self.chat_template_kwargs["chat_template"] = (
-                "{% for message in messages %}{{ message['content'] }}{% endfor %}"
+                "{% for message in messages %}{{ message['content'] }}"
+                "{% if message['role'] == 'assistant' %}{{ eos_token }}{% endif %}"
+                "{% endfor %}"
+                "{% if messages[-1]['role'] == 'assistant' %}{{ '\n' }}{% endif %}"
             )
         self.async_reward = AsyncRewardWrapper(
             import_symbol(reward_fn),

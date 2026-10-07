@@ -127,7 +127,7 @@ singularity exec --no-eval --nv --bind /storage:/storage \
   "$IMAGE" python3 -m areal_rsi.scripts.train --recipe areal_rsi.infra.coordination.evaluation.tir.claude_train.prepare actor._version=v2 rollout._version=v2 \
   --task-set-root "$TASKS" --harness-root "$SELECTED" \
   --claude-cli "$CLAUDE" --validate-only --config "$CONFIG"
-if [[ ! -s "$CHECKPOINT/model.safetensors" ]] || ! grep -q 'Training completes!' "$DATA/g${GENERATION}-train.log"; then
+if ! grep -q 'Training completes!' "$DATA/g${GENERATION}-train.log"; then
 singularity exec --no-eval --nv --bind /storage:/storage \
   --env "PYTHONPATH=$PYTHONPATH,HF_HUB_OFFLINE=1,TRANSFORMERS_OFFLINE=1,NO_PROXY=*,no_proxy=*" \
   "$IMAGE" python3 -m areal_rsi.scripts.train --recipe areal_rsi.infra.coordination.evaluation.tir.claude_train.prepare actor._version=v2 rollout._version=v2 \
@@ -136,7 +136,7 @@ singularity exec --no-eval --nv --bind /storage:/storage \
   > "$DATA/g${GENERATION}-train.log" 2>&1
 fi
 grep -q 'Training completes!' "$DATA/g${GENERATION}-train.log"
-test -s "$CHECKPOINT/model.safetensors"
+"$PYTHON" -c 'import sys; from pathlib import Path; from areal_rsi.infra.storage.artifacts import validate_hf_model_files; validate_hf_model_files(Path(sys.argv[1]))' "$CHECKPOINT"
 
 for ((i=0; i<180; i++)); do
   if [[ -z "$(nvidia-smi --query-compute-apps=pid --format=csv,noheader)" ]]; then break; fi

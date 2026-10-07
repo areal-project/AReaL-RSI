@@ -16,6 +16,7 @@ from areal_rsi.api.control import decode, json_bytes, read_record, safe_name
 from areal_rsi.api.records import AgentEvaluationReport, AgentHarnessSpec, RsiSplit
 from areal_rsi.api.research import AgentHarnessSearchDecision
 from areal_rsi.infra.coordination.evaluation.tasks import load_task_set
+from areal_rsi.infra.storage.artifacts import validate_hf_model_files
 from areal_rsi.infra.storage.files import write_bytes
 
 ROOT = Path(os.environ.get("RSI_ROOT", str(Path.cwd()))).resolve()
@@ -138,12 +139,6 @@ def prepare_config(
     scheduling["srun_additional_args"] = "--unbuffered --mpi=none -K"
     scheduling["env_vars"]["PYTHONPATH"] = os.pathsep.join((str(AREAL), str(ROOT / "src")))
     if plan.large_model:
-        # Keep optimizer and effective batch fixed; reduce initialization/optimizer peaks.
-        config["actor"]["fsdp"] = {
-            "memory_efficient_load": True,
-            "per_layer_optim_step": True,
-        }
-        config["ref"]["fsdp"] = {"memory_efficient_load": True}
         config["rollout"]["agent"]["chat_template_kwargs"] = {"enable_thinking": False}
     path = output / f"train-g{generation}.yaml"
     write_bytes(path, yaml.safe_dump(config, sort_keys=False).encode(), immutable=True)
@@ -320,8 +315,7 @@ def main() -> None:
                 # Wait for the eight-GPU budget before AReaL's bounded worker startup.
                 run_gpu(["true"], env, gpus=8)
                 run(command, env, log)
-            if not (checkpoint / "model.safetensors").is_file():
-                raise ValueError("Completed training has no checkpoint")
+            validate_hf_model_files(checkpoint)
             run_gpu(
                 [
                     "bash",

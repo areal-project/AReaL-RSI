@@ -83,7 +83,7 @@ for ARM in control synthetic; do
     --claude-cli "$CLAUDE" --config "$CONFIG" \
     > "$DATA/$ARM-train.log" 2>&1
   grep -q 'Training completes!' "$DATA/$ARM-train.log"
-  test -s "$CHECKPOINT/model.safetensors"
+  "$PYTHON" -c 'import sys; from pathlib import Path; from areal_rsi.infra.storage.artifacts import validate_hf_model_files; validate_hf_model_files(Path(sys.argv[1]))' "$CHECKPOINT"
   for ((i=0; i<180; i++)); do
     if [[ -z "$(nvidia-smi --query-compute-apps=pid --format=csv,noheader)" ]]; then break; fi
     sleep 2

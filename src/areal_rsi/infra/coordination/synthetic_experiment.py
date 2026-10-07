@@ -24,6 +24,7 @@ from areal_rsi.infra.coordination.evaluation.tir.synthesis import (
     synthesize_tir_supplement,
 )
 from areal_rsi.infra.runtime.claude_solver import load_claude_harness
+from areal_rsi.infra.storage.artifacts import validate_hf_model_files
 from areal_rsi.infra.storage.files import write_bytes
 
 SYNTH_ROOT = Path(os.environ.get("RSI_ROOT", str(Path.cwd()))).resolve()
@@ -85,8 +86,7 @@ def retained_state() -> RetainedState:
             raise ValueError("Synthesis requires the retained state of a terminal weight loop")
         model = Path(state.model_root).resolve(strict=True)
         harness = Path(state.harness_root).resolve(strict=True)
-        if not (model / "model.safetensors").is_file():
-            raise ValueError("Retained pilot checkpoint is incomplete")
+        validate_hf_model_files(model)
         load_claude_harness(harness, CLAUDE, model)
         task_set = load_task_set(Path(state.task_set_root))
         if decision.get("task_set_id") != task_set.task_set_id:

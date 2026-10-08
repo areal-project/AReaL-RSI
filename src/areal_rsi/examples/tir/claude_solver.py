@@ -29,10 +29,10 @@ from areal_rsi.api.records import (
     Task,
 )
 from areal_rsi.api.research import AgentHarnessAttemptFailure, AgentHarnessSearchDecision
+from areal_rsi.examples.tir.verifier import strict_math_reward
 from areal_rsi.infra.coordination.evaluation.assets import _gold_answer, verifier_sources
 from areal_rsi.infra.coordination.evaluation.harness import validate_prompt
 from areal_rsi.infra.coordination.evaluation.tasks import load_task_set, public_tasks
-from areal_rsi.infra.coordination.evaluation.tir.verifier import strict_math_reward
 from areal_rsi.infra.coordination.policies.harness import select_agent_harnesses
 from areal_rsi.infra.coordination.tools import calculator as calculator_tool
 from areal_rsi.infra.runtime.anthropic import complete_instruction
@@ -445,21 +445,32 @@ def reverify_claude_report(
     import areal_rsi
 
     current_package = Path(areal_rsi.__file__).resolve().parent
+    legacy_paths = {
+        "examples/tir/verifier.py": "infra/coordination/evaluation/tir/verifier.py",
+        "examples/tir/claude_solver.py": "infra/runtime/claude_solver.py",
+    }
+
+    def parent_source(relative: str) -> Path:
+        candidate = parent_package / relative
+        if not candidate.exists() and relative in legacy_paths:
+            return parent_package / legacy_paths[relative]
+        return candidate
+
     # Preserve the entire source bundle as evidence. Also establish that the
     # actual scorer and transcript parser have not changed across the move.
     for relative in (
-        "infra/coordination/evaluation/tir/verifier.py",
+        "examples/tir/verifier.py",
         "infra/runtime/claude.py",
     ):
-        if _regular_bytes(parent_package / relative) != _regular_bytes(current_package / relative):
+        if _regular_bytes(parent_source(relative)) != _regular_bytes(current_package / relative):
             raise ValueError("Saved evaluation grading or parsing policy changed")
     for relative, name in (
-        ("infra/runtime/claude_solver.py", "_claude_math_reward"),
+        ("examples/tir/claude_solver.py", "_claude_math_reward"),
         ("infra/coordination/evaluation/assets.py", "_gold_answer"),
     ):
         definitions = []
-        for package in (parent_package, current_package):
-            text = _regular_bytes(package / relative).decode()
+        for source in (parent_source(relative), current_package / relative):
+            text = _regular_bytes(source).decode()
             definition = next(
                 (
                     node

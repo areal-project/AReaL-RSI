@@ -21,7 +21,7 @@ if curl -fsSI "http://127.0.0.1:$PORT/" >/dev/null 2>&1; then
 fi
 mkdir -p "$OUT"
 if [[ ! -e "$OUT/incumbent-harness" ]]; then
-  "$PYTHON" -m areal_rsi.infra.runtime.claude_solver freeze \
+  "$PYTHON" -m areal_rsi.examples.tir.claude_solver freeze \
     --prompt "$PROMPT" --claude-cli "$CLAUDE" \
     --backend-model-root "$MODEL" --model "$MODEL" \
     --output "$OUT/incumbent-harness"
@@ -51,12 +51,12 @@ common=(--task-set-root "$TASKS" --claude-cli "$CLAUDE" \
 for pair in 'h0-evolve:harness_evolve' 'h0-select:harness_select' 'h0-repeat:harness_select'; do
   name=${pair%%:*}
   split=${pair#*:}
-  "$PYTHON" -m areal_rsi.infra.runtime.claude_solver evaluate \
+  "$PYTHON" -m areal_rsi.examples.tir.claude_solver evaluate \
     "${common[@]}" --harness-root "$OUT/incumbent-harness" \
     --split "$split" --trial-id "shared512-$name" \
     --output "$OUT/$name.json" --workers 4
 done
-"$PYTHON" -m areal_rsi.infra.runtime.claude_solver search \
+"$PYTHON" -m areal_rsi.examples.tir.claude_solver search \
   "${common[@]}" --harness-root "$OUT/incumbent-harness" \
   --baseline-evolve "$OUT/h0-evolve.json" \
   --baseline-select "$OUT/h0-select.json" \
@@ -78,12 +78,12 @@ if len(selected) != 1 or not decision['continue_to_training']:
 print(selected[0])
 PY
 )
-"$PYTHON" -m areal_rsi.infra.runtime.claude_solver evaluate \
+"$PYTHON" -m areal_rsi.examples.tir.claude_solver evaluate \
   "${common[@]}" --harness-root "$OUT/incumbent-harness" \
   --split model_dev --trial-id shared512-m0-h0-dev \
   --output "$OUT/m0-h0-dev.json" --workers 4
 if [[ "$SELECTED" != "$OUT/incumbent-harness" ]]; then
-  "$PYTHON" -m areal_rsi.infra.runtime.claude_solver evaluate \
+  "$PYTHON" -m areal_rsi.examples.tir.claude_solver evaluate \
     "${common[@]}" --harness-root "$SELECTED" \
     --split model_dev --trial-id shared512-m0-selected-dev \
     --output "$OUT/m0-selected-dev.json" --workers 4

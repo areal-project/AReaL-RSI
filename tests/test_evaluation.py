@@ -10,6 +10,7 @@ from areal_rsi.api.control import json_bytes, read_record
 from areal_rsi.api.records import RsiCaseScore, RsiSplit
 from areal_rsi.api.research import GenerationSpec, HarnessSelectionRule, RsiPromotionRule
 from areal_rsi.examples.tir.profile import PROFILE
+from areal_rsi.examples.tir.verifier import strict_math_reward
 from areal_rsi.infra.coordination.evaluation.assets import verifier_sources
 from areal_rsi.infra.coordination.evaluation.contracts import TraceBundle, Trajectory
 from areal_rsi.infra.coordination.evaluation.evaluation import (
@@ -19,7 +20,6 @@ from areal_rsi.infra.coordination.evaluation.evaluation import (
 )
 from areal_rsi.infra.coordination.evaluation.harness import load_prompt_harness
 from areal_rsi.infra.coordination.evaluation.tasks import load_task_set
-from areal_rsi.infra.coordination.evaluation.tir.verifier import strict_math_reward
 from areal_rsi.infra.coordination.generation import GenerationCycle
 from areal_rsi.infra.storage.artifacts import (
     checkpoint_digest,
@@ -105,7 +105,7 @@ def test_nested_factorial_comparison_does_not_expand_huge_integer() -> None:
     assert strict_math_reward(r"\boxed{11!!}", r"\boxed{2}") == 0.0
     assert strict_math_reward(r"\boxed{3!}", r"\boxed{6}") == 1.0
     sympy = pytest.importorskip("sympy")
-    from areal_rsi.infra.coordination.evaluation.tir.verifier import _integer_bound_counterexample
+    from areal_rsi.examples.tir.verifier import _integer_bound_counterexample
 
     for argument, expected in [(0, 1), (1, 1), (3, 6)]:
         value = sympy.factorial(argument, evaluate=False)
@@ -117,7 +117,7 @@ def test_nested_factorial_comparison_does_not_expand_huge_integer() -> None:
 
 def test_integer_bounds_do_not_confuse_zero_or_negative_powers() -> None:
     sympy = pytest.importorskip("sympy")
-    from areal_rsi.infra.coordination.evaluation.tir.verifier import _integer_bound_counterexample
+    from areal_rsi.examples.tir.verifier import _integer_bound_counterexample
 
     tower = sympy.Pow(2003, sympy.Pow(2002, 2001, evaluate=False), evaluate=False)
     assert _integer_bound_counterexample(sympy.Integer(4003), tower)
@@ -171,7 +171,7 @@ def test_comparison_retry_preserves_equality_and_propagates_failure(monkeypatch)
 
 def test_training_reward_contains_persistent_math_timeout(monkeypatch) -> None:
     errors = pytest.importorskip("math_verify.errors")
-    from areal_rsi.infra.coordination.evaluation.tir import verifier
+    from areal_rsi.examples.tir import verifier
 
     def timed_out(response: str, answer: str) -> float:
         raise errors.TimeoutException("persistent comparison timeout")

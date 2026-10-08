@@ -15,13 +15,13 @@ import pytest
 import yaml
 
 from areal_rsi.api.control import json_bytes
-from areal_rsi.infra.coordination import continuation
-from areal_rsi.infra.coordination.evaluation import rlvr
-from areal_rsi.infra.coordination.evaluation.tasks import load_task_set
-from areal_rsi.infra.coordination.evaluation.tir.dynamic_synthesis import (
+from areal_rsi.examples.tir import continuation
+from areal_rsi.examples.tir.dynamic_synthesis import (
     CompletedDynamicRounds,
     completed_rounds,
 )
+from areal_rsi.infra.coordination.evaluation import rlvr
+from areal_rsi.infra.coordination.evaluation.tasks import load_task_set
 from areal_rsi.infra.storage.artifacts import checkpoint_digest
 from areal_rsi.scripts.train import TrainingPlan, train, validate_v2
 from areal_rsi.scripts.train import main as train_main

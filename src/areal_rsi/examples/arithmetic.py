@@ -10,9 +10,7 @@ from areal_rsi.scripts.train import main as train_main
 
 
 def prepare(argv: list[str]) -> TrainingPlan | None:
-    return prepare_training(
-        argv, reward_fn="areal_rsi.infra.coordination.evaluation.tir.verifier.arithmetic_reward"
-    )
+    return prepare_training(argv, reward_fn="areal_rsi.examples.tir.verifier.arithmetic_reward")
 
 
 def main() -> None:

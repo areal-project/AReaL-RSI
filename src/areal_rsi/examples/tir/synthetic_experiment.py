@@ -14,8 +14,8 @@ import yaml  # type: ignore[import-untyped]
 
 from areal_rsi.api.control import decode, json_bytes, read_record
 from areal_rsi.api.records import AgentEvaluationReport, RsiSplit
-from areal_rsi.infra.coordination.evaluation.tasks import load_task_set
-from areal_rsi.infra.coordination.evaluation.tir.synthesis import (
+from areal_rsi.examples.tir.claude_solver import load_claude_harness
+from areal_rsi.examples.tir.synthesis import (
     SyntheticMathCase,
     freeze_tir_synthetic_probe,
     freeze_tir_synthetic_training,
@@ -23,7 +23,7 @@ from areal_rsi.infra.coordination.evaluation.tir.synthesis import (
     synthesize_tir_math_cases,
     synthesize_tir_supplement,
 )
-from areal_rsi.infra.runtime.claude_solver import load_claude_harness
+from areal_rsi.infra.coordination.evaluation.tasks import load_task_set
 from areal_rsi.infra.storage.artifacts import validate_hf_model_files
 from areal_rsi.infra.storage.files import write_bytes
 

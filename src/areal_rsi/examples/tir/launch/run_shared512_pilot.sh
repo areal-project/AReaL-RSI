@@ -56,7 +56,7 @@ TRIAL=g${GENERATION}-shared512-2ep-20261003
 CHECKPOINT=$DATA/areal-experiments/checkpoints/root/rsi-shared512-pilot/$TRIAL/default/epoch1epochstep15globalstep31
 
 if [[ ! -e "$EVAL/decision.json" ]]; then
-bash "$ROOT/src/areal_rsi/infra/coordination/launch/run_shared512_search.sh" \
+bash "$ROOT/src/areal_rsi/examples/tir/launch/run_shared512_search.sh" \
   "$MODEL" "$TASKS" "$PROMPT" "$SEARCH"
 read -r SELECTED < "$SEARCH/selected-harness-path.txt"
 
@@ -69,7 +69,7 @@ from pathlib import Path
 import yaml
 from areal_rsi.api.control import json_bytes
 from areal_rsi.infra.storage.files import write_bytes
-from areal_rsi.infra.runtime.claude_solver import load_claude_harness
+from areal_rsi.examples.tir.claude_solver import load_claude_harness
 from areal_rsi.infra.coordination.evaluation.tasks import load_task_set
 
 main, root, model, tasks, search, selected, config_path, lock_path = map(Path, sys.argv[1:9])
@@ -110,13 +110,13 @@ lock = {
     'source_digests': {name: digest(root / name) for name in (
         'src/areal_rsi/api/records.py',
         'src/areal_rsi/infra/coordination/evaluation/tasks.py',
-        'src/areal_rsi/infra/runtime/claude_solver.py',
+        'src/areal_rsi/examples/tir/claude_solver.py',
         'src/areal_rsi/infra/runtime/anthropic.py',
         'src/areal_rsi/infra/runtime/claude.py',
-        'src/areal_rsi/infra/coordination/launch/run_shared512_search.sh',
-        'src/areal_rsi/infra/coordination/launch/run_shared512_eval.sh',
-        'src/areal_rsi/infra/coordination/evaluation/tir/claude_train.py',
-        'src/areal_rsi/infra/coordination/launch/run_shared512_pilot.sh',
+        'src/areal_rsi/examples/tir/launch/run_shared512_search.sh',
+        'src/areal_rsi/examples/tir/launch/run_shared512_eval.sh',
+        'src/areal_rsi/examples/tir/claude_train.py',
+        'src/areal_rsi/examples/tir/launch/run_shared512_pilot.sh',
     )},
 }
 write_bytes(lock_path, json_bytes(lock), immutable=True)
@@ -124,13 +124,13 @@ PY
 
 singularity exec --no-eval --nv --bind /storage:/storage \
   --env "PYTHONPATH=$PYTHONPATH,HF_HUB_OFFLINE=1,TRANSFORMERS_OFFLINE=1,NO_PROXY=*,no_proxy=*" \
-  "$IMAGE" python3 -m areal_rsi.scripts.train --recipe areal_rsi.infra.coordination.evaluation.tir.claude_train.prepare actor._version=v2 rollout._version=v2 \
+  "$IMAGE" python3 -m areal_rsi.scripts.train --recipe areal_rsi.examples.tir.claude_train.prepare actor._version=v2 rollout._version=v2 \
   --task-set-root "$TASKS" --harness-root "$SELECTED" \
   --claude-cli "$CLAUDE" --validate-only --config "$CONFIG"
 if ! grep -q 'Training completes!' "$DATA/g${GENERATION}-train.log"; then
 singularity exec --no-eval --nv --bind /storage:/storage \
   --env "PYTHONPATH=$PYTHONPATH,HF_HUB_OFFLINE=1,TRANSFORMERS_OFFLINE=1,NO_PROXY=*,no_proxy=*" \
-  "$IMAGE" python3 -m areal_rsi.scripts.train --recipe areal_rsi.infra.coordination.evaluation.tir.claude_train.prepare actor._version=v2 rollout._version=v2 \
+  "$IMAGE" python3 -m areal_rsi.scripts.train --recipe areal_rsi.examples.tir.claude_train.prepare actor._version=v2 rollout._version=v2 \
   --task-set-root "$TASKS" --harness-root "$SELECTED" \
   --claude-cli "$CLAUDE" --config "$CONFIG" \
   > "$DATA/g${GENERATION}-train.log" 2>&1
@@ -144,11 +144,11 @@ for ((i=0; i<180; i++)); do
 done
 test -z "$(nvidia-smi --query-compute-apps=pid --format=csv,noheader)"
 
-bash "$ROOT/src/areal_rsi/infra/coordination/launch/run_shared512_eval.sh" \
+bash "$ROOT/src/areal_rsi/examples/tir/launch/run_shared512_eval.sh" \
   "$CHECKPOINT" "$TASKS" model_dev "shared512-g${GENERATION}-m1-selected-test" \
   "$EVAL/m1-selected-dev" "$SELECTED/prompt.txt"
 if [[ "$SELECTED" != "$SEARCH/incumbent-harness" ]]; then
-  bash "$ROOT/src/areal_rsi/infra/coordination/launch/run_shared512_eval.sh" \
+  bash "$ROOT/src/areal_rsi/examples/tir/launch/run_shared512_eval.sh" \
     "$CHECKPOINT" "$TASKS" model_dev "shared512-g${GENERATION}-m1-h0-test" \
     "$EVAL/m1-h0-dev" "$SEARCH/incumbent-harness/prompt.txt"
 fi

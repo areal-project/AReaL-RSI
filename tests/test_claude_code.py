@@ -14,16 +14,16 @@ import pytest
 from areal_rsi.api.control import json_bytes
 from areal_rsi.api.execution import AgentRunResult
 from areal_rsi.api.records import AgentCaseRecord, AgentEvaluationReport, RsiSplit
-from areal_rsi.infra.coordination.policies.harness import select_agent_harnesses
-from areal_rsi.infra.coordination.tools.calculator import calculate
-from areal_rsi.infra.runtime.anthropic import adapt_messages
-from areal_rsi.infra.runtime.claude import read_result
-from areal_rsi.infra.runtime.claude_solver import (
+from areal_rsi.examples.tir.claude_solver import (
     _claude_math_reward,
     _training_claude_math_reward,
     freeze_claude_harness,
     load_claude_harness,
 )
+from areal_rsi.infra.coordination.policies.harness import select_agent_harnesses
+from areal_rsi.infra.coordination.tools.calculator import calculate
+from areal_rsi.infra.runtime.anthropic import adapt_messages
+from areal_rsi.infra.runtime.claude import read_result
 
 
 def test_claude_reward_parses_fullwidth_digit_without_changing_answer() -> None:
@@ -47,19 +47,19 @@ def test_training_reward_contains_math_comparison_timeout(monkeypatch: pytest.Mo
     def timeout(response: str, answer: str) -> float:
         raise TimeoutException("undecidable comparison")
 
-    monkeypatch.setattr("areal_rsi.infra.runtime.claude_solver.strict_math_reward", timeout)
+    monkeypatch.setattr("areal_rsi.examples.tir.claude_solver.strict_math_reward", timeout)
     assert _training_claude_math_reward(r"\boxed{\int x\,dx}", "0") == 0.0
 
     def malformed(response: str, answer: str) -> float:
         raise ValueError('String "٣٣" does not denote a Number')
 
-    monkeypatch.setattr("areal_rsi.infra.runtime.claude_solver.strict_math_reward", malformed)
+    monkeypatch.setattr("areal_rsi.examples.tir.claude_solver.strict_math_reward", malformed)
     assert _training_claude_math_reward(r"\boxed{٣٣}", "33") == 0.0
 
     def invalid_gold(response: str, answer: str) -> float:
         raise ValueError("Frozen TIR gold answer cannot be parsed")
 
-    monkeypatch.setattr("areal_rsi.infra.runtime.claude_solver.strict_math_reward", invalid_gold)
+    monkeypatch.setattr("areal_rsi.examples.tir.claude_solver.strict_math_reward", invalid_gold)
     with pytest.raises(ValueError, match="Frozen TIR gold"):
         _training_claude_math_reward(r"\boxed{1}", "bad gold")
 
@@ -269,12 +269,12 @@ def test_model_proposal_preserves_valid_output_and_rejects_invalid_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, instruction: str, valid: bool
 ) -> None:
     from areal_rsi.api.control import json_bytes
+    from areal_rsi.examples.tir import claude_solver as claude_code
     from areal_rsi.infra.coordination.evaluation.tasks import (
         SplitSizes,
         freeze_task_set,
         public_tasks,
     )
-    from areal_rsi.infra.runtime import claude_solver as claude_code
 
     train = tmp_path / "train.jsonl"
     test = tmp_path / "test.jsonl"
@@ -390,13 +390,13 @@ def test_claude_cli_evaluation_records_real_subprocess_trace_and_rejects_drift(
     from concurrent.futures import ThreadPoolExecutor
 
     from areal_rsi.api.records import RsiSplit
+    from areal_rsi.examples.tir import claude_solver as claude_code
     from areal_rsi.infra.coordination.evaluation.assets import verifier_sources
     from areal_rsi.infra.coordination.evaluation.tasks import (
         SplitSizes,
         freeze_task_set,
         public_tasks,
     )
-    from areal_rsi.infra.runtime import claude_solver as claude_code
 
     train, test = tmp_path / "train.jsonl", tmp_path / "test.jsonl"
 
@@ -526,9 +526,7 @@ def test_claude_cli_evaluation_records_real_subprocess_trace_and_rejects_drift(
     case_path.write_bytes(case_bytes)
 
     # Even a correctly attested older bundle with a different scorer is rejected.
-    (parent_package / "infra/coordination/evaluation/tir/verifier.py").write_text(
-        "# altered grading policy\n"
-    )
+    (parent_package / "examples/tir/verifier.py").write_text("# altered grading policy\n")
     changed_digest = claude_code.source_files_digest(
         verifier_sources(runner, rsi_package=parent_package)
     )
@@ -565,12 +563,12 @@ def test_claude_limit_scores_one_case_zero_and_continues(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
     from areal_rsi.api.records import RsiSplit
+    from areal_rsi.examples.tir import claude_solver as claude_code
     from areal_rsi.infra.coordination.evaluation.tasks import (
         SplitSizes,
         freeze_task_set,
         public_tasks,
     )
-    from areal_rsi.infra.runtime import claude_solver as claude_code
 
     train, test = tmp_path / "train.jsonl", tmp_path / "test.jsonl"
     train.write_text(
@@ -660,12 +658,12 @@ def test_frozen_claude_workflow_uses_areal_session_proxy(
     import asyncio
 
     from areal_rsi.api.records import RsiSplit
+    from areal_rsi.examples.tir.claude_solver import FrozenClaudeWorkflow
     from areal_rsi.infra.coordination.evaluation.tasks import (
         SplitSizes,
         freeze_task_set,
         public_tasks,
     )
-    from areal_rsi.infra.runtime.claude_solver import FrozenClaudeWorkflow
 
     train, test = tmp_path / "train.jsonl", tmp_path / "test.jsonl"
     train.write_text(

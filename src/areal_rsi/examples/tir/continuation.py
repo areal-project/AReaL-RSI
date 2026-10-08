@@ -16,12 +16,12 @@ import yaml  # type: ignore[import-untyped]
 from areal_rsi.api.control import decode, json_bytes, read_record, safe_name
 from areal_rsi.api.records import AgentEvaluationReport, AgentHarnessSpec, RsiSplit
 from areal_rsi.api.research import AgentHarnessSearchDecision
-from areal_rsi.infra.coordination.evaluation.tasks import load_task_set
-from areal_rsi.infra.runtime.claude_solver import (
+from areal_rsi.examples.tir.claude_solver import (
     SavedEvaluation,
     freeze_claude_harness,
     reverify_claude_report,
 )
+from areal_rsi.infra.coordination.evaluation.tasks import load_task_set
 from areal_rsi.infra.storage.artifacts import checkpoint_digest, validate_hf_model_files
 from areal_rsi.infra.storage.files import write_bytes
 
@@ -444,9 +444,7 @@ def main() -> None:
                 run_gpu(
                     [
                         "bash",
-                        str(
-                            ROOT / "src/areal_rsi/infra/coordination/launch/run_shared512_search.sh"
-                        ),
+                        str(ROOT / "src/areal_rsi/examples/tir/launch/run_shared512_search.sh"),
                         str(model),
                         plan.task_set,
                         str(prompt),
@@ -472,7 +470,7 @@ def main() -> None:
                     "-m",
                     "areal_rsi.scripts.train",
                     "--recipe",
-                    "areal_rsi.infra.coordination.evaluation.tir.claude_train.prepare",
+                    "areal_rsi.examples.tir.claude_train.prepare",
                     "--task-set-root",
                     plan.task_set,
                     "--harness-root",
@@ -497,7 +495,7 @@ def main() -> None:
                 run_gpu(
                     [
                         "bash",
-                        str(ROOT / "src/areal_rsi/infra/coordination/launch/run_shared512_eval.sh"),
+                        str(ROOT / "src/areal_rsi/examples/tir/launch/run_shared512_eval.sh"),
                         str(checkpoint),
                         plan.task_set,
                         "model_dev",

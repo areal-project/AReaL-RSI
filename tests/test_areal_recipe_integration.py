@@ -405,7 +405,7 @@ def test_native_workflow_formats_frozen_prompt_and_rejects_changed_snapshot(
     ("reward", "answer"),
     [
         ("areal_rsi.infra.coordination.evaluation.rlvr.exact_reward", "positive"),
-        ("areal_rsi.infra.coordination.evaluation.tir.verifier.arithmetic_reward", "3"),
+        ("areal_rsi.examples.tir.verifier.arithmetic_reward", "3"),
     ],
 )
 def test_native_v2_prompt_agent_uses_proxy_and_scores_correct_and_wrong_answers(
@@ -490,8 +490,8 @@ def test_native_v2_calculator_agent_keeps_tool_result_and_cleans_up_on_failure(
     from areal.api.cli_args import GenerationHyperparameters
     from examples.tir.tool_manager import ToolManager
 
+    from areal_rsi.examples.tir.workflow import FrozenTIRWorkflow
     from areal_rsi.infra.runtime.prompt import PromptRewardAgent
-    from areal_rsi.infra.runtime.tir import FrozenTIRWorkflow
 
     class Tokenizer:
         def encode(self, value: str, **_kwargs: Any) -> list[int]:
@@ -503,7 +503,7 @@ def test_native_v2_calculator_agent_keeps_tool_result_and_cleans_up_on_failure(
     agent = object.__new__(FrozenTIRWorkflow)
     PromptRewardAgent.__init__(
         agent,
-        reward_fn="areal_rsi.infra.coordination.evaluation.tir.verifier.strict_tir_reward_fn",
+        reward_fn="areal_rsi.examples.tir.verifier.strict_tir_reward_fn",
         tokenizer=Tokenizer(),
         prompt_template="User: {prompt}\nAssistant:",
         gconfig=GenerationHyperparameters(max_new_tokens=64, max_tokens=512),
@@ -591,8 +591,8 @@ def test_calculator_episode_exports_one_native_v2_trajectory_with_tool_tokens_ma
     from areal.v2.inference_service.data_proxy.config import DataProxyConfig
     from areal.v2.inference_service.data_proxy.session import SessionStore
 
+    from areal_rsi.examples.tir.workflow import FrozenTIRWorkflow
     from areal_rsi.infra.runtime.prompt import PromptRewardAgent
-    from areal_rsi.infra.runtime.tir import FrozenTIRWorkflow
     from areal_rsi.scripts.train import load_tokenizer
 
     tokenizer = load_tokenizer(os.environ["RSI_TEST_MODEL"])
@@ -636,7 +636,7 @@ def test_calculator_episode_exports_one_native_v2_trajectory_with_tool_tokens_ma
     agent = object.__new__(FrozenTIRWorkflow)
     PromptRewardAgent.__init__(
         agent,
-        reward_fn="areal_rsi.infra.coordination.evaluation.tir.verifier.strict_tir_reward_fn",
+        reward_fn="areal_rsi.examples.tir.verifier.strict_tir_reward_fn",
         tokenizer=tokenizer,
         prompt_template="User: {prompt}\nAssistant:",
         gconfig=GenerationHyperparameters(max_new_tokens=64, max_tokens=512),

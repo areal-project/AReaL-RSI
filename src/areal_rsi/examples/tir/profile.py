@@ -4,9 +4,9 @@ from areal_rsi.infra.coordination.evaluation.profile import PromptProfile
 
 PROFILE = PromptProfile(
     config_class="examples.tir.tir_workflow.TIRGRPOConfig",
-    workflow="areal_rsi.infra.runtime.tir.FrozenTIRWorkflow",
-    reward_fn="areal_rsi.infra.coordination.evaluation.tir.verifier.strict_tir_reward_fn",
-    verify_fn="areal_rsi.infra.coordination.evaluation.tir.verifier.strict_math_reward",
+    workflow="areal_rsi.examples.tir.workflow.FrozenTIRWorkflow",
+    reward_fn="areal_rsi.examples.tir.verifier.strict_tir_reward_fn",
+    verify_fn="areal_rsi.examples.tir.verifier.strict_math_reward",
     runner_directory="examples/tir",
     boxed_answers=True,
     enabled_tools=("calculator",),

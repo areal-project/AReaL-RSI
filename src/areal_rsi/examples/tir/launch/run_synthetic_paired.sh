@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SYNTH=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+SYNTH=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../../../.." && pwd -P)
 DATA=$SYNTH/data/synthetic-experiment
 AREAL=/storage/openpsi/users/fenghui/projects/AReaL-dev-0928
 IMAGE=/storage/openpsi/images/areal-dev-sglang-0821.sif
@@ -21,7 +21,7 @@ done
 test -z "$(nvidia-smi --query-compute-apps=pid --format=csv,noheader)"
 
 if [[ -z "${RSI_PROBE_BATCHES_PATH:-}" ]]; then
-"$PYTHON" -m areal_rsi.infra.coordination.synthetic_experiment prepare-probe > "$DATA/prepare-probe.log"
+"$PYTHON" -m areal_rsi.examples.tir.synthetic_experiment prepare-probe > "$DATA/prepare-probe.log"
 readarray -t PROBE < <("$PYTHON" - "$DATA/probe-state.json" <<'PY'
 import json
 import sys
@@ -32,15 +32,15 @@ for name in ("model_root", "task_set_root", "prompt_path"):
 PY
 )
 for RUN in first second; do
-  "$SYNTH/src/areal_rsi/infra/coordination/launch/run_synthetic_eval.sh" \
+  "$SYNTH/src/areal_rsi/examples/tir/launch/run_synthetic_eval.sh" \
     "${PROBE[0]}" "${PROBE[1]}" harness_evolve "synthetic-probe-$RUN" \
     "$DATA/probe-$RUN" "${PROBE[2]}"
 done
 
 fi
 
-"$PYTHON" -m areal_rsi.infra.coordination.synthetic_experiment prepare > "$DATA/prepare.log"
-"$PYTHON" -m areal_rsi.infra.coordination.synthetic_experiment verify
+"$PYTHON" -m areal_rsi.examples.tir.synthetic_experiment prepare > "$DATA/prepare.log"
+"$PYTHON" -m areal_rsi.examples.tir.synthetic_experiment verify
 
 readarray -t STATE < <("$PYTHON" - "$DATA/prepared.json" <<'PY'
 import json
@@ -62,7 +62,7 @@ CONTROL_CHECKPOINT=${STATE[3]}
 SYNTHETIC_CHECKPOINT=${STATE[4]}
 
 for ARM in control synthetic; do
-  "$PYTHON" -m areal_rsi.infra.coordination.synthetic_experiment verify
+  "$PYTHON" -m areal_rsi.examples.tir.synthetic_experiment verify
   if [[ "$ARM" == control ]]; then
     TASKS=$CONTROL_TASKS
     CHECKPOINT=$CONTROL_CHECKPOINT
@@ -73,12 +73,12 @@ for ARM in control synthetic; do
   CONFIG=$DATA/$ARM.yaml
   singularity exec --no-eval --nv --bind /storage:/storage \
     --env "PYTHONPATH=$PYTHONPATH,HF_HUB_OFFLINE=1,TRANSFORMERS_OFFLINE=1,NO_PROXY=*,no_proxy=*" \
-    "$IMAGE" python3 -m areal_rsi.scripts.train --recipe areal_rsi.infra.coordination.evaluation.tir.claude_train.prepare actor._version=v2 rollout._version=v2 \
+    "$IMAGE" python3 -m areal_rsi.scripts.train --recipe areal_rsi.examples.tir.claude_train.prepare actor._version=v2 rollout._version=v2 \
     --task-set-root "$TASKS" --harness-root "${STATE[0]}" \
     --claude-cli "$CLAUDE" --validate-only --config "$CONFIG"
   singularity exec --no-eval --nv --bind /storage:/storage \
     --env "PYTHONPATH=$PYTHONPATH,HF_HUB_OFFLINE=1,TRANSFORMERS_OFFLINE=1,NO_PROXY=*,no_proxy=*" \
-    "$IMAGE" python3 -m areal_rsi.scripts.train --recipe areal_rsi.infra.coordination.evaluation.tir.claude_train.prepare actor._version=v2 rollout._version=v2 \
+    "$IMAGE" python3 -m areal_rsi.scripts.train --recipe areal_rsi.examples.tir.claude_train.prepare actor._version=v2 rollout._version=v2 \
     --task-set-root "$TASKS" --harness-root "${STATE[0]}" \
     --claude-cli "$CLAUDE" --config "$CONFIG" \
     > "$DATA/$ARM-train.log" 2>&1
@@ -89,12 +89,12 @@ for ARM in control synthetic; do
     sleep 2
   done
   test -z "$(nvidia-smi --query-compute-apps=pid --format=csv,noheader)"
-  "$SYNTH/src/areal_rsi/infra/coordination/launch/run_synthetic_eval.sh" \
+  "$SYNTH/src/areal_rsi/examples/tir/launch/run_synthetic_eval.sh" \
     "$CHECKPOINT" "$TASKS" model_dev "$ARM-postloop-model-dev" \
     "$DATA/$ARM/model_dev" "$PROMPT"
 done
 
-"$PYTHON" -m areal_rsi.infra.coordination.synthetic_experiment decide-dev
-"$PYTHON" -m areal_rsi.infra.coordination.synthetic_experiment verify
+"$PYTHON" -m areal_rsi.examples.tir.synthetic_experiment decide-dev
+"$PYTHON" -m areal_rsi.examples.tir.synthetic_experiment verify
 
-"$PYTHON" -m areal_rsi.infra.coordination.synthetic_experiment finalize
+"$PYTHON" -m areal_rsi.examples.tir.synthetic_experiment finalize

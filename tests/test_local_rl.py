@@ -2,7 +2,7 @@
 
 import pytest
 
-from areal_rsi.infra.coordination.evaluation.tir.verifier import arithmetic_reward
+from areal_rsi.examples.tir.verifier import arithmetic_reward
 
 
 @pytest.mark.parametrize(

@@ -10,18 +10,18 @@ from pathlib import Path
 import pytest
 
 from areal_rsi.api.records import RsiSplit
-from areal_rsi.infra.coordination.evaluation.tasks import (
-    SplitSizes,
-    freeze_task_set,
-    load_task_set,
-)
-from areal_rsi.infra.coordination.evaluation.tir.synthesis import (
+from areal_rsi.examples.tir.synthesis import (
     freeze_tir_synthetic_probe,
     freeze_tir_synthetic_training,
     select_model_calibrated_cases,
     synthesize_tir_math_cases,
 )
-from areal_rsi.infra.coordination.synthetic_experiment import retained_state
+from areal_rsi.examples.tir.synthetic_experiment import retained_state
+from areal_rsi.infra.coordination.evaluation.tasks import (
+    SplitSizes,
+    freeze_task_set,
+    load_task_set,
+)
 
 
 def test_synthesis_rejects_a_nonterminal_weight_loop(
@@ -209,7 +209,7 @@ def test_fractional_linear_answers_satisfy_unique_equations() -> None:
 
 
 def test_supplement_answers_follow_ratio_and_production_constraints() -> None:
-    from areal_rsi.infra.coordination.evaluation.tir.synthesis import synthesize_tir_supplement
+    from areal_rsi.examples.tir.synthesis import synthesize_tir_supplement
 
     cases = synthesize_tir_supplement(seed=20261004)
     assert len(cases) == len({item.case.task_id for item in cases}) == 256
@@ -246,7 +246,7 @@ def test_supplement_answers_follow_ratio_and_production_constraints() -> None:
 def test_dynamic_candidates_exclude_all_earlier_rounds() -> None:
     from collections import Counter
 
-    from areal_rsi.infra.coordination.evaluation.tir.dynamic_synthesis import fresh_candidates
+    from areal_rsi.examples.tir.dynamic_synthesis import fresh_candidates
 
     previous = fresh_candidates(20271005, set())
     excluded = {item.case.task_id for item in previous}
@@ -261,7 +261,7 @@ def test_dynamic_candidates_exclude_all_earlier_rounds() -> None:
 def test_diverse_selection_caps_templates_and_excludes_solved_tasks() -> None:
     from collections import Counter
 
-    from areal_rsi.infra.coordination.evaluation.tir.synthesis import synthesize_diverse_math_cases
+    from areal_rsi.examples.tir.synthesis import synthesize_diverse_math_cases
 
     cases = synthesize_diverse_math_cases(seed=91)
     assert len({c.recipe for c in cases}) == 16
@@ -283,7 +283,7 @@ def test_new_math_answers_against_independent_computations() -> None:
     from itertools import product
     from math import comb
 
-    from areal_rsi.infra.coordination.evaluation.tir.synthesis import synthesize_diverse_math_cases
+    from areal_rsi.examples.tir.synthesis import synthesize_diverse_math_cases
 
     for item in synthesize_diverse_math_cases(seed=49, count=32):
         q, answer = item.case.question, Fraction(item.case.answer)

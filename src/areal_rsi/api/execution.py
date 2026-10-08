@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
@@ -166,3 +167,110 @@ class SlurmPreflight:
 class TrustedSourceFile:
     label: str
     path: Path
+
+
+class ArenaResourceKind(StrEnum):
+    CASE = "cases"
+    ENV = "envs"
+    HARNESS = "harnesses"
+    REWARD = "rewards"
+    BENCHMARK = "benchmarks"
+    MODEL = "models"
+    TOOL = "tools"
+    SKILL = "skills"
+
+
+@dataclass(frozen=True, slots=True)
+class ArenaResourcePin:
+    kind: ArenaResourceKind
+    key: str
+    version: str
+    content_hash: str
+
+    def __post_init__(self) -> None:
+        safe_name(self.key)
+        if not self.version or not valid_digest("sha256:" + self.content_hash):
+            raise ValueError("Arena resource must pin a published content hash")
+
+    def ref(self) -> dict[str, str]:
+        return {"key": self.key, "version": self.version}
+
+
+@dataclass(frozen=True, slots=True)
+class ArenaTaskStatus:
+    task_id: str
+    status: str
+
+
+@dataclass(frozen=True, slots=True)
+class ArenaJobStatus:
+    job_id: str
+    status: str
+    tasks: tuple[ArenaTaskStatus, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ArenaJobLaunch:
+    run_id: str
+    benchmark: ArenaResourcePin
+    harness: ArenaResourcePin
+    model: ArenaResourcePin
+    samples: int
+    concurrency: int
+
+    def __post_init__(self) -> None:
+        safe_name(self.run_id)
+        if self.samples < 1 or self.concurrency < 1:
+            raise ValueError("Arena launch needs positive samples and concurrency")
+
+
+@dataclass(frozen=True, slots=True)
+class ArenaJobReceipt:
+    launch_digest: str
+    job_id: str
+
+    def __post_init__(self) -> None:
+        if not valid_digest(self.launch_digest) or not self.job_id:
+            raise ValueError("Arena job receipt needs its launch identity")
+
+
+@dataclass(frozen=True, slots=True)
+class ArenaDatasetResources:
+    run_id: str
+    harness: ArenaResourcePin
+    model: ArenaResourcePin
+    env: ArenaResourcePin
+    reward: ArenaResourcePin
+    cases: tuple[ArenaResourcePin, ...]
+    benchmark: ArenaResourcePin
+
+    def __post_init__(self) -> None:
+        safe_name(self.run_id)
+        if not self.cases:
+            raise ValueError("Arena dataset must contain cases")
+
+
+@dataclass(frozen=True, slots=True)
+class ArenaAssetUpload:
+    source_digest: str
+    uri: str
+
+    def __post_init__(self) -> None:
+        if not valid_digest(self.source_digest) or not self.uri:
+            raise ValueError("Arena upload needs a frozen source digest and URI")
+
+
+@dataclass(frozen=True, slots=True)
+class ArenaTrainingDataset:
+    run_id: str
+    stream_id: str
+    model: ArenaResourcePin
+    harness: ArenaResourcePin
+    reward: ArenaResourcePin
+    envs: tuple[ArenaResourcePin, ...]
+
+    def __post_init__(self) -> None:
+        safe_name(self.run_id)
+        safe_name(self.stream_id)
+        if not self.envs:
+            raise ValueError("Arena training needs published environments")

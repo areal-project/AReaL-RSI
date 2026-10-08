@@ -9,13 +9,13 @@
 | `api/` | 现有领域契约与 JSON 校验；不依赖实现 |
 | `infra/coordination/` | 可恢复的代际流程与发布记录 |
 | `infra/coordination/policies/` | 公开反馈提案、选择、噪声和晋升策略 |
-| `infra/coordination/evaluation/` | 冻结题集与 Harness、可信轨迹和训练收据；数学合成/评分在 `tir/` |
+| `infra/coordination/evaluation/` | 通用冻结题集与 Harness、可信轨迹和训练收据 |
 | `infra/coordination/tools/` | 计算器和候选源码工具 |
 | `infra/runtime/` | Claude 执行及有冻结校验的 AReaL workflow |
 | `scripts/` | 任务无关的 AReaL v2 trainer、推理批次、Slurm 提交与作业收据 |
 | `examples/` | 任务 profile、奖励、提示词及配置装配，位于 `src/areal_rsi/` 内 |
 
-[数学 TIR 示例](src/areal_rsi/examples/tir/README.md)的 `cycle.py` 只绑定数学 profile。普通分类示例使用同一个 `GenerationCycle`，包含相同的候选选择、混合奖励门槛、训练收据、四组 dev/sealed 评测和发布/回滚流程。
+[数学 TIR 示例](src/areal_rsi/examples/tir/README.md)的 `cycle.py` 绑定数学 profile，并提供 Arena 入口；数学合成、评分、Claude 求解和连续实验也在该 example 中。普通分类示例使用同一个 `GenerationCycle`，包含相同的候选选择、混合奖励门槛、训练收据、四组 dev/sealed 评测和发布/回滚流程。
 
 接入新的 prompt/answer 数据集时，将数据规范化为 `messages` 与 `answer` JSONL，复用冻结工具；在 example 中配置 `PromptProfile` 的工作流、奖励/独立验证函数、答案格式和研究员指令。更换模型只改运行配置的模型路径和资源参数。原始数据格式的转换可留在 example，通用冻结、调度、训练与评测无需复制。
 
@@ -37,7 +37,7 @@ v2 接受带 `run()` 方法的 Agent。共享 `PromptRewardAgent` 通过会话�
 
 只需要训练完成后的正式评测时，向 `areal-rsi-train`、`continuation` 或 `dynamic_synthesis` 入口传入 `--no-training-eval`。该选项关闭训练内的验证集评测及其 GPU worker，保留训练采样数、更新预算、检查点导出和轮次完成后的正式评测。动态实验可通过 `--completed-rounds` 引用 `CompletedDynamicRounds` 收据，在新输出目录继续剩余轮次；原源码锁、32步日志、配置、检查点、评测及轨迹摘要必须通过校验，旧目录保持只读。
 
-若旧控制器在第1轮的32次训练更新及检查点导出完成后退出，新执行可向 `areal_rsi.infra.coordination.continuation` 传入 `--reuse-first-training`，引用 `CompletedFirstTraining` 记录。控制器会核对原计划、源码锁、配置、完成日志、提示筛选记录及检查点摘要，然后只启动该轮训练后评测；原目录保持只读，后续轮次写入新输出目录。
+若旧控制器在第1轮的32次训练更新及检查点导出完成后退出，新执行可向 `areal_rsi.examples.tir.continuation` 传入 `--reuse-first-training`，引用 `CompletedFirstTraining` 记录。控制器会核对原计划、源码锁、配置、完成日志、提示筛选记录及检查点摘要，然后只启动该轮训练后评测；原目录保持只读，后续轮次写入新输出目录。
 
 若训练后评测也已完成，同时传入 `--reuse-first-evaluation`，引用独立的 `SavedEvaluation` 记录，包含原报表路径、摘要和源码根目录。恢复入口会核验原源码包、评分与解析规则、题序、逐题记录和原始轨迹，并复算每道题，要求分数与原记录一致；失败题保留零分。训练前后报表在新目录中重新绑定当前完整源码摘要，保留原报表出处，随后执行原有严格轮次校验。这个路径不会重新生成答案或训练首轮，也不会改写旧报表。
 

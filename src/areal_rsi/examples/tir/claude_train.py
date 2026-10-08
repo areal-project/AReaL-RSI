@@ -7,9 +7,9 @@ import json
 from pathlib import Path
 
 from areal_rsi.api.records import RsiSplit
+from areal_rsi.examples.tir.claude_solver import load_claude_harness
 from areal_rsi.infra.coordination.evaluation.assets import _rows
 from areal_rsi.infra.coordination.evaluation.tasks import load_task_set
-from areal_rsi.infra.runtime.claude_solver import load_claude_harness
 from areal_rsi.scripts.train import TrainingPlan, load_config
 
 
@@ -83,6 +83,6 @@ def prepare(argv: list[str]) -> TrainingPlan | None:
         config,
         train_rows,
         dev_rows,
-        "areal_rsi.infra.runtime.claude_solver.FrozenClaudeWorkflow",
+        "areal_rsi.examples.tir.claude_solver.FrozenClaudeWorkflow",
         workflow_kwargs,
     )

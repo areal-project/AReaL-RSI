@@ -14,7 +14,8 @@ import yaml  # type: ignore[import-untyped]
 
 from areal_rsi.api.control import decode, json_bytes, read_record
 from areal_rsi.api.records import AgentEvaluationReport, RsiSplit
-from areal_rsi.infra.coordination.continuation import (
+from areal_rsi.examples.tir.claude_solver import _backend_model_digest
+from areal_rsi.examples.tir.continuation import (
     ROOT,
     ContinuationPlan,
     RoundResult,
@@ -24,8 +25,7 @@ from areal_rsi.infra.coordination.continuation import (
     sources,
     training_config,
 )
-from areal_rsi.infra.coordination.evaluation.tasks import load_task_set
-from areal_rsi.infra.coordination.evaluation.tir.synthesis import (
+from areal_rsi.examples.tir.synthesis import (
     DiverseMathFamily,
     SyntheticMathCase,
     freeze_tir_synthetic_probe,
@@ -33,7 +33,7 @@ from areal_rsi.infra.coordination.evaluation.tir.synthesis import (
     select_model_calibrated_cases,
     synthesize_diverse_math_cases,
 )
-from areal_rsi.infra.runtime.claude_solver import _backend_model_digest
+from areal_rsi.infra.coordination.evaluation.tasks import load_task_set
 from areal_rsi.infra.storage.artifacts import validate_hf_model_files
 from areal_rsi.infra.storage.files import write_bytes
 
@@ -283,10 +283,7 @@ def main() -> None:
                     run_gpu(
                         [
                             "bash",
-                            str(
-                                ROOT
-                                / "src/areal_rsi/infra/coordination/launch/run_shared512_eval.sh"
-                            ),
+                            str(ROOT / "src/areal_rsi/examples/tir/launch/run_shared512_eval.sh"),
                             model,
                             str(probe),
                             "harness_evolve",
@@ -383,7 +380,7 @@ def main() -> None:
             [
                 sys.executable,
                 "-m",
-                "areal_rsi.infra.coordination.continuation",
+                "areal_rsi.examples.tir.continuation",
                 "--plan",
                 str(plan_path),
                 "--output",

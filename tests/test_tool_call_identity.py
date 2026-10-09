@@ -18,7 +18,15 @@ from areal_rsi.coordination.config import ResearchConfig
 from areal_rsi.coordination.coordinator import Coordinator
 from areal_rsi.modules.research_runtime import ResearchRuntime
 from areal_rsi.modules.runtime_package import PackageSession, RuntimeSettings
-from areal_rsi.modules.runtime_tools import invoke
+from areal_rsi.modules.runtime_tools import invoke, shell_call_id
+
+
+def test_shell_observations_ignore_reused_explicit_call_ids() -> None:
+    assert shell_call_id("verify_candidate", "stable") == "stable"
+    first = shell_call_id("job_status", "poll")
+    second = shell_call_id("job_status", "poll")
+    assert first.startswith("poll:") and second.startswith("poll:") and first != second
+    assert shell_call_id("wait_for_job", "wait") != "wait"
 
 
 def test_effect_survives_process_restart_and_explicit_retry(

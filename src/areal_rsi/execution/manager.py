@@ -56,6 +56,7 @@ class JobManager:
         max_jobs: int | None = 1,
         *,
         on_event: Callable[[JobEvent], None] | None = None,
+        schedule_filter: Callable[[JobRecord], bool] | None = None,
         auto_monitor: bool = True,
         scheduling_enabled: bool = True,
         poll_interval: float = 0.1,
@@ -80,6 +81,7 @@ class JobManager:
         self.gpu_ids = tuple(gpu_ids)
         self.max_jobs = max_jobs
         self.scheduling_enabled = scheduling_enabled
+        self.schedule_filter = schedule_filter
         self.on_event = on_event
         self.callback_error: str | None = None
         self.poll_interval = poll_interval
@@ -326,6 +328,8 @@ class JobManager:
         for record in records:
             if record.state != "queued" or available_slots <= 0:
                 continue
+            if self.schedule_filter is not None and not self.schedule_filter(record):
+                continue
             requested = record.spec.gpu_ids
             if requested:
                 if not set(requested) <= set(self.gpu_ids) or set(requested) & used:
@@ -436,6 +440,12 @@ class JobManager:
                 self._transition(
                     record, state="running", pid=pid, process_identity=identity, error=None
                 )
+            return
+        # On macOS process_identity() shells out to ps. A transient ps failure
+        # is inconclusive, not proof that the detached supervisor disappeared.
+        # Keep the durable claim while its process group is demonstrably alive
+        # and reconcile it again on the next poll.
+        if actual is None and pid is not None and group_exists(pid):
             return
         # Give the exec/handle write a bounded grace period after a launch.
         if time.time() - (record.started_at or record.updated_at) < 3:

@@ -1,0 +1,82 @@
+{
+  "protocol": "tb21-domain-holdout-v1",
+  "train_task_ids": [
+    "tb2-build-cython-ext", "tb2-build-pmars", "tb2-build-pov-ray", "tb2-caffe-cifar-10",
+    "tb2-cancel-async-tasks", "tb2-configure-git-webserver", "tb2-count-dataset-tokens",
+    "tb2-dna-assembly", "tb2-dna-insert", "tb2-extract-elf", "tb2-feal-differential-cryptanalysis",
+    "tb2-feal-linear-cryptanalysis", "tb2-fix-code-vulnerability", "tb2-fix-ocaml-gc",
+    "tb2-gcode-to-text", "tb2-git-multibranch", "tb2-kv-store-grpc", "tb2-mailman",
+    "tb2-make-doom-for-mips", "tb2-make-mips-interpreter", "tb2-mteb-leaderboard",
+    "tb2-mteb-retrieve", "tb2-multi-source-data-merger", "tb2-openssl-selfsigned-cert",
+    "tb2-overfull-hbox", "tb2-polyglot-c-py", "tb2-polyglot-rust-c", "tb2-protein-assembly",
+    "tb2-prove-plus-comm", "tb2-pypi-server", "tb2-pytorch-model-cli", "tb2-qemu-alpine-ssh",
+    "tb2-qemu-startup", "tb2-query-optimize", "tb2-regex-chess", "tb2-regex-log",
+    "tb2-vulnerable-secret", "tb2-winning-avg-corewars"
+  ],
+  "dev_task_ids": [
+    "tb2-bn-fit-modify", "tb2-cobol-modernization", "tb2-code-from-image", "tb2-compile-compcert",
+    "tb2-crack-7z-hash", "tb2-financial-document-processor", "tb2-gpt2-codegolf",
+    "tb2-large-scale-text-editing", "tb2-largest-eigenval", "tb2-llm-inference-batching-scheduler",
+    "tb2-mcmc-sampling-stan", "tb2-merge-diff-arc-agi-task", "tb2-path-tracing",
+    "tb2-path-tracing-reverse", "tb2-raman-fitting", "tb2-rstan-to-pystan", "tb2-sanitize-git-repo",
+    "tb2-schemelike-metacircular-eval", "tb2-sqlite-with-gcov", "tb2-train-fasttext"
+  ],
+  "test_task_ids": [
+    "tb2-adaptive-rejection-sampler", "tb2-break-filter-js-from-html", "tb2-chess-best-move",
+    "tb2-circuit-fibsqrt", "tb2-constraints-scheduling", "tb2-custom-memory-heap-crash",
+    "tb2-db-wal-recovery", "tb2-distribution-search", "tb2-extract-moves-from-video",
+    "tb2-filter-js-from-html", "tb2-fix-git", "tb2-git-leak-recovery", "tb2-headless-terminal",
+    "tb2-hf-model-inference", "tb2-install-windows-3.11", "tb2-log-summary-date-ranges",
+    "tb2-model-extraction-relu-logits", "tb2-modernize-scientific-stack", "tb2-nginx-request-logging",
+    "tb2-password-recovery", "tb2-portfolio-optimization", "tb2-pytorch-model-recovery",
+    "tb2-reshard-c4-data", "tb2-sam-cell-seg", "tb2-sparql-university", "tb2-sqlite-db-truncate",
+    "tb2-torch-pipeline-parallelism", "tb2-torch-tensor-parallelism", "tb2-tune-mjcf",
+    "tb2-video-processing", "tb2-write-compressor"
+  ],
+  "research_portfolios": [
+    {
+      "id": "software-build-program-reasoning",
+      "role": "domain",
+      "direction": "软件构建、编译、语言互操作与程序推理",
+      "train_task_ids": ["tb2-build-cython-ext", "tb2-build-pmars", "tb2-build-pov-ray", "tb2-fix-code-vulnerability", "tb2-fix-ocaml-gc", "tb2-git-multibranch", "tb2-kv-store-grpc", "tb2-make-doom-for-mips", "tb2-make-mips-interpreter", "tb2-overfull-hbox", "tb2-polyglot-c-py", "tb2-polyglot-rust-c", "tb2-regex-log"]
+    },
+    {
+      "id": "system-debug-file-recovery",
+      "role": "domain",
+      "direction": "系统配置、调试、虚拟化、服务与文件恢复",
+      "train_task_ids": ["tb2-cancel-async-tasks", "tb2-configure-git-webserver", "tb2-extract-elf", "tb2-gcode-to-text", "tb2-mailman", "tb2-openssl-selfsigned-cert", "tb2-pypi-server", "tb2-qemu-alpine-ssh", "tb2-qemu-startup"]
+    },
+    {
+      "id": "data-processing-query",
+      "role": "domain",
+      "direction": "数据处理、检索、查询优化与文本分析",
+      "train_task_ids": ["tb2-count-dataset-tokens", "tb2-mteb-leaderboard", "tb2-mteb-retrieve", "tb2-multi-source-data-merger", "tb2-query-optimize"]
+    },
+    {
+      "id": "ml-multimedia",
+      "role": "domain",
+      "direction": "机器学习、模型运行与计算型任务",
+      "train_task_ids": ["tb2-caffe-cifar-10", "tb2-pytorch-model-cli", "tb2-winning-avg-corewars"]
+    },
+    {
+      "id": "science-math-optimization",
+      "role": "domain",
+      "direction": "科学计算、数学证明、生物信息与优化",
+      "train_task_ids": ["tb2-dna-assembly", "tb2-dna-insert", "tb2-protein-assembly", "tb2-prove-plus-comm", "tb2-regex-chess"]
+    },
+    {
+      "id": "security",
+      "role": "domain",
+      "direction": "安全分析、密码分析与秘密信息防护",
+      "train_task_ids": ["tb2-feal-differential-cryptanalysis", "tb2-feal-linear-cryptanalysis", "tb2-vulnerable-secret"]
+    },
+    {
+      "id": "fusion",
+      "role": "fusion",
+      "direction": "跨领域证据融合与通用 Harness 汇总优化",
+      "train_task_ids": [
+        "tb2-build-cython-ext", "tb2-build-pmars", "tb2-build-pov-ray", "tb2-caffe-cifar-10", "tb2-cancel-async-tasks", "tb2-configure-git-webserver", "tb2-count-dataset-tokens", "tb2-dna-assembly", "tb2-dna-insert", "tb2-extract-elf", "tb2-feal-differential-cryptanalysis", "tb2-feal-linear-cryptanalysis", "tb2-fix-code-vulnerability", "tb2-fix-ocaml-gc", "tb2-gcode-to-text", "tb2-git-multibranch", "tb2-kv-store-grpc", "tb2-mailman", "tb2-make-doom-for-mips", "tb2-make-mips-interpreter", "tb2-mteb-leaderboard", "tb2-mteb-retrieve", "tb2-multi-source-data-merger", "tb2-openssl-selfsigned-cert", "tb2-overfull-hbox", "tb2-polyglot-c-py", "tb2-polyglot-rust-c", "tb2-protein-assembly", "tb2-prove-plus-comm", "tb2-pypi-server", "tb2-pytorch-model-cli", "tb2-qemu-alpine-ssh", "tb2-qemu-startup", "tb2-query-optimize", "tb2-regex-chess", "tb2-regex-log", "tb2-vulnerable-secret", "tb2-winning-avg-corewars"
+      ]
+    }
+  ]
+}

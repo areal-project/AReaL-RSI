@@ -243,7 +243,7 @@ def public_detail(value: Json) -> Json:
                 "job_id agent_id status title description created_at started_at finished_at error "
                 "gpu_ids progress_message agent_name iteration_id candidate_id phase "
                 "verification is_baseline published_candidate_id verification_job_id "
-                "source_job_id publication_error search_eligible",
+                "source_job_id publication_error protocol_eligible search_eligible",
             ),
             "progress": public_progress(job.get("progress")),
             "result": _score(job.get("result")),

@@ -365,7 +365,10 @@ class ResearchApp:
             key = ""
         config.pin_model_settings()
         config.connection_settings()
-        key = key or config.api_key()
+        # An inherited environment credential is already available to the server
+        # process and must not be duplicated into a run artifact. Only persist a
+        # credential that the operator explicitly supplied in this create request.
+        explicit_key = key
         if not conversation and config.seed_dir and not Path(config.seed_dir).is_dir():
             raise FileNotFoundError(f"Seed directory does not exist: {config.seed_dir}")
         if (
@@ -384,8 +387,8 @@ class ResearchApp:
         c.state["creation_digest"] = creation_digest
         c.state["mode"] = config.mode
         c.save()
-        if key:
-            self.save_credentials(c, config, key)
+        if explicit_key:
+            self.save_credentials(c, config, explicit_key)
         write_json(c.store.root / "coordination" / "config.json", config.public(), immutable=True)
         if conversation:
             c.state["intake"] = {"status": "discussing", "summary": "", "environment": ""}
@@ -513,11 +516,13 @@ class ResearchApp:
         if "intake" in c.state:
             c.state["intake"]["confirmation_message_id"] = confirmation_message_id
             c.save()
-        c.start()
         if config.metadata.get("full_benchmark_evaluation"):
             c.state["full_benchmark_evaluation"] = True
             c.state["require_final_confirmation"] = True
             c.save()
+        # Freeze the full-baseline gate before start() wakes the engine. Otherwise
+        # RSI can enter a turn in the small window before the gate is persisted.
+        c.start()
         active.engine.wake()
 
     async def freeze_execution(self, c: Coordinator) -> None:
@@ -866,6 +871,7 @@ class ResearchApp:
                         "verification_job_id": info.get("verification_job_id"),
                         "source_job_id": info.get("source_job_id"),
                         "publication_error": info.get("publication_error"),
+                        "protocol_eligible": info.get("protocol_eligible", True),
                         "progress": read_progress(Path(info["output"])),
                     }
                 )
@@ -881,6 +887,7 @@ class ResearchApp:
                     and result.get("phase") == "search"
                     and result.get("contract_digest") == contract_digest
                     and result.get("simulated") == c.state["simulated"]
+                    and info.get("protocol_eligible", True)
                 ):
                     candidate_id = result["candidate_id"]
                     if candidate_id not in withdrawn:

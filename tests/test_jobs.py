@@ -5,6 +5,9 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
+import areal_rsi.execution.manager as manager_module
 from areal_rsi.execution import JobManager, JobRecord, JobSpec
 
 
@@ -68,3 +71,33 @@ def test_restart_reattaches_running_job_without_duplicate_execution(tmp_path: Pa
         assert same.pid == job.pid
         assert wait_for(restarted, job.job_id).state == "succeeded"
         assert marker.read_text() == "x"
+
+
+def test_transient_identity_failure_does_not_lose_live_supervisor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager = JobManager(tmp_path, auto_monitor=False)
+    job = manager.submit(python_job(tmp_path, "import time; time.sleep(2)"))
+    wait_for_file(tmp_path / "jobs" / job.job_id / "handle.json")
+    with monkeypatch.context() as patch:
+        patch.setattr(manager_module, "process_identity", lambda _pid: None)
+        patch.setattr(manager_module, "group_exists", lambda _pid: True)
+        manager.poll()
+        assert manager.get(job.job_id).state == "running"
+    manager.close(preserve_running=False)
+
+
+def test_schedule_filter_keeps_ineligible_job_queued(tmp_path: Path) -> None:
+    eligible: set[str] = set()
+    with JobManager(
+        tmp_path,
+        max_jobs=1,
+        auto_monitor=False,
+        schedule_filter=lambda record: record.job_id in eligible,
+    ) as manager:
+        job = manager.submit(
+            JobSpec(backend="mock", mock_duration_seconds=0), job_id="job-filtered"
+        )
+        assert job.state == "queued"
+        eligible.add(job.job_id)
+        assert wait_for(manager, job.job_id).state == "succeeded"

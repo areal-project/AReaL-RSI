@@ -13,7 +13,7 @@ from typing import Any
 
 from areal_rsi.api.base import AgentState, ContentRef, IterationState, RecordRef
 from areal_rsi.api.research import CandidateSnapshot, ResearchMessage, VerifiedResult
-from areal_rsi.base.storage import decode, encode, now, safe_relative, write_json
+from areal_rsi.base.storage import DIRECTORY_TYPE, decode, encode, now, safe_relative, write_json
 from areal_rsi.coordination.actions import STRING, ResearchActions, definition
 from areal_rsi.coordination.coordinator import effect_id
 from areal_rsi.coordination.effective_time import EffectiveTime
@@ -70,6 +70,52 @@ class ResearchExecution:
         )
         self.path = self.c.store.root / "coordination" / "jobs.json"
         self.jobs: dict[str, Any] = json.loads(self.path.read_text()) if self.path.exists() else {}
+        config_path = self.c.store.root / "coordination" / "config.json"
+        run_metadata = (
+            json.loads(config_path.read_text()).get("metadata", {})
+            if config_path.exists()
+            else {}
+        )
+        self.require_diagnostic_before_search = bool(run_metadata.get("research_portfolios"))
+        self.minimum_search_verifications_per_agent = run_metadata.get(
+            "minimum_search_verifications_per_agent"
+        )
+        if (
+            self.minimum_search_verifications_per_agent is not None
+            and (
+                type(self.minimum_search_verifications_per_agent) is not int
+                or self.minimum_search_verifications_per_agent <= 0
+            )
+        ):
+            raise ValueError(
+                "minimum_search_verifications_per_agent must be a positive integer"
+            )
+        migrated = False
+        if self.require_diagnostic_before_search:
+            for job_id, info in self.jobs.items():
+                if info.get("verification") and info.get("phase") == "search":
+                    eligible = self._search_protocol_eligible(
+                        info.get("agent_id"), info.get("candidate_id"), before_job_id=job_id
+                    )
+                    if info.get("protocol_eligible") != eligible:
+                        info["protocol_eligible"] = eligible
+                        migrated = True
+                elif "protocol_eligible" not in info:
+                    info["protocol_eligible"] = True
+                    migrated = True
+        if migrated:
+            self.save()
+        self.manager.schedule_filter = self._job_schedulable
+        if self.require_diagnostic_before_search:
+            for job_id, info in self.jobs.items():
+                if (
+                    info.get("verification")
+                    and info.get("phase") == "search"
+                    and not info.get("protocol_eligible", True)
+                    and (record := self.find_job(job_id)) is not None
+                    and record.state == "queued"
+                ):
+                    self.manager.cancel(job_id)
         for tool in (
             definition(
                 "run_job",
@@ -106,7 +152,8 @@ class ResearchExecution:
                 "job_status",
                 "查看作业的命令、原始任务参数、公开状态、进度与已发布结果。"
                 "普通作业失败且无公开反馈时，附上有界日志末尾帮助排错。"
-                "任务归属以 parameters 和实际反馈为准，不凭 Job ID 猜测。",
+                "任务归属以 parameters 和实际反馈为准，不凭 Job ID 猜测。"
+                "重复观察时每次使用新的工具调用；复用同一 call id 会返回幂等缓存结果。",
                 job_id=STRING,
             ),
             definition(
@@ -136,7 +183,8 @@ class ResearchExecution:
                     "在当前回合等待原作业并返回反馈；仍在运行时继续等待，不重复提交。"
                     if self.c.state.get("mode") == "passk"
                     else "结束本回合，等作业完成后在同一任务中继续。作业已经完成时直接返回结果。"
-                ),
+                )
+                + "不要用固定 call id 的自建轮询循环替代此工具。",
                 job_id=STRING,
             ),
             definition(
@@ -149,6 +197,162 @@ class ResearchExecution:
             ),
         ):
             actions.register(tool, self.handler, roles={"rsi", "research"})
+
+    def _job_schedulable(self, record: JobRecord) -> bool:
+        info = self.jobs.get(record.job_id)
+        if (
+            not self.require_diagnostic_before_search
+            or info is None
+            or not info.get("verification")
+            or info.get("phase") != "search"
+        ):
+            return True
+        agent_id = info.get("agent_id")
+        if not info.get("protocol_eligible", True) or not self._diagnostic_ready(agent_id):
+            return False
+        target = getattr(self, "minimum_search_verifications_per_agent", None)
+        if target is None:
+            return True
+        completed = sum(
+            self._trusted_search_success(item) and item.get("agent_id") == agent_id
+            for item in self.jobs.values()
+        )
+        active = sum(
+            job_id != record.job_id
+            and item.get("agent_id") == agent_id
+            and item.get("verification")
+            and item.get("phase") == "search"
+            and item.get("protocol_eligible", True)
+            and not item.get("processed", False)
+            and (job := self.find_job(job_id)) is not None
+            and job.state in {"starting", "running"}
+            for job_id, item in self.jobs.items()
+        )
+        return completed + active < target
+
+    @staticmethod
+    def _trusted_search_success(info: dict[str, Any]) -> bool:
+        result = info.get("result", {})
+        metrics = result.get("metrics", {})
+        return bool(
+            info.get("verification")
+            and info.get("phase") == "search"
+            and info.get("protocol_eligible", True)
+            and result.get("status") == "succeeded"
+            and not result.get("simulated", False)
+            and metrics.get("failed_count", 0) == 0
+        )
+
+    def _diagnostic_ready(self, agent_id: str | None) -> bool:
+        return any(
+            diagnostic.get("agent_id") == agent_id
+            and diagnostic.get("verification")
+            and diagnostic.get("phase") == "diagnostic"
+            and diagnostic.get("processed")
+            and diagnostic.get("result", {}).get("status") == "succeeded"
+            for diagnostic in self.jobs.values()
+        )
+
+    def _diagnostic_blocks_resubmission(self, agent_id: str | None) -> bool:
+        for job_id, diagnostic in self.jobs.items():
+            if (
+                diagnostic.get("agent_id") != agent_id
+                or not diagnostic.get("verification")
+                or diagnostic.get("phase") != "diagnostic"
+            ):
+                continue
+            if diagnostic.get("processed") and diagnostic.get("result", {}).get(
+                "status"
+            ) == "succeeded":
+                return True
+            record = self.find_job(job_id)
+            if record is not None and not record.terminal:
+                return True
+            if record is not None and record.state == "succeeded":
+                return True
+        return False
+
+    def _candidate_digest(self, candidate_id: str | None) -> str | None:
+        if not candidate_id:
+            return None
+        with suppress(FileNotFoundError, KeyError, ValueError):
+            return self.c.store.get("candidates", candidate_id, CandidateSnapshot).content.digest
+        return None
+
+    def _candidate_semantic_digest(self, candidate_id: str | None) -> str | None:
+        """Normalize JSON candidate files so formatting-only edits are not iterations."""
+        if not candidate_id:
+            return None
+        with suppress(FileNotFoundError, KeyError, ValueError, TypeError):
+            candidate = self.c.store.get("candidates", candidate_id, CandidateSnapshot)
+            if candidate.content.media_type != DIRECTORY_TYPE:
+                return candidate.content.digest
+            root = self.c.store.content.root
+            manifest_digest = candidate.content.digest.removeprefix("sha256:")
+            manifest = json.loads((root / manifest_digest).read_text())
+            identities = []
+            for name, encoded_ref in sorted(manifest["files"].items()):
+                ref = decode(ContentRef, encoded_ref)
+                data = (root / ref.digest.removeprefix("sha256:")).read_bytes()
+                if name.endswith(".json"):
+                    normalized = json.dumps(
+                        json.loads(data), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                    ).encode()
+                    digest = hashlib.sha256(normalized).hexdigest()
+                else:
+                    digest = hashlib.sha256(data).hexdigest()
+                identities.append((name, digest))
+            canonical = json.dumps(identities, ensure_ascii=False, separators=(",", ":")).encode()
+            return "sha256:" + hashlib.sha256(canonical).hexdigest()
+        return None
+
+    def _search_protocol_eligible(
+        self,
+        agent_id: str | None,
+        candidate_id: str | None,
+        *,
+        before_job_id: str | None = None,
+    ) -> bool:
+        """Require each counted DEV iteration to be a distinct post-diagnostic candidate."""
+        if not self._diagnostic_ready(agent_id):
+            return False
+        candidate_digest = self._candidate_semantic_digest(candidate_id)
+        if candidate_digest is None:
+            return False
+        diagnostic_digests = {
+            self._candidate_semantic_digest(info.get("candidate_id"))
+            for info in self.jobs.values()
+            if info.get("agent_id") == agent_id
+            and info.get("verification")
+            and info.get("phase") == "diagnostic"
+            and info.get("processed")
+            and info.get("result", {}).get("status") == "succeeded"
+        }
+        if candidate_digest in diagnostic_digests:
+            return False
+        current_order: tuple[str, str] | None = None
+        if before_job_id is not None and before_job_id in self.jobs:
+            current = self.jobs[before_job_id]
+            current_order = (str(current.get("created_at", "")), before_job_id)
+        for job_id, info in self.jobs.items():
+            if job_id == before_job_id:
+                continue
+            if current_order is not None and (
+                str(info.get("created_at", "")), job_id
+            ) >= current_order:
+                continue
+            if (
+                info.get("verification")
+                and info.get("phase") == "search"
+                and info.get("protocol_eligible", True)
+                and self._candidate_semantic_digest(info.get("candidate_id")) == candidate_digest
+                and (
+                    not info.get("processed", False)
+                    or self._trusted_search_success(info)
+                )
+            ):
+                return False
+        return True
 
     def save(self) -> None:
         write_json(self.path, self.jobs)
@@ -426,6 +630,67 @@ class ResearchExecution:
             command = self.verifier
             if command is None or self.read_verification is None:
                 raise ValueError("No trusted verifier configured for this run")
+            if phase == "diagnostic" and self._diagnostic_blocks_resubmission(agent_id):
+                raise ValueError(
+                    "This researcher already has a running or successful TRAIN diagnostic"
+                )
+            if phase == "search":
+                if self.require_diagnostic_before_search and not self._diagnostic_ready(agent_id):
+                    raise ValueError(
+                        "Complete this researcher's successful TRAIN diagnostic before "
+                        "submitting DEV search verification"
+                    )
+                config_path = self.c.store.root / "coordination/config.json"
+                metadata = (
+                    json.loads(config_path.read_text()).get("metadata", {})
+                    if config_path.exists()
+                    else {}
+                )
+                target = metadata.get("stop_after_search_verifications")
+                if target is not None:
+                    if type(target) is not int or target <= 0:
+                        raise ValueError(
+                            "stop_after_search_verifications must be a positive integer"
+                        )
+                    completed = sum(
+                        item.status == "succeeded" and item.phase == "search"
+                        for item in self.c.store.records("verifications", VerifiedResult)
+                    )
+                    pending = sum(
+                        info["verification"]
+                        and info["phase"] == "search"
+                        and info.get("protocol_eligible", True)
+                        and not info.get("processed", False)
+                        for info in self.jobs.values()
+                    )
+                    if completed + pending >= target:
+                        raise ValueError(
+                            f"Search verification target ({target}) is already fully allocated"
+                        )
+                per_agent_target = metadata.get("minimum_search_verifications_per_agent")
+                if per_agent_target is not None:
+                    if type(per_agent_target) is not int or per_agent_target <= 0:
+                        raise ValueError(
+                            "minimum_search_verifications_per_agent must be a positive integer"
+                        )
+                    completed = sum(
+                        self._trusted_search_success(item)
+                        and item.get("agent_id") == agent_id
+                        for item in self.jobs.values()
+                    )
+                    pending = sum(
+                        item.get("agent_id") == agent_id
+                        and item.get("verification")
+                        and item.get("phase") == "search"
+                        and item.get("protocol_eligible", True)
+                        and not item.get("processed", False)
+                        for item in self.jobs.values()
+                    )
+                    if completed + pending >= per_agent_target:
+                        raise ValueError(
+                            "This researcher's minimum search verification target "
+                            f"({per_agent_target}) is already fully allocated"
+                        )
             max_verify = self.c.store.brief().limits.max_verify_calls
             if (
                 max_verify is not None
@@ -437,6 +702,16 @@ class ResearchExecution:
         candidate_id = args.get("candidate_id") or None
         if verification and candidate_id is None:
             raise ValueError("Verification requires an immutable candidate")
+        if (
+            verification
+            and phase == "search"
+            and self.require_diagnostic_before_search
+            and not self._search_protocol_eligible(agent_id, candidate_id)
+        ):
+            raise ValueError(
+                "DEV search requires a new candidate whose content differs from this "
+                "researcher's diagnostic baseline and prior counted iterations"
+            )
         if self.c.state.get("full_benchmark_evaluation"):
             from areal_rsi.coordination.benchmark import baseline_pending
 
@@ -558,6 +833,22 @@ class ResearchExecution:
 
             assert candidate_id is not None
             candidate = self.c.store.get("candidates", candidate_id, CandidateSnapshot)
+            config_path = self.c.store.root / "coordination/config.json"
+            run_metadata = (
+                json.loads(config_path.read_text()).get("metadata", {})
+                if config_path.exists()
+                else {}
+            )
+            portfolio_metadata: dict[str, Any] = {}
+            portfolios = run_metadata.get("research_portfolios")
+            if isinstance(portfolios, list):
+                researchers = [actor.agent_id for actor in self.c.store.run().research_agents]
+                if agent_id in researchers:
+                    portfolio = portfolios[researchers.index(agent_id)]
+                    portfolio_metadata = {
+                        "research_portfolio_id": portfolio["id"],
+                        "research_portfolio_role": portfolio["role"],
+                    }
             spec = replace(
                 spec,
                 metadata={
@@ -566,6 +857,7 @@ class ResearchExecution:
                     "candidate_id": candidate_id,
                     "candidate_digest": candidate.content.digest,
                     "phase": phase,
+                    **portfolio_metadata,
                 },
             )
         if self.simulated:
@@ -585,6 +877,10 @@ class ResearchExecution:
             "source_job_id": source_job_id,
             "verification": verification,
             "phase": phase,
+            "protocol_eligible": not verification
+            or phase != "search"
+            or not self.require_diagnostic_before_search
+            or self._search_protocol_eligible(agent_id, candidate_id),
             "waiting": False,
             "processed": False,
             "output": str(output),
@@ -657,6 +953,7 @@ class ResearchExecution:
             "verification_job_id": info.get("verification_job_id"),
             "publication_error": info.get("publication_error"),
             "phase": info.get("phase") if info["verification"] else None,
+            "protocol_eligible": info.get("protocol_eligible", True),
             "state": record.state,
             "gpu_ids": list(record.assigned_gpu_ids),
             "created_at": record.created_at,
@@ -1093,12 +1390,68 @@ class ResearchExecution:
                                     for name, value in result.metrics.items()
                                     if name in baseline_result["metrics"]
                                 },
-                                "scope": "same-benchmark improvement, not held-out generalization",
+                                "scope": (
+                                    "sealed-test generalization"
+                                    if baseline_result.get("split") == "test"
+                                    else "same-benchmark improvement, not held-out generalization"
+                                ),
                             },
                         )
                 self.c.store.save_run(run)
-                self.c.store.consider_best(result.result_id, simulated_run=self.simulated)
                 info["result"] = {**encode(result), "uri": ref.uri}
+                if self._trusted_search_success(info):
+                    self.c.store.consider_best(result.result_id, simulated_run=self.simulated)
+                if (
+                    result.phase == "search"
+                    and result.status == "succeeded"
+                    and info.get("protocol_eligible", True)
+                ):
+                    config_path = self.c.store.root / "coordination/config.json"
+                    metadata = (
+                        json.loads(config_path.read_text()).get("metadata", {})
+                        if config_path.exists()
+                        else {}
+                    )
+                    target = metadata.get("stop_after_search_verifications")
+                    if target is not None:
+                        if type(target) is not int or target <= 0:
+                            raise ValueError(
+                                "stop_after_search_verifications must be a positive integer"
+                            )
+                        completed = sum(
+                            self._trusted_search_success(job) for job in self.jobs.values()
+                        )
+                        self.c.state["completed_search_verifications"] = completed
+                        self.c.save()
+                        if completed >= target and self.c.state["status"] == "running":
+                            self.c.stop(
+                                f"Completed the configured {target} trusted search verifications"
+                            )
+                    per_agent_target = metadata.get("minimum_search_verifications_per_agent")
+                    if per_agent_target is not None:
+                        if type(per_agent_target) is not int or per_agent_target <= 0:
+                            raise ValueError(
+                                "minimum_search_verifications_per_agent must be a positive integer"
+                            )
+                        counts = {
+                            actor.agent_id: sum(
+                                job.get("agent_id") == actor.agent_id
+                                and self._trusted_search_success(job)
+                                for job in self.jobs.values()
+                            )
+                            for actor in self.c.store.run().research_agents
+                        }
+                        self.c.state["completed_search_verifications_by_agent"] = counts
+                        self.c.save()
+                        if (
+                            counts
+                            and all(count >= per_agent_target for count in counts.values())
+                            and self.c.state["status"] == "running"
+                        ):
+                            self.c.stop(
+                                "Every researcher completed at least "
+                                f"{per_agent_target} trusted search verifications"
+                            )
             else:
                 # Job exit state is evidence. Training stdout is never a score.
                 info["result"] = self.publish_execution(record)

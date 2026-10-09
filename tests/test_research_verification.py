@@ -23,10 +23,11 @@ from areal_rsi.base.storage import now, write_json
 from areal_rsi.coordination.actions import ResearchActions
 from areal_rsi.coordination.config import ResearchConfig, config_from_dict
 from areal_rsi.coordination.coordinator import Coordinator
+from areal_rsi.coordination.finalization import _finish
 from areal_rsi.coordination.jobs import ResearchExecution
 from areal_rsi.coordination.store import ResearchStore
 from areal_rsi.coordination.verification import read_trusted_result
-from areal_rsi.execution import ApprovedCommand, JobRecord, JobSpec
+from areal_rsi.execution import ApprovedCommand, JobManager, JobRecord, JobSpec
 from areal_rsi.modules.agent_runtime import ToolCall
 
 
@@ -219,6 +220,68 @@ def test_job_artifact_is_frozen_and_scored_automatically(tmp_path: Path) -> None
             assert c.store.run().best_result_ref is not None
             await runner.poll()
             assert len(runner.jobs) == 2
+        finally:
+            runner.close(cancel=True)
+
+    asyncio.run(scenario())
+
+
+def test_search_verification_target_stops_exploration(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        brief = TaskBrief(
+            "Research",
+            "Stop after one result",
+            verification=VerificationContract("score"),
+        )
+        c = Coordinator.create(tmp_path, brief)
+        seed = tmp_path / "seed"
+        seed.mkdir()
+        (seed / "candidate.json").write_text("{}\n")
+        candidate = await c.store.snapshot(seed, agent_id="operator", description="seed")
+        c.state["seed_candidate_id"] = candidate.candidate_id
+        write_json(
+            c.store.root / "coordination/config.json",
+            {"metadata": {"stop_after_search_verifications": 1}},
+        )
+        c.start()
+        agent = c.spawn(key="a", direction="search", instruction="verify")['agent_id']
+        runner = ResearchExecution(
+            ResearchActions(c),
+            verifier=ApprovedCommand("verify", (sys.executable, "-c", "pass")),
+            read_verification=lambda job, frozen, phase: VerifiedResult(
+                job.job_id,
+                frozen.candidate_id,
+                c.store.contract_digest(),
+                now(),
+                "succeeded",
+                0.5,
+                True,
+                phase="search",
+            ),
+        )
+        try:
+            await runner.submit(
+                agent,
+                ToolCall(
+                    "verify_candidate",
+                    {"candidate_id": candidate.candidate_id, "phase": "search"},
+                    "search-1",
+                ),
+            )
+            with pytest.raises(ValueError, match="already fully allocated"):
+                await runner.submit(
+                    agent,
+                    ToolCall(
+                        "verify_candidate",
+                        {"candidate_id": candidate.candidate_id, "phase": "search"},
+                        "search-2",
+                    ),
+                )
+            async with asyncio.timeout(10):
+                while await runner.poll():
+                    await asyncio.sleep(0.05)
+            assert c.state["completed_search_verifications"] == 1
+            assert c.state["status"] == "stopped"
         finally:
             runner.close(cancel=True)
 
@@ -457,5 +520,84 @@ meta = job['spec']['metadata']
             assert len(list((c.store.root / "jobs").glob("*/job.json"))) == 1
         finally:
             await app.close()
+
+    asyncio.run(scenario())
+
+
+def test_sealed_final_failure_is_not_automatically_retried(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        seed = tmp_path / "seed"
+        seed.mkdir()
+        (seed / "answer").write_text("seed")
+        config = ResearchConfig(
+            TaskBrief(
+                "Research",
+                "Confirm once",
+                verification=VerificationContract("quality"),
+            ),
+            verifier=ApprovedCommand(
+                "verify",
+                (sys.executable, "-c", "raise AssertionError('must not relaunch')"),
+                ("workspace", "output", "phase"),
+            ),
+            seed_dir=str(seed),
+            metadata={
+                "full_benchmark_evaluation": True,
+                "verification_identity": {
+                    "adapter": "content",
+                    "phases": {
+                        "baseline": {
+                            "protocol_id": "fixed",
+                            "manifest_id": "sealed",
+                            "task_ids": ["sealed-task"],
+                        },
+                        "final": {
+                            "protocol_id": "fixed",
+                            "manifest_id": "sealed",
+                            "task_ids": ["sealed-task"],
+                        },
+                    },
+                },
+            },
+        )
+        c = Coordinator.create(tmp_path, config.brief)
+        workspace = tmp_path / "candidate"
+        workspace.mkdir()
+        (workspace / "answer").write_text("best")
+        candidate = await c.store.snapshot(workspace, agent_id="operator", description="best")
+        result = VerifiedResult(
+            "best-result",
+            candidate.candidate_id,
+            c.store.contract_digest(),
+            now(),
+            "succeeded",
+            score=0.9,
+            passed=True,
+        )
+        c.store.record_verification(result)
+        c.store.consider_best(result.result_id)
+        c.state["finalization"] = {"status": "running", "exploration_finished_at": 1.0}
+        c.save()
+
+        final_job_id = "job-" + hashlib.sha256(b"closeout:final:0").hexdigest()
+        with JobManager(c.store.root, auto_monitor=False) as manager:
+            record = manager.submit(
+                JobSpec(backend="mock", mock_exit_code=1), job_id=final_job_id
+            )
+            while not record.terminal:
+                manager.poll()
+                await asyncio.sleep(0.01)
+                record = manager.get(final_job_id)
+            assert record.state == "failed"
+
+        with (
+            JobManager(c.store.root, auto_monitor=False) as manager,
+            pytest.raises(RuntimeError, match="refusing an automatic retry"),
+        ):
+            await _finish(c, config, manager)
+
+        assert [
+            path.parent.name for path in (c.store.root / "jobs").glob("*/job.json")
+        ] == [final_job_id]
 
     asyncio.run(scenario())

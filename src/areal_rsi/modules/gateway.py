@@ -15,6 +15,86 @@ _MAX_STREAM_ATTEMPTS = 6
 _MAX_RETRY_DELAY_SECONDS = 8.0
 
 
+def _flatten_codex_tools(request: dict[str, Any]) -> dict[str, Any]:
+    """Translate Codex namespace declarations into ordinary Responses functions."""
+    tools: list[Any] = []
+    for tool in request.get("tools") or []:
+        if not isinstance(tool, dict):
+            tools.append(tool)
+            continue
+        if tool.get("type") == "namespace" and isinstance(tool.get("tools"), list):
+            namespace = str(tool.get("name", "")).strip()
+            for child in tool["tools"]:
+                if not isinstance(child, dict):
+                    continue
+                value = dict(child)
+                if namespace and isinstance(value.get("name"), str):
+                    value["name"] = namespace + "__" + value["name"]
+                value["type"] = "function"
+                tools.append(value)
+            continue
+        value = dict(tool)
+        namespace = value.pop("namespace", None)
+        if isinstance(namespace, str) and namespace and isinstance(value.get("name"), str):
+            value["name"] = namespace + "__" + value["name"]
+        tools.append(value)
+    value = {**request, **({"tools": tools} if "tools" in request else {})}
+    return _normalize_codex_value(value)
+
+
+def _repair_tool_arguments(value: str) -> str:
+    """Repair the observed duplicate empty-string suffix only when JSON proves it invalid."""
+    try:
+        json.loads(value)
+        return value
+    except json.JSONDecodeError:
+        pass
+    candidate = value
+    while candidate.endswith('""'):
+        candidate = candidate[:-2]
+        try:
+            json.loads(candidate)
+            return candidate
+        except json.JSONDecodeError:
+            continue
+    return value
+
+
+def _normalize_codex_value(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_normalize_codex_value(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    normalized = {key: _normalize_codex_value(item) for key, item in value.items()}
+    if normalized.get("type") == "reasoning" and not isinstance(normalized.get("summary"), list):
+        content = normalized.get("content")
+        text = content if isinstance(content, str) else ""
+        normalized["summary"] = (
+            [{"type": "summary_text", "text": text}] if isinstance(text, str) and text else []
+        )
+    for key in ("arguments", "delta"):
+        if isinstance(normalized.get(key), str) and (
+            normalized.get("type") in {"function_call", "response.function_call_arguments.done"}
+            or key == "arguments"
+        ):
+            normalized[key] = _repair_tool_arguments(normalized[key])
+    return normalized
+
+
+def normalize_responses_body(body: bytes, *, stream: bool) -> bytes:
+    """Normalize DeepSeek Responses records into the subset Codex persists and replays."""
+    if not stream:
+        return json.dumps(_normalize_codex_value(json.loads(body)), ensure_ascii=False).encode()
+    lines: list[str] = []
+    for line in body.decode().splitlines():
+        if line.startswith("data: {"):
+            line = "data: " + json.dumps(
+                _normalize_codex_value(json.loads(line[6:])), ensure_ascii=False
+            )
+        lines.append(line)
+    return ("\n".join(lines) + "\n\n").encode()
+
+
 def _event_payload(event: bytes) -> dict[str, Any] | None:
     """读取单个 SSE 事件的 JSON data；注释、DONE 和非 JSON 事件返回 None。"""
     for line in event.splitlines():
@@ -64,7 +144,9 @@ def _done(event: bytes, route: str) -> bool:
         return True
     if route == "/responses":
         return payload.get("type") in {
-            "response.completed", "response.failed", "response.incomplete"
+            "response.completed",
+            "response.failed",
+            "response.incomplete",
         }
     if route == "/messages":
         return payload.get("type") == "message_stop"
@@ -172,7 +254,15 @@ def _completion_to_sse(body: bytes) -> bytes:
 
 
 class GatewayProxy:
-    def __init__(self, base_url: str, api_key: str, *, access_token: str | None = None):
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        *,
+        access_token: str | None = None,
+        codex_compatibility: bool = False,
+        port: int = 0,
+    ):
         self.requests: list[dict[str, Any]] = []
         owner = self
         upstream_root = base_url.rstrip("/")
@@ -204,6 +294,8 @@ class GatewayProxy:
                 if route != "/chat/completions":
                     removed = ()
                 forwarded = {k: v for k, v in original.items() if k not in removed}
+                if codex_compatibility and route == "/responses":
+                    forwarded = _flatten_codex_tools(forwarded)
                 if route != "/messages":
                     forwarded["store"] = False
                 payload = json.dumps(forwarded).encode()
@@ -265,6 +357,8 @@ class GatewayProxy:
                                 chunk = (
                                     normalize_tool_deltas(data)
                                     if route == "/chat/completions"
+                                    else normalize_responses_body(data, stream=True)
+                                    if codex_compatibility and route == "/responses"
                                     else data
                                 )
                                 self.wfile.write(f"{len(chunk):x}\r\n".encode())
@@ -309,6 +403,8 @@ class GatewayProxy:
                             return
                         body = response.read()
                         entry["response"] = body.decode(errors="replace")
+                        if codex_compatibility and route == "/responses":
+                            body = normalize_responses_body(body, stream=False)
                         if route == "/chat/completions" and original.get("stream") is True:
                             try:
                                 body = _completion_to_sse(body)
@@ -335,7 +431,7 @@ class GatewayProxy:
             def log_message(self, format: str, *args: Any) -> None:
                 pass
 
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.url = f"http://127.0.0.1:{self.server.server_port}"

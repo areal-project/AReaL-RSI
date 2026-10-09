@@ -20,6 +20,7 @@ class ArenaBenchmark:
         self.client, self.config = client, config
         self.spec: dict[str, Any] = {}
         self.tasks: dict[BenchmarkSplit, list[Task]] = {}
+        self.materialized: dict[tuple[str, BenchmarkSplit], Task] = {}
         self.entries: dict[str, dict[str, Any]] = {}
         self.entry_collection = ""
         self.reference_field = ""
@@ -64,55 +65,74 @@ class ArenaBenchmark:
             (BenchmarkSplit.TRAIN, self.config.train_cases),
             (BenchmarkSplit.VALIDATE, self.config.validate_cases),
         ):
-            tasks = []
-            for key in keys:
-                if key not in self.entries:
-                    raise ValueError(f"Case {key} 不在固定 Benchmark 中")
-                entry = self.entries[key]
-                if entry.get("harness_ref"):
-                    raise ValueError(
-                        "Case 自带 Harness override，会覆盖候选；请使用统一 Harness 的 Benchmark"
-                    )
-                kind = "cases" if self.reference_field == "case_ref" else "envs"
-                source = await self.client.version(kind, entry[self.reference_field])
-                spec = source["spec"]
-                query = spec.get("query", {})
-                uri = str(query.get("uri", ""))
-                # Some Cases expose a query containing sandbox-relative input paths.
-                # Preserve it as public data; Arena materializes its actual files.
-                public: Any = {"query": query}
-                if uri.startswith("data:"):
-                    header, encoded = uri.split(",", 1)
-                    if ";base64" in header:
-                        text = base64.b64decode(encoded, validate=True).decode()
-                        public = json.loads(text) if "application/json" in header else text
-                weight = entry.get("weight", 1)
-                if type(weight) not in (int, float) or not math.isfinite(weight) or weight <= 0:
-                    raise ValueError("Case weight 必须为有限正数")
-                metadata = {
-                    "backend": "envarena",
-                    "split": split.value,
-                    "arena_reference_field": self.reference_field,
-                    self.reference_field: encode(reference(entry[self.reference_field])),
-                    "source_content_hash": source.get("content_hash", ""),
-                    "benchmark_ref": encode(self.config.benchmark),
-                    "reward_ref": encode(reference(self.spec["reward_ref"])),
-                    "weight": float(weight),
-                }
-                if self.reference_field == "case_ref":
-                    metadata["env_ref"] = encode(reference(spec["env_ref"]))
-                    metadata["case_content_hash"] = source.get("content_hash", "")
-                tasks.append(Task(key, public, metadata))
-            self.tasks[split] = tasks
+            self.tasks[split] = list(await self.tasks_for(keys, split))
 
     async def list_tasks(self, split: BenchmarkSplit) -> Sequence[Task]:
         return self.tasks[split]
 
+    async def tasks_for(self, keys: Sequence[str], split: BenchmarkSplit) -> Sequence[Task]:
+        """Materialize a frozen ordered subset without changing configured splits.
+
+        Full-benchmark baseline/final evaluations use this to select all entries,
+        including the development subsets, while ordinary TRAIN and VALIDATE stay
+        disjoint in ``ArenaConfig``.
+        """
+        if not keys or len(set(keys)) != len(keys):
+            raise ValueError("Arena task key 列表必须非空且无重复")
+        tasks = []
+        for key in keys:
+            if key not in self.entries:
+                raise ValueError(f"Case {key} 不在固定 Benchmark 中")
+            entry = self.entries[key]
+            if entry.get("harness_ref"):
+                raise ValueError(
+                    "Case 自带 Harness override，会覆盖候选；请使用统一 Harness 的 Benchmark"
+                )
+            kind = "cases" if self.reference_field == "case_ref" else "envs"
+            source = await self.client.version(kind, entry[self.reference_field])
+            spec = source["spec"]
+            query = spec.get("query", {})
+            uri = str(query.get("uri", ""))
+            # Some Cases expose a query containing sandbox-relative input paths.
+            # Preserve it as public data; Arena materializes its actual files.
+            public: Any = {"query": query}
+            if uri.startswith("data:"):
+                header, encoded = uri.split(",", 1)
+                if ";base64" in header:
+                    text = base64.b64decode(encoded, validate=True).decode()
+                    public = json.loads(text) if "application/json" in header else text
+            weight = entry.get("weight", 1)
+            if type(weight) not in (int, float) or not math.isfinite(weight) or weight <= 0:
+                raise ValueError("Case weight 必须为有限正数")
+            metadata = {
+                "backend": "envarena",
+                "split": split.value,
+                "arena_reference_field": self.reference_field,
+                self.reference_field: encode(reference(entry[self.reference_field])),
+                "source_content_hash": source.get("content_hash", ""),
+                "benchmark_ref": encode(self.config.benchmark),
+                "reward_ref": encode(reference(self.spec["reward_ref"])),
+                "weight": float(weight),
+            }
+            if self.reference_field == "case_ref":
+                metadata["env_ref"] = encode(reference(spec["env_ref"]))
+                metadata["case_content_hash"] = source.get("content_hash", "")
+            task = Task(key, public, metadata)
+            materialized_key = (key, split)
+            previous = self.materialized.get(materialized_key)
+            if previous is not None and previous != task:
+                raise ValueError("同一 Arena task key 被映射为不同的固定任务")
+            self.materialized[materialized_key] = task
+            tasks.append(task)
+        return tasks
+
     async def ensure_subset(self, tasks: Sequence[Task]) -> dict[str, str]:
         if not tasks or len({t.task_id for t in tasks}) != len(tasks):
             raise ValueError("远端评测题目必须非空且无重复")
-        known = {t.task_id: t for group in self.tasks.values() for t in group}
-        if any(known.get(t.task_id) != t for t in tasks):
+        if any(
+            self.materialized.get((t.task_id, BenchmarkSplit(t.metadata["split"]))) != t
+            for t in tasks
+        ):
             raise ValueError("Task 与已固定的 Arena 数据集不一致")
         spec = {
             self.entry_collection: [self.entries[t.task_id] for t in tasks],

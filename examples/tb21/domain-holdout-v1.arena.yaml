@@ -1,0 +1,77 @@
+benchmark: tb21-terminus2-full@2.1.1
+harness: terminus-2-tb21@1.0.10
+model: deepseek-v4-flash-0731-terminus-max@1.0.2
+namespace: dsv4-tb21-rsi-domain-v1
+train_cases:
+  - tb2-build-cython-ext
+  - tb2-build-pmars
+  - tb2-build-pov-ray
+  - tb2-caffe-cifar-10
+  - tb2-cancel-async-tasks
+  - tb2-configure-git-webserver
+  - tb2-count-dataset-tokens
+  - tb2-dna-assembly
+  - tb2-dna-insert
+  - tb2-extract-elf
+  - tb2-feal-differential-cryptanalysis
+  - tb2-feal-linear-cryptanalysis
+  - tb2-fix-code-vulnerability
+  - tb2-fix-ocaml-gc
+  - tb2-gcode-to-text
+  - tb2-git-multibranch
+  - tb2-kv-store-grpc
+  - tb2-mailman
+  - tb2-make-doom-for-mips
+  - tb2-make-mips-interpreter
+  - tb2-mteb-leaderboard
+  - tb2-mteb-retrieve
+  - tb2-multi-source-data-merger
+  - tb2-openssl-selfsigned-cert
+  - tb2-overfull-hbox
+  - tb2-polyglot-c-py
+  - tb2-polyglot-rust-c
+  - tb2-protein-assembly
+  - tb2-prove-plus-comm
+  - tb2-pypi-server
+  - tb2-pytorch-model-cli
+  - tb2-qemu-alpine-ssh
+  - tb2-qemu-startup
+  - tb2-query-optimize
+  - tb2-regex-chess
+  - tb2-regex-log
+  - tb2-vulnerable-secret
+  - tb2-winning-avg-corewars
+validate_cases:
+  - tb2-bn-fit-modify
+  - tb2-cobol-modernization
+  - tb2-code-from-image
+  - tb2-compile-compcert
+  - tb2-crack-7z-hash
+  - tb2-financial-document-processor
+  - tb2-gpt2-codegolf
+  - tb2-large-scale-text-editing
+  - tb2-largest-eigenval
+  - tb2-llm-inference-batching-scheduler
+  - tb2-mcmc-sampling-stan
+  - tb2-merge-diff-arc-agi-task
+  - tb2-path-tracing
+  - tb2-path-tracing-reverse
+  - tb2-raman-fitting
+  - tb2-rstan-to-pystan
+  - tb2-sanitize-git-repo
+  - tb2-schemelike-metacircular-eval
+  - tb2-sqlite-with-gcov
+  - tb2-train-fasttext
+allowed_changes:
+  - system_prompt
+  - skills
+  - tools
+  - mcp
+  - model_parameters
+artifact_globs: []
+sample_numbers: 1
+max_parallel: 89
+max_retries: 0
+poll_seconds: 20
+timeout_seconds: 86400
+target_score: 1.0

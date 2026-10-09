@@ -15,3 +15,4 @@ dist/
 .rsi/
 runs/
 node_modules/
+tmp/

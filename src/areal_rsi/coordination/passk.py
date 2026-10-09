@@ -62,6 +62,9 @@ ALLOWED_TOOLS = {
 class PassKActions(ResearchActions):
     team_read = False
 
+    def can_team_read(self, agent_id: str) -> bool:
+        return self.team_read
+
     def definitions(self, agent_id: str, *, include_hidden: bool = False) -> list[dict[str, Any]]:
         if self.c.state["status"] == "planned" and agent_id == "interaction":
             return super().definitions(agent_id, include_hidden=include_hidden)
@@ -121,7 +124,7 @@ class PassKActions(ResearchActions):
         async def handle(call: ToolCall) -> ToolResult:
             try:
                 if agent_id not in {"rsi", "interaction"}:
-                    team_read = self.team_read and call.name in {
+                    team_read = self.can_team_read(agent_id) and call.name in {
                         "read_candidate_file",
                         "import_candidate",
                         "job_status",
@@ -325,16 +328,38 @@ async def launch(c: Coordinator, actions: PassKActions) -> None:
         c.state["active"].pop(agent_id, None)
     c.save()
     brief = c.store.brief()
-    instruction = (
-        "请独立完成下面的完整任务，自行调研、实现、实验和改进，直到系统通知停止。\n\n"
-        + brief.objective
-        + "\n\n"
-        + brief.instructions
+    config_path = c.store.root / "coordination/config.json"
+    metadata = (
+        json.loads(config_path.read_text()).get("metadata", {}) if config_path.exists() else {}
     )
+    portfolios = metadata.get("research_portfolios")
+    if portfolios is not None and (
+        not isinstance(portfolios, list) or len(portfolios) != brief.limits.max_agents
+    ):
+        raise ValueError("research_portfolios must match max_agents")
     for index in range(brief.limits.max_agents):
-        result = c.spawn(
-            key=f"passk-{index + 1}", direction=f"独立探索 {index + 1}", instruction=instruction
+        portfolio = portfolios[index] if portfolios else None
+        direction = portfolio["direction"] if portfolio else f"独立探索 {index + 1}"
+        assignment = ""
+        if portfolio:
+            assignment = (
+                f"\n\n你的冻结角色是 {portfolio['id']}（{portfolio['role']}）。"
+                f"研究范围：{portfolio['direction']}。"
+                "diagnostic 会由系统自动限定到该角色的 TRAIN 子集；search 始终使用共享 DEV。"
+                "至少完成配置要求的成功 search 验证次数；达到门槛后报告并等待系统统一停止。"
+            )
+            if portfolio["role"] == "domain":
+                assignment += "不得读取或复用其他领域 Agent 的候选、作业或轨迹。"
+            else:
+                assignment += "你负责综合全部领域证据，可读取其他研究员的报告、候选和轨迹。"
+        instruction = (
+            "请完成下面的冻结研究分工，自行调研、实现、实验和改进，直到系统通知停止。\n\n"
+            + brief.objective
+            + "\n\n"
+            + brief.instructions
+            + assignment
         )
+        result = c.spawn(key=f"passk-{index + 1}", direction=direction, instruction=instruction)
         await actions.initialize_workspace(result["agent_id"])
     c.state["passk_ready"] = True
     c.save()
@@ -398,6 +423,8 @@ class PassKEngine(ResearchEngine):
     async def tick(self) -> int:
         c = self.coordinator
         self._acquire()
+        from areal_rsi.coordination.benchmark import baseline_pending
+
         if c.state["status"] == "running":
             self._check_effective_time()
         if c.state["status"] == "running" and self._wall_reason() is None:
@@ -428,6 +455,7 @@ class PassKEngine(ResearchEngine):
                 "rsi" not in c.state["active"]
                 and not c.state["inboxes"].get("rsi")
                 and not c.state.get("passk_ready")
+                and not baseline_pending(c.state)
                 and self.clock() >= c.state.get("passk_supervision_at", 0) + 30
             ):
                 c.state["passk_supervision_at"] = self.clock()
@@ -440,6 +468,8 @@ class PassKEngine(ResearchEngine):
         return await super().tick()
 
     def _actor_allowed(self, agent_id: str) -> bool:
+        if not super()._actor_allowed(agent_id):
+            return False
         if self.coordinator.state["status"] == "planned":
             return agent_id == "interaction"
         return self.coordinator.state["status"] == "running" and (

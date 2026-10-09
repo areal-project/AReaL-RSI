@@ -122,7 +122,17 @@ class ArenaHarnessRuntime:
         if receipt.exists():
             record = json.loads(receipt.read_text())
             if record["signature"] != signature:
-                raise ValueError("execution_key 已绑定不同配置，拒绝复用")
+                # Version-store IDs are process-local. Reconstructing the same
+                # candidate after a supervisor crash may assign a fresh
+                # solution_id even though every remote execution input is
+                # unchanged. Permit only that exact recovery case.
+                recovered = {
+                    **signature,
+                    "solution_id": record["signature"].get("solution_id"),
+                }
+                if record["signature"] != recovered:
+                    raise ValueError("execution_key 已绑定不同配置，拒绝复用")
+                signature = record["signature"]
         else:
             record = {
                 "signature": signature,

@@ -23,7 +23,7 @@ def bypass_local_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
     [
         (
             "/responses",
-            b'event: response.output_text.delta\ndata: '
+            b"event: response.output_text.delta\ndata: "
             b'{"type":"response.output_text.delta","delta":"hello"}\n\n',
             b'event: response.completed\ndata: {"type":"response.completed"}\n\n',
         ),
@@ -99,9 +99,7 @@ def test_stream_audit_survives_io_failure(failure: str) -> None:
 
     raw = bytearray()
     with pytest.raises((TimeoutError, BrokenPipeError)):
-        _relay_stream(
-            InterruptedStream(event + partial), send, route="/chat/completions", raw=raw
-        )
+        _relay_stream(InterruptedStream(event + partial), send, route="/chat/completions", raw=raw)
     assert raw == (event + partial if failure == "upstream" else event)
     assert sent == ([event] if failure == "upstream" else [])
 
@@ -111,9 +109,10 @@ def test_non_retryable_error_is_forwarded_and_role_only_eof_can_fallback() -> No
     error = b'data: {"error":{"type":"invalid_request_error","message":"bad request"}}\n\n'
     sent: list[bytes] = []
     raw = bytearray()
-    assert _relay_stream(
-        BytesIO(role), sent.append, route="/chat/completions", raw=raw
-    ) == (False, "empty")
+    assert _relay_stream(BytesIO(role), sent.append, route="/chat/completions", raw=raw) == (
+        False,
+        "empty",
+    )
     assert sent == [] and raw == role
 
     sent = []
@@ -704,3 +703,76 @@ def test_authentication_stays_between_proxy_and_configured_service(api_key: str)
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def test_codex_responses_compatibility_normalizes_tools_arguments_and_reasoning() -> None:
+    received: list[dict[str, object]] = []
+    response = {
+        "id": "resp_fixture",
+        "output": [
+            {"id": "r1", "type": "reasoning", "content": "保留推理内容"},
+            {
+                "id": "c1",
+                "type": "function_call",
+                "name": "research__verify_candidate",
+                "arguments": '{"candidate_id":"c1"}""',
+            },
+        ],
+    }
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            received.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+            body = json.dumps(response, ensure_ascii=False).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    with local_upstream(Handler) as upstream:
+        proxy = GatewayProxy(upstream, "areal", codex_compatibility=True)
+        try:
+            request = urllib.request.Request(
+                proxy.url + "/v1/responses",
+                data=json.dumps(
+                    {
+                        "model": "fixture-model",
+                        "input": [],
+                        "tools": [
+                            {
+                                "type": "namespace",
+                                "name": "research",
+                                "tools": [
+                                    {
+                                        "name": "verify_candidate",
+                                        "description": "verify",
+                                        "parameters": {"type": "object"},
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(request, timeout=3) as result:
+                normalized = json.loads(result.read())
+            assert received[0]["tools"] == [
+                {
+                    "type": "function",
+                    "name": "research__verify_candidate",
+                    "description": "verify",
+                    "parameters": {"type": "object"},
+                }
+            ]
+            assert normalized["output"][0]["summary"] == [
+                {"type": "summary_text", "text": "保留推理内容"}
+            ]
+            assert normalized["output"][0]["content"] == "保留推理内容"
+            assert json.loads(normalized["output"][1]["arguments"])["candidate_id"] == "c1"
+        finally:
+            proxy.close()

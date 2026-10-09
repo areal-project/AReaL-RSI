@@ -6,19 +6,26 @@ import asyncio
 import json
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from areal_rsi.api.base import AgentState
-from areal_rsi.api.research import ResearchLimits, TaskBrief, VerificationContract, VerifiedResult
-from areal_rsi.base.storage import encode, now
+from areal_rsi.api.research import (
+    CandidateSnapshot,
+    ResearchLimits,
+    TaskBrief,
+    VerificationContract,
+    VerifiedResult,
+)
+from areal_rsi.base.storage import FileContentStore, encode, now
 from areal_rsi.coordination.config import ResearchConfig
 from areal_rsi.coordination.coordinator import Coordinator, effect_id
 from areal_rsi.coordination.engine import ToolSet
 from areal_rsi.coordination.jobs import ResearchExecution
 from areal_rsi.coordination.passk import PassKActions, PassKEngine, launch, stop_on_target
-from areal_rsi.execution import ApprovedCommand
+from areal_rsi.execution import ApprovedCommand, JobRecord, JobSpec
 from areal_rsi.modules.agent_runtime import ToolCall, TurnResult
 from areal_rsi.research_app import ResearchApp
 
@@ -41,6 +48,278 @@ def configuration(k: int = 3, seconds: float = 60) -> ResearchConfig:
         mode="passk",
         model_settings_pinned=True,
     )
+
+
+def test_portfolio_search_waits_for_own_processed_diagnostic() -> None:
+    execution = object.__new__(ResearchExecution)
+    execution.require_diagnostic_before_search = True
+    execution.jobs = {
+        "job-search": {
+            "agent_id": "research-a",
+            "verification": True,
+            "phase": "search",
+        },
+        "job-other-diagnostic": {
+            "agent_id": "research-b",
+            "verification": True,
+            "phase": "diagnostic",
+            "processed": True,
+            "result": {"status": "succeeded"},
+        },
+        "job-own-diagnostic": {
+            "agent_id": "research-a",
+            "verification": True,
+            "phase": "diagnostic",
+            "processed": False,
+        },
+    }
+    record = JobRecord("job-search", JobSpec(backend="mock"), "queued", 0, 0)
+    assert not execution._job_schedulable(record)
+    execution.jobs["job-own-diagnostic"].update(
+        processed=True, result={"status": "succeeded"}
+    )
+    assert execution._job_schedulable(record)
+
+
+def test_portfolio_scheduler_stops_allocating_after_strict_agent_target() -> None:
+    execution = object.__new__(ResearchExecution)
+    execution.require_diagnostic_before_search = True
+    execution.minimum_search_verifications_per_agent = 2
+    execution.jobs = {
+        "job-diagnostic": {
+            "agent_id": "research-a",
+            "verification": True,
+            "phase": "diagnostic",
+            "processed": True,
+            "result": {"status": "succeeded"},
+        },
+        "job-success": {
+            "agent_id": "research-a",
+            "verification": True,
+            "phase": "search",
+            "protocol_eligible": True,
+            "processed": True,
+            "result": {
+                "status": "succeeded",
+                "simulated": False,
+                "metrics": {"task_count": 20, "failed_count": 0},
+            },
+        },
+        "job-infra-failure": {
+            "agent_id": "research-a",
+            "verification": True,
+            "phase": "search",
+            "protocol_eligible": True,
+            "processed": True,
+            "result": {
+                "status": "succeeded",
+                "simulated": False,
+                "metrics": {"task_count": 20, "failed_count": 1},
+            },
+        },
+        "job-active": {
+            "agent_id": "research-a",
+            "verification": True,
+            "phase": "search",
+            "protocol_eligible": True,
+            "processed": False,
+        },
+        "job-queued": {
+            "agent_id": "research-a",
+            "verification": True,
+            "phase": "search",
+            "protocol_eligible": True,
+            "processed": False,
+        },
+    }
+    records = {
+        "job-active": JobRecord("job-active", JobSpec(backend="mock"), "running", 0, 0),
+        "job-queued": JobRecord("job-queued", JobSpec(backend="mock"), "queued", 0, 0),
+    }
+    execution.find_job = records.get  # type: ignore[method-assign]
+
+    assert not execution._job_schedulable(records["job-queued"])
+    records["job-active"] = JobRecord(
+        "job-active", JobSpec(backend="mock"), "failed", 0, 0
+    )
+    assert execution._job_schedulable(records["job-queued"])
+
+
+def test_trusted_search_success_rejects_harness_failures_and_simulation() -> None:
+    info: dict[str, Any] = {
+        "verification": True,
+        "phase": "search",
+        "protocol_eligible": True,
+        "result": {
+            "status": "succeeded",
+            "simulated": False,
+            "metrics": {"task_count": 20, "failed_count": 0},
+        },
+    }
+    assert ResearchExecution._trusted_search_success(info)
+    info["result"]["metrics"]["failed_count"] = 1
+    assert not ResearchExecution._trusted_search_success(info)
+    info["result"]["metrics"]["failed_count"] = 0
+    info["result"]["simulated"] = True
+    assert not ResearchExecution._trusted_search_success(info)
+
+
+def test_prediagnostic_search_is_not_protocol_eligible(tmp_path: Path) -> None:
+    execution = object.__new__(ResearchExecution)
+    execution.require_diagnostic_before_search = True
+    execution.jobs = {
+        "job-diagnostic": {
+            "agent_id": "research-a",
+            "verification": True,
+            "phase": "diagnostic",
+            "processed": False,
+        }
+    }
+    assert not execution._diagnostic_ready("research-a")
+    execution.jobs["job-diagnostic"].update(
+        processed=True, result={"status": "succeeded"}
+    )
+    assert execution._diagnostic_ready("research-a")
+
+
+def test_search_protocol_requires_distinct_candidate_content() -> None:
+    execution = object.__new__(ResearchExecution)
+    execution.require_diagnostic_before_search = True
+    digests = {
+        "candidate-baseline": "sha256:baseline",
+        "candidate-first": "sha256:first",
+        "candidate-first-copy": "sha256:first",
+        "candidate-second": "sha256:second",
+    }
+    execution._candidate_semantic_digest = lambda candidate_id: digests.get(candidate_id)  # type: ignore[method-assign]
+    execution.jobs = {
+        "job-diagnostic": {
+            "agent_id": "research-a",
+            "candidate_id": "candidate-baseline",
+            "verification": True,
+            "phase": "diagnostic",
+            "processed": True,
+            "result": {"status": "succeeded"},
+        },
+        "job-first": {
+            "agent_id": "research-a",
+            "candidate_id": "candidate-first",
+            "verification": True,
+            "phase": "search",
+            "protocol_eligible": True,
+        },
+    }
+
+    assert not execution._search_protocol_eligible("research-a", "candidate-baseline")
+    assert not execution._search_protocol_eligible("research-a", "candidate-first-copy")
+    assert execution._search_protocol_eligible("research-a", "candidate-second")
+    assert execution._search_protocol_eligible(
+        "research-a", "candidate-first", before_job_id="job-first"
+    )
+
+
+def test_search_protocol_deduplicates_across_agents_but_allows_infra_retry() -> None:
+    execution = object.__new__(ResearchExecution)
+    execution.require_diagnostic_before_search = True
+    digests = {
+        "baseline-a": "sha256:baseline-a",
+        "candidate-a": "sha256:shared",
+        "candidate-b": "sha256:shared",
+    }
+    execution._candidate_semantic_digest = lambda candidate_id: digests.get(candidate_id)  # type: ignore[method-assign]
+    execution.jobs = {
+        "job-diagnostic": {
+            "agent_id": "research-b",
+            "candidate_id": "baseline-a",
+            "verification": True,
+            "phase": "diagnostic",
+            "processed": True,
+            "result": {"status": "succeeded"},
+        },
+        "job-other-agent": {
+            "agent_id": "research-a",
+            "candidate_id": "candidate-a",
+            "verification": True,
+            "phase": "search",
+            "protocol_eligible": True,
+            "processed": True,
+            "result": {
+                "status": "infra_error",
+                "simulated": False,
+                "metrics": {},
+            },
+        },
+    }
+
+    assert execution._search_protocol_eligible("research-b", "candidate-b")
+    execution.jobs["job-other-agent"]["result"] = {
+        "status": "succeeded",
+        "simulated": False,
+        "metrics": {"task_count": 20, "failed_count": 0},
+    }
+    assert not execution._search_protocol_eligible("research-b", "candidate-b")
+
+
+def test_candidate_semantic_digest_ignores_json_formatting(tmp_path: Path) -> None:
+    content = FileContentStore(tmp_path / "content")
+    compact, formatted = tmp_path / "compact", tmp_path / "formatted"
+    compact.mkdir()
+    formatted.mkdir()
+    (compact / "change.json").write_text("{}")
+    (formatted / "change.json").write_text("{\n}\n")
+    async def snapshots():
+        return await asyncio.gather(content.snapshot(compact), content.snapshot(formatted))
+
+    compact_ref, formatted_ref = asyncio.run(snapshots())
+    candidates = {
+        "compact": CandidateSnapshot("compact", compact_ref, now(), "research-a", "compact"),
+        "formatted": CandidateSnapshot(
+            "formatted", formatted_ref, now(), "research-a", "formatted"
+        ),
+    }
+    store = SimpleNamespace(content=content, get=lambda _category, key, _kind: candidates[key])
+    execution = object.__new__(ResearchExecution)
+    execution.c = SimpleNamespace(store=store)
+
+    assert compact_ref.digest != formatted_ref.digest
+    assert execution._candidate_semantic_digest("compact") == (
+        execution._candidate_semantic_digest("formatted")
+    )
+
+
+@pytest.mark.parametrize("state", ["queued", "running", "succeeded"])
+def test_running_or_successful_diagnostic_blocks_resubmission(state: str) -> None:
+    execution = object.__new__(ResearchExecution)
+    execution.jobs = {
+        "job-diagnostic": {
+            "agent_id": "research-a",
+            "verification": True,
+            "phase": "diagnostic",
+            "processed": False,
+        }
+    }
+    execution.find_job = lambda _job_id: JobRecord(  # type: ignore[method-assign]
+        "job-diagnostic", JobSpec(backend="mock"), state, 0, 0
+    )
+    assert execution._diagnostic_blocks_resubmission("research-a")
+
+
+@pytest.mark.parametrize("state", ["cancelled", "failed", "lost"])
+def test_failed_diagnostic_allows_replacement(state: str) -> None:
+    execution = object.__new__(ResearchExecution)
+    execution.jobs = {
+        "job-diagnostic": {
+            "agent_id": "research-a",
+            "verification": True,
+            "phase": "diagnostic",
+            "processed": True,
+            "result": {"status": "infra_error"},
+        }
+    }
+    execution.find_job = lambda _job_id: JobRecord(  # type: ignore[method-assign]
+        "job-diagnostic", JobSpec(backend="mock"), state, 0, 0
+    )
+    assert not execution._diagnostic_blocks_resubmission("research-a")
 
 
 async def setup(root: Path, k: int = 3) -> tuple[Coordinator, PassKActions, list[str]]:
@@ -278,6 +557,37 @@ class ScriptedRuntime:
             self.cancelled.add(agent)
             raise
         raise AssertionError("unreachable")
+
+
+def test_full_baseline_gate_keeps_passk_leader_idle(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        c = Coordinator.create(tmp_path, configuration(1).brief)
+        c.state.update(mode="passk", full_benchmark_evaluation=True)
+        c.enqueue("interaction", "rsi", "start", key="start")
+        c.start()
+        actions = PassKActions(c)
+        runtime = ScriptedRuntime()
+        engine = PassKEngine(
+            c,
+            runtime,
+            lambda agent_id: ToolSet(actions.definitions(agent_id), actions.handler(agent_id)),
+            poll_interval=0.01,
+        )
+        try:
+            await engine.tick()
+            assert runtime.calls == []
+            assert not engine._actor_allowed("rsi")
+            c.state["full_baseline_ready"] = True
+            c.save()
+            await engine.tick()
+            async with asyncio.timeout(1):
+                while not runtime.calls:
+                    await asyncio.sleep(0.01)
+            assert runtime.calls == ["rsi"]
+        finally:
+            await engine.close()
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("leader_busy", [False, True])

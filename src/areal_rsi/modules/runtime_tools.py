@@ -17,6 +17,15 @@ from areal_agent_runtime.contracts import TextBlock, ToolCall, ToolResult, ToolS
 from areal_agent_runtime.plugin_sdk import HealthStatus, PluginContext
 from pydantic import JsonValue
 
+FRESH_OBSERVATION_TOOLS = frozenset({"job_status", "wait_for_job"})
+
+
+def shell_call_id(tool_name: str, explicit_call_id: str) -> str:
+    """Keep mutations idempotent while ensuring repeated observations are fresh."""
+    if tool_name in FRESH_OBSERVATION_TOOLS:
+        return explicit_call_id + ":" + uuid.uuid4().hex
+    return explicit_call_id
+
 
 async def invoke(config: dict[str, Any], call: dict[str, Any]) -> Any:
     reader, writer = await asyncio.open_connection("127.0.0.1", config["port"], limit=2**20)
@@ -94,7 +103,7 @@ if __name__ == "__main__":
                 {
                     "name": sys.argv[3],
                     "arguments": json.loads(sys.argv[4]),
-                    "call_id": sys.argv[5],
+                    "call_id": shell_call_id(sys.argv[3], sys.argv[5]),
                 },
             )
         )

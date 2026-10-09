@@ -155,6 +155,11 @@ async def _finish(c: Coordinator, config: ResearchConfig, manager: JobManager) -
                 "lost",
             }:
                 break
+            if phase == "final" and config.metadata.get("full_benchmark_evaluation"):
+                raise RuntimeError(
+                    "Sealed final evaluation already has a failed or uncertain attempt; "
+                    "refusing an automatic retry that could query TEST twice"
+                )
             attempt += 1
         output = (
             folder / "output" if candidate is None else c.store.root / "execution-outputs" / key

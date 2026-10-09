@@ -57,6 +57,19 @@ TRACE_EVENTS = {
 class GuidedPassKActions(PassKActions):
     team_read = True
 
+    def _is_fusion(self, agent_id: str) -> bool:
+        if agent_id == "rsi":
+            return True
+        path = self.c.store.root / "coordination/config.json"
+        metadata = json.loads(path.read_text()).get("metadata", {}) if path.exists() else {}
+        portfolios = metadata.get("research_portfolios")
+        if not isinstance(portfolios, list):
+            return True
+        researchers = [actor.agent_id for actor in self.c.store.run().research_agents]
+        return (
+            agent_id in researchers and portfolios[researchers.index(agent_id)]["role"] == "fusion"
+        )
+
     def definitions(self, agent_id: str, *, include_hidden: bool = False) -> list[dict[str, Any]]:
         if agent_id == "rsi":
             return [
@@ -72,9 +85,16 @@ class GuidedPassKActions(PassKActions):
                 ],
             ]
         tools = super().definitions(agent_id, include_hidden=include_hidden)
-        return tools if agent_id == "interaction" else [*tools, TRACE]
+        return (
+            tools if agent_id == "interaction" or not self._is_fusion(agent_id) else [*tools, TRACE]
+        )
+
+    def can_team_read(self, agent_id: str) -> bool:
+        return self._is_fusion(agent_id)
 
     def read_record(self, agent_id: str, uri: str) -> Any:
+        if not self._is_fusion(agent_id):
+            return super().read_record(agent_id, uri)
         ref = self.c.store.record_reference(RecordRef(uri))
         return self.c.store.public_record(ref)
 
@@ -85,7 +105,7 @@ class GuidedPassKActions(PassKActions):
                 researcher["latest_advice"] = self.c.state.get("leader_advice", {}).get(
                     researcher["agent_id"]
                 )
-        if agent_id not in {"rsi", "interaction"}:
+        if agent_id not in {"rsi", "interaction"} and self._is_fusion(agent_id):
             state["researchers"] = [
                 {
                     "agent_id": actor.agent_id,
@@ -95,10 +115,14 @@ class GuidedPassKActions(PassKActions):
                 }
                 for actor in self.c.store.run().research_agents
             ]
+        elif agent_id not in {"rsi", "interaction"}:
+            state["researchers"] = []
         return state
 
     async def _apply(self, agent_id: str, key: str, name: str, args: dict[str, Any]) -> ToolResult:
         if name in {"advise_researcher", "read_researcher_trace"}:
+            if name == "read_researcher_trace" and not self._is_fusion(agent_id):
+                raise ValueError("Only the fusion researcher and RSI may read cross-agent traces")
             target = args["agent_id"]
             if target not in {actor.agent_id for actor in self.c.store.run().research_agents}:
                 raise ValueError("Unknown researcher")

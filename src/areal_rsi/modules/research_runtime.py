@@ -25,6 +25,7 @@ from areal_rsi.api.base import AgentSpec, ModelVersion
 from areal_rsi.base.storage import FileContentStore, FileTrajectoryStore, decode, now, write_json
 from areal_rsi.coordination.config import ResearchConfig, config_from_dict
 from areal_rsi.modules.agent_runtime import EventSink, ToolCall, ToolHandler, TurnResult
+from areal_rsi.modules.gateway import GatewayProxy
 from areal_rsi.modules.runtime_package import PackageAgentRuntime, PackageSession, RuntimeSettings
 
 Json = dict[str, Any]
@@ -68,9 +69,31 @@ class ResearchRuntime:
         self.config = config
         self.connection = config.runtime()
         self.backend = config.backend
+        self.gateway: GatewayProxy | None = None
+        self.runtime_base_url = self.connection.runtime_base_url
+        self.runtime_api_key = self.config.api_key()
+        self.gateway_enabled = bool(
+            self.backend == "codex" and config.metadata.get("codex_compatibility_proxy")
+        )
+        self.gateway_port = int(config.metadata.get("codex_compatibility_proxy_port", 0))
         self.allow_web_access = config.metadata.get("allow_web_access", True)
         self.settings = settings or config.runtime_settings()
         self.conversations: dict[Path, Conversation] = {}
+
+    def _ensure_gateway(self) -> None:
+        # Planned runs are attached for TUI inspection. Bind the fixed proxy port
+        # only when a model session actually starts, so inspection and execution
+        # runtimes cannot contend for it.
+        if self.gateway_enabled and self.gateway is None:
+            self.gateway = GatewayProxy(
+                self.connection.runtime_base_url,
+                self.config.api_key(),
+                access_token="local-proxy",
+                codex_compatibility=True,
+                port=self.gateway_port,
+            )
+            self.runtime_base_url = self.gateway.url + "/v1"
+            self.runtime_api_key = "local-proxy"
 
     def for_interaction(self) -> ResearchRuntime:
         return ResearchRuntime(self.config, settings=self.settings)
@@ -117,6 +140,7 @@ class ResearchRuntime:
         handler: ToolHandler,
         agent_id: str,
     ) -> Conversation:
+        self._ensure_gateway()
         role = self.role_for(agent_id)
         kind = self.settings.select(role)["kind"]
         request_path = directory / "runtime/request.json"
@@ -206,8 +230,8 @@ class ResearchRuntime:
             FileTrajectoryStore(directory / "trajectories", content),
             settings=self.settings,
             role=role,
-            base_url=self.connection.runtime_base_url,
-            api_key=self.config.api_key(),
+            base_url=self.runtime_base_url,
+            api_key=self.runtime_api_key,
             timeout=86400,
             max_tokens=self.config.max_output_tokens,
             dsh_root=Path(
@@ -423,3 +447,8 @@ class ResearchRuntime:
     async def close(self) -> None:
         await asyncio.gather(*(self._close(c) for c in self.conversations.values()))
         self.conversations.clear()
+        if self.gateway is not None:
+            await asyncio.to_thread(self.gateway.close)
+            self.gateway = None
+            self.runtime_base_url = self.connection.runtime_base_url
+            self.runtime_api_key = self.config.api_key()

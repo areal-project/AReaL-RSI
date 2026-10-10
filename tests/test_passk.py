@@ -800,6 +800,49 @@ def test_supervisor_reports_do_not_block_or_share_research(tmp_path: Path) -> No
     asyncio.run(scenario())
 
 
+def test_researcher_at_personal_search_target_sleeps_until_new_information(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        from areal_rsi.coordination.passk import (
+            SEARCH_TARGET_WAIT_REASON,
+            needs_continue,
+            record_search_targets,
+        )
+
+        c, actions, agents = await setup(tmp_path, 2)
+        agent_id = agents[0]
+        c.begin_turn(agent_id)
+        record_search_targets(c, {agent_id: 10, agents[1]: 4}, 10)
+
+        engine = PassKEngine(
+            c,
+            ScriptedRuntime(),
+            lambda a: ToolSet(actions.definitions(a), actions.handler(a)),
+        )
+        engine._complete_research_turn(
+            agent_id, c.actor(agent_id).current_iteration_id, "turn", "."
+        )
+
+        actor = c.actor(agent_id)
+        assert actor.state == AgentState.WAITING
+        assert actor.wait_reason == SEARCH_TARGET_WAIT_REASON
+        assert not needs_continue(c, agent_id)
+        assert c.state["researchers_at_search_target"][agent_id]["count"] == 10
+        assert c.state["status"] == "running", "Other researchers must remain active"
+        assert not c.state["inboxes"].get(agent_id)
+
+        recorded = len(
+            [e for e in c.store.events() if e.kind == "researcher_search_target_reached"]
+        )
+        record_search_targets(c, {agent_id: 11, agents[1]: 4}, 10)
+        assert len(
+            [e for e in c.store.events() if e.kind == "researcher_search_target_reached"]
+        ) == recorded
+
+    asyncio.run(scenario())
+
+
 def test_kernelbench_verification_uses_only_own_attempt_receipts(tmp_path: Path) -> None:
     import hashlib
     import runpy

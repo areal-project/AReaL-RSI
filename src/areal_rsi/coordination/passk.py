@@ -31,6 +31,7 @@ PROGRESS_TOOL = definition(
     references=REFERENCES,
 )
 CONTINUE_MESSAGE = "研究尚未结束，还有时间和资源。请继续独立探索并验证你的方案。"
+SEARCH_TARGET_WAIT_REASON = "search_target_reached"
 
 ALLOWED_TOOLS = {
     "read_agent_skill",
@@ -177,6 +178,8 @@ class PassKActions(ResearchActions):
                         "needs_continue": needs_continue(c, actor.agent_id),
                         "best": self.state(actor.agent_id)["best"],
                         "latest_report": c.state.get("passk_reports", {}).get(actor.agent_id),
+                        "search_target_reached": actor.agent_id
+                        in c.state.get("researchers_at_search_target", {}),
                     }
                     for actor in c.store.run().research_agents
                 ],
@@ -211,6 +214,8 @@ class PassKActions(ResearchActions):
             "seed_candidate_id": c.state["seed_candidate_id"],
             "workspace_candidate_id": self.workspace_candidate(agent_id),
             "best": encode(results[0]) if results else None,
+            "search_target_reached": agent_id
+            in c.state.get("researchers_at_search_target", {}),
             "budget": {
                 name: budget[name]
                 for name in (
@@ -309,11 +314,41 @@ def needs_continue(c: Coordinator, agent_id: str) -> bool:
     actor = c.actor(agent_id)
     return (
         c.state["status"] == "running"
+        and agent_id not in c.state.get("researchers_at_search_target", {})
         and actor.state == AgentState.WAITING
         and actor.wait_reason == "passk_supervision"
         and agent_id not in c.state["active"]
         and not c.state["inboxes"].get(agent_id)
     )
+
+
+def record_search_targets(c: Coordinator, counts: dict[str, int], target: int) -> None:
+    """Park researchers that completed their personal pass@k allocation."""
+    reached = c.state.setdefault("researchers_at_search_target", {})
+    changed = False
+    for agent_id, count in counts.items():
+        if count < target:
+            continue
+        if agent_id not in reached:
+            reached[agent_id] = {"count": count, "target": target, "observed_at": now()}
+            c.store.event(
+                "researcher_search_target_reached",
+                agent_id=agent_id,
+                count=count,
+                target=target,
+            )
+            changed = True
+        actor = c.actor(agent_id)
+        if (
+            actor.state == AgentState.WAITING
+            and agent_id not in c.state["active"]
+            and actor.wait_reason != SEARCH_TARGET_WAIT_REASON
+        ):
+            actor.wait_reason = SEARCH_TARGET_WAIT_REASON
+            c.save_actor(actor)
+            changed = True
+    if changed:
+        c.save()
 
 
 async def launch(c: Coordinator, actions: PassKActions) -> None:
@@ -430,7 +465,9 @@ class PassKEngine(ResearchEngine):
         if c.state["status"] == "running" and self._wall_reason() is None:
             retries = c.state.setdefault("passk_retries", {})
             for actor in (c.actor("rsi"), *c.store.run().research_agents):
-                if actor.state != AgentState.FAILED:
+                if actor.state != AgentState.FAILED or (
+                    actor.agent_id in c.state.get("researchers_at_search_target", {})
+                ):
                     continue
                 entry = retries.setdefault(actor.agent_id, {"count": 0, "at": None})
                 if entry["at"] is None:
@@ -504,5 +541,10 @@ class PassKEngine(ResearchEngine):
         c.end_turn(agent_id)
         if c.state["status"] == "running":
             actor = c.actor(agent_id)
-            actor.state, actor.wait_reason = AgentState.WAITING, "passk_supervision"
+            wait_reason = (
+                SEARCH_TARGET_WAIT_REASON
+                if agent_id in c.state.get("researchers_at_search_target", {})
+                else "passk_supervision"
+            )
+            actor.state, actor.wait_reason = AgentState.WAITING, wait_reason
             c.save_actor(actor)

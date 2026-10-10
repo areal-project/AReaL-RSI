@@ -1443,6 +1443,9 @@ class ResearchExecution:
                         }
                         self.c.state["completed_search_verifications_by_agent"] = counts
                         self.c.save()
+                        from areal_rsi.coordination.passk import record_search_targets
+
+                        record_search_targets(self.c, counts, per_agent_target)
                         if (
                             counts
                             and all(count >= per_agent_target for count in counts.values())

@@ -85,14 +85,9 @@ class ResearchStore:
         self.runs.save(self.run_id, run, immutable=False)
 
     def research_jobs(self) -> dict[str, ResearchJob]:
-        """Decode old job indexes without rewriting them during reads."""
+        """Decode the persisted job index without mutating records during reads."""
         path = self.root / "coordination/jobs.json"
         records = read_json(path) if path.exists() else {}
-        legacy_completion_ids = {
-            "job-" + hashlib.sha256(f"closeout:{phase}:{attempt}".encode()).hexdigest()
-            for phase in ("prepare", "search", "final")
-            for attempt in range(len(records))
-        }
         jobs = {}
         for key, saved in records.items():
             value = dict(saved)
@@ -105,12 +100,9 @@ class ResearchStore:
             )
             value["execution_result"] = result if not value["verification"] else None
             subscriptions = value.get("waiters", {})
-            if "waiters" not in value and value.get("waiting"):
-                subscriptions = {value["agent_id"]: {"iteration_id": value.get("iteration_id")}}
             value["waiters"] = {
                 actor: decode(JobWaiter, item) for actor, item in subscriptions.items()
             }
-            value["completion"] = value.get("completion", key in legacy_completion_ids)
             value["spec"] = decode(JobSpec, value["spec"])
             jobs[key] = ResearchJob(**value)
         return jobs
@@ -234,11 +226,15 @@ class ResearchStore:
         return sequence
 
     def events(
-        self, after: int = 0, *, limit: int | None = None, before: int | None = None,
+        self,
+        after: int = 0,
+        *,
+        limit: int | None = None,
+        before: int | None = None,
     ) -> list[ResearchEvent]:
         # Event filenames encode their immutable sequence. Skip acknowledged
         # files before reading/decoding, rather than reparsing the full archive
-        # on every workbench poll.
+        # on every status poll.
         result = []
         directory = self.root / "events"
         last = self._last_event_sequence()
@@ -465,10 +461,7 @@ class ResearchStore:
         return ref
 
     def withdrawals(self) -> list[dict[str, Any]]:
-        return [
-            read_json(path)
-            for path in sorted((self.root / "withdrawals").glob("*.json"))
-        ]
+        return [read_json(path) for path in sorted((self.root / "withdrawals").glob("*.json"))]
 
     def is_withdrawn(self, candidate_id: str) -> bool:
         candidate = self.get("candidates", candidate_id, CandidateSnapshot)

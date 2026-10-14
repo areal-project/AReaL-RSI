@@ -13,7 +13,6 @@ from areal_rsi.api.control import validate_record
 from areal_rsi.api.records import EvolutionTarget
 from areal_rsi.api.research import TaskBrief
 from areal_rsi.infra.config import ResearchConnection, local_codex_auth, validate_base_url
-from areal_rsi.infra.coordination.policies.collaboration import selected_modules
 from areal_rsi.infra.execution import ApprovedCommand
 from areal_rsi.infra.storage.files import decode, encode
 
@@ -33,7 +32,9 @@ def git_repository(path: str | Path) -> Path:
     directory = Path(path).expanduser().resolve()
     result = subprocess.run(
         ["git", "-C", str(directory), "rev-parse", "--show-toplevel"],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if result.returncode != 0:
         raise ValueError("指定目录不是 Git 仓库：" + str(directory))
@@ -44,7 +45,9 @@ def git_common_directory(path: str | Path) -> Path:
     directory = git_repository(path)
     result = subprocess.run(
         ["git", "-C", str(directory), "rev-parse", "--git-common-dir"],
-        capture_output=True, text=True, check=True,
+        capture_output=True,
+        text=True,
+        check=True,
     )
     common = Path(result.stdout.strip())
     return (common if common.is_absolute() else directory / common).resolve()
@@ -54,7 +57,9 @@ def git_head_commit(path: str | Path) -> str:
     directory = git_repository(path)
     result = subprocess.run(
         ["git", "-C", str(directory), "rev-parse", "--verify", "HEAD"],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if result.returncode != 0:
         raise ValueError("Git 仓库需要已有基线提交：" + str(directory))
@@ -89,8 +94,7 @@ def validate_model_settings(value: dict[str, Any]) -> dict[str, str]:
 @dataclass(slots=True)
 class ResearchConfig:
     brief: TaskBrief
-    mode: str = "passk"
-    collaboration_modules: tuple[str, ...] = ()
+    mode: Literal["goal", "legacy_passk"] = "goal"
     seed_dir: str | None = None
     workspace_dir: str | None = None
     backend: str = "standard"
@@ -127,18 +131,25 @@ class ResearchConfig:
             self.evolution_target = EvolutionTarget(self.evolution_target)
         if self.brief.limits.max_model_calls is not None:
             raise ValueError("max_model_calls is not supported by native runtimes; use null")
-        # Old configurations remain decodable for viewing; executable entry points reject them.
-        if self.mode not in {"collaborative", "pass1"}:
-            self.collaboration_modules = selected_modules(self.mode, self.collaboration_modules)
+        if self.mode not in {"goal", "legacy_passk"}:
+            raise ValueError("mode must be goal or legacy_passk")
+        if self.mode == "goal" and self.brief.limits.max_agents != 1:
+            raise ValueError("goal runs one Leader; max_agents applies to legacy_passk")
+        if self.mode == "goal" and self.finalizer is not None:
+            raise ValueError("goal acceptance belongs to the Leader; finalizer is legacy-only")
         if self.backend not in {"standard", "codex", "runtime"}:
             raise ValueError("Agent 后端支持 standard、codex 或 runtime")
-        if self.brief.limits.max_effective_seconds is not None and self.mode != "passk":
+        if self.brief.limits.max_effective_seconds is not None and self.mode != "legacy_passk":
             raise ValueError("Per-researcher effective time requires passk")
         ResearchConnection(
-            self.base_url, self.model, self.reasoning_effort,
-            self.max_output_tokens, self.context_window_tokens, self.backend,
+            self.base_url,
+            self.model,
+            self.reasoning_effort,
+            self.max_output_tokens,
+            self.context_window_tokens,
+            self.backend,
         )
-        if self.mode == "passk":
+        if self.mode == "legacy_passk":
             limits = self.brief.limits
             if any(
                 getattr(limits, name) is not None
@@ -148,7 +159,7 @@ class ResearchConfig:
                 )
             ):
                 raise ValueError(
-                    "passk requires unlimited token/verification counts (null); "
+                    "legacy_passk requires unlimited token/verification counts (null); "
                     "use a wall-time limit"
                 )
             if limits.max_nodes is not None and limits.max_nodes < limits.max_agents:
@@ -162,8 +173,10 @@ class ResearchConfig:
             for key in MODEL_FIELDS
         }
 
-        if not self.model_settings_pinned and "RSI_BACKEND" not in os.environ and (
-            self.runtime_config is not None or os.environ.get("RSI_RUNTIME_CONFIG")
+        if (
+            not self.model_settings_pinned
+            and "RSI_BACKEND" not in os.environ
+            and (self.runtime_config is not None or os.environ.get("RSI_RUNTIME_CONFIG"))
         ):
             settings["backend"] = "runtime"
         return settings
@@ -172,11 +185,16 @@ class ResearchConfig:
         from areal_rsi.infra.runtime.runtime_package import RuntimeSettings
 
         if self.backend != "runtime":
-            return RuntimeSettings({"default": {
-                "kind": "codex-cli" if self.backend == "codex" else "dsh",
-                "config": {"modelProtocol": "responses", "timeoutSeconds": 86400}
-                if self.backend == "codex" else {"reasoningEffort": self.reasoning_effort},
-            }})
+            return RuntimeSettings(
+                {
+                    "default": {
+                        "kind": "codex-cli" if self.backend == "codex" else "dsh",
+                        "config": {"modelProtocol": "responses", "timeoutSeconds": 86400}
+                        if self.backend == "codex"
+                        else {"reasoningEffort": self.reasoning_effort},
+                    }
+                }
+            )
         if self.runtime_config is None:
             path = os.environ.get("RSI_RUNTIME_CONFIG")
             if not path:
@@ -186,8 +204,11 @@ class ResearchConfig:
         for role in ("research-agent", "rsi-agent", "interaction-agent"):
             kind = settings.select(role)["kind"]
             ResearchConnection(
-                self.base_url, self.model, self.reasoning_effort,
-                self.max_output_tokens, self.context_window_tokens,
+                self.base_url,
+                self.model,
+                self.reasoning_effort,
+                self.max_output_tokens,
+                self.context_window_tokens,
                 "codex" if kind == "codex-cli" else "standard",
             )
         return settings
@@ -203,8 +224,10 @@ class ResearchConfig:
         connection = self.connection_settings()
         if self.auth_mode == "codex_login":
             settings = self.runtime_settings()
-            if any(settings.select(role)["kind"] != "codex-cli"
-                   for role in ("rsi-agent", "research-agent", "interaction-agent")):
+            if any(
+                settings.select(role)["kind"] != "codex-cli"
+                for role in ("rsi-agent", "research-agent", "interaction-agent")
+            ):
                 raise ValueError("本地登录要求所有研究角色使用 Codex Runtime")
             local_codex_auth()
         elif not self.api_key():
@@ -246,7 +269,7 @@ class ResearchConfig:
         return os.environ.get(self.api_key_env, "")
 
     def public(self) -> dict[str, Any]:
-        """Configuration is useful for recovery, but not a public web projection."""
+        """Serialize keyless configuration for recovery."""
         result: dict[str, Any] = encode(self)
         return result
 
@@ -254,13 +277,10 @@ class ResearchConfig:
 def config_from_dict(value: dict[str, Any]) -> ResearchConfig:
     if "api_key" in value:
         raise ValueError("Use api_key_env; credentials must not be saved in research configuration")
-    if "research_prompt_variant" in value:
-        raise ValueError("research_prompt_variant 已移除；Prompt 由协作配置选择")
     unknown = set(value) - ResearchConfig.__dataclass_fields__.keys()
     if unknown:
         raise ValueError("Unknown research configuration fields: " + ", ".join(sorted(unknown)))
     validate_record(ResearchConfig, value)
-    selected_modules(value.get("mode", "passk"), value.get("collaboration_modules", ()))
     try:
         config: ResearchConfig = decode(ResearchConfig, value)
     except KeyError as exc:
@@ -276,15 +296,6 @@ def config_from_dict(value: dict[str, Any]) -> ResearchConfig:
         raise ValueError("Automatic artifact verification requires a trusted verifier")
     if config.finalizer and (config.verifier is None or config.finalizer.parameters != ("output",)):
         raise ValueError("Finalizer requires a verifier and exactly one output parameter")
-    return config
-
-
-def archived_config(value: dict[str, Any]) -> ResearchConfig:
-    """Read historical configuration without rewriting its mode, prompts, or budgets."""
-    value = dict(value)
-    value.pop("research_prompt_variant", None)
-    value.setdefault("mode", "collaborative")
-    config: ResearchConfig = decode(ResearchConfig, value)
     return config
 
 

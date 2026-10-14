@@ -1,4 +1,4 @@
-"""Research workbench boundary over the original package-backed RSI runtime.
+"""Research runtime boundary over the original package-backed RSI runtime.
 
 Provider requests, native tools, history, compaction and retry policy belong to
 AReaL Agent Runtime. This adapter translates RSI deliveries, scoped task tools
@@ -180,8 +180,12 @@ class ResearchRuntime:
                 )
                 if connection.sink:
                     await connection.sink(
-                        {"type": "tool_started", "name": name, "call_id": call.call_id,
-                         "arguments": public_tool_text(call.arguments)}
+                        {
+                            "type": "tool_started",
+                            "name": name,
+                            "call_id": call.call_id,
+                            "arguments": public_tool_text(call.arguments),
+                        }
                     )
                 result = await connection.handler(call)
                 output: Any = result.output
@@ -205,18 +209,28 @@ class ResearchRuntime:
                             {"type": "message_injected", "message_id": update["message_id"]}
                         )
                     await connection.sink(
-                        {"type": "tool_completed", "name": name, "call_id": call.call_id,
-                         "arguments": public_tool_text(call.arguments),
-                         "result": public_tool_text(result.output),
-                         "status": "failed" if isinstance(result.output, dict)
-                         and "error" in result.output else "completed"}
+                        {
+                            "type": "tool_completed",
+                            "name": name,
+                            "call_id": call.call_id,
+                            "arguments": public_tool_text(call.arguments),
+                            "result": public_tool_text(result.output),
+                            "status": "failed"
+                            if isinstance(result.output, dict) and "error" in result.output
+                            else "completed",
+                        }
                     )
             except (ValueError, KeyError, ValidationError) as exc:
                 if call is not None and connection is not None and connection.sink:
-                    await connection.sink({
-                        "type": "tool_completed", "name": call.name, "call_id": call.call_id,
-                        "status": "failed", "result": public_tool_text({"error": str(exc)}),
-                    })
+                    await connection.sink(
+                        {
+                            "type": "tool_completed",
+                            "name": call.name,
+                            "call_id": call.call_id,
+                            "status": "failed",
+                            "result": public_tool_text({"error": str(exc)}),
+                        }
+                    )
                 writer.write((json.dumps({"error": str(exc)}) + "\n").encode())
                 await writer.drain()
             finally:
@@ -278,10 +292,9 @@ class ResearchRuntime:
                     for tool in (definitions if advertised_tools is None else advertised_tools)
                 ],
             }
-            from areal_rsi.infra.coordination.policies.collaboration import build_plan
-
-            plan = build_plan(self.config.mode, self.config.collaboration_modules)
-            allow_web = self.allow_web_access and not (plan.supervisor_only and agent_id == "rsi")
+            allow_web = self.allow_web_access and not (
+                self.config.mode == "legacy_passk" and agent_id == "rsi"
+            )
             codex_config = {
                 "model_reasoning_effort": self.connection.reasoning_effort,
                 "web_search": "live" if allow_web else "disabled",
@@ -308,7 +321,8 @@ class ResearchRuntime:
                 codex_config=codex_config if kind == "codex-cli" else None,
                 environment=environment,
                 writable_paths=(str(git_common_directory(self.config.workspace_dir)),)
-                if self.config.workspace_dir else (),
+                if self.config.workspace_dir
+                else (),
             )
         except BaseException:
             server.close()
@@ -413,21 +427,32 @@ class ResearchRuntime:
                 arguments = data.get("arguments") or {
                     key: value[key] for key in ("command", "cmd", "cwd", "path") if key in value
                 }
-                result = {key: value[key] for key in
-                          ("aggregatedOutput", "exitCode", "status", "processId", "durationMs")
-                          if key in value}
+                result = {
+                    key: value[key]
+                    for key in ("aggregatedOutput", "exitCode", "status", "processId", "durationMs")
+                    if key in value
+                }
                 if not result:
-                    result = {"output": "\n".join(
-                        b.get("text", "") for b in (data.get("content") or [])
-                        if b.get("type") == "text"
-                    )}
+                    result = {
+                        "output": "\n".join(
+                            b.get("text", "")
+                            for b in (data.get("content") or [])
+                            if b.get("type") == "text"
+                        )
+                    }
                 if data.get("error"):
                     result["error"] = data["error"]
-                status = ("running" if kind == "tool.started" else
-                          "failed" if kind == "tool.failed" or data.get("error")
-                          or value.get("exitCode") not in (None, 0) else
-                          "background" if value.get("status") in {"inProgress", "running"}
-                          else "completed")
+                status = (
+                    "running"
+                    if kind == "tool.started"
+                    else "failed"
+                    if kind == "tool.failed"
+                    or data.get("error")
+                    or value.get("exitCode") not in (None, 0)
+                    else "background"
+                    if value.get("status") in {"inProgress", "running"}
+                    else "completed"
+                )
                 await event_sink(
                     {
                         "type": "tool_started" if kind == "tool.started" else "tool_completed",

@@ -9,8 +9,9 @@ import pytest
 from runtime_fakes import ActionRuntime
 
 from areal_rsi.api.interfaces import ToolCall
+from areal_rsi.api.research import TaskBrief
 from areal_rsi.infra.config import ResearchConnection
-from areal_rsi.infra.coordination.config import config_from_dict
+from areal_rsi.infra.coordination.config import ResearchConfig, config_from_dict
 from areal_rsi.infra.coordination.tools.actions import ResearchActions
 from areal_rsi.infra.coordination.tools.brief import PASSK_HIDDEN_LIMITS
 from areal_rsi.infra.execution import ApprovedCommand
@@ -23,11 +24,11 @@ def test_current_brief_can_be_updated_and_started(tmp_path: Path) -> None:
     async def scenario() -> None:
         system = ResearchSystem(tmp_path, runtime_factory=lambda _: ActionRuntime())
         try:
-            detail = await system.create({"conversation": True})
-            c = system.coordinator(detail["run_id"])
+            run_id = await system.create(ResearchConfig(TaskBrief("new", "describe")))
+            c = system.coordinator(run_id)
             arguments = encode(c.store.brief())
-            for key in PASSK_HIDDEN_LIMITS:
-                arguments["limits"].pop(key)
+            for key in (*PASSK_HIDDEN_LIMITS, "max_agents", "max_effective_seconds"):
+                arguments["limits"].pop(key, None)
             arguments.update(objective="Research", instructions="Keep fixed data",
                              acceptance=["Run the configured checks using fixed data"])
             result = await ResearchActions(c).handler("interaction")(
@@ -39,7 +40,6 @@ def test_current_brief_can_be_updated_and_started(tmp_path: Path) -> None:
             config.commands = (ApprovedCommand("noop", (sys.executable, "-c", "pass")),)
             write_json(c.store.root / "coordination/config.json", config.public())
             c.state.intake.status = "ready"
-            c.state.execution_setup = "pending"
             c.save()
             await system.start(c.store.run_id)
             assert system.coordinator(c.store.run_id).state.status == "running"

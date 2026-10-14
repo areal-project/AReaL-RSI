@@ -7,7 +7,6 @@ from typing import Any
 from jsonschema import Draft202012Validator
 
 from areal_rsi.api.research import TaskBrief
-from areal_rsi.infra.coordination.policies.collaboration import selected_modules
 from areal_rsi.infra.storage.files import decode, encode
 
 PASSK_HIDDEN_LIMITS = (
@@ -28,7 +27,8 @@ def object_schema(properties: dict[str, Any]) -> dict[str, Any]:
 
 
 def brief_tool(mode: str) -> dict[str, Any]:
-    selected_modules(mode, ())
+    if mode not in {"goal", "legacy_passk"}:
+        raise ValueError("Unknown workflow")
     limits: dict[str, Any] = {}
     descriptions = {
         "max_agents": "同时存活的 AI 研究员上限，等待中的研究员也计入；不是实验并发数。",
@@ -36,6 +36,9 @@ def brief_tool(mode: str) -> dict[str, Any]:
         "max_effective_seconds": "pass@k 每名研究员的有效时间上限，单位秒；null 表示不限。",
         "max_jobs": "并发实验作业上限，与 AI 研究员数量独立；null 表示不限。",
     }
+    if mode == "goal":
+        descriptions.pop("max_agents")
+        descriptions.pop("max_effective_seconds")
     for name, description in descriptions.items():
         limits[name] = {
             "type": "integer"
@@ -67,12 +70,6 @@ def brief_tool(mode: str) -> dict[str, Any]:
         "验证 identity 由后端保留，不在此工具修改。"
         "不支持模型调用次数上限；若用户要求此限制，请说明并确认可用的预算约束。"
     )
-    description += (
-        "当前为 pass@k：仅提供研究时限、研究员数量和执行资源限制；"
-        "token 总量、验证次数及累计节点数由系统保持不限。"
-        "若用户要求这些上限，先说明当前不支持并明确预算；"
-        "不要擅自忽略用户要求，也不要把冲突上限写进 instructions。"
-    )
     return {
         "type": "function",
         "name": "update_brief",
@@ -81,10 +78,16 @@ def brief_tool(mode: str) -> dict[str, Any]:
             {
                 "objective": {"type": "string", "description": "研究目标。"},
                 "instructions": {"type": "string", "description": "已确认的任务要求与必要原话。"},
-                "acceptance": {"type": "array", "items": {"type": "string", "minLength": 1},
-                               "description": "已确认的可检查完成条件；未知时为空并继续沟通。"},
-                "revision": {"type": "integer", "minimum": 0,
-                             "description": "当前 brief 的版本号，原样保留，不得自行增加。"},
+                "acceptance": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1},
+                    "description": "已确认的可检查完成条件；未知时为空并继续沟通。",
+                },
+                "revision": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "当前 brief 的版本号，原样保留，不得自行增加。",
+                },
                 "limits": object_schema(limits),
                 "verification": {"anyOf": [verification, {"type": "null"}]},
             }
@@ -107,7 +110,10 @@ def updated_brief(mode: str, current: TaskBrief, arguments: dict[str, Any]) -> T
     value = encode(current)
     value.update(arguments)
     value["limits"] = dict(arguments["limits"])
-    value["limits"].update(dict.fromkeys(PASSK_HIDDEN_LIMITS))
+    for name in PASSK_HIDDEN_LIMITS:
+        value["limits"][name] = getattr(current.limits, name) if mode == "goal" else None
+    if mode == "goal":
+        value["limits"]["max_agents"] = 1
     if arguments["verification"] is not None:
         value["verification"] = {
             **arguments["verification"],

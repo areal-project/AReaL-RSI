@@ -137,14 +137,8 @@ def test_withdrawal_survives_crash_and_excludes_identical_artifacts(
             recovered.read_record(agent, withdrawal.output["uri"])["reason"]
             == tool.arguments["reason"]
         )
-        refused = await recovered.handler("rsi")(
-            ToolCall(
-                "finish",
-                {"summary": "Done", "candidate_id": duplicate.candidate_id},
-                "finish-withdrawn",
-            )
-        )
-        assert "withdrawn" in refused.output["error"]
+        with pytest.raises(ValueError, match="withdrawn"):
+            recovered.completion_candidate(duplicate.candidate_id)
         # A withdrawn artifact remains available for repair and forensic comparison.
         imported = await recovered.handler(agent)(
             ToolCall(

@@ -12,14 +12,16 @@ from areal_rsi.api.control import public_tool_text
 from areal_rsi.api.research import ResearchLimits, TaskBrief
 from areal_rsi.infra.coordination.coordinator import Coordinator
 from areal_rsi.infra.coordination.engine import ResearchEngine, ToolSet
-from areal_rsi.infra.coordination.policies.passk import PassKActions, launch
+from areal_rsi.infra.coordination.policies.legacy_passk import PassKActions, launch
+from areal_rsi.infra.coordination.views import agent_trace
 from areal_rsi.infra.research import ResearchSystem
+from areal_rsi.infra.storage.files import encode
 
 
 def test_agent_trace_is_scoped_paginated_and_read_only(tmp_path: Path) -> None:
     async def scenario() -> None:
         c = Coordinator.create(tmp_path, TaskBrief("task", "task", ResearchLimits(max_agents=2)))
-        c.state.mode = "passk"
+        c.state.mode = "legacy_passk"
         c.start()
         await launch(c, PassKActions(c))
         first, second = [a.agent_id for a in c.store.run().research_agents]
@@ -35,15 +37,14 @@ def test_agent_trace_is_scoped_paginated_and_read_only(tmp_path: Path) -> None:
                       call_id="interaction-call",
                       arguments={"cmd": "cat visible.txt; echo token=private-secret"},
                       status="running")
-        message = c.user_message("Only the first researcher", key="direct", recipient=first)
+        message = c.enqueue("user", first, "Only the first researcher", key="direct")
         before = {p: p.read_bytes() for p in c.store.root.rglob("*.json")}
         app = ResearchSystem(tmp_path)
         try:
-            assert "interaction-trace" in (await app.bootstrap())["capabilities"]
-            page = await app.trace(c.store.run_id, first, limit=3)
+            page = encode(agent_trace(c, first, limit=3))
             all_entries = list(page["entries"])
             while page["next_before"] is not None:
-                page = await app.trace(c.store.run_id, first, before=page["next_before"], limit=3)
+                page = encode(agent_trace(c, first, before=page["next_before"], limit=3))
                 all_entries = page["entries"] + all_entries
             sequences = [e["sequence"] for e in all_entries]
             assert sequences == sorted(set(sequences))
@@ -56,19 +57,19 @@ def test_agent_trace_is_scoped_paginated_and_read_only(tmp_path: Path) -> None:
             assert "private-key" not in tool["result"] and "checked" in tool["result"]
             assert tool["status"] == "failed"
             assert any(e["kind"] == "agent_finished" for e in all_entries)
-            interaction = await app.trace(c.store.run_id, "interaction")
+            interaction = encode(agent_trace(c, "interaction"))
             tool = next(e for e in interaction["entries"]
                         if e["call_id"] == "interaction-call")
             assert "visible.txt" in tool["arguments"]
             assert "private-secret" not in tool["arguments"]
             assert "first-0" not in str(interaction)
-            peer = await app.trace(c.store.run_id, second)
+            peer = encode(agent_trace(c, second))
             assert "Only the first" not in str(peer)
             assert message not in str(peer)
             with pytest.raises(ValueError, match="不属于"):
-                await app.trace(c.store.run_id, "research_foreign")
+                agent_trace(c, "research_foreign")
             with pytest.raises(ValueError):
-                await app.trace(c.store.run_id, first, limit=10000)
+                agent_trace(c, first, limit=10000)
             assert before == {p: p.read_bytes() for p in c.store.root.rglob("*.json")}
         finally:
             await app.close()
@@ -129,9 +130,9 @@ def test_conversation_agent_trace_restores_public_output(tmp_path: Path, agent_i
         c.store.event("tool_started", agent_id=agent_id, name="exec_command", call_id="check")
         app = ResearchSystem(tmp_path)
         try:
-            latest = await app.trace(c.store.run_id, agent_id, limit=1)
+            latest = encode(agent_trace(c, agent_id, limit=1))
             assert latest["entries"][0]["name"] == "exec_command"
-            earlier = await app.trace(c.store.run_id, agent_id, before=latest["next_before"])
+            earlier = encode(agent_trace(c, agent_id, before=latest["next_before"]))
             assert any(e["text"] == "我先检查运行环境" for e in earlier["entries"])
             assert "其他 Agent" not in str(earlier)
         finally:

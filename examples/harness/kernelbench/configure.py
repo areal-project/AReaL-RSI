@@ -46,6 +46,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument(
         "--instructions-file", type=Path, help="Additional user guidance as UTF-8 text"
     )
+    result.add_argument("--mode", choices=("goal", "legacy_passk"), default="goal")
     result.add_argument("--max-agents", type=int, help="Default: 1")
     result.add_argument("--max-nodes", type=integer_limit, default=None)
     result.add_argument("--max-total-tokens", type=integer_limit, default=None)
@@ -137,12 +138,15 @@ def describe(
 
 
 def build_config(args: argparse.Namespace) -> ResearchConfig:
-    if any(
-        getattr(args, field) is not None
-        for field in ("max_total_tokens", "max_verify_calls")
+    if args.mode == "legacy_passk" and any(
+        getattr(args, field) is not None for field in ("max_total_tokens", "max_verify_calls")
     ):
         raise ValueError("pass@k 不支持调用次数、Token 或验证次数上限；请使用 --max-wall-seconds")
-    if args.max_wall_seconds is None and args.target is None:
+    if args.mode == "goal" and args.max_agents not in {None, 1}:
+        raise ValueError(
+            "goal executes with one Leader; use legacy_passk for k independent attempts"
+        )
+    if args.mode == "legacy_passk" and args.max_wall_seconds is None and args.target is None:
         raise ValueError("请设置 --max-wall-seconds 或 --target")
     operator_path = absolute_path(args.operator, "--operator")
     executable = absolute_path(args.python, "--python")  # Preserve the venv symlink path.
@@ -269,12 +273,14 @@ def build_config(args: argparse.Namespace) -> ResearchConfig:
         "用 read_job_output_file 查看公开摘要、目标代码与轨迹；这些材料不要写进候选 harness。"
         "从轨迹提取通用改进，安排有针对性的研究，并用可信验证器测量固定候选。"
         "search/final 的原始题目与轨迹不公开。目标模型使用现有 DSH 沙箱；"
-        "默认起点未配置 GPU 开发工具。探索结束后，系统对最佳候选进行独立的 final 确认。"
+        "默认起点未配置 GPU 开发工具。goal 模式由 Leader 亲自执行，选定候选后调用 final 验证，"
+        "通过后用 update_goal 完成。legacy_passk 由系统在停止探索后执行 final 确认。"
     )
     metric = "fast_1"
     if args.instructions_file:
         instructions += "\n\n用户补充说明：\n" + args.instructions_file.read_text(encoding="utf-8")
     return ResearchConfig(
+        mode=args.mode,
         brief=TaskBrief(
             objective,
             instructions,

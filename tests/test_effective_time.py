@@ -22,7 +22,7 @@ from areal_rsi.infra.coordination.config import ResearchConfig
 from areal_rsi.infra.coordination.effective_time import EffectiveTime
 from areal_rsi.infra.coordination.engine import ToolSet
 from areal_rsi.infra.coordination.evaluation.jobs import ResearchExecution
-from areal_rsi.infra.coordination.policies.passk import PassKEngine
+from areal_rsi.infra.coordination.policies.legacy_passk import PassKEngine
 from areal_rsi.infra.execution import ApprovedCommand
 from areal_rsi.infra.runtime.research_runtime import ResearchRuntime
 from areal_rsi.infra.storage.files import decode, encode, write_json

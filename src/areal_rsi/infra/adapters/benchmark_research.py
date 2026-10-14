@@ -27,7 +27,6 @@ from areal_rsi.api.records import (
 from areal_rsi.api.research import ResearchLimits, TaskBrief, VerificationContract
 from areal_rsi.infra.config import ModelConfig
 from areal_rsi.infra.coordination.config import ResearchConfig
-from areal_rsi.infra.coordination.policies.collaboration import DEFAULT_MODULES
 from areal_rsi.infra.execution import ApprovedCommand
 from areal_rsi.infra.runtime.gateway import GatewayProxy
 from areal_rsi.infra.runtime.runtime_package import PackageAgentRuntime, RuntimeSettings
@@ -129,14 +128,14 @@ async def prepare(
         TaskBrief(
             name,
             "完成一次真实的 harness 研究端到端实验。固定目标模型、题目划分、运行时和评分器。"
-            "RSI 按所选 pass@k 协调配置启动研究员；每位研究员自行完成整个任务。"
+            "Leader 亲自完成本次任务，不创建 Researcher。"
             "先将工作区起点 save_candidate 为自己的候选，用 verify_candidate(phase='diagnostic') "
             "执行 TRAIN 基线诊断；诊断结果仅作为反馈，不参与最佳候选排名。"
             "然后修改通用 prompt.md 或允许的 skill，生成与起点不同的候选，"
             "禁止写入具体题目的答案或针对题号分支。保存新候选并用 "
             "verify_candidate(phase='search') 执行真实 TRAIN 评测，报告候选和证据。"
-            "在研究预算内继续分析与改进，不自行调用 final、finish 或 stop_run。"
-            "探索到时系统会冻结最佳正式候选并在固定 VALIDATE 上独立最终复测。"
+            "在研究预算内分析与改进，选定候选后调用 final 验证。"
+            "只有同一候选通过固定 VALIDATE 最终复测后，才能用 update_goal 完成本 run。"
             "本次是小规模端到端验证，不要求超过基线，不扩展题目或改变评测协议。",
             ResearchLimits(
                 max_agents=1,
@@ -153,7 +152,6 @@ async def prepare(
         ),
         backend=backend,
         evolution_target=EvolutionTarget.HARNESS,
-        collaboration_modules=DEFAULT_MODULES,
         seed_dir=str(seed),
         verifier=ApprovedCommand(
             "evaluate_benchmark",

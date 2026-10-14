@@ -84,7 +84,7 @@ class ResearchExecution:
                 "按已配置命令运行固定输入。candidate_id 为空时使用当前工作区。"
                 + (
                     "wait=true 在当前回合等待结果；若仍在运行，继续 wait_for_job 等原作业。"
-                    if self.c.state.mode == "passk"
+                    if self.c.state.mode == "legacy_passk"
                     else "wait=true 时短作业直接返回，长作业停止推理、完成后带回公开反馈。"
                 )
                 + "返回的记录引用在作业运行中即可交接；实时状态用 job_status 查询。",
@@ -142,7 +142,7 @@ class ResearchExecution:
                 "wait_for_job",
                 (
                     "在当前回合等待原作业并返回反馈；仍在运行时继续等待，不重复提交。"
-                    if self.c.state.mode == "passk"
+                    if self.c.state.mode == "legacy_passk"
                     else "结束本回合，等作业完成后在同一任务中继续。作业已经完成时直接返回结果。"
                 ),
                 job_id=STRING,
@@ -194,8 +194,7 @@ class ResearchExecution:
                                 "parameter_descriptions": {
                                     p: cmd.parameter_descriptions[p]
                                     for p in cmd.parameters
-                                    if p not in BOUND_PARAMETERS
-                                    and p in cmd.parameter_descriptions
+                                    if p not in BOUND_PARAMETERS and p in cmd.parameter_descriptions
                                 },
                                 "output_subdir": cmd.output_subdir,
                                 "feedback_file": cmd.feedback_file,
@@ -217,7 +216,6 @@ class ResearchExecution:
                         "verification_feedback_available": self.verifier is not None
                         and self.verifier.public_output_subdir is not None,
                         "simulated": self.simulated,
-                        "execution_setup": self.c.state.execution_setup,
                     }
                 )
             if call.name in {"run_job", "verify_candidate"}:
@@ -359,7 +357,7 @@ class ResearchExecution:
     async def wait_for_result(
         self, agent_id: str, job_id: str, *, inline: bool = True
     ) -> ToolResult:
-        continuous = self.c.state.mode == "passk"
+        continuous = self.c.state.mode == "legacy_passk"
         wait_seconds = (
             self.continuous_wait_seconds
             if continuous
@@ -402,8 +400,6 @@ class ResearchExecution:
         source_content: ContentRef | None = None,
         source_job_id: str | None = None,
     ) -> ToolResult:
-        if self.c.state.execution_setup == "pending":
-            raise ValueError("执行接入尚未冻结；RSI 调用 freeze_execution 后才能运行作业")
         key = effect_id("job", agent_id + ":" + call.call_id).replace("job_", "job-", 1)
         if key in self.jobs:
             record = self.find_job(key)
@@ -573,8 +569,9 @@ class ResearchExecution:
         phase: str,
         extra_env: dict[str, str] | None = None,
     ) -> JobSpec:
-        spec = replace(spec, metadata={**spec.metadata,
-                                       "goal_revision": str(self.c.store.brief().revision)})
+        spec = replace(
+            spec, metadata={**spec.metadata, "goal_revision": str(self.c.store.brief().revision)}
+        )
         environment = {**self.execution_env, **(extra_env or {})}
         if environment:
             spec = replace(spec, env=environment)
@@ -626,9 +623,11 @@ class ResearchExecution:
                 self.manager.cancel(record.job_id)
         try:
             async with asyncio.timeout(5):
-                while any(not current.terminal or not current.resources_released
-                          for record in records
-                          for current in [self.manager.get(record.job_id)]):
+                while any(
+                    not current.terminal or not current.resources_released
+                    for record in records
+                    for current in [self.manager.get(record.job_id)]
+                ):
                     self.manager.poll()
                     await asyncio.sleep(0.05)
         except TimeoutError as exc:
@@ -974,8 +973,11 @@ class ResearchExecution:
         """
         info = self.jobs[record.job_id]
         subdir = info.auto_verify_output
-        if (subdir is None or record.state != "succeeded"
-            or info.goal_revision != self.c.store.brief().revision):
+        if (
+            subdir is None
+            or record.state != "succeeded"
+            or info.goal_revision != self.c.store.brief().revision
+        ):
             return
         output = Path(info.output)
         source = output if subdir == "." else output / safe_relative(subdir)

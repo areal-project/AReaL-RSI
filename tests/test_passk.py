@@ -17,14 +17,13 @@ from areal_rsi.infra.coordination.config import ResearchConfig
 from areal_rsi.infra.coordination.coordinator import Coordinator, effect_id
 from areal_rsi.infra.coordination.engine import ToolSet
 from areal_rsi.infra.coordination.evaluation.jobs import ResearchExecution
-from areal_rsi.infra.coordination.policies.passk import (
+from areal_rsi.infra.coordination.policies.legacy_passk import (
     PassKActions,
     PassKEngine,
     launch,
     stop_on_target,
 )
 from areal_rsi.infra.execution import ApprovedCommand
-from areal_rsi.infra.research import ResearchSystem
 from areal_rsi.infra.storage.files import encode, now
 
 
@@ -43,14 +42,15 @@ def configuration(k: int = 3, seconds: float = 60) -> ResearchConfig:
             ),
             VerificationContract("speedup", target=1.0),
         ),
-        mode="passk",
+        mode="legacy_passk",
         model_settings_pinned=True,
     )
 
 
 async def setup(root: Path, k: int = 3) -> tuple[Coordinator, PassKActions, list[str]]:
     c = Coordinator.create(root, configuration(k).brief)
-    c.state.mode = "passk"
+    c.state.mode = "legacy_passk"
+    c.save()
     c.start()
     actions = PassKActions(c)
     await launch(c, actions)
@@ -234,7 +234,7 @@ def test_independent_records_jobs_and_identical_snapshots(tmp_path: Path) -> Non
         assert result.output["withdrawn"]
         assert c.store.is_withdrawn(first.candidate_id)
         assert not c.store.is_withdrawn(second.candidate_id), "One attempt must not prune another"
-        assert not c.state.inboxes.get("rsi")  # Code-backed RSI needs no model delivery.
+        assert c.state.inboxes.get("rsi")  # Main supervises through a Leader model.
 
     asyncio.run(scenario())
 
@@ -302,7 +302,6 @@ def test_all_attempts_continue_and_cancel_at_original_deadline(
         original = c.state.started_at
         await launch(c, actions)
         assert len(c.store.run().research_agents) == 3
-        c.state.rsi_model_enabled = leader_busy
         if leader_busy:
             c.enqueue("system", "rsi", "Supervise", key="supervisor")
         runtime = ScriptedRuntime(leader_busy)
@@ -322,7 +321,7 @@ def test_all_attempts_continue_and_cancel_at_original_deadline(
                     await asyncio.sleep(0.01)
             assert all(len(c.actor(a).iterations) == 1 for a in agents)
             assert len(list((c.store.root / "reports").glob("*.json"))) == 3
-            assert ("rsi" in runtime.calls) == leader_busy
+            assert "rsi" in runtime.calls
             clock += 61
             await engine.tick()
             assert set(agents) == runtime.cancelled
@@ -375,35 +374,6 @@ def test_only_trusted_passing_search_result_stops_group(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
-def test_workbench_mode_stops_and_accepts_user_messages(tmp_path: Path) -> None:
-    async def scenario() -> None:
-        runtime = ScriptedRuntime()
-        system = ResearchSystem(
-            tmp_path,
-            config=configuration(seconds=1.0),
-            runtime_factory=lambda _: runtime,
-            allow_simulation=True,
-        )
-        try:
-            detail = await system.create({"simulated": True})
-            c = system.coordinator(detail["run_id"])
-            await system.start(c.store.run_id)
-            c = system.coordinator(detail["run_id"])
-            await system.active[c.store.run_id].engine.tick()
-            await system.call("chat", {"run_id": c.store.run_id, "text": "check progress",
-                                       "recipient": c.store.run().research_agents[0].agent_id})
-            await asyncio.wait_for(system.active[c.store.run_id].task, 5)
-            assert c.state.status == "stopped"
-            assert len(set(runtime.calls)) == 3  # Only the fixed three researchers call the model.
-            assert len(c.store.run().research_agents) == 3
-            assert (
-                json.loads((c.store.root / "coordination/started-config.json").read_text())["mode"]
-                == "passk"
-            )
-        finally:
-            await system.close()
-
-    asyncio.run(scenario())
 
 
 def test_mode_validation_prevents_shared_budget_interference() -> None:
@@ -415,29 +385,14 @@ def test_mode_validation_prevents_shared_budget_interference() -> None:
         setattr(config.brief.limits, name, None)
 
 
-def test_cli_does_not_end_experiment_during_backoff() -> None:
-    from areal_rsi.ui.cli import _idle_reason
-
-    assert (
-        _idle_reason(
-            {
-                "mode": "passk",
-                "status": "running",
-                "worker_alive": True,
-                "agents": [{"state": "failed"}],
-            }
-        )
-        is None
-    )
-    assert (
-        _idle_reason({"mode": "passk", "status": "running", "worker_alive": False})
-        == "worker_stopped"
-    )
 
 
 def test_supervisor_reports_do_not_block_or_share_research(tmp_path: Path) -> None:
     async def scenario() -> None:
-        from areal_rsi.infra.coordination.policies.passk import CONTINUE_MESSAGE, needs_continue
+        from areal_rsi.infra.coordination.policies.legacy_passk import (
+            CONTINUE_MESSAGE,
+            needs_continue,
+        )
 
         c, actions, agents = await setup(tmp_path, 2)
         actor_id = agents[0]
@@ -481,8 +436,6 @@ def test_supervisor_reports_do_not_block_or_share_research(tmp_path: Path) -> No
         ):
             denied = await leader(ToolCall(name, {}, name))
             assert "error" in denied.output
-        assert actions.definitions("rsi") == []
-        c.state.rsi_model_enabled = True  # Optional model-backed RSI uses the same role.
         assert {tool["name"] for tool in actions.definitions("rsi")} == {
             "get_state",
             "start_researchers",
@@ -509,6 +462,8 @@ def test_supervisor_reports_do_not_block_or_share_research(tmp_path: Path) -> No
         assert actor_id in c.pending(), "A progress report must not block the next delivery"
 
     asyncio.run(scenario())
+
+
 
 
 def test_leader_budget_preserves_native_model_input_contract(tmp_path: Path) -> None:

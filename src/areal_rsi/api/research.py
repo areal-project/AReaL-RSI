@@ -134,30 +134,13 @@ class ResearchReport:
         if not self.message.strip():
             raise ValueError("Report requires a nonempty message")
 
-    @staticmethod
-    def message_from(value: dict[str, Any]) -> str:
-        """Read old seven-field reports without rewriting their archives."""
-        if isinstance(value.get("message"), str):
-            return str(value["message"])
-        labels = {
-            "task_status": "任务",
-            "work": "工作",
-            "problems": "问题",
-            "results": "结果",
-            "interpretation": "结论",
-            "next_steps": "下一步",
-        }
-        parts = [f"{label}：{value[name]}" for name, label in labels.items() if value.get(name)]
-        parts.extend(str(item) for item in value.get("shared_findings", []))
-        return "\n\n".join(parts)
-
     @classmethod
     def from_record(cls, value: dict[str, Any]) -> ResearchReport:
         return cls(
             value["report_id"],
             value["iteration_id"],
             value["assignment_id"],
-            cls.message_from(value),
+            value["message"],
             value["created_at"],
             tuple(RecordRef(item["uri"]) for item in value.get("references", [])),
         )
@@ -313,17 +296,9 @@ class IntakeState:
 
 
 @dataclass(slots=True)
-class TurnFailure:
-    kind: str
-    message_id: str
-    iteration_id: str | None = None
-
-
-@dataclass(slots=True)
 class TurnRetry:
     message_id: str
     retry_id: str
-    mode: str | None = None
 
 
 @dataclass(slots=True)
@@ -385,21 +360,6 @@ class ReportSummary:
 
 
 @dataclass(slots=True)
-class PendingReportReply:
-    agent_id: str
-    direction: str | None
-    iteration_id: str
-    report_ref: RecordRef
-
-
-@dataclass(slots=True)
-class LeaderAdvice:
-    message_id: str
-    message: str
-    references: list[str] = field(default_factory=list)
-
-
-@dataclass(slots=True)
 class UserQuestion:
     message_id: str
     agent_id: str = ""
@@ -451,105 +411,6 @@ class GoalContext:
 
 
 @dataclass(slots=True)
-class GoalToolCall:
-    call_id: str
-    name: str
-    started_at: str
-    before_output: int
-    status: Literal["running", "completed", "failed", "interrupted"] = "running"
-    finished_at: str | None = None
-    arguments: str = ""
-    result: str = ""
-
-
-@dataclass(slots=True)
-class GoalTurn:
-    """One Agent execution, possibly containing multiple model and tool calls."""
-
-    number: int
-    started_at: str
-    brief: TaskBrief
-    inputs: list[ResearchMessage]
-    context_before: GoalContext | None
-    tokens_before: int
-    agent_id: str = ""
-    context_after: GoalContext | None = None
-    tokens_after: int = 0
-    status: Literal["running", "completed", "blocked", "failed", "interrupted"] = "running"
-    finished_at: str | None = None
-    output: list[str] = field(default_factory=list)
-    tools: list[GoalToolCall] = field(default_factory=list)
-    last_tool: str | None = None
-    tool_running: bool = False
-    tools_completed: int = 0
-    error: str | None = None
-
-
-@dataclass(slots=True)
-class DevelopmentSetup:
-    profile_id: str
-    repository: str
-    revision: str
-    acceptance: str
-    parallelism: int = 1
-    wall_seconds: float | None = None
-
-    def __post_init__(self) -> None:
-        if not all(value.strip() for value in (
-            self.profile_id, self.repository, self.revision, self.acceptance
-        )):
-            raise ValueError("请填写执行环境、仓库、基线与验收要求")
-        if not 1 <= self.parallelism <= 16 or (
-            self.wall_seconds is not None and not 60 <= self.wall_seconds <= 86400
-        ):
-            raise ValueError("尝试数量须为 1–16，时限须为 60–86400 秒或留空不限")
-
-
-@dataclass(slots=True)
-class DevelopmentProfile:
-    profile_id: str
-    title: str
-    description: str
-    defaults: DevelopmentSetup
-    prepare_command: tuple[str, ...]
-    timeout_seconds: int = 1800
-
-
-@dataclass(slots=True)
-class PreparationCheck:
-    name: str
-    status: Literal["pending", "running", "passed", "failed"]
-    message: str = ""
-
-
-@dataclass(slots=True)
-class ResearchPreparation:
-    setup: DevelopmentSetup
-    status: Literal["pending", "running", "cancelling", "ready", "failed"] = "pending"
-    checks: list[PreparationCheck] = field(default_factory=list)
-    job_id: str | None = None
-    config_digest: str = ""
-    error: str = ""
-
-
-@dataclass(slots=True)
-class GoalRevision:
-    request_id: str
-    previous: TaskBrief
-    brief: TaskBrief
-    created_at: str
-    applied: bool = False
-    verification_confirmed: bool = False
-
-
-@dataclass(slots=True)
-class HumanControl:
-    paused_agents: list[str] = field(default_factory=list)
-    received_messages: list[str] = field(default_factory=list)
-    goal_changes: list[GoalRevision] = field(default_factory=list)
-
-
-@dataclass(slots=True)
 class RunAcceptance:
     """Immutable Leader decision, recoverable independently of mutable run views."""
 
@@ -591,8 +452,6 @@ class CoordinationState:
     status: str = "planned"
     created_at: str = ""
     simulated: bool = False
-    preparation: ResearchPreparation | None = None
-    human: HumanControl = field(default_factory=HumanControl)
     inboxes: dict[str, list[str]] = field(default_factory=dict)
     active: dict[str, str] = field(default_factory=dict)
     delivered: list[str] = field(default_factory=list)
@@ -608,36 +467,23 @@ class CoordinationState:
     started_at: str | None = None
     waiting_for_user: list[UserQuestion] = field(default_factory=list)
     finalization: CompletionRecord | None = None
-    goal: GoalContext | None = None  # Historical single-agent records remain read-only.
-    goals: dict[str, GoalContext] = field(default_factory=dict)
-    goal_turn_count: int = 0
-    goal_turns_latest: dict[str, int] = field(default_factory=dict)
-    rsi_model_enabled: bool = False
+    goal: GoalContext | None = None
     intake: IntakeState = field(default_factory=IntakeState)
     effective_time: EffectiveClock | None = None
-    turn_failures: dict[str, TurnFailure] = field(default_factory=dict)
     turn_retries: dict[str, TurnRetry] = field(default_factory=dict)
     turn_followups: dict[str, list[str]] = field(default_factory=dict)
     runtime_usage: dict[str, RuntimeUsage] = field(default_factory=dict)
     agent_activity: dict[str, AgentActivity] = field(default_factory=dict)
     passk_reports: dict[str, ReportSummary] = field(default_factory=dict)
     passk_retries: dict[str, RetryBackoff] = field(default_factory=dict)
-    leader_advice: dict[str, LeaderAdvice] = field(default_factory=dict)
     passk_target: TargetObservation | None = None
     passk_ready: bool = False
     passk_supervision_at: float = 0.0
     runtime_turns: int = 0
     mode: str | None = None
-    execution_setup: str = "ready"
-    creation_digest: str | None = None
     budget_stop_reason: str | None = None
     user_stopped: bool = False
-    rsi_explicit_wait: bool = False
     require_final_confirmation: bool = False
-    run_stop_agents: list[str] | None = None
-    archived_chat_message_ids: list[str] = field(default_factory=list)
-    # Opaque historical request receipts, used only to project legacy counters.
-    model_requests: dict[str, JsonObject] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.status not in {

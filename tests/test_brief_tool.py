@@ -15,14 +15,14 @@ def arguments(mode: str) -> dict[str, Any]:
     value: dict[str, Any] = encode(
         TaskBrief("Improve benchmark", "Keep protocol", ResearchLimits())
     )
-    if mode == "passk":
+    if mode == "legacy_passk":
         for key in PASSK_HIDDEN_LIMITS:
             value["limits"].pop(key)
     return value
 
 
 def test_structured_update_preserves_verification_identity() -> None:
-    mode = "passk"
+    mode = "legacy_passk"
     current = TaskBrief(
         "old",
         "old",
@@ -48,14 +48,14 @@ def test_structured_update_preserves_verification_identity() -> None:
 
 
 def test_effective_budget_is_per_researcher_and_only_available_in_passk() -> None:
-    args = arguments("passk")
+    args = arguments("legacy_passk")
     args["limits"].update(max_effective_seconds=1800, max_wall_seconds=None)
-    result = updated_brief("passk", TaskBrief("old", "old"), args)
+    result = updated_brief("legacy_passk", TaskBrief("old", "old"), args)
     assert result.limits.max_effective_seconds == 1800
     assert result.limits.max_wall_seconds is None
 
 
-@pytest.mark.parametrize("mode", ["passk"])
+@pytest.mark.parametrize("mode", ["legacy_passk"])
 def test_removed_model_call_limit_is_not_advertised_or_accepted(mode: str) -> None:
     tool = brief_tool(mode)
     assert "max_model_calls" not in tool["parameters"]["properties"]["limits"]["properties"]
@@ -73,6 +73,6 @@ def test_action_catalog_follows_current_mode(tmp_path: Path) -> None:
     actions = ResearchActions(coordinator)
     tools = actions.definitions("interaction")
     tool = next(tool for tool in tools if tool["name"] == "update_brief")
-    assert tool == brief_tool("passk")
+    assert tool == brief_tool("goal")
     coordinator.state.status = "running"
     assert all(tool["name"] != "update_brief" for tool in actions.definitions("interaction"))

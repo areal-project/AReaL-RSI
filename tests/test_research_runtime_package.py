@@ -516,17 +516,46 @@ def test_native_codex_passk_launches_independent_attempts_and_stops_on_result(
     monkeypatch.setenv("RSI_API_KEY", "fixture")
     model = ResponsesModel()
 
+    def output(request: dict[str, Any]) -> dict[str, Any]:
+        supervisor = "负责启动并监督" in json.dumps(request, ensure_ascii=False)
+        if supervisor and not any(
+            x.get("type") == "function_call_output" for x in request.get("input", [])
+        ):
+            return {
+                "id": "fc_start",
+                "type": "function_call",
+                "call_id": "start",
+                "name": "exec_command",
+                "arguments": json.dumps({"cmd": "rsi-tools call start_researchers '{}' start"}),
+                "status": "completed",
+            }
+        return {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "Done", "annotations": []}],
+        }
+
+    model.output = output
+
     async def scenario() -> None:
         config = configuration(k=3, seconds=30)
         config.backend, config.base_url = "codex", model.url
-        system = ResearchSystem(tmp_path, config=config)
+        from areal_rsi.infra.execution import ApprovedCommand
+
+        config.verifier = ApprovedCommand("verify", (sys.executable, "-c", "pass"))
+        config.metadata["verification_identity"] = {
+            "adapter": "content",
+            "phases": {"search": {"protocol_id": "fixed", "manifest_id": "search"}},
+        }
+        system = ResearchSystem(tmp_path)
         try:
-            created = await system.create({})
-            await system.start(created["run_id"])
-            c = system.coordinator(created["run_id"])
+            run_id = await system.create(config)
+            await system.start(run_id)
+            c = system.coordinator(run_id)
             active = system.active[c.store.run_id]
-            # Model tool behavior is covered by the supervisor scheduler test;
-            # this fixture answers text only; the code-backed RSI starts three native processes.
+            # The supervisor starts k attempts through the normal model tool channel.
             await active.engine.tick()
             async with asyncio.timeout(25):
                 while True:
@@ -544,9 +573,10 @@ def test_native_codex_passk_launches_independent_attempts_and_stops_on_result(
             active = system.active[c.store.run_id]
             runtime = active.engine.runtime
             assert isinstance(runtime, ResearchRuntime)
-            assert len(runtime.conversations) == 3
+            assert len(runtime.conversations) == 4
+            assert any("/rsi/" in str(path) for path in runtime.conversations)
             processes = [item.session.process for item in runtime.conversations.values()]
-            assert len({process.pid for process in processes}) == 3
+            assert len({process.pid for process in processes}) == 4
             for request in model.requests:
                 state = json.dumps(request["input"], ensure_ascii=False)
                 if "负责启动并监督" in state:
@@ -575,7 +605,6 @@ def test_native_codex_passk_launches_independent_attempts_and_stops_on_result(
             assert all(process.returncode is not None for process in processes)
             assert c.state.passk_target is not None
             assert c.state.passk_target.result.candidate_id == candidate.candidate_id
-            assert not list(c.store.paths.agent("rsi").glob("sessions/*/runtime/request.json"))
             assert c.state.total_tokens > 0
         finally:
             await system.close()
@@ -707,7 +736,7 @@ def test_native_runtime_honors_environment_and_advertised_tools(
             "arguments": json.dumps(
                 {
                     "cmd": 'printf "%s" "$RSI_SMOKE_VALUE" > env-seen.txt; '
-                    'rsi-tools list > tools-seen.json'
+                    "rsi-tools list > tools-seen.json"
                 }
             ),
         }

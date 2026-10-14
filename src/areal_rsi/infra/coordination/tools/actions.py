@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -13,7 +12,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from areal_rsi.api.interfaces import ToolCall, ToolHandler, ToolResult
-from areal_rsi.api.records import AgentState, RecordRef, ResearchRun, RunState
+from areal_rsi.api.records import AgentState, RecordRef, ResearchRun
 from areal_rsi.api.research import CandidateSnapshot, EvidenceRecord, VerifiedResult
 from areal_rsi.infra.coordination.config import (
     config_from_dict,
@@ -137,112 +136,11 @@ COMMON = [
     ),
 ]
 RSI = [
-    definition(
-        "retry_researcher",
-        "检查失败原因后恢复研究员的原任务与会话，不新建节点。",
-        agent_id=STRING,
-    ),
-    definition(
-        "message_researcher",
-        "向研究员当前未完成的任务补充要求或证据。工具边界送入原会话，不创建新节点。"
-        "已经提交报告时使用 assign 回复报告并下发下一项任务。",
-        agent_id=STRING,
-        instruction=STRING,
-        references=REFERENCES,
-    ),
-    definition(
-        "update_plan",
-        "保存简明的当前研究计划，并说明调整原因。",
-        plan=STRING,
-        reason=STRING,
-    ),
-    definition(
-        "spawn_researcher",
-        "研究的任何阶段都可新建方向，下发首轮阶段问题与汇报点。"
-        "max_agents 限制同时存活数量，非累计创建数；停止旧研究员后可复用名额。",
-        direction=STRING,
-        instruction=STRING,
-        references=REFERENCES,
-    ),
-    definition(
-        "assign",
-        "针对最新报告作出判断，下发下一轮阶段问题与汇报点，延续研究员的原会话。",
-        agent_id=STRING,
-        instruction=STRING,
-        references=REFERENCES,
-    ),
-    definition(
-        "stop_researcher",
-        "停止这个研究方向并释放研究员名额，系统会取消该研究员正在进行的执行；"
-        "历史会话、报告与产物仍保留。等待回复不会释放名额。",
-        agent_id=STRING,
-        reason=STRING,
-    ),
-    definition(
-        "stop_run",
-        "根据研究证据结束研究，说明最佳结果、未达目标和停止原因。环境故障应 ask_user 等待修复，"
-        "不能用 stop_run 结束；用户仍可从工作台明确停止。",
-        reason=STRING,
-    ),
-    definition(
-        "share_evidence",
-        "将有用证据共享给本次研究中的其他方向，保留来源。",
-        evidence_id=STRING,
-        limitations=STRING,
-    ),
-    definition("wait", "结束本回合，等新消息到来后继续。说明需要等待的具体事件。", reason=STRING),
-    definition(
-        "ask_user",
-        "直接向用户提问并结束本回合。说明问题、已做检查、影响和需要用户处理的事项；"
-        "用户回答会直接回到你的同一会话。",
-        question=STRING,
-    ),
-    definition(
-        "finish",
-        "核对交付物和所需最终验证后结束研究。candidate_id 为空时采用当前final/best 对应的候选。",
-        summary=STRING,
-        candidate_id=STRING,
-    ),
+    definition("wait", "等待研究员报告。", reason=STRING),
+    definition("ask_user", "说明需要用户补充的信息并等待。", question=STRING),
 ]
-RESEARCH = [
-    definition(
-        "share_update",
-        "将影响相关同伴的关键发现或可复用产物直接交给指定研究员，RSI 同步收到副本。"
-        "只共享事实和引用，不改变同伴目标、不结束自己的阶段；正式报告后的同伴不会被唤醒。"
-        "接收者从 get_state 的 collaborators 选择；不群发普通进度。"
-        "save_current=true 时一次完成保存当前工作区快照并交接，无需先保存再发送引用。"
-        "在 message 中说明入口、已测部分和仍未通过的验证；快照本身不是正确性证明。",
-        agent_ids={"type": "array", "items": STRING, "minItems": 1},
-        message=STRING,
-        references=REFERENCES,
-        save_current={
-            "type": "boolean",
-            "description": "同时保存并交接当前产物；已有快照引用时为 false。",
-        },
-    ),
-    definition(
-        "send_update",
-        "将影响其他方向或整体决策的关键发现及时通知 RSI，本阶段继续执行，不提交报告。"
-        "说明新证据、影响和你正在做的下一步；普通进度不用发送。",
-        message=STRING,
-        references=REFERENCES,
-    ),
-    definition(
-        "submit_report",
-        "上报阶段结论或需要 RSI 决策的问题，结束本轮并等待回复；研究方向可以尚未完成。"
-        "也可以直接给出最终回复，系统会自动归档为报告。",
-        message=STRING,
-        references=REFERENCES,
-    ),
-]
-INTERACTION = [
-    definition(
-        "send_to_rsi",
-        "用自然语言将用户指令、建议或回答及必要背景转交 RSI。",
-        message=STRING,
-    ),
-    definition("ask_user", "向用户提出简短的问题，然后结束本回合。", question=STRING),
-]
+RESEARCH: list[dict[str, Any]] = []
+INTERACTION = [definition("ask_user", "向用户澄清需求并等待。", question=STRING)]
 
 
 class ResearchActions:
@@ -265,40 +163,33 @@ class ResearchActions:
 
     def definitions(self, agent_id: str, *, include_hidden: bool = False) -> list[dict[str, Any]]:
         role = self.role(agent_id)
-        terminal = self.c.state.status in {"stopped", "succeeded", "completed", "failed"}
-        common = COMMON if role != "interaction" else [
-            tool for tool in COMMON if tool["name"] in {
-                "get_state", "read_record", "list_records", "read_candidate_file",
-                "import_candidate",
-            }
-        ]
+        common = (
+            COMMON
+            if role != "interaction"
+            else [
+                tool
+                for tool in COMMON
+                if tool["name"]
+                in {
+                    "get_state",
+                    "read_record",
+                    "list_records",
+                    "read_candidate_file",
+                    "import_candidate",
+                }
+            ]
+        )
         hidden = set()
         if not include_hidden:
             if {"read", "write", "glob"} <= self.extras.keys():
                 hidden.update({"read_file", "write_file", "list_files"})
-            if terminal:
-                hidden.add("send_to_rsi")
-            if self.c.state.status != "planned" and self.c.state.execution_setup != "pending":
-                hidden.update(
-                    {
-                        "get_setup",
-                        "inspect_environment",
-                        "set_execution",
-                        "load_execution_config",
-                        "get_adapter_guide",
-                        "prepare_adapter",
-                        "prepare_research",
-                        "start_research",
-                        "handoff_research",
-                        "freeze_execution",
-                        "update_brief",
-                    }
-                )
+            if self.c.state.status != "planned":
+                hidden.update({"get_setup", "start_research", "update_brief"})
         return [
             tool
             for tool in [
                 *common,
-                *([brief_tool(self.c.state.mode or "passk")] if role == "interaction" else []),
+                *([brief_tool(self.c.state.mode or "goal")] if role == "interaction" else []),
                 *{"rsi": RSI, "interaction": INTERACTION, "research": RESEARCH}[role],
                 *(tool for tool, _, roles in self.extras.values() if role in roles),
             ]
@@ -315,19 +206,11 @@ class ResearchActions:
             action_path = self.c.store.root / "actions" / f"{key}.json"
             if (
                 self.c.state.status != "planned"
-                and call.name in {
-                    "set_execution", "load_execution_config", "prepare_adapter",
-                    "prepare_research", "start_research", "handoff_research", "update_brief",
-                }
+                and call.name in {"start_research", "update_brief"}
                 and not action_path.exists()
             ):
                 return ToolResult({"error": "Tool is not available after research starts"})
-            stopping_replay = call.name == "stop_run" and action_path.exists()
-            if (
-                actor.state == AgentState.STOPPED
-                and call.name != "submit_report"
-                and not stopping_replay
-            ):
+            if actor.state == AgentState.STOPPED and call.name != "submit_report":
                 return ToolResult({"error": "Agent was stopped"}, stop=True, reason="stopped")
             if action_path.exists():
                 previous = json.loads(action_path.read_text())
@@ -380,25 +263,10 @@ class ResearchActions:
         return self.c.store.root.parent.parent / "worktrees" / self.c.store.run_id / agent_id
 
     def workspace(self, agent_id: str) -> Path:
-        if self.c.state.workspace_dir:
-            if agent_id not in {"rsi", "interaction"}:
-                return self._worktree_path(agent_id)
-            if agent_id == "interaction" and self.c.state.started_at:
-                agents = self.c.store.run().research_agents
-                selected = self.c.selected_candidate_id
-                if selected:
-                    candidate = self.c.store.get("candidates", selected, CandidateSnapshot)
-                    owner = next(
-                        (a for a in agents if a.agent_id == candidate.source_agent_id), None
-                    )
-                    if owner is None and len(agents) == 1:
-                        owner = agents[0]
-                else:
-                    owner = agents[0] if len(agents) == 1 else None
-                if owner is not None:
-                    worktree = self._worktree_path(owner.agent_id)
-                    if worktree.is_dir():
-                        return worktree
+        if self.c.state.workspace_dir and (
+            agent_id != "interaction" and (agent_id != "rsi" or self.c.state.mode == "goal")
+        ):
+            return self._worktree_path(agent_id)
         root = self.c.store.paths.agent(agent_id) / "workspace"
         root.mkdir(parents=True, exist_ok=True)
         return root
@@ -441,13 +309,6 @@ class ResearchActions:
             if ref not in refs:
                 refs.append(ref)
         return tuple(refs)
-
-    def handoff_refs(
-        self, instruction: str, values: list[str], *, agent_id: str = "rsi"
-    ) -> tuple[RecordRef, ...]:
-        # Prose references have the same ownership checks as structured ones.
-        inline = re.findall(r"run://[\w-]+/[\w-]+/[\w.-]*[\w]", instruction)
-        return self.refs(agent_id, list(dict.fromkeys([*values, *inline])))
 
     async def _apply(
         self,
@@ -607,151 +468,6 @@ class ResearchActions:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(args["content"])
             return ToolResult({"path": args["path"], "bytes": path.stat().st_size})
-        if name == "update_plan":
-            c.state.plan = args["plan"]
-            c.save()
-            c.store.event(
-                "plan_updated", agent_id=agent_id, plan=args["plan"], reason=args["reason"]
-            )
-            return ToolResult({"saved": True})
-        if name in {"spawn_researcher", "assign"}:
-            values = {
-                **args,
-                "references": self.handoff_refs(args["instruction"], args["references"]),
-                "key": key,
-            }
-            result = c.spawn(**values) if name == "spawn_researcher" else c.assign(**values)
-            await self.initialize_workspace(result["agent_id"])
-            return ToolResult(result)
-        if name == "message_researcher":
-            return ToolResult(
-                {
-                    "message_id": c.message_researcher(
-                        args["agent_id"],
-                        args["instruction"],
-                        key=key,
-                        references=self.handoff_refs(
-                            args["instruction"], args.get("references", [])
-                        ),
-                    )
-                }
-            )
-        if name == "retry_researcher":
-            if args["agent_id"] in {"rsi", "interaction"}:
-                raise ValueError("只能恢复 Research Agent")
-            c.retry_agent(args["agent_id"])
-            return ToolResult({"resumed": args["agent_id"]})
-        if name == "submit_report":
-            values = {
-                **args,
-                "references": self.refs(agent_id, args["references"]),
-            }
-            result = c.report(agent_id, key=key, fields=values)
-            return ToolResult(result, stop=True, reason="rsi_reply")
-        if name in {"send_update", "share_update"}:
-            message = args["message"].strip()
-            actor = c.actor(agent_id)
-            node = next(
-                (n for n in actor.iterations if n.iteration_id == actor.current_iteration_id), None
-            )
-            if (
-                c.state.status != "running"
-                or not message
-                or node is None
-                or node.report_ref is not None
-            ):
-                raise ValueError("进展通知需要尚未结束的研究阶段和具体发现")
-            recipients = list(dict.fromkeys(args.get("agent_ids", [])))
-            contacts = {item["agent_id"]: item for item in c.collaborators(agent_id)}
-            if name == "share_update" and (
-                not recipients or any(recipient not in contacts for recipient in recipients)
-            ):
-                raise ValueError("接收者必须是本 run 的其他研究员，请查看 collaborators")
-            refs = self.handoff_refs(message, args["references"], agent_id=agent_id)
-            saved = None
-            if name == "share_update" and args.get("save_current", False):
-                # Snapshot identity belongs to this durable action. If delivery
-                # is interrupted, reuse these bytes even if local work changes.
-                saved = (
-                    await self._apply(
-                        agent_id, key + ":snapshot", "save_candidate", {"description": message}
-                    )
-                ).output
-                refs = (*refs, RecordRef(saved["uri"]))
-                if c.state.status != "running" or c.actor(agent_id).state in {
-                    AgentState.STOPPED,
-                    AgentState.FAILED,
-                }:
-                    raise ValueError("研究已停止；产物快照已保留，不再交接")
-                # Saving may yield while a recipient reports or stops.
-                contacts = {item["agent_id"]: item for item in c.collaborators(agent_id)}
-            text = (
-                "研究进展（本阶段仍在执行，不是阶段报告）：\n"
-                + message
-                + ("\n\n已保存当前产物供协作复用；保存不代表验证通过。" if saved else "")
-                + ("\n\n相关记录：\n" + "\n".join(ref.uri for ref in refs) if refs else "")
-            )
-            deliveries = []
-            for recipient in recipients:
-                if not contacts[recipient]["accepts_updates"]:
-                    deliveries.append({"agent_id": recipient, "status": "not_active"})
-                    continue
-                for ref in refs:
-                    c.link_reference(recipient, ref)
-                peer_message = c.enqueue(
-                    agent_id,
-                    recipient,
-                    "同伴共享事实与产物，不是新的阶段指令。\n" + text,
-                    key=key + ":peer:" + recipient,
-                    references=refs,
-                )
-                deliveries.append(
-                    {"agent_id": recipient, "status": "sent", "message_id": peer_message}
-                )
-            message_id = c.enqueue(
-                agent_id,
-                "rsi",
-                text
-                + (
-                    "\n\n指定共享同伴（已结束阶段不唤醒）：" + ", ".join(recipients)
-                    if recipients
-                    else ""
-                ),
-                key=key,
-                references=refs,
-            )
-            return ToolResult(
-                {
-                    "message_id": message_id,
-                    "stage_continues": True,
-                    "deliveries": deliveries,
-                    **({"saved_candidate": saved} if saved else {}),
-                }
-            )
-        if name == "stop_researcher":
-            c.stop_agent(args["agent_id"], args["reason"])
-            return ToolResult({"stopped": args["agent_id"]})
-        if name == "stop_run":
-            reason = args["reason"].strip()
-            if not reason:
-                raise ValueError(
-                    "Stopping requires an evidence-based reason and remaining limitation"
-                )
-            if c.state.status not in {"planned", "running", "paused", "stopped"}:
-                raise ValueError("This run has already concluded")
-            if c.state.status != "stopped" and (blocker := c.execution_blocker()):
-                raise ValueError(
-                    f"验证作业 {blocker['job_id']} 仍有基础设施错误，不能据此结束整个研究。"
-                    "请用 ask_user 说明故障、已做检查及需要的处理，保留当前任务等待回复；"
-                    "用户可在工作台明确停止研究。"
-                )
-            c.stop(reason)
-            message_id = c.enqueue("rsi", "user", reason, key=key)
-            return ToolResult(
-                {"status": "stopped", "reason": reason, "message_id": message_id},
-                stop=True,
-                reason="stopped",
-            )
         if name == "wait":
             c.wait(agent_id, args["reason"])
             return ToolResult({"waiting_for": args["reason"]}, stop=True, reason="message")
@@ -760,15 +476,10 @@ class ResearchActions:
             return ToolResult(
                 {"question_sent": True, "message_id": message_id}, stop=True, reason="user"
             )
-        if name == "send_to_rsi":
-            if c.state.status in {"stopped", "succeeded", "completed", "failed"}:
-                raise ValueError("研究已结束；请直接回复用户，新的研究需要另建任务")
-            c.enqueue("interaction", "rsi", args["message"], key=key)
-            return ToolResult({"sent": True})
         if name == "update_brief":
-            if c.state.status != "planned":
+            if c.state.status != "planned" or c.state.intake.status == "starting":
                 raise ValueError("Hard constraints are frozen after start; discuss a new run")
-            brief = updated_brief(c.state.mode or "passk", c.store.brief(), args)
+            brief = updated_brief(c.state.mode or "goal", c.store.brief(), args)
             config_path = c.store.root / "coordination" / "config.json"
             config = None
             if c.state.intake.status is not None:
@@ -812,13 +523,6 @@ class ResearchActions:
                     "evidence_id": record.evidence_id,
                 }
             )
-        if name == "share_evidence":
-            published = c.store.publish_evidence(
-                args["evidence_id"],
-                limitations=args["limitations"],
-                publication_id=effect_id("evidence", key),
-            )
-            return ToolResult(self.evidence_public(published))
         if name == "save_candidate":
             candidate_id = effect_id("candidate", key)
             path = c.store.root / "candidates" / f"{candidate_id}.json"
@@ -846,25 +550,13 @@ class ResearchActions:
             await c.store.check_candidate_scope(candidate, c.state.seed_candidate_id)
             await self.checkout_candidate(agent_id, candidate, key)
             return ToolResult({"candidate_id": candidate.candidate_id, "checked_out": True})
-        if name == "finish":
-            run, selected = self.completion_candidate(args.get("candidate_id") or None)
-            for actor in run.research_agents:
-                if actor.state != AgentState.STOPPED:
-                    c.stop_agent(actor.agent_id, "研究已完成")
-            run.research_agents = c.store.run().research_agents
-            c.select_candidate(selected)
-            c.state.status = "succeeded"
-            c.state.waiting_for_user = []
-            c.save()
-            run.state, run.finished_at = RunState.SUCCEEDED, now()
-            c.store.save_run(run)
-            c.enqueue("rsi", "user", args["summary"], key=key)
-            c.store.event("run_completed", summary=args["summary"])
-            return ToolResult({"completed": True}, stop=True, reason="completed")
         raise ValueError("Unknown tool")
 
     def completion_candidate(
-        self, selected: str | None, *, final_confirmation: bool = True,
+        self,
+        selected: str | None,
+        *,
+        final_confirmation: bool = True,
         require_verification: bool = False,
     ) -> tuple[ResearchRun, str | None]:
         c = self.c
@@ -880,8 +572,9 @@ class ResearchActions:
                     "Selected candidate was withdrawn; repair and verify a new artifact"
                 )
         require_final = self.require_final_confirmation() if final_confirmation else False
-        if require_final or (contract is not None and
-                             (require_verification or contract.target is not None)):
+        if require_final or (
+            contract is not None and (require_verification or contract.target is not None)
+        ):
             if contract is None or selected is None:
                 raise ValueError("No selected candidate has the required verification")
             phase = "final" if require_final else "search"
@@ -897,20 +590,14 @@ class ResearchActions:
             # A newer failed confirmation cannot be hidden by selecting an
             # older successful attempt of this same candidate.
             verified = max(results, key=lambda result: result.created_at) if results else None
-            if (
-                verified is None
-                or verified.status != "succeeded"
-                or verified.passed is not True
-            ):
+            if verified is None or verified.status != "succeeded" or verified.passed is not True:
                 raise ValueError(f"Selected candidate needs a successful {phase} verification")
             assert verified.score is not None
             if contract.target is not None and (
                 (contract.direction == "maximize" and verified.score < contract.target)
                 or (contract.direction == "minimize" and verified.score > contract.target)
             ):
-                raise ValueError(
-                    f"Selected candidate's {phase} score has not reached the target"
-                )
+                raise ValueError(f"Selected candidate's {phase} score has not reached the target")
             if require_final:
                 run.final_result_ref = c.store.paths.reference(
                     c.store.root / "verifications" / f"{verified.result_id}.json"
@@ -991,7 +678,9 @@ class ResearchActions:
         if staging.exists():
             shutil.rmtree(staging)
         await self.c.store.content.materialize(candidate.content, staging)
-        if self.c.state.workspace_dir and agent_id not in {"rsi", "interaction"}:
+        if self.c.state.workspace_dir and (
+            agent_id != "interaction" and (agent_id != "rsi" or self.c.state.mode == "goal")
+        ):
             # A linked worktree must keep its .git pointer and directory identity.
             backup.mkdir()
             try:
@@ -1017,7 +706,8 @@ class ResearchActions:
                 shutil.rmtree(backup)
             self.mark_workspace_candidate(agent_id, candidate.candidate_id)
             self.c.store.event(
-                "candidate_checked_out", agent_id=agent_id,
+                "candidate_checked_out",
+                agent_id=agent_id,
                 candidate_id=candidate.candidate_id,
             )
             return
@@ -1030,14 +720,15 @@ class ResearchActions:
         )
 
     async def initialize_workspace(self, agent_id: str) -> None:
-        if self.c.state.workspace_dir and agent_id not in {"rsi", "interaction"}:
+        if self.c.state.workspace_dir and (
+            agent_id != "interaction" and (agent_id != "rsi" or self.c.state.mode == "goal")
+        ):
             source = git_repository(self.c.state.workspace_dir)
             target = self._worktree_path(agent_id)
             if target.exists():
-                if (
-                    git_repository(target) != target.resolve()
-                    or git_common_directory(target) != git_common_directory(source)
-                ):
+                if git_repository(target) != target.resolve() or git_common_directory(
+                    target
+                ) != git_common_directory(source):
                     raise ValueError("现有工作目录不属于所选 Git 仓库：" + str(target))
                 return
             base = self.c.state.workspace_base_commit
@@ -1045,11 +736,21 @@ class ResearchActions:
                 raise ValueError("研究启动前缺少 Git 基线提交")
             branch = f"rsi/{self.c.store.run_id}/{agent_id}"
             target.parent.mkdir(parents=True, exist_ok=True)
-            exists = subprocess.run(
-                ["git", "-C", str(source), "show-ref", "--verify", "--quiet",
-                 "refs/heads/" + branch],
-                check=False,
-            ).returncode == 0
+            exists = (
+                subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        str(source),
+                        "show-ref",
+                        "--verify",
+                        "--quiet",
+                        "refs/heads/" + branch,
+                    ],
+                    check=False,
+                ).returncode
+                == 0
+            )
             command = ["git", "-C", str(source), "worktree", "add"]
             command += [str(target), branch] if exists else ["-b", branch, str(target), base]
             result = await asyncio.to_thread(
@@ -1058,8 +759,11 @@ class ResearchActions:
             if result.returncode:
                 raise ValueError("创建 Git worktree 失败：" + result.stderr.strip())
             self.c.store.event(
-                "worktree_created", agent_id=agent_id, path=str(target),
-                branch=branch, base_commit=base,
+                "worktree_created",
+                agent_id=agent_id,
+                path=str(target),
+                branch=branch,
+                base_commit=base,
             )
             return
         root = self.workspace(agent_id)

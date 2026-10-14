@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from test_collaboration_config import system_at
+from runtime_fakes import ActionRuntime
 
 from areal_rsi.api.interfaces import ToolCall
 from areal_rsi.api.records import RecordRef
@@ -28,6 +28,7 @@ from areal_rsi.infra.coordination.evaluation.verification import read_trusted_re
 from areal_rsi.infra.coordination.store import ResearchStore
 from areal_rsi.infra.coordination.tools.actions import ResearchActions
 from areal_rsi.infra.execution import ApprovedCommand, JobRecord, JobSpec
+from areal_rsi.infra.research import ResearchSystem
 from areal_rsi.infra.storage.files import encode, now, write_json
 
 
@@ -274,7 +275,7 @@ def test_job_receipt_publication_recovers_without_resubmission(
 
 
 @pytest.mark.parametrize("exit_code", [0, 7])
-def test_running_job_can_be_shared_and_reported_before_completion_after_recovery(
+def test_running_job_receipt_and_private_logs_survive_recovery(
     tmp_path: Path, exit_code: int
 ) -> None:
     async def scenario() -> None:
@@ -326,16 +327,6 @@ def test_running_job_can_be_shared_and_reported_before_completion_after_recovery
             assert not ({"spec", "env", "command", "cwd", "output"} & initial.keys())
             with pytest.raises(ValueError, match="not shared"):
                 actions.read_record(peer, job_id)
-            shared = await actions.handler(owner)(ToolCall(
-                "share_update", {"agent_ids": [peer], "message": "Experiment is running",
-                                 "references": [job_id], "save_current": False}, "share",
-            ))
-            assert "error" not in shared.output
-            report = await actions.handler(owner)(ToolCall(
-                "submit_report", {"message": "Phase findings; this job is still pending",
-                                  "references": [job_id]}, "report",
-            ))
-            assert "error" not in report.output
             c.end_turn(owner)
             runner.close()
             recovered = Coordinator(c.store)
@@ -343,12 +334,12 @@ def test_running_job_can_be_shared_and_reported_before_completion_after_recovery
             runner = ResearchExecution(actions, commands={"produce": command})
             replay = await runner.submit(owner, call)
             assert replay.output["job_id"] == job_id and len(runner.jobs) == 1
-            assert actions.read_record(peer, job_id) == initial
+            assert actions.read_record(owner, job_id) == initial
             Path(runner.jobs[job_id].output, "gate").touch()
             async with asyncio.timeout(10):
                 while await runner.poll():
                     await asyncio.sleep(0.02)
-            final = actions.read_record(peer, job_id)
+            final = actions.read_record(owner, job_id)
             assert final["terminal"] and final["exit_code"] == exit_code
             assert final["state"] == ("succeeded" if exit_code == 0 else "failed")
             assert final["output_available"] == (exit_code == 0)
@@ -425,10 +416,11 @@ meta = job['spec']['metadata']
     config.brief.limits.gpu_ids = ("0",)
 
     async def scenario() -> None:
-        app = system_at(tmp_path)
+        config.mode = "legacy_passk"
+        app = ResearchSystem(tmp_path, runtime_factory=lambda _: ActionRuntime())
         try:
-            detail = await app.create({"config": config.public()})
-            c = app.coordinator(detail["run_id"])
+            run_id = await app.create(config)
+            c = app.coordinator(run_id)
             workspace = tmp_path / "candidate"
             workspace.mkdir()
             for text, score in (("fallback", 0.6), ("best", 0.9)):
@@ -446,7 +438,7 @@ meta = job['spec']['metadata']
                 c.store.record_verification(result)
                 c.store.consider_best(result.result_id)
             await app.start(c.store.run_id)
-            c = app.coordinator(detail["run_id"])
+            c = app.coordinator(run_id)
             active = app.active[c.store.run_id]
             await active.engine.tick()
             if target is None:
@@ -478,14 +470,14 @@ meta = job['spec']['metadata']
             assert c.completion is not None
             assert c.completion.target_reached is (False if target is not None else None)
             before = c.path.read_bytes()
-            with pytest.raises(ValueError, match="复测已完成"):
+            with pytest.raises(ValueError, match="Only planned"):
                 await app.resume(c.store.run_id)
             assert c.path.read_bytes() == before
             await app.stop(c.store.run_id)
             assert c.path.read_bytes() == before
             jobs = json.loads((c.store.root / "coordination/jobs.json").read_text())
             assert len(jobs) == 1 and next(iter(jobs.values()))["phase"] == "final"
-            await app.call("recover", {})
+            await app.detail(run_id)
             assert len(list((c.store.root / "jobs").glob("*/job.json"))) == 1
         finally:
             await app.close()
@@ -493,7 +485,7 @@ meta = job['spec']['metadata']
     asyncio.run(scenario())
 
 
-def test_completion_recovers_legacy_intent_without_retrying_an_unreleased_job(
+def test_completion_recovers_intent_without_retrying_an_unreleased_job(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
@@ -518,7 +510,7 @@ def test_completion_recovers_legacy_intent_without_retrying_an_unreleased_job(
         index = c.store.root / "coordination/jobs.json"
         write_json(index, {key: {
             "agent_id": "rsi", "output": str(output), "spec": encode(spec), "created_at": now(),
-            "verification": False, "phase": "prepare", "processed": False,
+            "verification": False, "phase": "prepare", "processed": False, "completion": True,
         }})
         before = index.read_bytes()
         runner.close()

@@ -28,8 +28,6 @@ from areal_rsi.api.records import AgentState
 from areal_rsi.api.research import AgentActivity, ResearchMessage, RunningTool, RuntimeUsage
 from areal_rsi.infra.agents.communication import INTEGRITY_PROMPT
 from areal_rsi.infra.agents.interaction.prompt import PROMPT as INTERACTION_PROMPT
-from areal_rsi.infra.agents.research.passk_prompt import PROMPT as RESEARCH_PROMPT
-from areal_rsi.infra.agents.rsi.passk_prompt import PROMPT as RSI_PROMPT
 from areal_rsi.infra.coordination.coordinator import Coordinator
 from areal_rsi.infra.coordination.effective_time import EffectiveTime
 from areal_rsi.infra.storage.files import encode, now, write_json
@@ -55,8 +53,8 @@ class ResearchEngine:
         runtime: ResearchAgentRuntime,
         tools_factory: Callable[[str], ToolSet],
         *,
-        research_prompt: str = RESEARCH_PROMPT,
-        rsi_prompt: str = RSI_PROMPT,
+        research_prompt: str = "",
+        rsi_prompt: str = "",
         max_concurrent_turns: int | None = None,
         tick_hook: TickHook | None = None,
         poll_interval: float = 0.1,
@@ -180,15 +178,6 @@ class ResearchEngine:
             # misrepresent it as one model request in comparison statistics.
             self.coordinator.state.runtime_turns = self.coordinator.state.runtime_turns + 1
             self.coordinator.save()
-        if kind in {"runtime_turn_started", "message_injected"}:
-            c = self.coordinator
-            identifier = (event.get("message_id") if kind == "message_injected"
-                          else c.state.active.get(agent_id))
-            if identifier and identifier not in c.state.human.received_messages:
-                message = c.store.get("messages", identifier, ResearchMessage)
-                if message.sender == "user":
-                    c.state.human.received_messages.append(identifier)
-                    c.save()
         if kind in {"runtime_turn_started", "tool_started", "tool_completed", "model_output"}:
             activity = self.coordinator.state.agent_activity.setdefault(
                 agent_id, AgentActivity(kind, None, now())
@@ -266,7 +255,6 @@ class ResearchEngine:
             "baseline": c.store.public_record(run.baseline_result_ref)
             if run.baseline_result_ref
             else None,
-            "execution_setup": c.state.execution_setup,
             "withdrawn_candidates": c.store.withdrawals(),
             "plan": c.state.plan,
             "agent_id": agent_id,
@@ -282,7 +270,6 @@ class ResearchEngine:
             if agent_id in {"rsi", "interaction"}
             else [],
             "direction": actor.direction,
-            "collaborators": c.collaborators(agent_id),
             "current_node": encode(current),
             # A completion notification is a new delivery, not a replacement
             # assignment. Keep the task itself available after wakeups/compaction.
@@ -319,9 +306,6 @@ class ResearchEngine:
             iteration_id = actor.current_iteration_id
             session = c.store.paths.agent(agent_id) / "sessions" / (actor.session_id or agent_id)
             state = self._recovery_state(agent_id)
-            handoff = session / "backend-handoff.json"
-            if handoff.exists():
-                state["backend_handoff"] = json.loads(handoff.read_text())
             toolset = self.tools_factory(agent_id)
             if agent_id == "rsi":
                 prompt = self.rsi_prompt.replace(
@@ -355,8 +339,6 @@ class ResearchEngine:
                     # Keep the object passed to runtime current throughout a long
                     # turn; checkpoint creation takes its own immutable copy.
                     latest = self._recovery_state(agent_id)
-                    if "backend_handoff" in state:
-                        latest["backend_handoff"] = state["backend_handoff"]
                     state.clear()
                     state.update(latest)
 
@@ -393,7 +375,6 @@ class ResearchEngine:
                 recovery_state=state,
                 retry_id=retry.retry_id
                 if retry is not None
-                and retry.mode != "report"
                 and retry.message_id == message.message_id
                 else None,
                 incoming_messages=incoming_messages,
@@ -412,8 +393,11 @@ class ResearchEngine:
             ):
                 for identifier in user_messages or c.current_message_ids(agent_id)[-1:]:
                     c.enqueue(
-                        agent_id, "user", result.text.strip(),
-                        key=agent_id + "-response:" + identifier, reply_to=identifier,
+                        agent_id,
+                        "user",
+                        result.text.strip(),
+                        key=agent_id + "-response:" + identifier,
+                        reply_to=identifier,
                     )
             if result.stop_reason == "completed" and agent_id not in {"rsi", "interaction"}:
                 self._complete_research_turn(
@@ -428,11 +412,9 @@ class ResearchEngine:
                 c.save_actor(actor)
                 c.end_turn(agent_id)
             elif actor.state not in {AgentState.STOPPED, AgentState.FAILED}:
-                human_paused = agent_id in c.state.human.paused_agents
-                paused = c.state.status == "paused" or human_paused
+                paused = c.state.status == "paused"
                 actor.state = AgentState.PAUSED if paused else AgentState.WAITING
-                actor.wait_reason = ("human_paused" if human_paused else
-                                     "run_paused" if paused else "worker_interrupted")
+                actor.wait_reason = "run_paused" if paused else "worker_interrupted"
                 c.save_actor(actor)
                 c.store.event("agent_suspended", agent_id=agent_id, reason=actor.wait_reason)
             raise
@@ -449,24 +431,13 @@ class ResearchEngine:
         )
 
     def _complete_research_turn(
-        self, agent_id: str, iteration_id: str | None, message_id: str, text: str
+        self,
+        agent_id: str,
+        iteration_id: str | None,
+        message_id: str,
+        text: str,
     ) -> None:
-        c = self.coordinator
-        node = next(n for n in c.actor(agent_id).iterations if n.iteration_id == iteration_id)
-        if node.report_ref is None and not c.pending_updates(agent_id):
-            if not text.strip():
-                c.end_turn(
-                    agent_id,
-                    error="Research Agent returned an empty final reply",
-                    missing_report=True,
-                )
-                return
-            c.report(
-                agent_id,
-                key="final:" + message_id,
-                fields={"message": text.strip(), "references": node.references},
-            )
-        c.end_turn(agent_id)
+        self.coordinator.end_turn(agent_id)
 
     async def tick(self) -> int:
         """Poll jobs, apply controls and dispatch ready actors without awaiting their turns."""
@@ -502,7 +473,6 @@ class ResearchEngine:
                     if actor.state == AgentState.PAUSED and actor.wait_reason == "run_paused":
                         actor.state, actor.wait_reason = AgentState.WAITING, "resume"
                         self.coordinator.save_actor(actor)
-                self.coordinator.reconcile_report_replies()
             for agent_id in self.coordinator.pending():
                 if (
                     self._actor_allowed(agent_id)
@@ -532,7 +502,8 @@ class ResearchEngine:
                 active = await self.tick()
                 if (
                     self.coordinator.state.status not in {"running", "planned", "paused"}
-                    and not active and not self.coordinator.pending()
+                    and not active
+                    and not self.coordinator.pending()
                 ):
                     return
                 if not active and not self.coordinator.pending() and not self._jobs_pending:
@@ -552,9 +523,11 @@ class ResearchEngine:
         self._acquire()
         try:
             while True:
-                if self.coordinator.state.status in {
-                    "stopped", "succeeded", "failed", "completed"
-                } and not self.coordinator.pending() and not self._tasks:
+                if (
+                    self.coordinator.state.status in {"stopped", "succeeded", "failed", "completed"}
+                    and not self.coordinator.pending()
+                    and not self._tasks
+                ):
                     break
                 await self.tick()
                 await self._wait()

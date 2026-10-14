@@ -19,6 +19,7 @@ dependencies = [
   "httpx[socks]>=0.28,<1",
   "openai-codex-cli-bin==0.153.4",
   "jsonschema>=4,<5",
+  "textual>=1,<9",
 ]
 
 [project.scripts]

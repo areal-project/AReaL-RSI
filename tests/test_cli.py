@@ -8,6 +8,28 @@ from pathlib import Path
 import pytest
 
 from areal_rsi.infra.storage.paths import data_root
+from areal_rsi.ui import cli
+from areal_rsi.ui.tui import ResearchTUI
+
+
+@pytest.mark.parametrize("command", [[], ["tui"]])
+def test_tui_is_default(
+    command: list[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("RSI_DATA_ROOT", raising=False)
+    called = []
+
+    def run(app: ResearchTUI) -> None:
+        called.append(app)
+        assert app.config.mode == "goal"
+        assert app.system.root == tmp_path / ".rsi/research-lab"
+
+    monkeypatch.setattr(ResearchTUI, "run", run)
+    monkeypatch.setattr(sys, "argv", ["rsi", *command])
+    with pytest.raises(SystemExit) as result:
+        cli.main()
+    assert result.value.code == 0 and len(called) == 1
 
 
 def test_root_precedence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,4 +1,4 @@
-"""Headless entry points for a durable research run."""
+"""Terminal and headless entry points for a durable research run."""
 
 from __future__ import annotations
 
@@ -34,8 +34,7 @@ async def run_research(
             run_id = await system.create(config)
             await system.start(run_id)
         command = (
-            f"rsi research --data-root {shlex.quote(str(system.root))} "
-            f"--resume {shlex.quote(run_id)}"
+            f"rsi tui --data-root {shlex.quote(str(system.root))} --resume {shlex.quote(run_id)}"
         )
         print(json.dumps({"run_id": run_id, "resume_command": command}), flush=True)
         cursor = 0
@@ -60,7 +59,14 @@ async def run_research(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="RSI：Leader goal 与 legacy pass@k")
-    commands = parser.add_subparsers(dest="command", required=True)
+    commands = parser.add_subparsers(dest="command")
+    parser.set_defaults(command="tui", root=None, config=None, resume=None, workspace=None)
+    tui = commands.add_parser("tui", help="交互终端（默认入口）")
+    tui.add_argument("--data-root", dest="root", type=Path)
+    source = tui.add_mutually_exclusive_group()
+    source.add_argument("--config", type=Path)
+    source.add_argument("--resume")
+    tui.add_argument("--workspace", type=Path, help="以 Git 工作区为研究起点")
     research = commands.add_parser("research", help="无界面运行，输出 JSON 事件")
     research.add_argument("--data-root", dest="root", type=Path)
     source = research.add_mutually_exclusive_group(required=True)
@@ -79,7 +85,22 @@ def main() -> None:
     preflight_parser.add_argument("--timeout", type=float, default=180)
     args = parser.parse_args()
     try:
-        if args.command == "research":
+        if args.command == "tui":
+            from areal_rsi.ui.tui import ResearchTUI
+
+            if args.workspace and (args.config or args.resume):
+                raise ValueError("--workspace cannot override --config or --resume")
+            config = (
+                load_config(args.config)
+                if args.config
+                else ResearchConfig(
+                    TaskBrief("新的研究", ""),
+                    workspace_dir=str(args.workspace.resolve()) if args.workspace else None,
+                )
+            )
+            ResearchTUI(ResearchSystem(data_root(args.root)), config, args.resume).run()
+            code = 0
+        elif args.command == "research":
             code = asyncio.run(
                 run_research(
                     config_file=args.config,

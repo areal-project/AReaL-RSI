@@ -13,7 +13,6 @@ from areal_rsi.api.interfaces import ToolCall, TurnResult
 from areal_rsi.api.research import ResearchLimits, TaskBrief
 from areal_rsi.infra.coordination.config import ResearchConfig
 from areal_rsi.infra.research import ResearchSystem
-from areal_rsi.ui.workbench import public_detail
 
 
 def progress(status: str, index: int) -> dict[str, Any]:
@@ -68,13 +67,12 @@ def test_turn_history_continues_blocks_and_survives_restart(tmp_path: Path) -> N
                     await asyncio.sleep(0.01)
             await asyncio.sleep(0.1)
             assert count == 2, "Blocked goals must not spin"
-            view = public_detail(await app.detail("goal", goal_limit=1))
+            view = (await app.detail("goal", goal_limit=1))
             turn = view["goal_turns"][0]
             assert turn["number"] == 2 and turn["status"] == "blocked"
             assert turn["context_before"]["summary"] == "进展 0"
             assert turn["context_after"]["summary"] == "进展 1"
             assert turn["output"] == ["本轮执行说明 1"]
-            assert "tools" not in turn
             assert turn["last_tool"] is None
             assert view["goal_turns_next"] == 2
             older = await app.detail("goal", goal_before=2, goal_limit=1)
@@ -91,7 +89,7 @@ def test_turn_history_continues_blocks_and_survives_restart(tmp_path: Path) -> N
             async with asyncio.timeout(5):
                 while (await app.detail("goal"))["worker_alive"]:
                     await asyncio.sleep(0.01)
-            view = public_detail(await app.detail("goal"))
+            view = (await app.detail("goal"))
             assert view["status"] == "succeeded"
             assert [turn["number"] for turn in view["goal_turns"]] == [3, 2, 1]
             assert view["goal_turns"][0]["inputs"][0]["text"] == "条件已补充，请继续"
@@ -125,11 +123,11 @@ def test_live_round_records_interruption(tmp_path: Path) -> None:
             await app.create({"run_id": "live", "config": config.public()})
             await app.start("live")
             await asyncio.wait_for(entered.wait(), 3)
-            live = public_detail(await app.detail("live"))["goal_turns"][0]
+            live = (await app.detail("live"))["goal_turns"][0]
             assert live["status"] == "running" and live["tool_running"]
             assert live["output"] == ["正在检查文件"]
             await app.pause("live")
-            ended = public_detail(await app.detail("live"))["goal_turns"][0]
+            ended = (await app.detail("live"))["goal_turns"][0]
             assert ended["status"] == "interrupted" and ended["finished_at"]
             assert not ended["tool_running"]
             assert app.coordinator("live").state.active, "Pause retains the active delivery"
@@ -196,7 +194,7 @@ def test_two_attempts_keep_completion_and_blocking_separate(tmp_path: Path) -> N
             statuses = sorted(goal.status for goal in c.state.goals.values())
             assert statuses == ["blocked", "completed"]
             assert list(calls.values()) == [1, 1]
-            detail = public_detail(await app.detail("pair"))
+            detail = (await app.detail("pair"))
             assert {t["agent_id"] for t in detail["goal_turns"]} == set(calls)
             assert {t["context_after"]["status"] for t in detail["goal_turns"]} == {
                 "blocked", "completed"

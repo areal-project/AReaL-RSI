@@ -9,7 +9,6 @@ import pytest
 from areal_rsi.api.interfaces import ResearchAgentRuntime
 from areal_rsi.infra.coordination.config import ResearchConfig
 from areal_rsi.infra.research import ResearchSystem
-from areal_rsi.ui.workbench import public_detail
 
 
 @pytest.mark.parametrize("wall_seconds", ["omitted", None, 14400])
@@ -75,7 +74,7 @@ def test_preparation_survives_restart_and_invalidates_changed_config(
             async with asyncio.timeout(10):
                 while (await app.detail("dev"))["preparation"]["status"] == "running":
                     await asyncio.sleep(.05)
-            detail = public_detail(await app.detail("dev"))
+            detail = (await app.detail("dev"))
             assert detail["preparation"]["status"] == "ready", detail["preparation"]
             ready_job = detail["preparation"]["job_id"]
             await app.prepare("dev", wait=True)

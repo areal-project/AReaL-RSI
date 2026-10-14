@@ -14,7 +14,6 @@ from areal_rsi.infra.coordination.coordinator import Coordinator
 from areal_rsi.infra.coordination.engine import ResearchEngine, ToolSet
 from areal_rsi.infra.coordination.policies.passk import PassKActions, launch
 from areal_rsi.infra.research import ResearchSystem
-from areal_rsi.ui.workbench import public_detail
 
 
 def test_agent_trace_is_scoped_paginated_and_read_only(tmp_path: Path) -> None:
@@ -104,11 +103,6 @@ def test_activity_tracks_concurrent_tools_and_api_wait_without_usage_heartbeats(
                           and e.data.get("call_id") == "a")
             assert record.data["started_at"]
             assert any(e.kind == "api_availability" for e in c.store.events())
-            view = public_detail({"agent_activity": {"rsi": {
-                "type": activity.type, "updated_at": activity.updated_at,
-                "api_available": False, "active_tools": {}, "secret": "hidden"}}})
-            assert view["agent_activity"]["rsi"]["api_available"] is False
-            assert "secret" not in str(view)
         finally:
             await engine.close()
     asyncio.run(scenario())

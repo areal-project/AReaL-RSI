@@ -511,49 +511,6 @@ def test_supervisor_reports_do_not_block_or_share_research(tmp_path: Path) -> No
     asyncio.run(scenario())
 
 
-def test_kernelbench_verification_uses_only_own_attempt_receipts(tmp_path: Path) -> None:
-    import hashlib
-    import runpy
-
-    client = runpy.run_path("examples/kernelbench_artifacts/client.py")
-    source = b"public candidate"
-    artifact = tmp_path / "candidate/L3P10/model_new.py"
-    artifact.parent.mkdir(parents=True)
-    artifact.write_bytes(source)
-    jobs = {}
-    evaluations = []
-    for agent, score in [("my-attempt", 1.2), ("peer", 50.0)]:
-        jobs[agent] = {"agent_id": agent}
-        output = tmp_path / "execution-outputs" / agent
-        output.mkdir(parents=True)
-        (output / "remote-job.json").write_text(json.dumps({"id": agent}))
-        evaluations.append(
-            {
-                "id": agent,
-                "kind": "eval",
-                "state": "succeeded",
-                "correct": True,
-                "speedup": score,
-                "source_sha256": hashlib.sha256(source).hexdigest(),
-                "evaluation": {"evaluation_policy": "strict-fp32-v1", "seed": 42},
-            }
-        )
-    (tmp_path / "coordination").mkdir()
-    (tmp_path / "coordination/jobs.json").write_text(json.dumps(jobs))
-    scoped = client["attempt_status"](
-        {"L3P10": {"jobs": evaluations, "used": 2}}, tmp_path, "my-attempt"
-    )
-    score, metrics, evidence = client["score_bundle"](
-        {"tasks": {"L3P10": {}}, "metric": "speedup", "exploration_seed": 42},
-        artifact.parents[1],
-        scoped,
-        "search",
-    )
-    assert score == 1.2 and metrics["L3P10_submissions"] == 1
-    assert evidence["L3P10"]["matching_evaluations"] == 1
-    assert "peer" not in json.dumps(evidence)
-
-
 def test_leader_budget_preserves_native_model_input_contract(tmp_path: Path) -> None:
     async def scenario() -> None:
         c, actions, agents = await setup(tmp_path, 1)

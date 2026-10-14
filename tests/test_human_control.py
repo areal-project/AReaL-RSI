@@ -24,7 +24,6 @@ from areal_rsi.infra.coordination.policies.passk import PassKActions, launch, st
 from areal_rsi.infra.execution import ApprovedCommand
 from areal_rsi.infra.research import ResearchSystem
 from areal_rsi.infra.storage.files import now
-from areal_rsi.ui.workbench import public_detail
 
 
 async def start(root: Path) -> tuple[ResearchSystem, str, list[str]]:
@@ -382,7 +381,7 @@ def test_guidance_is_durable_scoped_and_individually_paused(tmp_path: Path) -> N
             for _ in range(3):
                 await active.engine.tick()
             assert agents[0] not in active.engine.active_agents
-            detail = public_detail(await app.detail(run_id))
+            detail = (await app.detail(run_id))
             own = next(m for m in detail["messages"] if m["message_id"] == message["message_id"])
             assert own["delivery_status"] == "pending"
             assert detail["human"]["assisted"]
@@ -398,7 +397,7 @@ def test_guidance_is_durable_scoped_and_individually_paused(tmp_path: Path) -> N
             assert active.actions.state(agents[0])["human_guidance"][0]["text"] == "Use Chinese"
             await active.engine._event(agents[0], {"type": "message_injected",
                                                   "message_id": message["message_id"]})
-            detail = public_detail(await app.detail(run_id))
+            detail = (await app.detail(run_id))
             own = next(m for m in detail["messages"] if m["message_id"] == message["message_id"])
             assert own["delivery_status"] == "delivered"
             await app.pause(run_id)
@@ -473,7 +472,7 @@ def test_goal_revision_excludes_old_results_and_survives_restart(tmp_path: Path)
             assert app.config(c).brief.acceptance == ["English and Chinese present"]
             assert c.state.human.goal_changes[0].previous.objective == "Write a greeting"
             assert c.state.human.goal_changes[0].applied
-            detail = public_detail(await app.detail(run_id))
+            detail = (await app.detail(run_id))
             assert detail["brief"]["revision"] == 1
             assert detail["human"]["goal_changes"][0]["brief"]["revision"] == 1
         finally:

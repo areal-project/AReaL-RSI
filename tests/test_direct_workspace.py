@@ -20,7 +20,6 @@ from areal_rsi.infra.coordination.tools.brief import PASSK_HIDDEN_LIMITS
 from areal_rsi.infra.research import ResearchSystem
 from areal_rsi.infra.runtime.runtime_package import sandbox_command
 from areal_rsi.infra.storage.files import encode
-from areal_rsi.ui.workbench import public_detail
 
 
 def init_repo(project: Path) -> None:
@@ -115,7 +114,7 @@ def test_one_researcher_and_interaction_share_the_selected_git_directory(
             active = app.active["direct"]
             c = active.coordinator
             researcher = c.store.run().research_agents[0].agent_id
-            assert public_detail(await app.detail("direct"))["workspace_dir"] == str(project)
+            assert (await app.detail("direct"))["workspace_dir"] == str(project)
             worktree = active.actions.workspace(researcher)
             assert worktree != project
             assert worktree.is_dir()

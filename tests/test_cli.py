@@ -8,29 +8,6 @@ from pathlib import Path
 import pytest
 
 from areal_rsi.infra.storage.paths import data_root
-from areal_rsi.ui import cli
-
-
-@pytest.mark.parametrize("command", [[], ["web"]])
-def test_new_entry_aliases_share_workbench_and_default_root(
-    command: list[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("RSI_DATA_ROOT", raising=False)
-    called = []
-
-    def serve(**kwargs: object) -> int:
-        called.append(kwargs)
-        assert kwargs["root"] is None
-        assert data_root() == tmp_path / ".rsi/research-lab"
-        return 0
-
-    monkeypatch.setattr(cli, "serve_workbench", serve)
-    monkeypatch.setattr(sys, "argv", ["rsi", *command])
-    with pytest.raises(SystemExit) as result:
-        cli.main()
-    assert result.value.code == 0
-    assert called == [{"port": 8197, "config_file": None, "simulate_gpu": False, "root": None}]
 
 
 def test_root_precedence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -40,20 +17,6 @@ def test_root_precedence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setenv("RSI_DATA_ROOT", "custom")
     assert data_root() == tmp_path / "custom"
     assert data_root(Path("explicit")) == tmp_path / "explicit"
-
-
-def test_workbench_explicit_root_reaches_application(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def serve(**kwargs: object) -> int:
-        assert kwargs["root"] == tmp_path
-        return 0
-
-    monkeypatch.setattr(cli, "serve_workbench", serve)
-    monkeypatch.setattr(sys, "argv", ["rsi", "workbench", "--data-root", str(tmp_path)])
-    with pytest.raises(SystemExit) as result:
-        cli.main()
-    assert result.value.code == 0
 
 
 def test_preflight_without_credentials_fails_before_creating_records(tmp_path: Path) -> None:

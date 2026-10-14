@@ -3,21 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-import threading
-import urllib.request
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from areal_rsi.api.control import ArtifactDownload
 from areal_rsi.api.research import TaskBrief
 from areal_rsi.infra.coordination.config import ResearchConfig
 from areal_rsi.infra.coordination.coordinator import Coordinator
 from areal_rsi.infra.research import ResearchSystem
 from areal_rsi.infra.storage.files import write_json
-from areal_rsi.ui.launch import WorkbenchClient
-from areal_rsi.ui.workbench import WorkbenchServer
 
 
 @pytest.mark.parametrize("action,params", [
@@ -35,53 +30,6 @@ def test_invalid_requests_are_rejected_before_lookup_or_mutation(
         asyncio.run(ResearchSystem(root).call(action, params))
     assert "private-sentinel" not in str(error.value)
     assert not root.exists()
-
-
-def test_http_rejects_unknown_fields_and_serves_transport_neutral_download(tmp_path: Path) -> None:
-    artifact = tmp_path / "candidate.zip"
-    artifact.write_bytes(b"exported candidate")
-
-    class Backend:
-        def __init__(self) -> None:
-            self.commands: list[tuple[str, dict[str, Any]]] = []
-
-        async def call(
-            self, action: str, params: dict[str, Any]
-        ) -> dict[str, Any] | ArtifactDownload:
-            self.commands.append((action, params))
-            if action == "export":
-                return ArtifactDownload(artifact, "candidate.zip")
-            return {}
-
-    backend = Backend()
-    server = WorkbenchServer(backend, port=0)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        client = WorkbenchClient(server.server_port)
-        client.token = client.request("/api/bootstrap")["csrf_token"]
-        for route, payload in (
-            ("/api/runs/run_1/pause", {"typo": "private-sentinel"}),
-            ("/api/runs/run_1/pause", {"run_id": "another"}),
-            ("/api/runs", {"simulated": True}),
-        ):
-            with pytest.raises(ValueError):
-                client.request(route, payload)
-        assert backend.commands == [("bootstrap", {})]
-        request = urllib.request.Request(
-            server.url + "/api/runs/run_1/export", data=b'{"candidate_id":"candidate_1"}',
-            headers={"Content-Type": "application/json", "X-RSI-Token": client.token},
-        )
-        with urllib.request.urlopen(request, timeout=5) as response:
-            assert response.read() == artifact.read_bytes()
-            assert "candidate.zip" in response.headers["Content-Disposition"]
-        assert backend.commands[-1] == (
-            "export", {"run_id": "run_1", "candidate_id": "candidate_1"}
-        )
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
 
 
 def test_direct_stop_and_dispatch_share_operator_reason(tmp_path: Path) -> None:

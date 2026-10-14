@@ -1,27 +1,17 @@
-"""CLI entry points for the ResearchSystem workbench, research runs and preflight."""
+"""Headless entry points for research runs and backend preflight."""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
 import json
-import math
-import os
 import shlex
 import signal
 from contextlib import suppress
 from pathlib import Path
-from types import FrameType
 from typing import Any
 
 from areal_rsi.infra.storage.paths import data_root
-
-
-def _workbench_command(root: Path, *, simulated: bool) -> str:
-    return (
-        f"RSI_DATA_ROOT={shlex.quote(str(root))} uv run --env-file .env --locked rsi workbench"
-        + (" --simulate-gpu" if simulated else "")
-    )
 
 
 def _research_summary(detail: dict[str, Any], *, status: str | None = None) -> dict[str, Any]:
@@ -173,10 +163,7 @@ async def run_research(
                         {
                             **_research_summary(detail, status=idle),
                             "saved_status": status,
-                            "notice": "研究尚未完成；打开工作台查看问题、预算或 Agent 状态后继续。",
-                            "workbench_command": _workbench_command(
-                                root, simulated=bool(detail.get("simulated"))
-                            ),
+                            "notice": "研究尚未完成；检查保存的运行状态后使用 --resume 继续。",
                         },
                         ensure_ascii=False,
                     ),
@@ -199,57 +186,9 @@ async def run_research(
                 signal.signal(sig, previous)
 
 
-def serve_workbench(
-    *, port: int, config_file: Path | None, simulate_gpu: bool, root: Path | None = None
-) -> int:
-    from areal_rsi.infra.coordination.config import load_config
-    from areal_rsi.infra.research import ResearchSystem
-    from areal_rsi.ui.workbench import WorkbenchServer
-
-    request_timeout = float(os.environ.get("RSI_WORKBENCH_REQUEST_TIMEOUT", "120"))
-    if not math.isfinite(request_timeout) or request_timeout <= 0:
-        raise ValueError("RSI_WORKBENCH_REQUEST_TIMEOUT 须为正数秒")
-    config = load_config(config_file) if config_file else None
-    system = ResearchSystem(data_root(root), config=config, allow_simulation=simulate_gpu)
-    server = WorkbenchServer(system, port=port, backend_timeout=request_timeout)
-    server.invoke("recover", {})
-    previous = signal.getsignal(signal.SIGTERM)
-    terminated = False
-
-    def terminate(_sig: int, _frame: FrameType | None) -> None:
-        nonlocal terminated
-        terminated = True
-        raise KeyboardInterrupt
-
-    signal.signal(signal.SIGTERM, terminate)
-    print(f"研究工作台：{server.url}", flush=True)
-    print("停止本地服务会保留研究状态；再次打开后可恢复。", flush=True)
-    try:
-        server.serve_forever()
-        return 0
-    except KeyboardInterrupt:
-        return 143 if terminated else 130
-    finally:
-        signal.signal(signal.SIGTERM, previous)
-        try:
-            asyncio.run_coroutine_threadsafe(system.close(), server.loop).result(timeout=30)
-        finally:
-            server.server_close()
-
-
 def main() -> None:
-    parser = argparse.ArgumentParser(description="RSI 持续研究：工作台与 Research CLI")
-    commands = parser.add_subparsers(dest="command")
-    parser.set_defaults(command="workbench", port=8197, root=None, config=None, simulate_gpu=False)
-    workbench = commands.add_parser(
-        "workbench", aliases=["web"], help="打开可交互的本地研究工作台（默认入口）"
-    )
-    workbench.add_argument("--port", type=int, default=8197)
-    workbench.add_argument("--data-root", "--root", dest="root", type=Path)
-    workbench.add_argument("--config", type=Path, help="可信操作员配置 JSON")
-    workbench.add_argument(
-        "--simulate-gpu", action="store_true", help="允许模拟 GPU/Task 作业；研究模型仍调用真实 API"
-    )
+    parser = argparse.ArgumentParser(description="RSI Research CLI")
+    commands = parser.add_subparsers(dest="command", required=True)
     research = commands.add_parser("research", help="运行开放式多 Agent 研究，并保留可恢复状态")
     research.add_argument("--data-root", "--root", dest="root", type=Path)
     source = research.add_mutually_exclusive_group(required=True)
@@ -274,12 +213,7 @@ def main() -> None:
     preflight_parser.add_argument("--timeout", type=float, default=180)
     args = parser.parse_args()
     try:
-        if args.command in {"workbench", "web"}:
-            code = serve_workbench(
-                port=args.port, config_file=args.config,
-                simulate_gpu=args.simulate_gpu, root=args.root,
-            )
-        elif args.command == "prepare":
+        if args.command == "prepare":
             from areal_rsi.infra.adapters.benchmark_research import prepare
 
             path = asyncio.run(prepare(

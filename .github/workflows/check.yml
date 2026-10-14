@@ -17,13 +17,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
       - name: Install locked dependencies
         run: |
           python -m pip install uv
           uv sync --locked
-          npm ci --prefix tests/frontend --ignore-scripts --no-audit --no-fund
-      - name: Check architecture, behavior, types and frontend
+      - name: Check architecture, behavior, types and runtime
         run: make check

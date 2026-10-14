@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import threading
 from dataclasses import replace
 from pathlib import Path
 
@@ -15,7 +14,6 @@ from areal_rsi.api.research import TaskBrief
 from areal_rsi.infra.coordination.config import ResearchConfig, config_from_dict
 from areal_rsi.infra.coordination.intake import ResearchIntake
 from areal_rsi.infra.coordination.policies.collaboration import (
-    DEFAULT_MODULES,
     MODULES,
     build_plan,
     selected_modules,
@@ -23,8 +21,6 @@ from areal_rsi.infra.coordination.policies.collaboration import (
 from areal_rsi.infra.coordination.policies.passk import PassKActions, PassKEngine
 from areal_rsi.infra.research import ResearchSystem
 from areal_rsi.infra.storage.files import write_json
-from areal_rsi.ui.launch import WorkbenchClient
-from areal_rsi.ui.workbench import WorkbenchServer
 
 
 def system_at(root: Path) -> ResearchSystem:
@@ -147,78 +143,6 @@ def test_environment_import_preserves_selected_collaboration(tmp_path: Path) -> 
             await system.close()
 
     asyncio.run(scenario())
-
-
-def test_http_selection_and_historical_read_only_projection(tmp_path: Path) -> None:
-    system = system_at(tmp_path)
-    server = WorkbenchServer(system, port=0)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        client = WorkbenchClient(server.server_port)
-        bootstrap = client.request("/api/bootstrap")
-        client.token = bootstrap["csrf_token"]
-        assert bootstrap["default_collaboration"]["modules"] == list(DEFAULT_MODULES)
-        assert {m["id"] for m in bootstrap["collaboration_catalog"]["modes"]} == {
-            "passk"
-        }
-        assert "leader_guidance" in {m["id"] for m in bootstrap["collaboration_catalog"]["modules"]}
-        assert bootstrap["collaboration_catalog"]["presets"][1]["modules"] == ["leader_guidance"]
-        assert bootstrap["collaboration_catalog"]["presets"][2]["modules"] == [
-            "leader_guidance", "leader_guidance_v022"
-        ]
-        detail = client.request(
-            "/api/runs",
-            {
-                "message": "",
-                "collaboration": {"mode": "passk", "modules": []},
-            },
-        )
-        run_id = detail["run_id"]
-        detail = client.request(f"/api/runs/{run_id}")
-        assert detail["collaboration"]["mode"] == "passk"
-        assert detail["collaboration"]["editable"]
-        assert detail["brief"]["limits"]["max_verify_calls"] is None
-        client.request(
-            f"/api/runs/{run_id}/collaboration",
-            {
-                "mode": "passk",
-                "modules": ["leader_guidance"],
-            },
-        )
-        updated = client.request(f"/api/runs/{run_id}")
-        assert updated["collaboration"]["mode"] == "passk"
-        assert updated["collaboration"]["modules"] == ["leader_guidance"]
-        # A pre-feature stopped run has no manifest. Reading it never rewrites
-        # frozen config to pretend its implementation version was recorded.
-        c = system.coordinator(run_id)
-        c.state.status, c.state.started_at = "stopped", "2026-09-16T10:00:00Z"
-        c.save()
-        path = c.store.root / "coordination/config.json"
-        config = json.loads(path.read_text())
-        config.pop("collaboration_modules")
-        config.pop("mode")  # Pre-mode historical configuration.
-        config["research_prompt_variant"] = "detailed"
-        write_json(path, config)
-        before = path.read_bytes()
-        archived = client.request(f"/api/runs/{run_id}")
-        assert archived["collaboration"]["mode"] == "collaborative"
-        assert not archived["collaboration"]["supported"]
-        assert not archived["collaboration"]["editable"]
-        assert not archived["model_settings"]["editable"]
-        for action in ("start", "resume", "chat"):
-            with pytest.raises(ValueError, match="已移除"):
-                client.request(
-                    f"/api/runs/{run_id}/{action}", {"text": "continue"} if action == "chat" else {}
-                )
-
-        assert archived["collaboration"]["manifest"] is None
-        assert path.read_bytes() == before
-        assert not (c.store.root / "coordination/collaboration.json").exists()
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
 
 
 def test_recovery_skips_retired_mode_without_writing_history(tmp_path: Path) -> None:

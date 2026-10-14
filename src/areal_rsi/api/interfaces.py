@@ -37,6 +37,22 @@ from areal_rsi.api.records import (
     VerificationResult,
     VerifierSpec,
 )
+from areal_rsi.api.research import TaskReport, TeamTask
+
+
+class AgentTeam(Protocol):
+    """Future Leader-only delegation boundary; no implementation is registered yet.
+
+    The caller is an authenticated Leader of the run. Each Researcher receives
+    only its TeamTask and granted inputs, owns a separate workspace, and returns
+    a TaskReport. The Leader integrates results and retains run acceptance.
+    """
+
+    async def delegate(self, task: TeamTask) -> TeamTask: ...
+
+    async def interrupt(self, task_id: str, reason: str) -> None: ...
+
+    async def collect(self, task_id: str) -> TaskReport | None: ...
 
 
 class ContentStore(Protocol):

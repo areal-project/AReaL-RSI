@@ -550,6 +550,41 @@ class HumanControl:
 
 
 @dataclass(slots=True)
+class RunAcceptance:
+    """Immutable Leader decision, recoverable independently of mutable run views."""
+
+    goal: GoalContext
+    brief: TaskBrief
+    final_result_ref: RecordRef | None = None
+    user_messages: tuple[ResearchMessage, ...] = ()
+
+
+@dataclass(slots=True)
+class TeamTask:
+    """Future delegation contract. A task is a portion of one run's goal."""
+
+    task_id: str
+    run_id: str
+    instruction: str
+    acceptance: tuple[str, ...]
+    input_refs: tuple[RecordRef, ...] = ()
+    researcher_id: str | None = None
+    status: Literal["pending", "running", "completed", "blocked", "cancelled"] = "pending"
+
+
+@dataclass(slots=True)
+class TaskReport:
+    """Future Researcher output; completing a task never accepts the run."""
+
+    task_id: str
+    researcher_id: str
+    summary: str
+    evidence: tuple[RecordRef, ...]
+    candidate_id: str | None = None
+    blocker: str | None = None
+
+
+@dataclass(slots=True)
 class CoordinationState:
     """Durable scheduling state. JSON is decoded once when a run is opened."""
 

@@ -2,8 +2,7 @@
 
 Research 修改通用 harness，固定的 Task 模型通过 DSH 解题，再由 GPU evaluator 检查正确性与速度。初始 harness 和候选使用同一 search 题池比较；PyTorch reference 延迟不是 harness 的 baseline 分数。
 
-本例优化通用 harness，不直接优化某个 kernel。直接改 kernel 请使用
-[主 demo](../../kernelbench_artifacts/README.md)，不要配置额外 Task 模型。
+本例优化通用 harness，不直接优化某个 kernel。
 
 ## 环境与配置
 
@@ -25,19 +24,19 @@ uv run python -m areal_rsi.infra.adapters.kernelbench prepare \
 
 ## 启动
 
-可直接在[工作台](../../../README.md)向 Interaction 提供上述路径和要求，也可预先生成配置：
+先生成操作员配置，然后使用 [TUI](../../../README.md) 启动：
 
 ```bash
 uv run python examples/harness/kernelbench/configure.py \
   --operator /absolute/path/operator.json --output /absolute/path/research.json \
   --target-model FIXED_TARGET_MODEL --target 0.65
-uv run --env-file .env --locked rsi workbench --config /absolute/path/research.json
+uv run --env-file .env --locked rsi tui --config /absolute/path/research.json
 ```
 
-配置生成器检查各阶段的环境和评测身份，不调用 Task 模型或产生分数。`--target`、研究员数量及其他预算由用户指定。
+配置生成器检查各阶段的环境和评测身份，不调用 Task 模型或产生分数。`--target` 和预算由用户指定。
 
-生成的是纯 pass@k 配置，默认 1 名研究员、4 小时墙钟探索预算，最终复测另计，不限制模型调用、Token 和验证次数。
-可用 `--max-agents`、`--max-wall-seconds` 调整；模型调用、Token 和验证次数上限只接受 `none`，不支持的配置会在环境检查前报错。
-探索达标或到时结束后，系统从已验证结果中选出最佳候选，自动进行一次独立 final 验证。
+默认生成 goal 配置，由 Leader 亲自优化和验证。默认总时限 4 小时，可用 `--max-wall-seconds` 调整。
+Leader 选定候选后执行 final，满足协议后提交本 run 的验收。需要 main 基线时显式传
+`--mode legacy_passk --max-agents 4`，独立尝试停止后由系统最终复测。
 
 调度器入口为 `run.py --harness <candidate> --output <new-output> --config <operator.json> --phase diagnostic|search|final`。`diagnostic` 的轨迹从 `public/development/` 发布，仅作研究证据；正式分数从可信 `evaluation.json` 读取，不从 stdout 提取。只有固定题池的完整评测可参与比较，基础设施失败没有有效成绩。当前上游检查器仍在同一 Python 进程加载 kernel，不能视为恶意候选的完整安全沙箱。

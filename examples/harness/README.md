@@ -9,10 +9,6 @@
 | livecodebench | system prompt | 固定 EnvArena 模型与 Harness | 远端 LCB Reward |
 | [kernelbench](kernelbench/README.md) | 通用 kernel 生成 harness | 固定目标模型生成 kernel | GPU 检查正确性与速度 |
 
-直接优化某道题的 kernel 源码，使用 [kernelbench_artifacts](../kernelbench_artifacts/README.md)。
-它由研究员直接写 kernel，不再经过固定 Task 模型生成代码，是 `run.py --type demo` 的主入口。
-两者优化对象不同，不把成绩或预算混在一起。
-
 ## 算术 harness
 
 在 `.env` 配置研究模型 `RSI_*` 和目标模型 `RSI_TARGET_*`，在仓库根目录执行：
@@ -36,7 +32,7 @@ uv run --env-file .env --locked rsi prepare livecodebench \
 uv run --env-file .env --locked rsi research --config .rsi/lcb/setup/research.json --data-root .rsi/lcb
 ```
 
-两种准备命令都只生成配置，不启动研究。默认 1 名研究员、1200 秒探索时间；
-`--time-limit` 调整探索时限。研究员用 diagnostic 做起点诊断、search 比较候选，
-系统结束探索后冻结最佳候选，再独立执行 VALIDATE。最终复测另计时，不反馈给探索。
+两种准备命令都只生成配置，不启动研究。默认由一个 Leader 执行 goal，1200 秒总时限；
+`--time-limit` 调整时限。Leader 用 diagnostic 做起点诊断、search 比较候选，
+选定候选后在独立 VALIDATE 上运行 final，检查结果并提交本 run 的验收。
 完整 TRAIN 轨迹通过显式公开目录提供；基础设施失败不会被记作有效分数。

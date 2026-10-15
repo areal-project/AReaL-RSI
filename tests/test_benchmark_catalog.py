@@ -5,18 +5,14 @@ import unittest
 from collections.abc import Mapping
 from pathlib import Path
 
-from areal_rsi.api.base import (
-    BenchmarkSplit,
-    TaskResult,
-    TrajectoryRef,
-    VerificationRequest,
-    VerifierSpec,
+from areal_rsi.infra.storage.files import FileContentStore
+from areal_rsi.infra.tasks import BenchmarkCatalog, create_builtin_registry, create_registry
+from areal_rsi.infra.tasks.arithmetic import (
+    AccuracyEvaluation,
+    ArithmeticBenchmark,
+    ArithmeticVerifier,
 )
-from areal_rsi.base.storage import FileContentStore, FileVersionManager, json_bytes
-from areal_rsi.benchmarks import BenchmarkCatalog, create_builtin_registry, create_registry
-from areal_rsi.benchmarks.catalog import BenchmarkBundle, BenchmarkDescriptor
-from areal_rsi.modules.benchmark import AccuracyEvaluation, ArithmeticBenchmark, ArithmeticVerifier
-from areal_rsi.modules.gsm8k import Gsm8kBenchmark, Gsm8kVerifier, prepare_dataset
+from areal_rsi.infra.tasks.catalog import BenchmarkBundle, BenchmarkDescriptor
 
 
 class BenchmarkCatalogTest(unittest.IsolatedAsyncioTestCase):
@@ -49,57 +45,6 @@ class BenchmarkCatalogTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(bundle.instance_id, "external-fixture")
             with self.assertRaisesRegex(ValueError, "未知 Benchmark"):
                 create_builtin_registry(content).create("external-fixture")
-
-    async def test_gsm8k_adapter_matches_direct_implementation(self) -> None:
-        raw = b"\n".join(
-            json_bytes(
-                {"question": f"Synthetic fixture {index}", "answer": f"reasoning\n#### {index}"}
-            )
-            for index in range(30)
-        )
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            dataset = root / "dataset"
-            prepare_dataset(raw, dataset, source="synthetic-adapter-test")
-            content = FileContentStore(root / "content")
-
-            direct = Gsm8kBenchmark(dataset, train_limit=4, validate_limit=3)
-            direct_verifier = Gsm8kVerifier(content, direct)
-            bundle = create_builtin_registry(content).create(
-                "gsm8k",
-                {"data_path": str(dataset), "train_limit": 4, "validate_limit": 3},
-            )
-
-            self.assertEqual(bundle.instance_id, direct.name)
-            for split in BenchmarkSplit:
-                self.assertEqual(
-                    await bundle.benchmark.list_tasks(split), await direct.list_tasks(split)
-                )
-
-            versions = FileVersionManager(root / "versions")
-            ref = await content.put_text("fixture")
-            solution = await versions.create_solution(
-                await versions.create_model("m", ref), await versions.create_harness("h", ref)
-            )
-            task = (await direct.list_tasks(BenchmarkSplit.TRAIN))[0]
-            expected = task.task_id.rsplit("_", 1)[1]
-            output = await content.put_json(
-                {
-                    "task_id": task.task_id,
-                    "solution_id": solution.solution_id,
-                    "response": f"#### {expected}",
-                }
-            )
-            result = TaskResult(output, TrajectoryRef("trace"))
-            request = VerificationRequest(
-                task,
-                solution,
-                result,
-                VerifierSpec(bundle.descriptor.verifier, "injected"),
-            )
-            direct_result = await direct_verifier.verify(request)
-            adapter_result = await bundle.verifier.verify(request)
-            self.assertEqual(adapter_result, direct_result)
 
     def test_environment_configuration_is_typed_and_validated(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

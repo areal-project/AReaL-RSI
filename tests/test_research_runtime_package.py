@@ -14,15 +14,15 @@ from typing import Any
 
 import pytest
 
+from areal_rsi.api.interfaces import ToolCall, ToolResult
 from areal_rsi.api.research import TaskBrief
-from areal_rsi.coordination.actions import definition
-from areal_rsi.coordination.config import ResearchConfig
-from areal_rsi.modules.agent_runtime import ToolCall, ToolResult
-from areal_rsi.modules.research_runtime import ResearchRuntime
-from areal_rsi.modules.runtime_package import RuntimeSettings
-from areal_rsi.modules.runtime_storage import read_journal
-from areal_rsi.modules.runtime_tools import invoke
-from areal_rsi.research_app import ResearchApp
+from areal_rsi.infra.coordination.config import ResearchConfig
+from areal_rsi.infra.coordination.tools.actions import definition
+from areal_rsi.infra.research import ResearchSystem
+from areal_rsi.infra.runtime.research_runtime import ResearchRuntime
+from areal_rsi.infra.runtime.runtime_package import RuntimeSettings
+from areal_rsi.infra.runtime.runtime_storage import read_journal
+from areal_rsi.infra.runtime.runtime_tools import invoke
 
 
 class ResponsesModel:
@@ -202,8 +202,7 @@ def test_codex_native_tools_history_resume_and_usage(
             context_window_tokens=64000,
             metadata={"allow_web_access": True},
         )
-        runtime = ResearchApp._runtime(config)
-        assert isinstance(runtime, ResearchRuntime)
+        runtime = ResearchRuntime(config)
         events: list[dict[str, Any]] = []
 
         async def emit(event: dict[str, Any]) -> None:
@@ -264,7 +263,7 @@ def test_codex_native_tools_history_resume_and_usage(
                 assert "web__run" in tools or "web_search" in tools
                 assert "exec_command" in tools and "apply_patch" in tools
                 assert "spawn_agent" not in tools and "create_goal" not in tools
-                assert request["reasoning"]["effort"] == "xhigh"
+                assert request["reasoning"]["effort"] == "medium"
             assert any(e["type"] == "runtime_usage" for e in events)
             assert (session / "runtime/data/state/journal.jsonl").exists()
         finally:
@@ -295,8 +294,7 @@ def test_standard_uses_package_dsh_and_scoped_application_tools(
             model_settings_pinned=True,
             context_window_tokens=96000,
         )
-        runtime = ResearchApp._runtime(config)
-        assert isinstance(runtime, ResearchRuntime)
+        runtime = ResearchRuntime(config)
         calls = []
 
         async def handle(call: ToolCall) -> ToolResult:
@@ -319,12 +317,12 @@ def test_standard_uses_package_dsh_and_scoped_application_tools(
             assert len(calls) == 1 and calls[0].arguments == {"expression": "6 * 7"}
             assert result.usage["total_tokens"] > 0
             assert "42" in json.dumps(model.requests[-1]["input"])
-            assert model.requests[0]["reasoning"]["effort"] == "xhigh"
+            assert model.requests[0]["reasoning"]["effort"] == "medium"
             assert runtime.configuration()["harness"] == "dsh"
             if sys.platform == "darwin":
                 profile = tmp_path / "session/runtime/sandbox.sb"
                 assert '(allow network-outbound (remote ip "localhost:*"))' in profile.read_text()
-                assert '(deny file-write*)' in profile.read_text()
+                assert "(deny file-write*)" in profile.read_text()
             patch = json.loads((tmp_path / "session/runtime/research-model.patch.json").read_text())
             assert (
                 patch[0]["config"]["providers"]["rsi-responses"]["models"][0]["contextWindow"]
@@ -513,23 +511,52 @@ def test_native_codex_passk_launches_independent_attempts_and_stops_on_result(
     from test_passk import configuration
 
     from areal_rsi.api.research import VerifiedResult
-    from areal_rsi.base.storage import now
+    from areal_rsi.infra.storage.files import now
 
     monkeypatch.setenv("RSI_API_KEY", "fixture")
     model = ResponsesModel()
 
+    def output(request: dict[str, Any]) -> dict[str, Any]:
+        supervisor = "负责启动并监督" in json.dumps(request, ensure_ascii=False)
+        if supervisor and not any(
+            x.get("type") == "function_call_output" for x in request.get("input", [])
+        ):
+            return {
+                "id": "fc_start",
+                "type": "function_call",
+                "call_id": "start",
+                "name": "exec_command",
+                "arguments": json.dumps({"cmd": "rsi-tools call start_researchers '{}' start"}),
+                "status": "completed",
+            }
+        return {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "Done", "annotations": []}],
+        }
+
+    model.output = output
+
     async def scenario() -> None:
         config = configuration(k=3, seconds=30)
         config.backend, config.base_url = "codex", model.url
-        app = ResearchApp(tmp_path, config=config)
+        from areal_rsi.infra.execution import ApprovedCommand
+
+        config.verifier = ApprovedCommand("verify", (sys.executable, "-c", "pass"))
+        config.metadata["verification_identity"] = {
+            "adapter": "content",
+            "phases": {"search": {"protocol_id": "fixed", "manifest_id": "search"}},
+        }
+        system = ResearchSystem(tmp_path)
         try:
-            created = await app.create({})
-            await app.start(app.coordinator(created["run_id"]))
-            c = app.coordinator(created["run_id"])
-            active = app.active[c.store.run_id]
-            # Model tool behavior is covered by the supervisor scheduler test;
-            # this fixture answers text only, while all four native processes run.
-            await active.actions.handler("rsi")(ToolCall("start_researchers", {}, "launch"))
+            run_id = await system.create(config)
+            await system.start(run_id)
+            c = system.coordinator(run_id)
+            active = system.active[c.store.run_id]
+            # The supervisor starts k attempts through the normal model tool channel.
+            await active.engine.tick()
             async with asyncio.timeout(25):
                 while True:
                     agents = {actor.agent_id for actor in c.store.run().research_agents}
@@ -543,10 +570,11 @@ def test_native_codex_passk_launches_independent_attempts_and_stops_on_result(
                     if len(seen) == 3:
                         break
                     await asyncio.sleep(0.05)
-            active = app.active[c.store.run_id]
+            active = system.active[c.store.run_id]
             runtime = active.engine.runtime
             assert isinstance(runtime, ResearchRuntime)
             assert len(runtime.conversations) == 4
+            assert any("/rsi/" in str(path) for path in runtime.conversations)
             processes = [item.session.process for item in runtime.conversations.values()]
             assert len({process.pid for process in processes}) == 4
             for request in model.requests:
@@ -573,13 +601,13 @@ def test_native_codex_passk_launches_independent_attempts_and_stops_on_result(
             c.store.record_verification(result)
             c.store.consider_best(result.result_id)
             await asyncio.wait_for(active.task, 15)
-            assert c.state["status"] == "succeeded"
+            assert c.state.status == "succeeded"
             assert all(process.returncode is not None for process in processes)
-            assert c.state["passk_target"]["result"]["candidate_id"] == candidate.candidate_id
-            assert list(c.store.paths.agent("rsi").glob("sessions/*/runtime/request.json"))
-            assert c.state["total_tokens"] > 0
+            assert c.state.passk_target is not None
+            assert c.state.passk_target.result.candidate_id == candidate.candidate_id
+            assert c.state.total_tokens > 0
         finally:
-            await app.close()
+            await system.close()
 
     try:
         asyncio.run(scenario())
@@ -634,6 +662,132 @@ def test_linux_dsh_executes_workspace_shell(
             )
             assert result.text == "Done"
             assert "LINUX_WORKSPACE_OK" in json.dumps(model.requests[-1]["input"])
+        finally:
+            await runtime.close()
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        model.close()
+
+
+def test_failed_runtime_open_closes_listener(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from areal_rsi.infra.runtime import research_runtime
+
+    monkeypatch.setenv("RSI_API_KEY", "fixture")
+
+    async def scenario() -> None:
+        runtime = ResearchRuntime(ResearchConfig(TaskBrief("test", "test"), backend="codex"))
+        opened: list[asyncio.Server] = []
+        original = asyncio.start_server
+
+        async def capture(*args: Any, **kwargs: Any) -> asyncio.Server:
+            server = await original(*args, **kwargs)
+            opened.append(server)
+            return server
+
+        def fail_content(*args: Any, **kwargs: Any) -> None:
+            raise OSError("disk full")
+
+        async def handler(call: ToolCall) -> ToolResult:
+            raise AssertionError("not reached")
+
+        monkeypatch.setattr(asyncio, "start_server", capture)
+        monkeypatch.setattr(research_runtime, "FileContentStore", fail_content)
+        try:
+            with pytest.raises(OSError, match="disk full"):
+                await runtime._open(
+                    tmp_path / "session", tmp_path / "workspace", "test", [], handler, "rsi"
+                )
+            await runtime.close()
+            assert opened and not opened[0].is_serving()
+        finally:
+            for server in opened:
+                server.close()
+                await server.wait_closed()
+
+    asyncio.run(scenario())
+
+
+def test_native_runtime_honors_environment_and_advertised_tools(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RSI_API_KEY", "fixture")
+    model = ResponsesModel()
+
+    def output(request: dict[str, Any]) -> dict[str, Any]:
+        if any(item.get("type") == "function_call_output" for item in request["input"]):
+            return {
+                "id": "done",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "Done", "annotations": []}],
+            }
+        return {
+            "id": "env-call",
+            "type": "function_call",
+            "call_id": "env-call",
+            "name": "exec_command",
+            "status": "completed",
+            "arguments": json.dumps(
+                {
+                    "cmd": 'printf "%s" "$RSI_SMOKE_VALUE" > env-seen.txt; '
+                    "rsi-tools list > tools-seen.json"
+                }
+            ),
+        }
+
+    model.output = output
+
+    async def scenario() -> None:
+        runtime = ResearchRuntime(
+            ResearchConfig(
+                TaskBrief("test", "test"),
+                backend="codex",
+                base_url=model.url,
+                model_settings_pinned=True,
+            )
+        )
+
+        async def handler(call: ToolCall) -> ToolResult:
+            return ToolResult({})
+
+        events: list[dict[str, Any]] = []
+
+        async def emit(event: dict[str, Any]) -> None:
+            events.append(event)
+
+        workspace = tmp_path / "workspace"
+        visible = definition("get_state", "Read state")
+        hidden = definition("hidden_tool", "Callable but not advertised")
+        try:
+            await asyncio.wait_for(
+                runtime.turn(
+                    tmp_path / "session",
+                    system_prompt="Execute the requested command",
+                    user_message="Check environment",
+                    tools=[visible, hidden],
+                    advertised_tools=[visible],
+                    environment={"RSI_SMOKE_VALUE": "injected"},
+                    workspace=workspace,
+                    handler=handler,
+                    event_sink=emit,
+                ),
+                30,
+            )
+            assert (workspace / "env-seen.txt").read_text() == "injected"
+            exposed = json.loads((workspace / "tools-seen.json").read_text())
+            assert [tool["name"] for tool in exposed] == ["get_state"]
+            started = next(e for e in events if e["type"] == "tool_started")
+            completed = next(e for e in events if e["type"] == "tool_completed")
+            assert "env-seen.txt" in started["arguments"]
+            assert started["status"] == "running"
+            assert completed["status"] == "completed"
+            assert json.loads(completed["result"])["exitCode"] == 0
         finally:
             await runtime.close()
 

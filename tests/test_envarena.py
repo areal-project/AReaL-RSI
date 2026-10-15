@@ -13,7 +13,7 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from areal_rsi.api.base import (
+from areal_rsi.api.records import (
     BenchmarkSplit,
     ContentRef,
     HarnessChange,
@@ -22,28 +22,28 @@ from areal_rsi.api.base import (
     VerificationStatus,
     VerifierSpec,
 )
-from areal_rsi.base.storage import (
+from areal_rsi.infra.storage.files import (
     FileContentStore,
     FileTrajectoryStore,
     FileVersionManager,
     decode,
 )
-from areal_rsi.modules.remote.envarena.benchmark import ArenaBenchmark
-from areal_rsi.modules.remote.envarena.client import (
+from areal_rsi.infra.tasks.remote.envarena.benchmark import ArenaBenchmark
+from areal_rsi.infra.tasks.remote.envarena.client import (
     ArenaClient,
     ArenaConnection,
     ArenaError,
     fingerprint,
     redact,
 )
-from areal_rsi.modules.remote.envarena.config import ArenaConfig
-from areal_rsi.modules.remote.envarena.harness import (
+from areal_rsi.infra.tasks.remote.envarena.config import ArenaConfig
+from areal_rsi.infra.tasks.remote.envarena.harness import (
     REMOTE_CHANGE_TYPE,
     ArenaHarnessBuilder,
     snapshot,
     validate_change,
 )
-from areal_rsi.modules.remote.envarena.runtime import (
+from areal_rsi.infra.tasks.remote.envarena.runtime import (
     AmbiguousSubmission,
     ArenaEvaluation,
     ArenaHarnessRuntime,
@@ -599,7 +599,7 @@ class RemoteTest(unittest.IsolatedAsyncioTestCase):
         self.client.entities[f"/harnesses/{ref['key']}"]["tags"] = []
         self.client.calls.clear()
         with patch(
-            "areal_rsi.modules.remote.envarena.client.matching_spec",
+            "areal_rsi.infra.tasks.remote.envarena.client.matching_spec",
             side_effect=AssertionError("Published specs must not be compared"),
         ):
             self.assertEqual(await self.client.ensure_version("harnesses", "test", spec), ref)

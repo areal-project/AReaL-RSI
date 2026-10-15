@@ -9,10 +9,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
-from areal_rsi.api.base import ContentRef, JsonObject, Task, TrajectoryRef
-from areal_rsi.base.storage import FileContentStore, FileVersionManager
-from areal_rsi.modules.harness import LocalHarnessRuntime
-from areal_rsi.modules.runtime import DshAgentRuntime, DshSession
+from areal_rsi.api.records import ContentRef, JsonObject, Task, TrajectoryRef
+from areal_rsi.infra.runtime.dsh_runtime import DshAgentRuntime, DshSession
+from areal_rsi.infra.storage.files import FileContentStore, FileVersionManager
+from areal_rsi.infra.tasks.harness import LocalHarnessRuntime
 
 
 class HarnessInputTest(unittest.IsolatedAsyncioTestCase):

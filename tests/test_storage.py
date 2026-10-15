@@ -1,17 +1,60 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
 
-from areal_rsi.api.base import Trajectory, TrajectoryQuery
-from areal_rsi.base.storage import (
+from areal_rsi.api.records import Trajectory, TrajectoryQuery
+from areal_rsi.infra.storage.files import (
     FileContentStore,
-    FileMemory,
     FileTrajectoryStore,
     FileVersionManager,
 )
 
 
 class StorageTest(unittest.IsolatedAsyncioTestCase):
+    async def test_snapshot_rejects_invalid_roots_and_special_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = FileContentStore(root / "content")
+            source = root / "source"
+            with self.assertRaises(ValueError):
+                await store.snapshot(source)
+            source.write_text("not a directory")
+            with self.assertRaises(ValueError):
+                await store.snapshot(source)
+            source.unlink()
+            source.mkdir()
+            link = root / "link"
+            link.symlink_to(source, target_is_directory=True)
+            with self.assertRaises(ValueError):
+                await store.snapshot(link)
+            os.mkfifo(source / "pipe")
+            with self.assertRaises(ValueError):
+                await store.snapshot(source)
+
+    async def test_failed_materialization_can_be_retried_without_partial_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = FileContentStore(root / "content")
+            source = root / "source"
+            source.mkdir()
+            (source / "a").write_text("first")
+            (source / "b").write_text("second")
+            snapshot = await store.snapshot(source)
+            second = await store.put_text("second")
+            blob = await store.resolve_path(second)
+            blob.unlink()
+            destination = root / "restored"
+            with self.assertRaises(FileNotFoundError):
+                await store.materialize(snapshot, destination)
+            self.assertFalse(destination.exists())
+            await store.put_text("second")
+            await store.materialize(snapshot, destination)
+            self.assertEqual((destination / "b").read_text(), "second")
+            with self.assertRaises(FileExistsError):
+                await store.materialize(snapshot, destination)
+            self.assertEqual((destination / "a").read_text(), "first")
+
     async def test_trajectory_store_query_filters_completed_records(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -47,18 +90,6 @@ class StorageTest(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ValueError):
                 await versions.create_solution(model, harness, artifacts=(artifact,))
 
-    async def test_memory_preserves_text_and_finds_chinese_experience(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            memory = FileMemory(Path(directory))
-            text = "工具验证失败时检查参数和输出格式。" * 1000
-            record = await memory.add(text, source="trajectory:example", tags=("验证",))
-            stored = await memory.get(record.memory_id)
-            assert stored is not None
-            self.assertEqual(stored.text, text)
-            hits = await memory.search("如何改善工具验证？")
-            self.assertEqual(hits[0].memory.memory_id, record.memory_id)
-            self.assertEqual(await memory.search("不存在的主题xyz"), [])
-
     async def test_reload_is_detached_and_content_is_verified(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -90,3 +121,35 @@ class StorageTest(unittest.IsolatedAsyncioTestCase):
             (source / "escape").symlink_to(root)
             with self.assertRaises(ValueError):
                 await store.snapshot(source)
+
+
+class RecordReadCacheTest(unittest.TestCase):
+    def test_reads_are_independent_and_follow_replacement_and_deletion(self) -> None:
+        from unittest.mock import patch
+
+        from areal_rsi.infra.storage.files import read_json, write_json
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "record.json"
+            write_json(path, {"text": "first"})
+            original = Path.read_text
+            reads = []
+
+            def read(p: Path, *args: object, **kwargs: object) -> str:
+                reads.append(p)
+                return original(p)
+
+            with patch.object(Path, "read_text", read):
+                value = read_json(path)
+                value["text"] = "local change"
+                self.assertEqual(read_json(path), {"text": "first"})
+                self.assertEqual(reads, [path])
+                timestamp = path.stat().st_mtime_ns
+                replacement = path.with_suffix(".new")
+                write_json(replacement, {"text": "other"})
+                os.utime(replacement, ns=(timestamp, timestamp))
+                replacement.replace(path)
+                self.assertEqual(read_json(path), {"text": "other"})
+                path.unlink()
+                with self.assertRaises(FileNotFoundError):
+                    read_json(path)

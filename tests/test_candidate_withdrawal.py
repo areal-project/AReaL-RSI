@@ -8,15 +8,15 @@ from unittest.mock import patch
 
 import pytest
 
-from areal_rsi.api.base import RecordRef
+from areal_rsi.api.interfaces import ToolCall
+from areal_rsi.api.records import RecordRef
 from areal_rsi.api.research import ResearchMessage, TaskBrief, VerificationContract, VerifiedResult
-from areal_rsi.base.storage import now
-from areal_rsi.coordination.actions import ResearchActions
-from areal_rsi.coordination.coordinator import Coordinator
-from areal_rsi.coordination.jobs import ResearchExecution
-from areal_rsi.coordination.views import record_preview
-from areal_rsi.execution import ApprovedCommand
-from areal_rsi.modules.agent_runtime import ToolCall
+from areal_rsi.infra.coordination.coordinator import Coordinator
+from areal_rsi.infra.coordination.evaluation.jobs import ResearchExecution
+from areal_rsi.infra.coordination.tools.actions import ResearchActions
+from areal_rsi.infra.coordination.views import record_preview
+from areal_rsi.infra.execution import ApprovedCommand
+from areal_rsi.infra.storage.files import now
 
 
 @pytest.mark.parametrize("direction,withdrawer", [("maximize", "rsi"), ("minimize", "research")])
@@ -60,7 +60,7 @@ def test_withdrawal_survives_crash_and_excludes_identical_artifacts(
         run = c.store.run()
         assert run.best_result_ref is not None
         assert c.store.public_record(run.best_result_ref)["candidate_id"] == bad.candidate_id
-        c.state["selected_candidate_id"] = bad.candidate_id
+        c.state.selected_candidate_id = bad.candidate_id
         c.save()
         agent = c.spawn(
             key="repair", direction="Repair", instruction="Investigate the counterexample"
@@ -102,7 +102,7 @@ def test_withdrawal_survives_crash_and_excludes_identical_artifacts(
         withdrawal = await recovered.handler(actor)(tool)
         assert withdrawal.output["withdrawn"]
         assert withdrawal.output["best"]["candidate_id"] == candidates[0].candidate_id
-        assert recovered.c.state["selected_candidate_id"] is None
+        assert recovered.c.state.selected_candidate_id is None
         assert c.store.get("verifications", "defective", VerifiedResult) == results[1]
         assert c.store.is_withdrawn(duplicate.candidate_id)
         assert not c.store.consider_best("defective")
@@ -128,7 +128,7 @@ def test_withdrawal_survives_crash_and_excludes_identical_artifacts(
             assert notification.sender == agent
             assert bad.candidate_id in notification.text
             assert tool.arguments["reason"] in notification.text
-            assert notification.message_id in recovered.c.state["inboxes"]["rsi"]
+            assert notification.message_id in recovered.c.state.inboxes["rsi"]
             assert evidence in notification.references
         preview = record_preview(withdrawal_record, withdrawal_ref)
         assert preview["record_id"] == "withdrawals/" + bad.candidate_id
@@ -137,14 +137,8 @@ def test_withdrawal_survives_crash_and_excludes_identical_artifacts(
             recovered.read_record(agent, withdrawal.output["uri"])["reason"]
             == tool.arguments["reason"]
         )
-        refused = await recovered.handler("rsi")(
-            ToolCall(
-                "finish",
-                {"summary": "Done", "candidate_id": duplicate.candidate_id},
-                "finish-withdrawn",
-            )
-        )
-        assert "withdrawn" in refused.output["error"]
+        with pytest.raises(ValueError, match="withdrawn"):
+            recovered.completion_candidate(duplicate.candidate_id)
         # A withdrawn artifact remains available for repair and forensic comparison.
         imported = await recovered.handler(agent)(
             ToolCall(

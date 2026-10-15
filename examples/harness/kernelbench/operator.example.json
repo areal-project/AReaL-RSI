@@ -1,0 +1,29 @@
+{
+  "prepared_data": "/absolute/path/to/kernelbench-prepared",
+  "baseline_harness": "/absolute/path/to/examples/harness/kernelbench/seed",
+  "edit_scope": "skills",
+  "dsh_root": "/absolute/path/to/shared-dsh-installation",
+  "phases": {"diagnostic": "development", "search": "search", "final": "final"},
+  "target_budget": {
+    "max_model_requests": 8,
+    "max_output_tokens": 8192,
+    "timeout_seconds": 600
+  },
+  "gpu": {
+    "kind": "ssh",
+    "host": "my-gpu-host",
+    "root": "/work/rsi-kernelbench-jobs",
+    "python": "/work/KernelBench/.venv/bin/python",
+    "repository": "/work/KernelBench",
+    "cuda_visible_devices": "0"
+  },
+  "evaluation": {
+    "backend": "cuda",
+    "precision": "fp32",
+    "num_correct_trials": 5,
+    "num_perf_trials": 100,
+    "timing_method": "cuda_event",
+    "timeout": 300,
+    "seed": 42
+  }
+}

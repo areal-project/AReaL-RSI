@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from areal_rsi.modules.runtime import sandbox_wrapper
+from areal_rsi.infra.runtime.dsh_runtime import sandbox_wrapper
 
 
 @unittest.skipUnless(sys.platform == "darwin", "macOS sandbox-exec integration")

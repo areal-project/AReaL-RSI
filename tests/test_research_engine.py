@@ -11,12 +11,12 @@ from typing import Any
 import pytest
 from runtime_fakes import CallbackRuntime
 
-from areal_rsi.api.base import AgentState
-from areal_rsi.api.research import ResearchLimits, ResearchReport, TaskBrief
-from areal_rsi.coordination.actions import definition
-from areal_rsi.coordination.coordinator import Coordinator
-from areal_rsi.coordination.engine import ResearchEngine, ToolSet
-from areal_rsi.modules.agent_runtime import AgentRuntimeError, ToolCall, ToolResult, TurnResult
+from areal_rsi.api.interfaces import AgentRuntimeError, ToolCall, ToolResult, TurnResult
+from areal_rsi.api.records import AgentState
+from areal_rsi.api.research import ResearchLimits, TaskBrief
+from areal_rsi.infra.coordination.coordinator import Coordinator
+from areal_rsi.infra.coordination.engine import ResearchEngine, ToolSet
+from areal_rsi.infra.coordination.tools.actions import definition
 
 Json = dict[str, Any]
 
@@ -32,8 +32,8 @@ def coordinator(root: Path, limits: ResearchLimits | None = None) -> Coordinator
 def tools(c: Coordinator, agent: str) -> ToolSet:
     async def handle(call: ToolCall) -> ToolResult:
         if call.name == "report":
-            return ToolResult(c.report(agent, key=call.call_id, fields={"message": "Checked"}),
-                              stop=True)
+            c.end_turn(agent)
+            return ToolResult("checked", stop=True)
         c.wait(agent, "Waiting for relevant work")
         return ToolResult("waiting", stop=True)
 
@@ -95,13 +95,14 @@ def test_delivery_origin_and_updates_do_not_reassign_active_work(
         runtime = CallbackRuntime(run)
         engine = ResearchEngine(c, runtime, lambda agent: tools(c, agent))
         await engine.run_until_idle(timeout=3)
-        assert c.state["delivered"].count(message) == c.state["delivered"].count(update) == 1
-        assert not c.state["inboxes"][recipient]
+        assert update is not None
+        assert c.state.delivered.count(message) == c.state.delivered.count(update) == 1
+        assert not c.state.inboxes[recipient]
         count = len(runtime.calls)
         await engine.run_until_idle(timeout=3)
         assert len(runtime.calls) == count
         if recipient != "rsi":
-            assert c.actor(recipient).wait_reason == "rsi_reply"
+            assert c.actor(recipient).wait_reason == "message"
             assert len(c.actor(recipient).iterations) == 1
 
     asyncio.run(scenario())
@@ -125,77 +126,36 @@ def test_literal_user_message_is_not_wrapped(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
-def test_queued_updates_wait_for_next_assignment_across_restart(tmp_path: Path) -> None:
+
+
+
+
+def test_default_budget_does_not_stop_after_four_hours(tmp_path: Path) -> None:
     async def scenario() -> None:
-        c = coordinator(tmp_path, ResearchLimits(max_agents=2))
-        c.begin_turn("rsi")
-        source = waiting_researcher(c, "source")
-        recipient = c.spawn(key="recipient", direction="combine", instruction="First phase")[
-            "agent_id"
-        ]
-        c.end_turn("rsi")
-        updates: list[str] = []
-        researcher_calls = 0
-
-        async def run(session: Path, delivery: Json) -> TurnResult:
-            nonlocal researcher_calls
-            if delivery["recovery_state"]["agent_id"] == "rsi":
-                return await finish(session, delivery)
-            researcher_calls += 1
-            if researcher_calls == 1:
-                updates.extend([
-                    c.enqueue(source, recipient, "Late peer evidence", key="late-peer"),
-                    c.enqueue("system", recipient, "Late job completion", key="late-job"),
-                ])
-            else:
-                assert researcher_calls == 2
-                assert "Next phase" in delivery["user_message"]
-                assert len(c.actor(recipient).iterations) == 2
-                pending = delivery["incoming_messages"]()
-                assert [item["message_id"] for item in pending] == updates
-                for item in pending:
-                    await delivery["event_sink"](
-                        {"type": "message_injected", "message_id": item["message_id"]}
-                    )
-            # A terminal report must leave late updates queued for the next assignment.
-            return await finish(session, delivery, "report")
-
-        runtime = CallbackRuntime(run)
-        await ResearchEngine(c, runtime, lambda agent: tools(c, agent)).run_until_idle(timeout=3)
-        assert c.actor(recipient).wait_reason == "rsi_reply"
-        assert c.state["inboxes"][recipient] == updates
-        c = Coordinator(c.store)
-        assert recipient not in c.pending()
-        c.assign(recipient, key="next", instruction="Next phase")
-        await ResearchEngine(c, runtime, lambda agent: tools(c, agent)).run_until_idle(timeout=3)
-        assert researcher_calls == 2
-        assert all(c.state["delivered"].count(identifier) == 1 for identifier in updates)
-        assert not c.state["inboxes"][recipient]
+        c = coordinator(tmp_path)
+        assert c.state.started_at is not None
+        observed = datetime.fromisoformat(c.state.started_at).timestamp() + 86400
+        runtime = CallbackRuntime(finish)
+        engine = ResearchEngine(c, runtime, lambda agent: tools(c, agent), clock=lambda: observed)
+        try:
+            await engine.run_until_idle(timeout=3)
+            assert runtime.calls
+            assert c.state.status == "running"
+            assert not c.state.budget_stop_reason
+            budget = c.budget(observed_at=observed)
+            assert budget["remaining_wall_seconds"] is None
+            assert budget["deadline_at"] is None
+        finally:
+            await engine.close()
 
     asyncio.run(scenario())
-
-
-def test_report_publication_survives_crash_before_delivery_ack(tmp_path: Path) -> None:
-    c = coordinator(tmp_path)
-    agent = c.spawn(key="one", direction="inspect", instruction="Inspect")["agent_id"]
-    message, _ = c.begin_turn(agent)
-    c.enqueue("system", agent, "Late result", key="late")
-    c.report(agent, key="report", fields={"message": "Checked"})
-    c = Coordinator(c.store)
-    assert agent in c.pending()
-    resumed, interrupted = c.begin_turn(agent)
-    assert interrupted and resumed.message_id == message.message_id
-    c.report(agent, key="report", fields={"message": "Checked"})
-    c.end_turn(agent)
-    assert agent not in c.pending()
-    assert c.actor(agent).wait_reason == "rsi_reply"
-    assert len(c.store.records("reports", ResearchReport)) == 1
 
 
 def test_wall_budget_keeps_deadline_across_wait_pause_and_resume(tmp_path: Path) -> None:
     async def scenario() -> None:
         c = coordinator(tmp_path, ResearchLimits(max_wall_seconds=1800))
-        started = datetime.fromisoformat(c.state["started_at"]).timestamp()
+        assert c.state.started_at is not None
+        started = datetime.fromisoformat(c.state.started_at).timestamp()
         clock = [started + 1200]
         snapshots: list[Json] = []
 
@@ -217,8 +177,8 @@ def test_wall_budget_keeps_deadline_across_wait_pause_and_resume(tmp_path: Path)
         assert snapshots[-1]["deadline_at"] == snapshots[0]["deadline_at"]
         clock[0] = started + 1801
         await engine.tick()
-        assert c.state["status"] == "paused"
-        assert c.state["budget_stop_reason"] == "Run wall-time budget exhausted"
+        assert c.state.status == "paused"
+        assert c.state.budget_stop_reason == "Run wall-time budget exhausted"
         assert len(runtime.calls) == 2
         await engine.close()
 
@@ -244,11 +204,11 @@ def test_pause_cancels_turn_and_resume_keeps_delivery_and_session(tmp_path: Path
         try:
             await engine.tick()
             await asyncio.wait_for(started.wait(), 2)
-            original = c.state["active"]["rsi"]
+            original = c.state.active["rsi"]
             c.pause()
             await engine.tick()
             assert cancelled.is_set()
-            assert c.state["active"]["rsi"] == original
+            assert c.state.active["rsi"] == original
             assert c.actor("rsi").state == AgentState.PAUSED
             c.resume()
             await engine.run_until_idle(timeout=3)
@@ -257,46 +217,13 @@ def test_pause_cancels_turn_and_resume_keeps_delivery_and_session(tmp_path: Path
             assert first[0] == second[0]
             assert first[1]["message_id"] == second[1]["message_id"] == original
             assert first[1]["user_message"] and second[1]["user_message"] is None
-            assert c.state["delivered"].count(original) == 1
+            assert c.state.delivered.count(original) == 1
         finally:
             await engine.close()
 
     asyncio.run(scenario())
 
 
-def test_final_reply_archives_report_and_followup_reuses_session(tmp_path: Path) -> None:
-    async def scenario() -> None:
-        c = coordinator(tmp_path)
-        agent = c.spawn(key="one", direction="inspect", instruction="Check inputs")["agent_id"]
-        calls: list[tuple[Path, Json]] = []
-
-        async def run(session: Path, delivery: Json) -> TurnResult:
-            if delivery["recovery_state"]["agent_id"] == "rsi":
-                return await finish(session, delivery)
-            calls.append((session, delivery))
-            if len(calls) == 2:
-                assert "Check outputs" in delivery["user_message"]
-                assignment = delivery["recovery_state"]["current_assignment"]
-                assert assignment["instruction"] == "Check outputs"
-            return result(session, delivery, "The contract matches", "completed")
-
-        runtime = CallbackRuntime(run)
-        engine = ResearchEngine(c, runtime, lambda actor: tools(c, actor))
-        await engine.run_until_idle(timeout=3)
-        assert c.actor(agent).wait_reason == "rsi_reply"
-        reports = c.store.records("reports", ResearchReport)
-        assert len(reports) == 1 and reports[0].message == "The contract matches"
-        await engine.run_until_idle(timeout=3)
-        assert len(calls) == 1
-        c.assign(agent, key="next", instruction="Check outputs")
-        await engine.run_until_idle(timeout=3)
-        assert len(calls) == 2 and calls[0][0] == calls[1][0]
-        assert calls[0][1]["message_id"] != calls[1][1]["message_id"]
-        assert len(c.store.records("reports", ResearchReport)) == 2
-        assert len(c.actor(agent).iterations) == 2
-        assert agent not in c.state.get("turn_failures", {})
-
-    asyncio.run(scenario())
 
 
 def test_native_usage_is_deduplicated_across_restart_and_pauses_at_limit(tmp_path: Path) -> None:
@@ -310,16 +237,16 @@ def test_native_usage_is_deduplicated_across_restart_and_pauses_at_limit(tmp_pat
         engine = ResearchEngine(c, runtime, lambda actor: tools(c, actor))
         event = {"type": "runtime_usage", "event_id": "native-1", "usage": {"total_tokens": 12}}
         await engine._event("rsi", event)
-        assert c.state["total_tokens"] == 12
+        assert c.state.total_tokens == 12
         c = Coordinator(c.store)
         engine = ResearchEngine(c, runtime, lambda actor: tools(c, actor))
         await engine._event("rsi", event)
-        assert c.state["total_tokens"] == 12
+        assert c.state.total_tokens == 12
         await engine._event("rsi", {**event, "event_id": "native-2"})
-        assert c.state["total_tokens"] == 24 and c.state["status"] == "paused"
-        assert c.state["budget_stop_reason"] == "Run token budget exhausted"
+        assert c.state.total_tokens == 24 and c.state.status == "paused"
+        assert c.state.budget_stop_reason == "Run token budget exhausted"
         assert await engine.tick() == 0
-        assert not runtime.calls and "model_requests" not in c.state
+        assert not runtime.calls
         await engine.close()
 
     asyncio.run(scenario())
@@ -347,6 +274,72 @@ def test_execution_lock_excludes_another_scheduler(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("save_fails", [False, True])
+def test_close_releases_ownership_and_cannot_overwrite_successor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, save_fails: bool
+) -> None:
+    async def scenario() -> None:
+        c = coordinator(tmp_path, ResearchLimits(max_effective_seconds=60))
+
+        async def run(session: Path, delivery: Json) -> TurnResult:
+            return await finish(session, delivery)
+
+        runtime = CallbackRuntime(run)
+        first = ResearchEngine(c, runtime, lambda actor: tools(c, actor))
+        first._acquire()
+        with monkeypatch.context() as patch:
+            if save_fails:
+                def fail_save() -> None:
+                    raise OSError("disk full")
+
+                patch.setattr(c, "save", fail_save)
+                with pytest.raises(OSError, match="disk full"):
+                    await first.close()
+            else:
+                await first.close()
+        successor = Coordinator(c.store)
+        second = ResearchEngine(successor, runtime, lambda actor: tools(successor, actor))
+        try:
+            second._acquire()
+            successor.state.total_tokens = 17
+            successor.save()
+            await first.close()
+            assert json.loads(c.path.read_text())["total_tokens"] == 17
+        finally:
+            await second.close()
+            await first.close()
+
+    asyncio.run(scenario())
+
+
+def test_failed_worker_initialization_releases_execution_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        c = coordinator(tmp_path, ResearchLimits(max_effective_seconds=60))
+
+        async def run(session: Path, delivery: Json) -> TurnResult:
+            return await finish(session, delivery)
+
+        runtime = CallbackRuntime(run)
+        first = ResearchEngine(c, runtime, lambda actor: tools(c, actor))
+        second = ResearchEngine(Coordinator(c.store), runtime, lambda actor: tools(c, actor))
+        try:
+            with monkeypatch.context() as patch:
+                def fail_save() -> None:
+                    raise OSError("disk full")
+
+                patch.setattr(c, "save", fail_save)
+                with pytest.raises(OSError, match="disk full"):
+                    first._acquire()
+            second._acquire()
+        finally:
+            await second.close()
+            await first.close()
+
+    asyncio.run(scenario())
+
+
 def test_usage_replay_does_not_rebuild_full_recovery_state(tmp_path: Path) -> None:
     """Native cancellation replays settled usage; accounting must stay cheap and exact."""
     async def scenario() -> None:
@@ -368,7 +361,7 @@ def test_usage_replay_does_not_rebuild_full_recovery_state(tmp_path: Path) -> No
             }
             for _ in range(20):
                 await delivery["event_sink"](event)
-            observations["tokens"] = c.state["total_tokens"]
+            observations["tokens"] = c.state.total_tokens
             observations["usage_refreshes"] = refreshes - initial
             # Meaningful tool boundaries still refresh the context, including current usage.
             await delivery["event_sink"]({"type": "tool_completed", "name": "probe"})

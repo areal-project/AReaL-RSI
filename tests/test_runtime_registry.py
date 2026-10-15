@@ -6,9 +6,9 @@ from unittest.mock import patch
 
 import yaml  # type: ignore[import-untyped]
 
-from areal_rsi.api.base import AgentSpec, ModelVersion
-from areal_rsi.base.storage import FileContentStore, FileTrajectoryStore, now
-from areal_rsi.modules.runtime import DshAgentRuntime
+from areal_rsi.api.records import AgentSpec, ModelVersion
+from areal_rsi.infra.runtime.dsh_runtime import DshAgentRuntime
+from areal_rsi.infra.storage.files import FileContentStore, FileTrajectoryStore, now
 
 
 class RuntimeRegistryTest(unittest.IsolatedAsyncioTestCase):
@@ -39,12 +39,13 @@ class RuntimeRegistryTest(unittest.IsolatedAsyncioTestCase):
                         "MODEL_CREDENTIAL": "reference-only-sentinel",
                     },
                 ),
-                patch("areal_rsi.modules.runtime.DeepSeekHarness") as sdk,
+                patch("areal_rsi.infra.runtime.dsh_runtime.DeepSeekHarness") as sdk,
                 patch(
-                    "areal_rsi.modules.runtime.ensure_cli", return_value=root / "shared-dsh"
+                    "areal_rsi.infra.runtime.dsh_runtime.ensure_cli",
+                    return_value=root / "shared-dsh"
                 ) as ensure,
                 patch(
-                    "areal_rsi.modules.runtime.sandbox_wrapper",
+                    "areal_rsi.infra.runtime.dsh_runtime.sandbox_wrapper",
                     side_effect=lambda directory, _workspace, _cli: directory / "dsh",
                 ) as sandbox,
             ):

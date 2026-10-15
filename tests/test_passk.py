@@ -10,17 +10,21 @@ from typing import Any
 
 import pytest
 
-from areal_rsi.api.base import AgentState
+from areal_rsi.api.interfaces import ToolCall, TurnResult
+from areal_rsi.api.records import AgentState
 from areal_rsi.api.research import ResearchLimits, TaskBrief, VerificationContract, VerifiedResult
-from areal_rsi.base.storage import encode, now
-from areal_rsi.coordination.config import ResearchConfig
-from areal_rsi.coordination.coordinator import Coordinator, effect_id
-from areal_rsi.coordination.engine import ToolSet
-from areal_rsi.coordination.jobs import ResearchExecution
-from areal_rsi.coordination.passk import PassKActions, PassKEngine, launch, stop_on_target
-from areal_rsi.execution import ApprovedCommand
-from areal_rsi.modules.agent_runtime import ToolCall, TurnResult
-from areal_rsi.research_app import ResearchApp
+from areal_rsi.infra.coordination.config import ResearchConfig
+from areal_rsi.infra.coordination.coordinator import Coordinator, effect_id
+from areal_rsi.infra.coordination.engine import ToolSet
+from areal_rsi.infra.coordination.evaluation.jobs import ResearchExecution
+from areal_rsi.infra.coordination.policies.legacy_passk import (
+    PassKActions,
+    PassKEngine,
+    launch,
+    stop_on_target,
+)
+from areal_rsi.infra.execution import ApprovedCommand
+from areal_rsi.infra.storage.files import encode, now
 
 
 def configuration(k: int = 3, seconds: float = 60) -> ResearchConfig:
@@ -38,14 +42,15 @@ def configuration(k: int = 3, seconds: float = 60) -> ResearchConfig:
             ),
             VerificationContract("speedup", target=1.0),
         ),
-        mode="passk",
+        mode="legacy_passk",
         model_settings_pinned=True,
     )
 
 
 async def setup(root: Path, k: int = 3) -> tuple[Coordinator, PassKActions, list[str]]:
     c = Coordinator.create(root, configuration(k).brief)
-    c.state["mode"] = "passk"
+    c.state.mode = "legacy_passk"
+    c.save()
     c.start()
     actions = PassKActions(c)
     await launch(c, actions)
@@ -57,9 +62,12 @@ def test_job_wait_keeps_turn_and_reuses_job_after_recovery(tmp_path: Path) -> No
         c, actions, agents = await setup(tmp_path, 1)
         agent = agents[0]
         c.begin_turn(agent)
+        command = ApprovedCommand(
+            "test", ("echo", "{run_id}", "{agent_id}"), ("run_id", "agent_id")
+        )
         execution = ResearchExecution(
             actions,
-            commands={"test": ApprovedCommand("test", ("echo", "ok"))},
+            commands={"test": command},
             simulated=True,
             mock_duration=0.2,
         )
@@ -70,17 +78,22 @@ def test_job_wait_keeps_turn_and_reuses_job_after_recovery(tmp_path: Path) -> No
             "one-experiment",
         )
         try:
+            with pytest.raises(ValueError, match="assigned"):
+                await execution.submit(agent, ToolCall("run_job", {
+                    "command_name": "test", "parameters_json": '{"agent_id":"other"}'
+                }, "forged-owner"))
             result = await actions.handler(agent)(call)
             job_id = result.output["job_id"]
+            assert execution.manager.get(job_id).spec.command == ("echo", c.store.run_id, agent)
             assert not result.stop
             assert "wait_for_job" in result.output["instruction"]
-            assert not execution.waiters(execution.jobs[job_id])
+            assert not execution.jobs[job_id].waiters
             assert c.actor(agent).state == AgentState.RUNNING
             # Closing the coordinator's manager preserves the actual job.
             execution.close()
             execution = ResearchExecution(
                 actions,
-                commands={"test": ApprovedCommand("test", ("echo", "ok"))},
+                commands={"test": command},
                 simulated=True,
             )
             execution.continuous_wait_seconds = 10
@@ -92,7 +105,7 @@ def test_job_wait_keeps_turn_and_reuses_job_after_recovery(tmp_path: Path) -> No
             )
             assert not again.stop and again.output["state"] == "succeeded"
             # The tool result is the feedback: no duplicate wakeup delivery.
-            assert not execution.waiters(execution.jobs[job_id])
+            assert not execution.jobs[job_id].waiters
         finally:
             execution.close(cancel=True)
 
@@ -124,7 +137,7 @@ def test_continuous_wait_is_cancellable(tmp_path: Path) -> None:
             wait.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await asyncio.wait_for(wait, 1)
-            assert not execution.waiters(execution.jobs[submitted.output["job_id"]])
+            assert not execution.jobs[submitted.output["job_id"]].waiters
         finally:
             execution.close(cancel=True)
 
@@ -221,7 +234,7 @@ def test_independent_records_jobs_and_identical_snapshots(tmp_path: Path) -> Non
         assert result.output["withdrawn"]
         assert c.store.is_withdrawn(first.candidate_id)
         assert not c.store.is_withdrawn(second.candidate_id), "One attempt must not prune another"
-        assert len(c.state["inboxes"]["rsi"]) == 1  # Initial launch request only.
+        assert c.state.inboxes.get("rsi")  # Main supervises through a Leader model.
 
     asyncio.run(scenario())
 
@@ -286,10 +299,13 @@ def test_all_attempts_continue_and_cancel_at_original_deadline(
 ) -> None:
     async def scenario() -> None:
         c, actions, agents = await setup(tmp_path)
-        original = c.state["started_at"]
+        original = c.state.started_at
         await launch(c, actions)
         assert len(c.store.run().research_agents) == 3
+        if leader_busy:
+            c.enqueue("system", "rsi", "Supervise", key="supervisor")
         runtime = ScriptedRuntime(leader_busy)
+        assert original is not None
         clock = datetime.fromisoformat(original).timestamp()
         engine = PassKEngine(
             c,
@@ -309,8 +325,8 @@ def test_all_attempts_continue_and_cancel_at_original_deadline(
             clock += 61
             await engine.tick()
             assert set(agents) == runtime.cancelled
-            assert c.state["started_at"] == original
-            assert c.state["budget_stop_reason"] == "Run wall-time budget exhausted"
+            assert c.state.started_at == original
+            assert c.state.budget_stop_reason == "Run wall-time budget exhausted"
         finally:
             await engine.close()
 
@@ -345,46 +361,19 @@ def test_only_trusted_passing_search_result_stops_group(tmp_path: Path) -> None:
             if digest != c.store.contract_digest():
                 with pytest.raises(ValueError, match="different comparison contract"):
                     c.store.record_verification(result)
-                assert c.state["status"] == "running"
+                assert c.state.status == "running"
                 continue
             c.store.record_verification(result)
             c.store.consider_best(result.result_id)
             stop_on_target(c)
-            assert c.state["status"] == ("succeeded" if i == 4 else "running")
+            assert c.state.status == ("succeeded" if i == 4 else "running")
         assert all(c.actor(a).state == AgentState.STOPPED for a in agents)
-        assert c.state["passk_target"]["result"]["score"] == 1.0
+        assert c.state.passk_target is not None
+        assert c.state.passk_target.result.score == 1.0
 
     asyncio.run(scenario())
 
 
-def test_workbench_mode_stops_and_rejects_intervention(tmp_path: Path) -> None:
-    async def scenario() -> None:
-        runtime = ScriptedRuntime()
-        app = ResearchApp(
-            tmp_path,
-            config=configuration(seconds=0.25),
-            runtime_factory=lambda _: runtime,
-            allow_simulation=True,
-        )
-        try:
-            detail = await app.create({"simulated": True})
-            c = app.coordinator(detail["run_id"])
-            await app.start(c)
-            c = app.coordinator(detail["run_id"])
-            with pytest.raises(ValueError, match="intervention"):
-                await app.call("chat", {"run_id": c.store.run_id, "text": "change direction"})
-            await asyncio.wait_for(app.active[c.store.run_id].task, 3)
-            assert c.state["status"] == "stopped"
-            assert len(set(runtime.calls)) == 4  # RSI plus the fixed three attempts.
-            assert len(c.store.run().research_agents) == 3
-            assert (
-                json.loads((c.store.root / "coordination/started-config.json").read_text())["mode"]
-                == "passk"
-            )
-        finally:
-            await app.close()
-
-    asyncio.run(scenario())
 
 
 def test_mode_validation_prevents_shared_budget_interference() -> None:
@@ -396,29 +385,14 @@ def test_mode_validation_prevents_shared_budget_interference() -> None:
         setattr(config.brief.limits, name, None)
 
 
-def test_cli_does_not_end_experiment_during_backoff() -> None:
-    from areal_rsi.ui.cli import _idle_reason
-
-    assert (
-        _idle_reason(
-            {
-                "mode": "passk",
-                "status": "running",
-                "worker_alive": True,
-                "agents": [{"state": "failed"}],
-            }
-        )
-        is None
-    )
-    assert (
-        _idle_reason({"mode": "passk", "status": "running", "worker_alive": False})
-        == "worker_stopped"
-    )
 
 
 def test_supervisor_reports_do_not_block_or_share_research(tmp_path: Path) -> None:
     async def scenario() -> None:
-        from areal_rsi.coordination.passk import CONTINUE_MESSAGE, needs_continue
+        from areal_rsi.infra.coordination.policies.legacy_passk import (
+            CONTINUE_MESSAGE,
+            needs_continue,
+        )
 
         c, actions, agents = await setup(tmp_path, 2)
         actor_id = agents[0]
@@ -433,8 +407,8 @@ def test_supervisor_reports_do_not_block_or_share_research(tmp_path: Path) -> No
         assert not result.stop
         assert c.actor(actor_id).state == AgentState.RUNNING
         assert len(c.actor(actor_id).iterations) == 1
-        report = c.state["passk_reports"][actor_id]
-        assert report["message"] == "我自己的实验发现"
+        report = c.state.passk_reports[actor_id]
+        assert report.message == "我自己的实验发现"
         events = [event for event in c.store.events() if event.kind == "report_submitted"]
         assert len(events) == 1
         assert events[0].agent_id == actor_id
@@ -445,7 +419,7 @@ def test_supervisor_reports_do_not_block_or_share_research(tmp_path: Path) -> No
         )
         assert len([e for e in c.store.events() if e.kind == "report_submitted"]) == 1
         with pytest.raises(ValueError, match="not part"):
-            actions.read_record(agents[1], report["uri"])
+            actions.read_record(agents[1], report.uri)
         assert not any(
             "我自己的实验发现" in json.loads(p.read_text()).get("text", "")
             for p in (c.store.root / "messages").glob("*.json")
@@ -490,53 +464,12 @@ def test_supervisor_reports_do_not_block_or_share_research(tmp_path: Path) -> No
     asyncio.run(scenario())
 
 
-def test_kernelbench_verification_uses_only_own_attempt_receipts(tmp_path: Path) -> None:
-    import hashlib
-    import runpy
-
-    client = runpy.run_path("examples/kernelbench_artifacts/client.py")
-    source = b"public candidate"
-    artifact = tmp_path / "candidate/L3P10/model_new.py"
-    artifact.parent.mkdir(parents=True)
-    artifact.write_bytes(source)
-    jobs = {}
-    evaluations = []
-    for agent, score in [("my-attempt", 1.2), ("peer", 50.0)]:
-        jobs[agent] = {"agent_id": agent}
-        output = tmp_path / "execution-outputs" / agent
-        output.mkdir(parents=True)
-        (output / "remote-job.json").write_text(json.dumps({"id": agent}))
-        evaluations.append(
-            {
-                "id": agent,
-                "kind": "eval",
-                "state": "succeeded",
-                "correct": True,
-                "speedup": score,
-                "source_sha256": hashlib.sha256(source).hexdigest(),
-                "evaluation": {"evaluation_policy": "strict-fp32-v1", "seed": 42},
-            }
-        )
-    (tmp_path / "coordination").mkdir()
-    (tmp_path / "coordination/jobs.json").write_text(json.dumps(jobs))
-    scoped = client["attempt_status"](
-        {"L3P10": {"jobs": evaluations, "used": 2}}, tmp_path, "my-attempt"
-    )
-    score, metrics, evidence = client["score_bundle"](
-        {"tasks": {"L3P10": {}}, "metric": "speedup", "exploration_seed": 42},
-        artifact.parents[1],
-        scoped,
-        "search",
-    )
-    assert score == 1.2 and metrics["L3P10_submissions"] == 1
-    assert evidence["L3P10"]["matching_evaluations"] == 1
-    assert "peer" not in json.dumps(evidence)
 
 
 def test_leader_budget_preserves_native_model_input_contract(tmp_path: Path) -> None:
     async def scenario() -> None:
         c, actions, agents = await setup(tmp_path, 1)
-        c.state["runtime_turns"] = 7
+        c.state.runtime_turns = 7
         # Keep native-turn diagnostics, without adding them to model-visible budgets.
         assert c.summary()["runtime_turns"] == 7
         for agent in ["rsi", *agents]:

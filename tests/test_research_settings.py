@@ -2,64 +2,51 @@ from __future__ import annotations
 
 import asyncio
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 from runtime_fakes import ActionRuntime
 
-from areal_rsi.base.storage import encode, write_json
-from areal_rsi.coordination.actions import ResearchActions
-from areal_rsi.coordination.brief_tool import PASSK_HIDDEN_LIMITS
-from areal_rsi.coordination.config import config_from_dict
-from areal_rsi.execution import ApprovedCommand
-from areal_rsi.modules.agent_runtime import ToolCall
-from areal_rsi.modules.research_runtime import ResearchRuntime
-from areal_rsi.modules.research_settings import ResearchConnection
-from areal_rsi.research_app import ResearchApp
-
-RETIRED = {
-    "compact_keep_recent_tokens": 8000,
-    "max_model_calls_per_turn": None,
-    "retry_initial_seconds": 2,
-    "retry_max_seconds": 60,
-}
-
-
-@pytest.mark.parametrize("field,value", RETIRED.items())
-def test_removed_configuration_fields_are_rejected(field: str, value: int | None) -> None:
-    with pytest.raises(ValueError, match="Unknown research configuration fields: " + field):
-        config_from_dict({"brief": {"objective": "test", "instructions": "test"}, field: value})
+from areal_rsi.api.interfaces import ToolCall
+from areal_rsi.api.research import TaskBrief
+from areal_rsi.infra.config import ResearchConnection
+from areal_rsi.infra.coordination.config import ResearchConfig, config_from_dict
+from areal_rsi.infra.coordination.tools.actions import ResearchActions
+from areal_rsi.infra.coordination.tools.brief import PASSK_HIDDEN_LIMITS
+from areal_rsi.infra.execution import ApprovedCommand
+from areal_rsi.infra.research import ResearchSystem
+from areal_rsi.infra.runtime.research_runtime import ResearchRuntime
+from areal_rsi.infra.storage.files import encode, write_json
 
 
 def test_current_brief_can_be_updated_and_started(tmp_path: Path) -> None:
     async def scenario() -> None:
-        app = ResearchApp(tmp_path, runtime_factory=lambda _: ActionRuntime())
+        system = ResearchSystem(tmp_path, runtime_factory=lambda _: ActionRuntime())
         try:
-            detail = await app.create({"conversation": True})
-            c = app.coordinator(detail["run_id"])
+            run_id = await system.create(ResearchConfig(TaskBrief("new", "describe")))
+            c = system.coordinator(run_id)
             arguments = encode(c.store.brief())
-            for key in PASSK_HIDDEN_LIMITS:
-                arguments["limits"].pop(key)
-            arguments.update(objective="Research", instructions="Keep fixed data")
+            for key in (*PASSK_HIDDEN_LIMITS, "max_agents", "max_effective_seconds"):
+                arguments["limits"].pop(key, None)
+            arguments.update(objective="Research", instructions="Keep fixed data",
+                             acceptance=["Run the configured checks using fixed data"])
             result = await ResearchActions(c).handler("interaction")(
                 ToolCall("update_brief", arguments, "update")
             )
             assert "error" not in result.output
             assert c.store.brief().instructions == "Keep fixed data"
-            config = app.config(c)
+            config = system.config(c)
             config.commands = (ApprovedCommand("noop", (sys.executable, "-c", "pass")),)
             write_json(c.store.root / "coordination/config.json", config.public())
-            c.state["intake"]["status"] = "ready"
-            c.state["execution_setup"] = "pending"
+            c.state.intake.status = "ready"
             c.save()
-            await app.start(c)
-            assert app.coordinator(c.store.run_id).state["status"] == "running"
+            await system.start(c.store.run_id)
+            assert system.coordinator(c.store.run_id).state.status == "running"
             started = json.loads((c.store.root / "coordination/started-config.json").read_text())
             assert started["brief"]["limits"]["max_model_calls"] is None
         finally:
-            await app.close()
+            await system.close()
 
     asyncio.run(scenario())
 
@@ -91,14 +78,6 @@ def test_invalid_provider_urls_are_rejected(url: str) -> None:
 def test_invalid_token_settings_are_rejected(tokens: int, window: int | None) -> None:
     with pytest.raises(ValueError):
         ResearchConnection("https://example.test", "fixture", "high", tokens, window)
-
-
-def test_research_imports_do_not_load_legacy_responses(tmp_path: Path) -> None:
-    subprocess.run(
-        [sys.executable, "-c", "import sys; import areal_rsi.research_app; "
-         "import areal_rsi.ui.preflight; assert 'areal_rsi.modules.responses' not in sys.modules"],
-        cwd=tmp_path, check=True, capture_output=True, text=True, timeout=10,
-    )
 
 
 def test_unenforceable_request_cap_is_rejected() -> None:

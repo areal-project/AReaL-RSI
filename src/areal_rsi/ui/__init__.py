@@ -1,1 +1,1 @@
-"""终端和 Web 入口，不实现研究或评测逻辑。"""
+"""Terminal entry points for research execution and inspection."""

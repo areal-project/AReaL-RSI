@@ -1,230 +1,142 @@
 # AReaL-RSI
 
-AReaL-RSI is a persistent multi-agent system for open-ended research. An Interaction agent
-clarifies the task with the user, RSI plans and coordinates the work, and Research Agents run
-experiments and report evidence. The workbench keeps the entire process visible and resumable,
-including agent timelines, shared findings, jobs, budgets, verification results, and final output.
+AReaL-RSI is a persistent research system. In the default `goal` mode, one **Leader executes the
+work directly**: investigating, editing, running experiments, checking evidence, and accepting the
+result of a run. When a model turn ends with an active goal, the scheduler continues the same
+session. An optional Interaction agent helps clarify requirements before execution starts.
+
+| Mode | Execution | Run completion |
+| --- | --- | --- |
+| `goal` (default) | One Leader; no Researcher is created | The Leader accepts the run against its criteria and evidence |
+| `legacy_passk` | Fixed k independent Researchers, each attempting the complete task | A supervisor maintains the attempts; the system stops at the target or configured budget and performs final verification when configured |
+
+Legacy pass@k preserves the v0.1 behavior from `main` at `4771407`. Future Agent Team work will let
+the Leader delegate portions of a task to Researchers while retaining responsibility for integration
+and run acceptance. Only the contracts exist today; there is no runnable team mode.
 
 ## Quick start
 
-### Requirements
-
-- Python 3.11 or later
-- [uv](https://docs.astral.sh/uv/)
-- Node.js 22.19 or later and pnpm when using the default `standard` agent backend
-- A Responses-compatible model endpoint with tool calling for the `standard` and `codex` backends
-
-The default macOS runtime uses `sandbox-exec`. On a trusted Linux server, set
-`RSI_RUNTIME_ISOLATION=linux-unrestricted` explicitly. This runs agents with the service user's
-permissions and does not provide filesystem or process isolation. See
-[Agent backends](docs/agent-backends.md) for the full trust model.
-
-### Install
+Requirements: Python 3.11 or later and [uv](https://docs.astral.sh/uv/). The default `standard`
+backend also needs Node.js 22.19 or later and pnpm. The `standard` and `codex` backends need a
+Responses-compatible model endpoint with tool calling. See [Agent backends](docs/agent-backends.md)
+for configuration, isolation, and optional adapters. macOS uses `sandbox-exec` by default;
+Linux uses unrestricted execution with the launching user's permissions.
 
 ```bash
 uv sync --locked
 cp -n .env.example .env
+# Set RSI_BASE_URL, RSI_API_KEY, RSI_MODEL, and other model settings in .env.
+uv run --env-file .env --locked rsi tui
 ```
 
-Configure the research model in `.env`. Credentials remain on the local machine.
+The terminal UI is the default entry point; `uv run --env-file .env python run.py` starts it too.
+Enter a goal, clarify its acceptance criteria with Interaction, and hand it to the Leader.
 
-```dotenv
-RSI_BASE_URL=https://your-provider.example/v1
-RSI_API_KEY=<your-api-key>
-RSI_MODEL=gpt-5.6-luna
-RSI_REASONING_EFFORT=xhigh
-RSI_DATA_ROOT=.rsi/research-lab
+For a small task that requires only the research model, load the CSV-script example and enter
+`/start` in the TUI:
+
+```bash
+uv run --env-file .env --locked rsi tui --config examples/goal.json
 ```
+
+To work on an existing Git repository:
+
+```bash
+uv run --env-file .env --locked rsi tui --workspace /absolute/path/to/repository
+```
+
+The Leader gets a separate worktree from the repository's HEAD at startup. Uncommitted changes in
+the user's checkout are not included. The TUI shows the workspace path. For ordinary files, use
+`seed_dir` in a configuration to copy starting material into the Leader's workspace.
 
 ## Choose a workflow
 
 | Goal | Start with | Additional requirements |
 | --- | --- | --- |
-| Run a first complete research loop | [Arithmetic research](#run-your-first-complete-research-loop) | A research model and a target model |
-| Create and monitor research interactively | [Web workbench](#web-workbench) | A research model |
-| Optimize a real GPU kernel | [KernelBench](#kernelbench-passk-research) | SSH access and a deployed GPUQ |
-| Run an existing frozen configuration | [Research CLI](#research-cli-and-http-api) | A `ResearchConfig` JSON file |
+| Try a single-agent task | [Goal example](examples/goal.json) | A research model |
+| Test several harness iterations locally | [Single-problem math loop](examples/harness/math_loop/README.md) | A research model; target defaults to the same connection |
+| Optimize a harness with formal evaluation | [Arithmetic](examples/harness/README.md#算术-harness) | A target model in addition to the research model |
+| Optimize a LiveCodeBench system prompt | [LiveCodeBench](examples/harness/README.md#livecodebench-harness) | EnvArena access and a fixed benchmark |
+| Optimize a reusable GPU kernel harness | [KernelBench harness](examples/harness/kernelbench/README.md) | KernelBench data and a GPU evaluation environment |
 
-The [example catalog](examples/README.md) separates complete workflows from runtime profiles,
-reusable components, benchmark assets, and deployment configurations.
-
-## Run your first complete research loop
-
-The built-in arithmetic workflow is the smallest end-to-end path. It requires only the research
-model variables (`RSI_*`) and target model variables (`RSI_TARGET_*`). It does not require a GPU,
-SSH, or EnvArena.
-
-Prepare a frozen configuration, then run it through `ResearchApp`:
-
-```bash
-uv run --env-file .env --locked python -m areal_rsi.adapters.benchmark_research prepare \
-  --benchmark math --directory .rsi/arithmetic/setup
-uv run --env-file .env --locked rsi research \
-  --config .rsi/arithmetic/setup/research.json --data-root .rsi/arithmetic
-```
-
-The command prints the run ID, status, and verification scores. If interrupted, use the printed
-resume command. Complete records are stored under `.rsi/arithmetic/runs/<run_id>/`; open the
-workbench with the same `--data-root` to inspect them visually.
-
-This workflow covers candidate snapshots, TRAIN evaluation, selection, and an independent
-VALIDATE final verification. See the [Arithmetic guide](examples/local/README.md) for its task and
-verification contract.
-
-## Web workbench
-
-Start or reuse a background workbench from the repository root:
-
-```bash
-uv run --env-file .env --locked python run.py --type web
-```
-
-Open **http://127.0.0.1:8197**, create a research session, and discuss the task, environment,
-resource limits, and target with the Interaction agent. Once started, the task and collaboration
-configuration are frozen, while progress and evidence remain visible throughout the run.
-
-Use `--port 8200` for another port or `--data-root /path/to/data` for another data directory. A
-compatible running workbench is reused; an unrelated service on the selected port causes a clear
-error and is never stopped or replaced. Background logs and PID files are stored under
-`<data-root>/runtime/`.
-
-For a foreground process that stops with Ctrl+C, run:
-
-```bash
-uv run --env-file .env --locked rsi workbench --port 8197
-```
-
-`rsi`, `rsi web`, and `rsi workbench` all start the same foreground workbench. New workbenches,
-`rsi research`, and `rsi preflight` resolve their data directory in this order:
-`--data-root`, `RSI_DATA_ROOT`, then `.rsi/research-lab`.
-
-### Agent backends and collaboration
-
-The workbench supports the `standard` backend, the `codex` backend, and trusted `runtime`
-configurations such as Hermes or Claude adapters. Model settings and backend selection are frozen
-when research starts. Every backend runs through `PackageAgentRuntime`; the runtime owns native
-sessions, tools, and context compression, while RSI owns orchestration, permissions, jobs, and
-verification.
-
-In `passk` mode, RSI launches independent researchers that each solve the complete task. The run
-stops when a formal result reaches the target or the group budget expires. Optional RSI
-coordination adds evidence sharing and non-blocking guidance; new runs default to coordination
-version v0.2.2, while v0.2.1 remains available for comparison. See
-[pass@k](docs/passk.md) and [Collaboration](docs/collaboration.md).
-
-The workbench renders one timeline per agent and compresses idle periods. It highlights score
-improvements, reports, guidance, and active jobs. Evidence links show where shared information came
-from without implying that the receiving agent adopted it. The view reads persisted history and
-does not modify the collaboration state.
-
-## KernelBench pass@k research
-
-With access to the `et15` SSH host and a deployed GPUQ, start the default KernelBench research run:
-
-```bash
-uv run --env-file .env --locked python run.py --type demo
-```
-
-The launcher starts or reuses the workbench and runs four independent researchers on L3P10 with
-the v0.2.2 coordination profile. Exploration runs for one hour with unlimited submissions. At the
-end, the system freezes the best candidate, performs an independent final verification, and
-archives the result. Closing the browser or launch terminal does not stop the background run.
-
-The [KernelBench guide](examples/kernelbench_artifacts/README.md) documents environment checks,
-recovery, task selection, submission budgets, and recorded results. For the fixed three-task,
-30-minute-per-researcher experiment, see
-[KernelBench v0.2.1](examples/kernelbench_artifacts/v0.2.1/README.md). The
-[generic harness workflow](examples/kernelbench/README.md) is a separate task that optimizes a
-harness rather than a specific kernel.
-
-## Research CLI and HTTP API
-
-Run a prepared `ResearchConfig` without an Interaction conversation:
-
-```bash
-uv run --env-file .env --locked rsi research --config /absolute/path/research.json
-uv run --env-file .env --locked rsi research --resume <run_id>
-```
-
-The CLI streams progress and preserves state when interrupted with Ctrl+C. Open the workbench with
-the same data directory to inspect the run. While the CLI owns execution, the Web UI is read-only.
-Use the workbench API when research must continue in the background while remaining interactive.
-
-The local HTTP API uses a CSRF token. Read it from `GET /api/bootstrap`, then include it in the
-`X-RSI-Token` header for write requests.
-
-| Endpoint | Purpose |
-| --- | --- |
-| `POST /api/runs` with `{"message":"research request"}` | Create an Interaction conversation |
-| `POST /api/runs` with `{"run_id":"id","config":{...}}` | Create a configured, idempotent run |
-| `POST /api/runs/<id>/start` | Start a prepared run |
-| `GET /api/runs` and `GET /api/runs/<id>` | Read runs, reports, jobs, and scores |
-| `POST /api/runs/<id>/chat` | Send a user message |
-| `POST /api/runs/<id>/pause`, `resume`, or `stop` | Control execution |
-
-Write requests use a JSON body and the `X-RSI-Token` header.
-
-## Other runnable benchmarks
-
-Arithmetic and LiveCodeBench both use `ResearchApp`. Their operator adapters freeze the task set,
-target model, scoring identity, and allowed changes before research starts.
-
-- [Arithmetic quickstart](examples/local/README.md): three original TRAIN tasks and three
-  independent VALIDATE tasks.
-- [LiveCodeBench](examples/remote/README.md): a pinned EnvArena benchmark where researchers optimize
-  a general system prompt.
-
-See the [example catalog](examples/README.md) for more tasks, runtime configurations, reusable
+The [example catalog](examples/README.md) separates runnable workflows, backend profiles,
 components, and deployment assets.
 
-## Validate the runtime
+### Arithmetic research with formal verification
 
-Run a production-path preflight before starting an expensive experiment:
+Configure research model variables (`RSI_*`) and target model variables (`RSI_TARGET_*`) in `.env`,
+then prepare and run the built-in arithmetic workflow. It needs no GPU, SSH, or EnvArena.
 
 ```bash
-uv run --env-file .env --locked rsi preflight --backend standard
-uv run --env-file .env --locked rsi preflight --backend codex
-# Validate an exact research configuration:
-uv run --env-file .env --locked rsi preflight --config /absolute/path/research.json
+uv run --env-file .env --locked rsi prepare arithmetic --directory .rsi/math/setup
+uv run --env-file .env --locked rsi research \
+  --config .rsi/math/setup/research.json --data-root .rsi/math
 ```
 
-Preflight uses the production runtime factory and checks the configured model, task tools, session
-restart behavior, session identity, and duplicate-message receipts. The default timeout is 180
-seconds and can be changed with `--timeout`. Results are written below `<data-root>/preflight/` and
-do not create a research run or submit GPU work.
+This generates a `ResearchConfig` for `ResearchSystem`. The Leader improves the task harness,
+compares candidate snapshots on TRAIN, verifies the selected candidate independently on VALIDATE,
+and accepts the run after checking the result. See the [harness guide](examples/harness/README.md)
+for the task and verification contract.
 
-## Storage and recovery
+## Interaction and recovery
 
-Each run is stored under `RSI_DATA_ROOT/runs/<run_id>/`, including the task brief, sessions, jobs,
-reports, shared evidence, frozen candidates, and verification results. RSI does not call models
-while waiting for a job, report, or user response. Temporary API failures are retried.
+| Input | Behavior |
+| --- | --- |
+| Ordinary text | Clarify requirements with Interaction before startup; send input directly to the Leader during execution |
+| `/start` | Start execution using the saved requirements |
+| `/pause`, Ctrl+P | Pause model execution; submitted jobs remain managed |
+| `/resume` | Resume a paused run; an exhausted budget must be addressed first |
+| `/retry` | Retry the failed current role using the existing task and session |
+| `/stop` | Terminate the run and cancel unfinished managed jobs |
+| `/export /new/path` | Export the accepted, immutable candidate to a new directory |
+| `/new` | Create a new task after the current run ends |
+| `/quit`, Ctrl+Q | Save and exit; retain state and jobs for recovery |
 
-After a service restart, active background runs and finalization resume automatically. Manually
-paused runs remain paused. A run cannot modify candidates after final verification has completed;
-start a new run for another experiment. Invalid external credentials and cluster failures remain
-visible as explicit errors or waiting states.
+Reopen a run using its original data directory:
 
-All current entry points use `ResearchApp`. Removed TUI, MCP, fixed-round, and
-`tui/run/resume/status/local-app` flows are not migrated. Existing records remain readable, but old
-plans and checkpoints should not be resumed with current configurations.
+```bash
+uv run --env-file .env --locked rsi tui --resume <run_id>
+```
 
-## Documentation
+Data directory precedence is `--data-root`, `RSI_DATA_ROOT`, then `.rsi/research-lab`. The TUI manages
+one run at a time, and only one process may control a run. Completed runs can be inspected and
+exported; additional work requires a new run. Closing the TUI interrupts local model execution
+while preserving the active message, session, and managed jobs for recovery.
+
+## Headless execution and runtime checks
+
+```bash
+uv run --env-file .env --locked rsi research --config examples/goal.json
+uv run --env-file .env --locked rsi preflight
+```
+
+Headless execution prints JSON events. When operator input is required, it exits with code 3 and
+prints a TUI resume command. Preflight checks the configured backend, tool calls, and session
+recovery without submitting benchmark or GPU jobs.
+
+A general task without a formal verifier can complete on the Leader's recorded criteria and
+evidence. When a verifier is configured, acceptance requires formal verification of the same
+candidate under the current protocol. A textual claim or another candidate's score cannot replace
+that result. Pausing, reaching a budget, and waiting for input do not mean that the goal was met.
+
+## Compatibility and development
+
+Only `goal` and `legacy_passk` are supported. The Web workbench, older collaboration variants, and
+historical experiment launchers have been removed. Old run records and configurations are not
+migrated. Run acceptance does not automatically merge, publish, or deploy a result.
+
+```bash
+make check
+```
+
+`infra/research.py` exposes `ResearchSystem`, the application entry point. `api/` defines contracts,
+`infra/` implements execution, storage, evaluation, and coordination, and `ui/` handles presentation
+and input. `make check` runs Python behavior and architecture tests, Ruff, and Mypy.
 
 | Guide | Contents |
 | --- | --- |
-| [Architecture](docs/architecture.md) | Component ownership, messages, candidates, and data flow |
-| [Interfaces](docs/interfaces/README.md) | `ResearchConfig`, domain APIs, commands, and verification contracts |
-| [Agent backends](docs/agent-backends.md) | Runtime configuration, isolation, tools, sessions, and testing |
-| [pass@k](docs/passk.md) | Independent attempts, budgets, stopping, and experiment comparison |
-| [Collaboration](docs/collaboration.md) | Guidance versions, permissions, prompts, and reproducibility |
-| [Effective time](docs/effective-time.md) | Excluding API failures and GPU queue delays from active time |
-| [GPU isolation](docs/gpu-queue-isolation.md) | KernelBench queue deployment and isolation boundaries |
-
-## Development
-
-Run the Python checks with `make check`. Run frontend checks with:
-
-```bash
-npm ci --prefix tests/frontend
-npm test --prefix tests/frontend
-```
+| [Architecture](docs/architecture.md) | Responsibilities, goal lifecycle, and future Agent Team boundaries |
+| [Interfaces](docs/interfaces/README.md) | Domain APIs, controls, and verification contracts |
+| [Legacy pass@k](docs/passk.md) | Independent attempts, budgets, stopping, and final verification |
+| [Agent backends](docs/agent-backends.md) | Runtime configuration, isolation, tools, and sessions |
+| [Effective time](docs/effective-time.md) | Accounting for API outages and GPU queue delays |

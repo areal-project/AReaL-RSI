@@ -9,9 +9,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
-from areal_rsi.api.base import AgentSpec, ModelVersion
-from areal_rsi.base.storage import FileContentStore, FileTrajectoryStore, now
-from areal_rsi.modules.runtime_package import PackageAgentRuntime, RuntimeSettings, sandbox_command
+from areal_rsi.api.records import AgentSpec, ModelVersion
+from areal_rsi.infra.runtime.runtime_package import (
+    PackageAgentRuntime,
+    RuntimeSettings,
+    sandbox_command,
+)
+from areal_rsi.infra.storage.files import FileContentStore, FileTrajectoryStore, now
 
 
 class PackageRuntimeTest(unittest.IsolatedAsyncioTestCase):
@@ -129,7 +133,7 @@ class PackageRuntimeTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn(b"PermissionError", err)
             import areal_rsi
 
-            evaluator = Path(areal_rsi.__file__).parent / "modules/benchmark.py"
+            evaluator = Path(areal_rsi.__file__).parent / "infra/tasks/arithmetic.py"
             process = await asyncio.create_subprocess_exec(
                 *prefix,
                 sys.executable,
@@ -182,11 +186,11 @@ class PackageRuntimeTest(unittest.IsolatedAsyncioTestCase):
             model = ModelVersion("model-test", "test", await content.put_text("model"), now())
             with (
                 patch(
-                    "areal_rsi.modules.dsh.ensure_cli",
+                    "areal_rsi.infra.runtime.dsh.ensure_cli",
                     return_value=experiment / "dsh-cli/node_modules/.bin/dsh",
                 ),
                 patch(
-                    "areal_rsi.modules.runtime_dsh.ensure_profile",
+                    "areal_rsi.infra.runtime.dsh.ensure_profile",
                     return_value=experiment / "runtime-dsh/fixture",
                 ),
                 patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=Mock())),

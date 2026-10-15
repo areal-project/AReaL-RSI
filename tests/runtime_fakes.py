@@ -1,4 +1,4 @@
-"""Domain-test doubles at the AgentRuntime boundary, with no alternate model loop."""
+"""Domain-test doubles at the ResearchAgentRuntime boundary, with no alternate model loop."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-from areal_rsi.modules.agent_runtime import ToolCall, TurnResult
+from areal_rsi.api.interfaces import ToolCall, TurnResult
 
 
 class ActionRuntime:

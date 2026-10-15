@@ -1,82 +1,62 @@
-# ResearchApp 架构
+# 架构与演进边界
 
-ResearchApp 是唯一的研究应用入口。CLI、Web 工作台和仓库启动脚本都调用它。
+设计依据：[RSI Design Doc](https://yuque.antfin.com/areal-team/swe/ot9ck3wxptzz4zdh)。本分支保留文档中的基础能力分层，调整 Evolver 的职责：默认 Leader 执行完整任务，未来 Researcher 执行 Leader 分配的局部任务。准出针对一个 run。
 
-```text
-用户 → Web / rsi research → ResearchApp
-                            ├─ Interaction：确认需求和执行配置
-                            ├─ ResearchEngine / PassKEngine：调度消息与研究回合
-                            ├─ ResearchRuntime → PackageAgentRuntime → DSH / Codex / Hermes 等
-                            └─ ResearchExecution → JobManager → 实验命令与可信验证器
+```mermaid
+flowchart TD
+    U[用户] --> T[TUI / headless CLI]
+    T --> S[ResearchSystem：一个 run 的生命周期]
+    S --> I[Interaction：启动前整理需求]
+    I --> L[Goal：Leader 直接执行和验收]
+    S --> P[Legacy pass@k：main v0.1]
+    L --> R[ResearchRuntime：模型会话与原生工具]
+    L --> E[ResearchExecution：作业与验证]
+    P --> R
+    P --> E
+    E --> B[基础能力：候选、版本、轨迹、评测、资源]
+    R --> B
 ```
 
-## 编排与执行
+## 当前职责
 
-Interaction、RSI 和 Research Agents 的角色 prompt 位于 `agents/`，均由同一个
-`ResearchRuntime` 执行。所有新研究都使用 pass@k，固定启动 k 名独立研究员；
-纯 pass@k 中 RSI 只监督，leader guidance 模块增加证据共享和非阻塞建议，
-不增加、替换或停止研究员。它们共用消息、节点、作业和验证记录，探索停止后
-由系统执行最终复测，不存在另一套固定轮次实验调度器。
+- `api/research.py`：任务、goal、候选、验证、消息和调度状态。`TeamTask` / `TaskReport` 是未来分工契约。
+- `api/interfaces.py`：Runtime、VersionManager、TrajectoryStore、Memory、Builder、TrainingBackend 等能力协议，以及未实现的 `AgentTeam`。
+- `infra/research.py`：create/start/message/pause/resume/stop/export、进程所有权与资源释放。无 HTTP dispatcher。
+- `infra/coordination/coordinator.py`：持久状态与消息交付；`engine.py`：模型回合调度、恢复、使用量、取消和预算。
+- `infra/coordination/policies/goal.py`：Leader 持续执行、阻塞、完成判定。`legacy_passk.py`：独立完整尝试的历史行为。
+- `infra/coordination/tools/`：角色权限、工作区、候选和证据工具；`evaluation/`：受管理作业及可信验证。
+- `infra/runtime/`：DSH、Codex 和 Runtime 包接入、会话、沙箱和工具桥。
+- `infra/storage/`、`infra/tasks/`、`infra/execution/`：内容快照、追加版本、轨迹、Task 执行、评测和资源生命周期。
+- `ui/tui.py`、`ui/cli.py`：展示与输入，不包含研究策略。
 
-原生 Runtime 负责推理、工具调用、会话历史、压缩和供应商重试。ResearchEngine
-负责收件箱交付、并发、时限、token 使用量、等待和取消。等待外部作业时不调用模型。
+`ResearchSystem.attach()` 只组装或复用本地运行实例，后台执行由 `_serve()` 管理。
+模型、作业监控和 run 所有权在创建时登记到资源栈，初始化失败、后台退出或提前取消都使用同一套释放逻辑。
+模型调度循环退出后关闭模型会话；作业监控和 run 锁保留至 legacy 最终复测结束。
+两种 Engine 各自提供默认 prompt，legacy 的达标停止、预算停止和最终复测规则集中在 `legacy_passk.py`。
 
-## 消息与会话
+## Goal 流程
 
-Interaction 在启动前确认任务和执行条件；RSI 的监督或建议范围由所选[协作模块](collaboration.md)
-决定。每名研究员保留独立工作区和原生会话，在固定预算内持续探索；报告不会要求它等待
-新的分工指令。预算、停止和继续规则以 [pass@k](passk.md) 为准。
+Interaction 可以跳过：完整配置直接 `start`。对话创建时，Interaction 将需求保存为 brief，然后 `start_research`。启动后 Interaction 不再参与执行，用户消息直接投递给 Leader。
 
-消息、报告及作业事件先持久化，再触发调度。消息带稳定 ID、发送者、接收者、正文与引用；
-重复交付复用已有回执，结果不明的外部操作先核查，避免重复提交。
-角色 Prompt 保持稳定，预算和当前状态作为回合消息提供；上下文压缩由原生后端负责。
-运行中建议在 RSI 工具返回或下一回合投递，不保证插入任意原生工具调用之间。
+Leader 使用自己的工作区、原生文件/终端工具、候选与作业工具执行任务。`update_goal` 持久化摘要、当前步骤、下一步、验收条件、证据和阻塞原因。回合结束而 goal 仍 active 时，调度器在原会话继续。`ask_user` / blocked 停止续跑，用户回答后恢复；等待作业通过持久 waiter 唤醒，不靠模型循环查询。
 
-## 候选与验证
+`completed` 需要明确的验收条件和证据，不允许跳过未完成作业或未处理的用户消息。有正式协议时检查候选、协议摘要、阶段、目标分数和最新验证结果；要求 final 时必须对同一候选完成 final。没有 verifier 时保存 Leader 的验收依据，可信度来自实际工具证据和 Leader 判断，不宣称系统能自动证明任意自然语言要求。
 
-研究员在独立工作区修改产物，通过 `save_candidate` 创建内容寻址快照。
-`verify_candidate` 将该快照复制到实验拥有的输入目录，由操作员登记的命令评测。
-命令和答案不从候选目录导入；验证结果须匹配候选摘要、研究契约、评测协议、数据
-身份及 phase。stdout 和研究员报告不能充当正式分数。
+候选是不可变快照。`/export` 只导出验收时选定的快照，工作区之后的修改不会混入。Git worktree 与用户原检出隔离。完成一个 run 不意味着自动发布、合并或部署。
 
-数学和 LCB 的适配器位于 `adapters/benchmark_research.py`。它只处理一次候选评测：
-数学调用固定 Task 模型与 ArithmeticVerifier；LCB 复用固定 EnvArena
-Benchmark、Model、Harness 和 Reward。研究编排始终属于 ResearchApp。
+暂停与等待不等于完成。关闭 TUI 中断本地模型执行，但保留活动消息、会话和作业供重启；stop 取消未完成作业，终止 run。预算耗尽保存未完成状态。正式验证失败时 Leader 可以继续修复。
 
-KernelBench 单题直接生成 kernel，由 GPUQ 执行正式评测；已有通用 KernelBench
-harness 适配器也通过 ResearchApp 的命令和验证器接入。
+## 未来 Agent Team（仅契约）
 
-候选可以通过 `withdraw_candidate` 撤回，保留原因、证据和原分数；失效候选不再参与
-选优，纯 pass@k 的撤回仅影响当前尝试。最终复测不能用于继续优化。
-实验命令的自动验证、收尾选优和输出协议见[接口](interfaces/README.md#实验命令与评分)。
+参考 [DeepSeek Harness Agent Team](https://github.com/deepseek-ai/deepseek-harness/tree/master/packages/experimental/tool-agent-team) 的 Leader 派发和持久任务思想。保留现有 Runtime、作业、记录机制，不接入另一套模型循环。
 
-## 数据
+1. Leader 拆分 `TeamTask`：run、任务说明、局部验收条件和授予的输入引用。
+2. Leader 通过 `AgentTeam.delegate` 启动 Researcher。Researcher 使用独立会话/worktree，仅获取任务及授权材料。
+3. Researcher 返回 `TaskReport`：结果、候选、证据或阻塞；完成任务不会完成 run。
+4. Leader 检查报告、整合产物、解决冲突并验证，继续用当前 run 完成入口准出。Leader 也可以自己执行任意步骤。
 
-`api/base.py` 定义 `ResearchPlan`、`ResearchRun`、Agent 与节点记录，以及独立 Task
-评测使用的模型、能力快照、轨迹和验证契约。`api/research.py` 定义需求、候选、
-研究消息、报告与可信成绩。
+当前没有 Team 的 spawn 工具、task board 调度、同伴通信或集成实现，也不接受 `agent_team` 配置值。将来实现时不复用 legacy 中“每人完整解题”的启动语义。训练后端等尚未接入能力保持协议，不提供返回假成功的占位实现；底层已有 Task HarnessRuntime 承担推理执行。
 
-```text
-<data_root>/runs/<run_id>/
-├─ run.json
-├─ coordination/         # 调度、配置、作业意图
-├─ agents/<id>/          # 工作区与原生会话
-├─ iterations/           # 研究节点
-├─ candidates/           # 内容寻址产物记录
-├─ jobs/                 # 进程、日志、状态
-├─ execution-inputs/     # 冻结的验证输入
-├─ execution-outputs/    # 私有结果与显式公开反馈
-├─ verifications/        # 已核验分数
-└─ finalization/         # 可选的操作员最终复测
-```
+## 不兼容范围
 
-每个研究由执行锁限制为单个调度器。当前格式的暂停、重启和消息去重保留；不迁移
-已删除入口的计划、检查点或旧字段。旧实验需使用原版本，新实验使用当前配置。
-
-## 代码位置
-
-- `research_app.py` 与 `ui/workbench*`：应用和工作台入口。
-- `coordination/`：需求接入、协作选择、消息、调度与候选验证。
-- `agents/`：角色 Prompt；`modules/research_runtime.py`：原生运行时适配。
-- `execution/`：后台进程、资源和作业；`adapters/`、`examples/`：任务接入。
-- `api/`、`base/`：数据契约与可复用存储。优化对象分类和领域接口见[接口](interfaces/README.md)。
+只接受 `goal` 和 `legacy_passk`。删除协作模块组合、v0.2.x/leader guidance、旧 Researcher goal、Web/UI 控制协议及个人历史实验配置。新状态使用具名记录并严格校验，不为旧数据加入迁移分支。源代码清理不修改用户仓库、共享数据集或外部实验服务。

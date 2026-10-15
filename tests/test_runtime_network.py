@@ -6,12 +6,13 @@ from typing import Any
 
 import pytest
 
-from areal_rsi.modules.runtime_network import HttpsTunnel
+from areal_rsi.infra.runtime.runtime_network import HttpsTunnel
 
 
-def test_https_tunnel_rejects_private_destinations() -> None:
+@pytest.mark.parametrize("proxy_url", ["", "http://127.0.0.1:9"])
+def test_https_tunnel_rejects_private_destinations(proxy_url: str) -> None:
     async def scenario() -> None:
-        tunnel = HttpsTunnel()
+        tunnel = HttpsTunnel(proxy_url=proxy_url)
         port = await tunnel.start()
         try:
             for target in ("127.0.0.1:443", "localhost:443", "[::1]:443", "example.com:8198"):
@@ -27,11 +28,17 @@ def test_https_tunnel_rejects_private_destinations() -> None:
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("via_proxy", [False, True])
 def test_https_tunnel_pins_public_address_and_preserves_bytes(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, via_proxy: bool,
 ) -> None:
     async def scenario() -> None:
         async def echo(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            if via_proxy:
+                header = await reader.readuntil(b"\r\n\r\n")
+                assert header.startswith(b"CONNECT 93.184.216.34:443 HTTP/1.1")
+                writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                await writer.drain()
             writer.write(await reader.readexactly(4))
             await writer.drain()
             writer.close()
@@ -44,13 +51,13 @@ def test_https_tunnel_pins_public_address_and_preserves_bytes(
             assert args == ("example.com", 443)
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
 
-        async def pinned(host: str, port: int) -> Any:
-            assert (host, port) == ("93.184.216.34", 443)
+        async def pinned(host: str, port: int, **kwargs: Any) -> Any:
+            assert (host, port) == (("proxy.test", 8080) if via_proxy else ("93.184.216.34", 443))
             return await connect("127.0.0.1", origin)
 
         monkeypatch.setattr(asyncio.get_running_loop(), "getaddrinfo", resolve)
         monkeypatch.setattr(asyncio, "open_connection", pinned)
-        tunnel = HttpsTunnel()
+        tunnel = HttpsTunnel(proxy_url="http://proxy.test:8080" if via_proxy else "")
         port = await tunnel.start()
         try:
             reader, writer = await connect("127.0.0.1", port)

@@ -8,18 +8,18 @@ import secrets
 from pathlib import Path
 from typing import Any
 
-from areal_rsi.base.paths import data_root
-from areal_rsi.base.storage import new_id
-from areal_rsi.coordination.actions import definition
-from areal_rsi.coordination.config import ResearchConfig, config_from_dict
-from areal_rsi.modules.agent_runtime import ToolCall, ToolResult
-from areal_rsi.research_app import ResearchApp
+from areal_rsi.api.interfaces import ToolCall, ToolResult
+from areal_rsi.infra.coordination.config import ResearchConfig, config_from_dict
+from areal_rsi.infra.coordination.tools.actions import definition
+from areal_rsi.infra.runtime.research_runtime import ResearchRuntime
+from areal_rsi.infra.storage.files import new_id
+from areal_rsi.infra.storage.paths import data_root
 
 
 async def preflight(
     config: ResearchConfig, *, root: Path | None = None, timeout: float = 180
 ) -> dict[str, Any]:
-    """Use the same factory as ResearchApp; no alternate model transport or loop."""
+    """Use the same runtime as ResearchSystem; no alternate model transport or loop."""
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("Preflight timeout must be finite and positive")
     config = config_from_dict(config.public())
@@ -46,7 +46,7 @@ async def preflight(
         "Read its schema before calling; a failed tool call is not an acknowledgement. "
         "Do not write notes to files. Use the Runtime tool instructions below."
     )
-    runtime = ResearchApp._runtime(config)
+    runtime = ResearchRuntime(config)
     try:
         async with asyncio.timeout(timeout):
             first = await runtime.turn(
@@ -64,7 +64,7 @@ async def preflight(
             binding_path = directory / "runtime/session-binding.json"
             binding = binding_path.read_bytes()
             await runtime.close()
-            runtime = ResearchApp._runtime(config)
+            runtime = ResearchRuntime(config)
             second = await runtime.turn(
                 directory,
                 system_prompt=prompt,
@@ -83,7 +83,7 @@ async def preflight(
             ):
                 raise ValueError("The native session did not preserve its identity and memory")
             await runtime.close()
-            runtime = ResearchApp._runtime(config)
+            runtime = ResearchRuntime(config)
             event_count = len(events)
             duplicate = await runtime.turn(
                 directory,

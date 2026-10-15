@@ -1,4 +1,4 @@
-"""Opt-in Linux worker execution, including the real package/tool bridge."""
+"""Automatic Linux worker execution, including the real package/tool bridge."""
 
 from __future__ import annotations
 
@@ -10,21 +10,42 @@ from unittest.mock import patch
 
 import pytest
 
+from areal_rsi.api.interfaces import ToolCall, ToolResult
 from areal_rsi.api.research import TaskBrief
-from areal_rsi.coordination.actions import definition
-from areal_rsi.coordination.config import ResearchConfig
-from areal_rsi.modules.agent_runtime import ToolCall, ToolResult
-from areal_rsi.modules.research_runtime import ResearchRuntime
-from areal_rsi.modules.runtime_package import RuntimeSettings, sandbox_command
+from areal_rsi.infra.coordination.config import ResearchConfig
+from areal_rsi.infra.coordination.tools.actions import definition
+from areal_rsi.infra.runtime.research_runtime import ResearchRuntime
+from areal_rsi.infra.runtime.runtime_package import RuntimeSettings, sandbox_command
 
 
-def test_isolation_requires_explicit_supported_mode(
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+def test_isolation_without_override_selects_platform_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str
+) -> None:
+    """Platform defaults produce the appropriate worker launch command."""
+    monkeypatch.delenv("RSI_RUNTIME_ISOLATION", raising=False)
+    monkeypatch.setattr(sys, "platform", platform)
+    settings = RuntimeSettings({})
+    command = sandbox_command(tmp_path, tmp_path, (), isolation=settings.isolation)
+    if platform == "linux":
+        assert settings.isolation == "linux-unrestricted"
+        assert command[:2] == [sys.executable, "-I"]
+        assert not (tmp_path / "sandbox.sb").exists()
+    else:
+        assert settings.isolation == "sandbox"
+        assert command[:2] == ["/usr/bin/sandbox-exec", "-f"]
+
+
+def test_isolation_explicit_override_preserves_validation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delenv("RSI_RUNTIME_ISOLATION", raising=False)
+    monkeypatch.setenv("RSI_RUNTIME_ISOLATION", "sandbox")
     assert RuntimeSettings({}).isolation == "sandbox"
     with patch("sys.platform", "linux"), pytest.raises(RuntimeError, match="explicitly set"):
-        sandbox_command(tmp_path, tmp_path, ())
+        sandbox_command(tmp_path, tmp_path, (), isolation=RuntimeSettings({}).isolation)
+    monkeypatch.setenv("RSI_RUNTIME_ISOLATION", "linux-unrestricted")
+    with patch("sys.platform", "linux"):
+        assert RuntimeSettings({}).isolation == "linux-unrestricted"
     monkeypatch.setenv("RSI_RUNTIME_ISOLATION", "typo")
     with pytest.raises(ValueError, match="RSI_RUNTIME_ISOLATION"):
         RuntimeSettings({})
@@ -40,7 +61,7 @@ def test_isolation_requires_explicit_supported_mode(
 def test_linux_worker_shell_tools_and_resume(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("RSI_RUNTIME_ISOLATION", "linux-unrestricted")
+    monkeypatch.delenv("RSI_RUNTIME_ISOLATION", raising=False)
     monkeypatch.setenv("RSI_API_KEY", "fixture")
     monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:54321")
     monkeypatch.setenv("UNRELATED_API_KEY", "must-not-be-inherited")

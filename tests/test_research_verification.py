@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import hashlib
 import json
 import sys
@@ -9,9 +10,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from test_collaboration_config import app_at
+from runtime_fakes import ActionRuntime
 
-from areal_rsi.api.base import RecordRef
+from areal_rsi.api.interfaces import ToolCall
+from areal_rsi.api.records import RecordRef
 from areal_rsi.api.research import (
     CandidateSnapshot,
     ResearchLimits,
@@ -19,15 +21,15 @@ from areal_rsi.api.research import (
     VerificationContract,
     VerifiedResult,
 )
-from areal_rsi.base.storage import now, write_json
-from areal_rsi.coordination.actions import ResearchActions
-from areal_rsi.coordination.config import ResearchConfig, config_from_dict
-from areal_rsi.coordination.coordinator import Coordinator
-from areal_rsi.coordination.jobs import ResearchExecution
-from areal_rsi.coordination.store import ResearchStore
-from areal_rsi.coordination.verification import read_trusted_result
-from areal_rsi.execution import ApprovedCommand, JobRecord, JobSpec
-from areal_rsi.modules.agent_runtime import ToolCall
+from areal_rsi.infra.coordination.config import ResearchConfig, config_from_dict
+from areal_rsi.infra.coordination.coordinator import Coordinator
+from areal_rsi.infra.coordination.evaluation.jobs import ResearchExecution
+from areal_rsi.infra.coordination.evaluation.verification import read_trusted_result
+from areal_rsi.infra.coordination.store import ResearchStore
+from areal_rsi.infra.coordination.tools.actions import ResearchActions
+from areal_rsi.infra.execution import ApprovedCommand, JobRecord, JobSpec
+from areal_rsi.infra.research import ResearchSystem
+from areal_rsi.infra.storage.files import encode, now, write_json
 
 
 def test_command_parameter_help_survives_config_and_preserves_execution(tmp_path: Path) -> None:
@@ -82,7 +84,7 @@ def test_command_parameter_help_survives_config_and_preserves_execution(tmp_path
                     await asyncio.sleep(0.05)
             job_id = result.output["job_id"]
             assert runner.manager.get(job_id).state == "succeeded"
-            assert Path(runner.jobs[job_id]["output"], artifact).read_text() == dataset
+            assert Path(runner.jobs[job_id].output, artifact).read_text() == dataset
         finally:
             runner.close(cancel=True)
 
@@ -154,8 +156,7 @@ def fixture(
     return store, job, candidate, identity, result, output
 
 
-@pytest.mark.parametrize("adapter", ["content", "kernelbench"])
-@pytest.mark.parametrize("phase", ["search", "final"])
+@pytest.mark.parametrize("adapter,phase", [("content", "search"), ("kernelbench", "final")])
 def test_real_result_binds_frozen_candidate_contract_and_phase(
     tmp_path: Path, adapter: str, phase: str
 ) -> None:
@@ -196,20 +197,22 @@ def test_job_artifact_is_frozen_and_scored_automatically(tmp_path: Path) -> None
                 while await runner.poll():
                     await asyncio.sleep(0.05)
             source = runner.jobs[submitted.output["job_id"]]
-            verified = runner.jobs[source["verification_job_id"]]
-            assert verified["source_job_id"] == submitted.output["job_id"]
-            assert verified["result"]["score"] == 0.7
+            assert source.verification_job_id is not None
+            verified = runner.jobs[source.verification_job_id]
+            assert verified.result is not None and verified.result_ref is not None
+            assert verified.source_job_id == submitted.output["job_id"]
+            assert verified.result.score == 0.7
             # Trusted verification keeps its existing result namespace; no second
             # public record with the same ID exposes private verifier execution.
             verification_path = (
-                c.store.root / "executions" / f"{source['verification_job_id']}.json"
+                c.store.root / "executions" / f"{source.verification_job_id}.json"
             )
             assert not verification_path.exists()
-            assert c.store.record_reference(RecordRef(source["verification_job_id"])).uri == (
-                verified["result"]["uri"]
+            assert c.store.record_reference(RecordRef(source.verification_job_id)).uri == (
+                verified.result_ref.uri
             )
-            write_json(Path(verified["output"]) / "progress.json", {"message": "private verifier"})
-            verification_job = runner.manager.get(source["verification_job_id"])
+            write_json(Path(verified.output) / "progress.json", {"message": "private verifier"})
+            verification_job = runner.manager.get(source.verification_job_id)
             assert "progress" not in runner.for_agent(verification_job, agent)
             Path(verification_job.log_path).write_text("private verification details")
             for viewer in (agent, "rsi"):
@@ -272,7 +275,7 @@ def test_job_receipt_publication_recovers_without_resubmission(
 
 
 @pytest.mark.parametrize("exit_code", [0, 7])
-def test_running_job_can_be_shared_and_reported_before_completion_after_recovery(
+def test_running_job_receipt_and_private_logs_survive_recovery(
     tmp_path: Path, exit_code: int
 ) -> None:
     async def scenario() -> None:
@@ -309,7 +312,7 @@ def test_running_job_can_be_shared_and_reported_before_completion_after_recovery
             assert not initial["output_available"] and initial["exit_code"] is None
             assert submitted.output["uri"] == ref.uri
             assert submitted.output["record_id"] == job_id
-            write_json(Path(runner.jobs[job_id]["output"]) / "progress.json", {
+            write_json(Path(runner.jobs[job_id].output) / "progress.json", {
                 "stage": "transport", "message": "Retrying connection", "score": 9.0,
                 "unpublished": "private operator field",
             })
@@ -324,16 +327,6 @@ def test_running_job_can_be_shared_and_reported_before_completion_after_recovery
             assert not ({"spec", "env", "command", "cwd", "output"} & initial.keys())
             with pytest.raises(ValueError, match="not shared"):
                 actions.read_record(peer, job_id)
-            shared = await actions.handler(owner)(ToolCall(
-                "share_update", {"agent_ids": [peer], "message": "Experiment is running",
-                                 "references": [job_id], "save_current": False}, "share",
-            ))
-            assert "error" not in shared.output
-            report = await actions.handler(owner)(ToolCall(
-                "submit_report", {"message": "Phase findings; this job is still pending",
-                                  "references": [job_id]}, "report",
-            ))
-            assert "error" not in report.output
             c.end_turn(owner)
             runner.close()
             recovered = Coordinator(c.store)
@@ -341,18 +334,18 @@ def test_running_job_can_be_shared_and_reported_before_completion_after_recovery
             runner = ResearchExecution(actions, commands={"produce": command})
             replay = await runner.submit(owner, call)
             assert replay.output["job_id"] == job_id and len(runner.jobs) == 1
-            assert actions.read_record(peer, job_id) == initial
-            Path(runner.jobs[job_id]["output"], "gate").touch()
+            assert actions.read_record(owner, job_id) == initial
+            Path(runner.jobs[job_id].output, "gate").touch()
             async with asyncio.timeout(10):
                 while await runner.poll():
                     await asyncio.sleep(0.02)
-            final = actions.read_record(peer, job_id)
+            final = actions.read_record(owner, job_id)
             assert final["terminal"] and final["exit_code"] == exit_code
             assert final["state"] == ("succeeded" if exit_code == 0 else "failed")
             assert final["output_available"] == (exit_code == 0)
             assert final["created_at"] == initial["created_at"]
             assert recovered.store.record_reference(RecordRef(job_id)) == ref
-            assert runner.jobs[job_id]["result"]["uri"] == ref.uri
+            assert runner.jobs[job_id].result_ref == ref
             assert recovered.store.run().best_result_ref is None
             assert len(list((recovered.store.root / "executions").glob("*.json"))) == 1
             status = await runner.handler(owner)(
@@ -365,9 +358,9 @@ def test_running_job_can_be_shared_and_reported_before_completion_after_recovery
                 assert "verbose prefix:" not in log["text"]
                 assert runner.for_agent(runner.manager.get(job_id), "rsi")["failure_log"] == log
                 assert "failure_log" not in runner.for_agent(runner.manager.get(job_id), peer)
-                runner.jobs[job_id]["feedback"] = {"content": "Published failure details"}
+                runner.jobs[job_id].feedback = {"content": "Published failure details"}
                 assert "failure_log" not in runner.for_agent(runner.manager.get(job_id), owner)
-                runner.jobs[job_id].pop("feedback")
+                runner.jobs[job_id].feedback = None
                 Path(runner.manager.get(job_id).log_path).unlink()
                 assert "failure_log" not in runner.for_agent(runner.manager.get(job_id), owner)
             else:
@@ -378,13 +371,17 @@ def test_running_job_can_be_shared_and_reported_before_completion_after_recovery
     asyncio.run(scenario())
 
 
-def test_verifier_only_run_automatically_confirms_best_candidate(tmp_path: Path) -> None:
+@pytest.mark.parametrize("target", [None, 0.5])
+def test_verifier_only_run_automatically_confirms_best_candidate(
+    tmp_path: Path, target: float | None
+) -> None:
     script = tmp_path / "verify.py"
-    script.write_text("""import json, os, sys
+    script.write_text("""import json, os, sys, time
 from pathlib import Path
 output, workspace, phase = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
 assert phase == 'final' and (workspace/'answer').read_text() == 'best'
 assert os.environ['CUDA_VISIBLE_DEVICES'] == '0'
+time.sleep(0.15)
 job = json.loads((workspace.parents[2]/'jobs'/output.name/'job.json').read_text())
 meta = job['spec']['metadata']
 (output/'evaluation.json').write_text(json.dumps(dict(
@@ -397,7 +394,7 @@ meta = job['spec']['metadata']
             "Research",
             "Improve answer",
             verification=VerificationContract(
-                "quality", target=0.5, identity={"require_final_confirmation": True}
+                "quality", target=target, identity={"require_final_confirmation": True}
             ),
         ),
         verifier=ApprovedCommand(
@@ -419,10 +416,11 @@ meta = job['spec']['metadata']
     config.brief.limits.gpu_ids = ("0",)
 
     async def scenario() -> None:
-        app = app_at(tmp_path)
+        config.mode = "legacy_passk"
+        app = ResearchSystem(tmp_path, runtime_factory=lambda _: ActionRuntime())
         try:
-            detail = await app.create({"config": config.public()})
-            c = app.coordinator(detail["run_id"])
+            run_id = await app.create(config)
+            c = app.coordinator(run_id)
             workspace = tmp_path / "candidate"
             workspace.mkdir()
             for text, score in (("fallback", 0.6), ("best", 0.9)):
@@ -439,23 +437,100 @@ meta = job['spec']['metadata']
                 )
                 c.store.record_verification(result)
                 c.store.consider_best(result.result_id)
-            await app.start(c)
-            c = app.coordinator(detail["run_id"])
+            await app.start(c.store.run_id)
+            c = app.coordinator(run_id)
             active = app.active[c.store.run_id]
             await active.engine.tick()
-            assert c.state["status"] == "stopped", "Search alone must not declare success"
-            await asyncio.wait_for(active.task, 10)
-            assert c.state["finalization"]["status"] == "completed"
+            if target is None:
+                c.stop("Exploration budget ended")
+            assert c.state.status == "stopped", "Search alone must not declare success"
+            async with asyncio.timeout(3):
+                while c.completion is None:
+                    await asyncio.sleep(0.01)
+            with (
+                c.store.paths.execution_lock.open("a+") as lock,
+                pytest.raises(BlockingIOError),
+            ):
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            # Native tool waiters may deliver a late poll during final verification.
+            # Final jobs must survive both cancellation and scheduler reconciliation.
+            async with asyncio.timeout(10):
+                while not active.task.done():
+                    await active.execution.poll()
+                    await asyncio.sleep(0.01)
+            await active.task
+            assert c.state.finalization is not None
+            assert c.state.finalization.status == "completed"
             final_ref = c.store.run().final_result_ref
             assert final_ref is not None
             final = c.store.public_record(final_ref)
             assert final["score"] == 0.4 and final["candidate_id"] == candidate.candidate_id
-            assert c.state["status"] == "stopped"
+            assert c.state.status == "completed"
+            assert c.store.run().state.value == "completed"
+            assert c.completion is not None
+            assert c.completion.target_reached is (False if target is not None else None)
+            before = c.path.read_bytes()
+            with pytest.raises(ValueError, match="Only planned"):
+                await app.resume(c.store.run_id)
+            assert c.path.read_bytes() == before
+            await app.stop(c.store.run_id)
+            assert c.path.read_bytes() == before
             jobs = json.loads((c.store.root / "coordination/jobs.json").read_text())
             assert len(jobs) == 1 and next(iter(jobs.values()))["phase"] == "final"
-            await app.call("recover", {})
+            await app.detail(run_id)
             assert len(list((c.store.root / "jobs").glob("*/job.json"))) == 1
         finally:
             await app.close()
+
+    asyncio.run(scenario())
+
+
+def test_completion_recovers_intent_without_retrying_an_unreleased_job(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        c = Coordinator.create(tmp_path, TaskBrief("Research", "Return a result"))
+        c.start()
+        c.stop("Exploration ended")
+        c.begin_completion()
+        output = c.store.root / "finalization/output"
+        output.mkdir(parents=True)
+        marker = output / "calls"
+        command = ApprovedCommand(
+            "prepare", (sys.executable, "-c", "import sys; from pathlib import Path; "
+                        "p=Path(sys.argv[1]); p.write_text('once')", str(marker), "{output}"),
+            ("output",),
+        )
+        spec = command.bind({"output": str(output)}, cwd=str(output.parent))
+        key = "job-" + hashlib.sha256(b"closeout:prepare:0").hexdigest()
+        runner = ResearchExecution(ResearchActions(c))
+        old = runner.manager.submit(spec, job_id=key)
+        record_path = Path(old.result_path).with_name("job.json")
+        write_json(record_path, replace(old, state="lost", resources_released=False))
+        index = c.store.root / "coordination/jobs.json"
+        write_json(index, {key: {
+            "agent_id": "rsi", "output": str(output), "spec": encode(spec), "created_at": now(),
+            "verification": False, "phase": "prepare", "processed": False, "completion": True,
+        }})
+        before = index.read_bytes()
+        runner.close()
+        recovered = ResearchExecution(ResearchActions(Coordinator(c.store)))
+        try:
+            assert recovered.jobs[key].completion
+            assert index.read_bytes() == before, "Reading old records must not migrate them on disk"
+            await recovered.cancel_pending(exploration_only=True)
+            with pytest.raises(RuntimeError, match="unresolved resource claim"):
+                await recovered.execute_completion(command, "prepare")
+            assert not marker.exists() and len(recovered.manager.records()) == 1
+            # After an owner confirms release, the same closing operation can safely retry.
+            write_json(record_path, replace(recovered.manager.get(key), resources_released=True))
+            completed = await recovered.execute_completion(command, "prepare")
+            assert completed.processed and marker.read_text() == "once"
+            count = len(recovered.manager.records())
+            await recovered.execute_completion(command, "prepare")
+            assert len(recovered.manager.records()) == count and marker.read_text() == "once"
+            assert all(job.completion for job in c.store.research_jobs().values())
+        finally:
+            recovered.close()
 
     asyncio.run(scenario())

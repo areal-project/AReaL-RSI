@@ -1,4 +1,4 @@
-"""ResearchApp benchmark jobs preserve candidate, task and grading identities."""
+"""ResearchSystem benchmark jobs preserve candidate, task and grading identities."""
 
 from __future__ import annotations
 
@@ -10,15 +10,15 @@ from typing import Any
 import pytest
 from test_envarena import FakeArena
 
-from areal_rsi.adapters import benchmark_research as adapter
-from areal_rsi.api.base import SolutionVersion, Task, TaskResult, Trajectory
-from areal_rsi.base.storage import FileTrajectoryStore, now, write_json
-from areal_rsi.coordination.config import load_config
-from areal_rsi.coordination.coordinator import Coordinator
-from areal_rsi.coordination.verification import read_trusted_result
-from areal_rsi.execution import JobRecord
-from areal_rsi.modules.harness import LocalHarnessRuntime
-from areal_rsi.modules.remote.envarena.client import ArenaConnection
+from areal_rsi.api.records import SolutionVersion, Task, TaskResult, Trajectory
+from areal_rsi.infra.adapters import benchmark_research as adapter
+from areal_rsi.infra.coordination.config import load_config
+from areal_rsi.infra.coordination.coordinator import Coordinator
+from areal_rsi.infra.coordination.evaluation.verification import read_trusted_result
+from areal_rsi.infra.execution import JobRecord
+from areal_rsi.infra.storage.files import FileTrajectoryStore, now, write_json
+from areal_rsi.infra.tasks.harness import LocalHarnessRuntime
+from areal_rsi.infra.tasks.remote.envarena.client import ArenaConnection
 
 
 @pytest.mark.parametrize("benchmark", ["math", "lcb"])

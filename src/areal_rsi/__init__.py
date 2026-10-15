@@ -1,5 +1,5 @@
 """AReaL-RSI package."""
 
-from areal_rsi import api, framework
+from areal_rsi import api
 
-__all__ = ["api", "framework"]
+__all__ = ["api"]

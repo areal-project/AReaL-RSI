@@ -6,15 +6,15 @@ from pathlib import Path
 
 import pytest
 
-from areal_rsi.api.base import RecordRef, ResearchPlan, ResearchRun, RunState
+from areal_rsi.api.records import RecordRef, ResearchPlan, ResearchRun, RunState
 from areal_rsi.api.research import (
     ResearchLimits,
     TaskBrief,
     VerificationContract,
     VerifiedResult,
 )
-from areal_rsi.base.storage import now
-from areal_rsi.coordination.store import ResearchStore
+from areal_rsi.infra.coordination.store import ResearchStore
+from areal_rsi.infra.storage.files import now
 
 
 def make_store(root: Path, name: str = "example") -> ResearchStore:

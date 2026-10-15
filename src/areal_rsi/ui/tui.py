@@ -84,10 +84,9 @@ class ResearchTUI(App[None]):
         try:
             if text.startswith("/"):
                 await self.command(text)
-            elif self.run_id:
-                await self.system.send_message(self.run_id, text)
             else:
-                self.run_id = await self.system.create(self.config, message="")
+                if not self.run_id:
+                    self.run_id = await self.system.create(self.config)
                 await self.system.send_message(self.run_id, text)
             await self.poll()
         except (OSError, ValueError, RuntimeError) as exc:

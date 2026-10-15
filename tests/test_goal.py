@@ -72,6 +72,7 @@ def test_leader_continues_without_researchers_and_exports_frozen_artifact(tmp_pa
         system = ResearchSystem(tmp_path, runtime_factory=lambda _: runtime)
         try:
             run_id = await system.create(config())
+            assert not system.active and not runtime.calls
             await system.start(run_id)
             await asyncio.wait_for(system.active[run_id].task, 5)
             c = system.coordinator(run_id)
@@ -86,6 +87,43 @@ def test_leader_continues_without_researchers_and_exports_frozen_artifact(tmp_pa
             assert (exported / "answer.txt").read_text() == "42"
             with pytest.raises(FileExistsError):
                 await system.export(run_id, exported)
+        finally:
+            await system.close()
+
+    asyncio.run(scenario())
+
+
+def test_first_message_starts_persistent_intake(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async def respond(session: Path, delivery: dict[str, Any]) -> TurnResult:
+            assert delivery["recovery_state"]["agent_id"] == "interaction"
+            return TurnResult(
+                session.name, delivery["message_id"], "Which columns?", "completed", {}
+            )
+
+        runtime = CallbackRuntime(respond)
+        system = ResearchSystem(tmp_path, runtime_factory=lambda _: runtime)
+        try:
+            run_id = await system.create(config())
+            with pytest.raises(ValueError, match="Message must contain"):
+                await system.send_message(run_id, "")
+            assert not system.active and not runtime.calls
+            assert system.coordinator(run_id).state.intake.status is None
+
+            await system.send_message(run_id, "Write a CSV summary")
+            c = system.coordinator(run_id)
+            await wait_for(lambda: len(runtime.calls) == 1 and not c.state.active)
+            assert runtime.calls[0][1]["user_message"] == "Write a CSV summary"
+            assert c.state.status == "planned" and c.state.intake.status == "discussing"
+
+            await system.close()
+            system = ResearchSystem(tmp_path, runtime_factory=lambda _: runtime)
+            assert system.coordinator(run_id).state.intake.status == "discussing"
+            await system.send_message(run_id, "Sum the numeric columns")
+            c = system.coordinator(run_id)
+            await wait_for(lambda: len(runtime.calls) == 2 and not c.state.active)
+            assert runtime.calls[1][1]["user_message"] == "Sum the numeric columns"
+            assert c.state.status == "planned"
         finally:
             await system.close()
 
@@ -206,6 +244,108 @@ def test_control_ownership_pause_and_saved_delivery(tmp_path: Path) -> None:
         finally:
             await system.close()
             await other.close()
+
+    asyncio.run(scenario())
+
+
+def test_attach_failure_closes_created_resources_and_allows_another_owner(tmp_path: Path) -> None:
+    class FailingRuntime(ActionRuntime):
+        closed = False
+
+        def for_interaction(self) -> FailingRuntime:
+            raise OSError("Interaction backend unavailable")
+
+        async def close(self) -> None:
+            self.closed = True
+
+    async def scenario() -> None:
+        runtime = FailingRuntime()
+        system = ResearchSystem(tmp_path, runtime_factory=lambda _: runtime)
+        successor = ResearchSystem(tmp_path, runtime_factory=lambda _: ActionRuntime())
+        try:
+            run_id = await system.create(config())
+            with pytest.raises(OSError, match="Interaction backend unavailable"):
+                await system.start(run_id)
+            assert runtime.closed and not system.active
+            await successor.start(run_id)
+            await successor.stop(run_id)
+        finally:
+            await system.close()
+            await successor.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("close_fails", [False, True])
+def test_cancel_before_worker_starts_releases_resources_once(
+    tmp_path: Path, close_fails: bool
+) -> None:
+    class TrackingRuntime(ActionRuntime):
+        close_count = 0
+
+        def for_interaction(self) -> TrackingRuntime:
+            return interaction
+
+        async def close(self) -> None:
+            self.close_count += 1
+            if close_fails and self is interaction:
+                raise OSError("Runtime shutdown failed")
+
+    runtime, interaction = TrackingRuntime(), TrackingRuntime()
+
+    async def scenario() -> None:
+        system = ResearchSystem(tmp_path, runtime_factory=lambda _: runtime)
+        successor = ResearchSystem(tmp_path, runtime_factory=lambda _: ActionRuntime())
+        try:
+            run_id = await system.create(config())
+            active = await system.attach(system.coordinator(run_id))
+            assert await system.attach(active.coordinator) is active
+            active.task.cancel()
+            if close_fails:
+                with pytest.raises(OSError, match="Runtime shutdown failed"):
+                    await system.close()
+            else:
+                await system.close()
+            assert runtime.close_count == interaction.close_count == 1
+            assert active.execution.closed
+            await successor.start(run_id)
+            await system.close()
+            assert runtime.close_count == interaction.close_count == 1
+            await successor.stop(run_id)
+        finally:
+            await system.close()
+            await successor.close()
+
+    asyncio.run(scenario())
+
+
+def test_worker_failure_releases_ownership_for_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from areal_rsi.infra.coordination.policies.goal import GoalEngine
+
+    async def fail(_self: GoalEngine) -> None:
+        raise OSError("Job polling failed")
+
+    async def scenario() -> None:
+        system = ResearchSystem(tmp_path, runtime_factory=lambda _: ActionRuntime())
+        successor = ResearchSystem(tmp_path, runtime_factory=lambda _: ActionRuntime())
+        try:
+            run_id = await system.create(config())
+            with monkeypatch.context() as patch:
+                patch.setattr(GoalEngine, "serve", fail)
+                await system.start(run_id)
+                await system.active[run_id].task
+            assert system.coordinator(run_id).state.status == "failed"
+            assert any(e.kind == "worker_failed" for e in system.coordinator(run_id).store.events())
+            await successor.resume(run_id)
+            await wait_for(lambda: "rsi" in successor.coordinator(run_id).state.active)
+            await system.close()
+            assert successor.coordinator(run_id).state.status == "running"
+            await successor.stop(run_id)
+        finally:
+            await system.close()
+            await successor.close()
 
     asyncio.run(scenario())
 

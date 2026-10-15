@@ -29,6 +29,11 @@ flowchart TD
 - `infra/storage/`、`infra/tasks/`、`infra/execution/`：内容快照、追加版本、轨迹、Task 执行、评测和资源生命周期。
 - `ui/tui.py`、`ui/cli.py`：展示与输入，不包含研究策略。
 
+`ResearchSystem.attach()` 只组装或复用本地运行实例，后台执行由 `_serve()` 管理。
+模型、作业监控和 run 所有权在创建时登记到资源栈，初始化失败、后台退出或提前取消都使用同一套释放逻辑。
+模型调度循环退出后关闭模型会话；作业监控和 run 锁保留至 legacy 最终复测结束。
+两种 Engine 各自提供默认 prompt，legacy 的达标停止、预算停止和最终复测规则集中在 `legacy_passk.py`。
+
 ## Goal 流程
 
 Interaction 可以跳过：完整配置直接 `start`。对话创建时，Interaction 将需求保存为 brief，然后 `start_research`。启动后 Interaction 不再参与执行，用户消息直接投递给 Leader。

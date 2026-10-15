@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+from contextlib import suppress
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -18,8 +22,12 @@ from areal_rsi.api.research import (
     TargetObservation,
     VerifiedResult,
 )
+from areal_rsi.infra.agents.research.passk_prompt import PROMPT as RESEARCH_PROMPT
+from areal_rsi.infra.agents.rsi.passk_prompt import PROMPT as SUPERVISOR_PROMPT
+from areal_rsi.infra.coordination.config import ResearchConfig
 from areal_rsi.infra.coordination.coordinator import Coordinator, effect_id
 from areal_rsi.infra.coordination.engine import ResearchEngine
+from areal_rsi.infra.coordination.evaluation.jobs import ResearchExecution
 from areal_rsi.infra.coordination.tools.actions import (
     REFERENCES,
     STRING,
@@ -362,7 +370,91 @@ def stop_on_target(c: Coordinator) -> None:
         c.store.save_run(run)
 
 
+async def finish_run(
+    c: Coordinator, config: ResearchConfig, execution: ResearchExecution
+) -> None:
+    """Finalize an automatically stopped legacy run, or cancel its remaining jobs."""
+    if not (
+        config.needs_finalization
+        and c.state.status in {"stopped", "succeeded"}
+        and not c.state.user_stopped
+    ):
+        await execution.cancel_pending()
+        return
+    completion = c.begin_completion()
+    if completion.status == "completed":
+        return
+    assert completion.exploration_finished_at is not None and config.verifier is not None
+    remaining = None
+    limit = config.brief.limits.max_wall_seconds
+    if limit is not None and config.metadata.get("time_limit_scope", "total") == "total":
+        started = c.state.started_at
+        if started:
+            remaining = max(
+                0,
+                limit
+                - (datetime.now().timestamp() - datetime.fromisoformat(started).timestamp()),
+            )
+    cutoff = (
+        completion.exploration_finished_at
+        if (config.metadata.get("time_limit_scope") == "exploration")
+        else None
+    )
+    try:
+        async with asyncio.timeout(remaining):
+            await execution.cancel_pending(exploration_only=True)
+            if config.finalizer:
+                await c.store.export_selection(
+                    c.execution_cutoffs(execution.jobs, completion.exploration_finished_at)
+                )
+                prepared = await execution.execute_completion(
+                    config.finalizer, "prepare", cutoff=cutoff
+                )
+                candidate = await c.store.completion_candidate(
+                    Path(prepared.output) / "candidate"
+                )
+                c.select_candidate(candidate.candidate_id)
+                await execution.execute_completion(
+                    config.verifier, "search", candidate=candidate, cutoff=cutoff
+                )
+            else:
+                selected = c.selected_candidate_id
+                if selected is None:
+                    best = c.store.run().best_result_ref
+                    if best is None:
+                        raise ValueError("没有通过正式验证的候选，无法进行最终确认")
+                    selected = decode(VerifiedResult, c.store.public_record(best)).candidate_id
+                c.select_candidate(selected)
+                candidate = c.store.get("candidates", selected, CandidateSnapshot)
+            checked = await execution.execute_completion(
+                config.verifier, "final", candidate=candidate, cutoff=cutoff
+            )
+            assert checked.result is not None and checked.result_ref is not None
+            c.complete_research(checked.result, checked.result_ref)
+    except asyncio.CancelledError:
+        c.interrupt_completion()
+        raise
+    except Exception as exc:
+        if isinstance(exc, TimeoutError):
+            # Durable jobs retain any unconfirmed resource claims.
+            with suppress(TimeoutError, RuntimeError):
+                await execution.cancel_pending()
+            exc = TimeoutError("研究已到总时间上限；已验证的最佳版本仍保留")
+        c.interrupt_completion(str(exc)[:500])
+
+
 class PassKEngine(ResearchEngine):
+    research_prompt = RESEARCH_PROMPT
+    rsi_prompt = SUPERVISOR_PROMPT
+
+    async def _poll_jobs(self) -> bool:
+        pending = await super()._poll_jobs()
+        c = self.coordinator
+        if c.state.budget_stop_reason and c.state.status == "paused":
+            c.stop("探索预算耗尽，停止所有尝试并收尾")
+        stop_on_target(c)
+        return pending
+
     def _check_effective_time(self) -> None:
         if self.effective is None:
             return

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import math
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from decimal import Decimal, InvalidOperation
 
@@ -58,9 +58,9 @@ class ArithmeticBenchmark:
 
 
 class ArithmeticVerifier:
-    def __init__(self, content: FileContentStore):
+    def __init__(self, content: FileContentStore, *, answers: Mapping[str, str] | None = None):
         self.content = content
-        self.expected = {
+        self.expected = dict(answers) if answers is not None else {
             f"{split.value}_{i}": answer
             for split, rows in _CASES.items()
             for i, (_, answer) in enumerate(rows)

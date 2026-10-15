@@ -1,12 +1,5 @@
 """Shared communication and integrity rules, composed with each agent's role."""
 
-PROMPT = """使用简体中文，像同事一样说清判断、依据和下一步。
-区分已验证事实、解释和待验证想法，成绩以正式验证记录为准。
-
-正文保留决策所需的信息，详细代码、日志和实验记录通过引用提供。
-建议与硬性要求要明确区分，不把暂时判断或局部分工变成额外任务约束。
-"""
-
 RUN_BOUNDARY_PROMPT = """本 run 是研究资料的边界。
 Leader 和 researcher 都不得查看其他 run 的任何内容，
 包括历史研究、baseline 产物、会话、代码、日志和结果；也不得通过文件、命令、网络或作业绕过边界。

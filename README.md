@@ -54,6 +54,7 @@ the user's checkout are not included. The TUI shows the workspace path. For ordi
 | Goal | Start with | Additional requirements |
 | --- | --- | --- |
 | Try a single-agent task | [Goal example](examples/goal.json) | A research model |
+| Test several harness iterations locally | [Single-problem math loop](examples/harness/math_loop/README.md) | A research model; target defaults to the same connection |
 | Optimize a harness with formal evaluation | [Arithmetic](examples/harness/README.md#算术-harness) | A target model in addition to the research model |
 | Optimize a LiveCodeBench system prompt | [LiveCodeBench](examples/harness/README.md#livecodebench-harness) | EnvArena access and a fixed benchmark |
 | Optimize a reusable GPU kernel harness | [KernelBench harness](examples/harness/kernelbench/README.md) | KernelBench data and a GPU evaluation environment |

@@ -9,16 +9,15 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator, Callable
-from contextlib import AsyncExitStack, asynccontextmanager, suppress
-from dataclasses import dataclass
-from datetime import datetime
+from contextlib import AsyncExitStack, asynccontextmanager
+from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 from areal_rsi.api.interfaces import ResearchAgentRuntime
-from areal_rsi.api.research import CandidateSnapshot, GoalContext, IntakeState, VerifiedResult
-from areal_rsi.infra.agents.communication import INTEGRITY_PROMPT, tool_instructions
-from areal_rsi.infra.agents.leader import PROMPT as GOAL_PROMPT
+from areal_rsi.api.research import CandidateSnapshot, GoalContext, VerifiedResult
+from areal_rsi.infra.agents.communication import tool_instructions
 from areal_rsi.infra.coordination.config import ResearchConfig, config_from_dict, git_head_commit
 from areal_rsi.infra.coordination.coordinator import Coordinator
 from areal_rsi.infra.coordination.engine import ResearchEngine, ToolSet
@@ -33,24 +32,45 @@ from areal_rsi.infra.coordination.policies.goal import GoalActions, GoalEngine
 from areal_rsi.infra.coordination.policies.legacy_passk import (
     PassKActions,
     PassKEngine,
-    stop_on_target,
+)
+from areal_rsi.infra.coordination.policies.legacy_passk import (
+    finish_run as finish_legacy_run,
 )
 from areal_rsi.infra.coordination.store import ResearchStore
 from areal_rsi.infra.coordination.tools.actions import ResearchActions
 from areal_rsi.infra.coordination.tools.web import register_sources
 from areal_rsi.infra.execution import JobManager, JobRecord
 from areal_rsi.infra.runtime.research_runtime import ResearchRuntime
-from areal_rsi.infra.storage.files import decode, encode, new_id, now, safe_name, write_json
+from areal_rsi.infra.storage.files import encode, new_id, now, safe_name, write_json
 
 
 @dataclass
 class ActiveResearch:
+    """Components and resource scopes owned by one local worker."""
+
     coordinator: Coordinator
     actions: ResearchActions
     execution: ResearchExecution
     engine: ResearchEngine
-    task: asyncio.Task[None]
-    started: bool = False
+    resources: AsyncExitStack
+    model_resources: AsyncExitStack
+    task: asyncio.Task[None] = field(init=False)
+
+
+def _toolset(actions: ResearchActions, config: ResearchConfig, agent_id: str) -> ToolSet:
+    workspace = actions.workspace(agent_id)
+    return ToolSet(
+        actions.definitions(agent_id, include_hidden=True),
+        actions.handler(agent_id),
+        tool_instructions(
+            str(workspace),
+            backend=config.backend,
+            supervisor_only=config.mode == "legacy_passk" and agent_id == "rsi",
+        ),
+        actions.definitions(agent_id),
+        workspace,
+        config.execution_env,
+    )
 
 
 class ResearchSystem:
@@ -95,28 +115,27 @@ class ResearchSystem:
         self,
         config: ResearchConfig,
         *,
-        message: str | None = None,
         run_id: str | None = None,
         simulated: bool = False,
     ) -> str:
+        """Validate config, pin model settings, save initial records, and return the run ID."""
         config = config_from_dict(config.public())
         config.pin_model_settings()
         if not simulated and (issues := validate_execution(config)):
             raise ValueError("; ".join(issues))
+        # Check if there is an existing HEAD commit.
         if config.workspace_dir:
             git_head_commit(config.workspace_dir)
+
         c = Coordinator.create(self.root, config.brief, run_id=run_id, simulated=simulated)
         c.state.mode = config.mode
         c.state.workspace_dir = config.workspace_dir
-        if message is not None:
-            c.state.intake = IntakeState(status="discussing")
         c.save()
         write_json(c.store.root / "coordination/config.json", config.public(), immutable=True)
-        if message:
-            await self.send_message(c.store.run_id, message)
         return c.store.run_id
 
     async def start(self, run_id: str) -> None:
+        """Validate the run, prepare its workspace, and start background execution."""
         async with self.control(run_id) as c:
             if c.state.status != "planned":
                 raise ValueError("Run has already started")
@@ -161,16 +180,19 @@ class ResearchSystem:
                 raise
 
     async def attach(self, c: Coordinator) -> ActiveResearch:
+        """Reuse an active run or assemble and launch its local execution instance."""
         previous = self.active.get(c.store.run_id)
         if previous and not previous.task.done():
             return previous
-        c.acquire()
-        runtime = None
-        engine: ResearchEngine | None = None
-        execution = None
+        resources = AsyncExitStack()
         try:
+            c.acquire()
+            resources.callback(c.release)
+            # Models close before legacy final verification; jobs and ownership span it.
+            model_resources = await resources.enter_async_context(AsyncExitStack())
             config = self.config(c)
             runtime = self.runtime_factory(config)
+            model_resources.push_async_callback(runtime.close)
             legacy = config.mode == "legacy_passk"
             actions = PassKActions(c) if legacy else GoalActions(c)
             if isinstance(actions, GoalActions):
@@ -187,102 +209,42 @@ class ResearchSystem:
                 execution_env=config.execution_env,
                 simulated=c.state.simulated,
             )
+            resources.callback(execution.close)
             execution.instructions = str(config.metadata.get("execution_instructions", ""))
-            ResearchIntake(actions, lambda: self.start(c.store.run_id))
-
-            async def poll() -> bool:
-                assert execution is not None
-                pending = await execution.poll()
-                if legacy:
-                    if c.state.budget_stop_reason and c.state.status == "paused":
-                        c.stop("探索预算耗尽，停止所有尝试并收尾")
-                    stop_on_target(c)
-                return pending
-
-            def tools(agent_id: str) -> ToolSet:
-                return ToolSet(
-                    actions.definitions(agent_id, include_hidden=True),
-                    actions.handler(agent_id),
-                    tool_instructions(
-                        str(actions.workspace(agent_id)),
-                        backend=config.backend,
-                        supervisor_only=legacy and agent_id == "rsi",
-                    ),
-                    actions.definitions(agent_id),
-                    actions.workspace(agent_id),
-                    config.execution_env,
-                )
-
-            if legacy:
-                from areal_rsi.infra.agents.research.passk_prompt import PROMPT as RESEARCH
-                from areal_rsi.infra.agents.rsi.passk_prompt import PROMPT as SUPERVISOR
-
-                engine = PassKEngine(
-                    c,
-                    runtime,
-                    tools,
-                    research_prompt=RESEARCH,
-                    rsi_prompt=SUPERVISOR,
-                    tick_hook=poll,
-                )
-            else:
-                engine = GoalEngine(
-                    c,
-                    runtime,
-                    tools,
-                    research_prompt="",
-                    rsi_prompt=GOAL_PROMPT + "\n" + INTEGRITY_PROMPT,
-                    tick_hook=poll,
-                )
-
-            async def serve() -> None:
-                assert runtime is not None and engine is not None and execution is not None
-                active.started = True
-                try:
-                    async with AsyncExitStack() as stack:
-                        stack.push_async_callback(runtime.close)
-                        if engine.interaction_runtime is not runtime:
-                            stack.push_async_callback(engine.interaction_runtime.close)
-                        await engine.serve()
-                    finished_config = self.config(c)
-                    if (
-                        legacy
-                        and finished_config.needs_finalization
-                        and c.state.status in {"stopped", "succeeded"}
-                        and not c.state.user_stopped
-                    ):
-                        await self._complete_result(c, finished_config, execution)
-                    else:
-                        await execution.cancel_pending()
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    c.state.status = "failed"
-                    c.save()
-                    c.store.event("worker_failed", error=str(exc))
-                finally:
-                    execution.close(cancel=False)
-                    await engine.close()
-                    c.release()
-
-            active = ActiveResearch(
-                c,
-                actions,
-                execution,
-                engine,
-                asyncio.create_task(serve(), name="rsi:" + c.store.run_id),
+            ResearchIntake(actions, partial(self.start, c.store.run_id))
+            engine_type = PassKEngine if legacy else GoalEngine
+            engine = engine_type(
+                c, runtime, partial(_toolset, actions, config), tick_hook=execution.poll
             )
+            resources.push_async_callback(engine.close)
+            if engine.interaction_runtime is not runtime:
+                model_resources.push_async_callback(engine.interaction_runtime.close)
+            active = ActiveResearch(c, actions, execution, engine, resources, model_resources)
+            active.task = asyncio.create_task(self._serve(active), name="rsi:" + c.store.run_id)
             self.active[c.store.run_id] = active
             return active
         except BaseException:
-            if execution:
-                execution.close(cancel=False)
-            if engine:
-                await engine.close()
-            if runtime:
-                await runtime.close()
-            c.release()
+            await resources.aclose()
             raise
+
+    async def _serve(self, active: ActiveResearch) -> None:
+        """Run model turns, finish the run, and release its registered resources."""
+        c = active.coordinator
+        try:
+            await active.engine.serve()
+            await active.model_resources.aclose()
+            if isinstance(active.engine, PassKEngine):
+                await finish_legacy_run(c, self.config(c), active.execution)
+            else:
+                await active.execution.cancel_pending()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            c.state.status = "failed"
+            c.save()
+            c.store.event("worker_failed", error=str(exc))
+        finally:
+            await active.resources.aclose()
 
     async def send_message(self, run_id: str, text: str) -> None:
         async with self.control(run_id) as c:
@@ -364,18 +326,11 @@ class ResearchSystem:
 
     async def _stop_worker(self, active: ActiveResearch) -> None:
         active.task.cancel()
-        await asyncio.gather(active.task, return_exceptions=True)
-        if not active.started:
-            # Cancellation before the coroutine's first instruction skips its finally block.
-            active.started = True
-            try:
-                active.execution.close(cancel=False)
-                await active.engine.close()
-                await active.engine.runtime.close()
-                if active.engine.interaction_runtime is not active.engine.runtime:
-                    await active.engine.interaction_runtime.close()
-            finally:
-                active.coordinator.release()
+        try:
+            await asyncio.gather(active.task, return_exceptions=True)
+        finally:
+            # A task cancelled before its first instruction never enters _serve's finally.
+            await active.resources.aclose()
 
     async def _seed(self, c: Coordinator, config: ResearchConfig) -> None:
         if config.seed_dir and not config.workspace_dir and not c.state.seed_candidate_id:
@@ -435,70 +390,3 @@ class ResearchSystem:
             )
 
         return read
-
-    async def _complete_result(
-        self,
-        c: Coordinator,
-        config: ResearchConfig,
-        execution: ResearchExecution,
-    ) -> None:
-        completion = c.begin_completion()
-        if completion.status == "completed":
-            return
-        assert completion.exploration_finished_at is not None and config.verifier is not None
-        remaining = None
-        limit = config.brief.limits.max_wall_seconds
-        if limit is not None and config.metadata.get("time_limit_scope", "total") == "total":
-            started = c.state.started_at
-            if started:
-                remaining = max(
-                    0,
-                    limit
-                    - (datetime.now().timestamp() - datetime.fromisoformat(started).timestamp()),
-                )
-        cutoff = (
-            completion.exploration_finished_at
-            if (config.metadata.get("time_limit_scope") == "exploration")
-            else None
-        )
-        try:
-            async with asyncio.timeout(remaining):
-                await execution.cancel_pending(exploration_only=True)
-                if config.finalizer:
-                    await c.store.export_selection(
-                        c.execution_cutoffs(execution.jobs, completion.exploration_finished_at)
-                    )
-                    prepared = await execution.execute_completion(
-                        config.finalizer, "prepare", cutoff=cutoff
-                    )
-                    candidate = await c.store.completion_candidate(
-                        Path(prepared.output) / "candidate"
-                    )
-                    c.select_candidate(candidate.candidate_id)
-                    await execution.execute_completion(
-                        config.verifier, "search", candidate=candidate, cutoff=cutoff
-                    )
-                else:
-                    selected = c.selected_candidate_id
-                    if selected is None:
-                        best = c.store.run().best_result_ref
-                        if best is None:
-                            raise ValueError("没有通过正式验证的候选，无法进行最终确认")
-                        selected = decode(VerifiedResult, c.store.public_record(best)).candidate_id
-                    c.select_candidate(selected)
-                    candidate = c.store.get("candidates", selected, CandidateSnapshot)
-                checked = await execution.execute_completion(
-                    config.verifier, "final", candidate=candidate, cutoff=cutoff
-                )
-                assert checked.result is not None and checked.result_ref is not None
-                c.complete_research(checked.result, checked.result_ref)
-        except asyncio.CancelledError:
-            c.interrupt_completion()
-            raise
-        except Exception as exc:
-            if isinstance(exc, TimeoutError):
-                # Durable jobs retain any unconfirmed resource claims.
-                with suppress(TimeoutError, RuntimeError):
-                    await execution.cancel_pending()
-                exc = TimeoutError("研究已到总时间上限；已验证的最佳版本仍保留")
-            c.interrupt_completion(str(exc)[:500])

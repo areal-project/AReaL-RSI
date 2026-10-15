@@ -73,7 +73,7 @@ def main() -> None:
     source.add_argument("--config", type=Path)
     source.add_argument("--resume")
     setup = commands.add_parser("prepare", help="准备 harness 优化示例")
-    setup.add_argument("benchmark", choices=("arithmetic", "livecodebench"))
+    setup.add_argument("benchmark", choices=("arithmetic", "math-loop", "livecodebench"))
     setup.add_argument("--directory", type=Path, required=True)
     setup.add_argument("--arena-config", type=Path)
     setup.add_argument("--time-limit", type=float, default=1200)
@@ -113,7 +113,9 @@ def main() -> None:
 
             path = asyncio.run(
                 prepare(
-                    {"arithmetic": "math", "livecodebench": "lcb"}[args.benchmark],
+                    {"arithmetic": "math", "math-loop": "math-loop", "livecodebench": "lcb"}[
+                        args.benchmark
+                    ],
                     args.directory,
                     arena_config=args.arena_config,
                     max_wall_seconds=args.time_limit,

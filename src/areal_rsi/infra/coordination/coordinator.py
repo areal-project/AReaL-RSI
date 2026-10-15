@@ -337,6 +337,8 @@ class Coordinator:
         if self.state.mode == "legacy_passk" and self.state.started_at:
             raise ValueError("Legacy pass@k freezes the task after start; pause or stop the run")
         recipient = "rsi" if self.state.started_at else "interaction"
+        if recipient == "interaction" and self.state.intake.status is None:
+            self.state.intake.status = "discussing"
         questions = self.user_questions()
         reply_to = questions[-1].message_id if questions else None
         identifier = self.enqueue("user", recipient, text.strip(), key=key, reply_to=reply_to)

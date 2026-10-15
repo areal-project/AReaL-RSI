@@ -4,9 +4,9 @@
 
 | 方法 | 结果 / 约束 |
 | --- | --- |
-| `create(config, message=None, run_id=None, simulated=False)` | 返回 run ID。message 开启 Interaction intake；不传 message 可直接 start |
+| `create(config, run_id=None, simulated=False)` | 仅创建任务并返回 run ID；不启动模型或发送消息 |
 | `start(run_id)` | 固定配置与 Git HEAD，开始目标执行 |
-| `send_message(run_id, text)` | 启动前发 Interaction，运行中发 Leader；legacy 开始后拒绝修改 |
+| `send_message(run_id, text)` | 启动前的首条消息开启 Interaction 需求讨论；运行中发 Leader；legacy 开始后拒绝修改 |
 | `pause(run_id)` / `resume(run_id)` | 暂停模型回合或恢复原消息、会话；预算耗尽拒绝 resume |
 | `retry(run_id, agent_id="rsi")` | 重试失败角色，保持操作幂等身份 |
 | `stop(run_id)` | 停止 run 和受管理的未完成作业 |
@@ -16,9 +16,25 @@
 
 控制操作按 run 加锁，持久 flock 拒绝另一个进程修改同一 run。固定内部数据使用 dataclass；JSON 配置通过 `api/control.py` 验证，未知字段和模式直接报错。
 
+两种启动方式共用 `create(config)`，随后由实际操作决定流程：
+
+```python
+run_id = await system.create(config)
+await system.send_message(run_id, "帮我编写并测试 CSV 汇总脚本")  # 先讨论需求
+```
+
+或者直接执行准备好的配置：
+
+```python
+run_id = await system.create(config)
+await system.start(run_id)
+```
+
 ## 基础能力
 
-`api/records.py` 定义 Model/Harness/Artifact/Solution 版本、Task、TaskResult、VerifierSpec 和轨迹。`api/interfaces.py` 定义 ContentStore、EvidenceStore、VersionManager、TrajectoryStore、Memory、HarnessRuntime、Builder、TrainingBackend、Verifier 和 Evaluation 等协议。版本追加创建，研究中的 best/selected 指针属于 run；正式验证绑定候选内容摘要与固定协议。轨迹既可本地存储，也可接入配置的外部来源。
+`api/records.py` 定义 Model/Harness/Artifact/Solution 版本、Task、TaskResult、VerifierSpec 和轨迹。`api/interfaces.py` 定义 ContentStore、EvidenceStore、VersionManager、TrajectoryStore、Memory、HarnessRuntime、Builder、TrainingBackend、Verifier 和 Evaluation 等协议。版本追加创建，研究中的 best/selected 指针属于 run；正式验证绑定候选内容摘要与固定协议。
+
+当前使用 `FileTrajectoryStore` 保存本地轨迹。Memory、通用轨迹来源/归一化/存储工厂和 TrainingBackend 仅保留契约，没有接入运行链路；远程评测轨迹由具体适配器采集。
 
 `api/execution.py` 定义 ApprovedCommand、JobSpec/Record 等执行记录。`ResearchExecution` 向角色开放已配置命令，固定参数通过 argv 传递；验证器输出经过 `read_trusted_result` 检查，不能由模型直接写一个分数替代。
 

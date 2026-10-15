@@ -1,11 +1,14 @@
 # 示例目录
 
 示例按任务分类。第一次使用可以从 [goal.json](goal.json) 开始：由一个 Leader 编写并测试
-CSV 汇总脚本，只需要研究模型。需要体验正式评测时，使用 [算术 harness](harness/README.md#算术-harness)，
+CSV 汇总脚本，只需要研究模型。验证“评测 → 经验 → 改进 → 再评测”的完整循环，
+使用 [单题 Math loop](harness/math_loop/README.md)，默认同一模型连接、至少三个 harness 版本。
+需要体验独立 VALIDATE 评测时，使用 [算术 harness](harness/README.md#算术-harness)，
 它额外需要一个固定的目标模型，不需要 GPU、SSH 或 EnvArena。
 
 | 入口 | 类型 | 优化对象 | 额外依赖 | 用途 |
 | --- | --- | --- | --- | --- |
+| [Math loop](harness/math_loop/README.md) | Local E2E | 三版数学 harness 与反馈循环 | 默认仅需研究模型连接 | 单题、两轮改进、最终复测与结构化验收 |
 | [`goal.json`](goal.json) | Quickstart | CSV 脚本、测试和说明 | 无 | 单 Leader goal 与基于证据的验收 |
 | [Arithmetic](harness/README.md#算术-harness) | Benchmark | 算术 Task harness 的 prompt/skill | 一个目标模型连接 | 候选、TRAIN 评测与 VALIDATE 验证 |
 | [LiveCodeBench](harness/README.md#livecodebench-harness) | Benchmark | 通用 system prompt | EnvArena 账号与固定 Benchmark | 远端评测接入 |

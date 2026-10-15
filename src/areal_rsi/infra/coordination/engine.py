@@ -47,14 +47,17 @@ class ToolSet:
 
 
 class ResearchEngine:
+    research_prompt = ""
+    rsi_prompt = ""
+
     def __init__(
         self,
         coordinator: Coordinator,
         runtime: ResearchAgentRuntime,
         tools_factory: Callable[[str], ToolSet],
         *,
-        research_prompt: str = "",
-        rsi_prompt: str = "",
+        research_prompt: str | None = None,
+        rsi_prompt: str | None = None,
         max_concurrent_turns: int | None = None,
         tick_hook: TickHook | None = None,
         poll_interval: float = 0.1,
@@ -64,8 +67,10 @@ class ResearchEngine:
         self.runtime = runtime
         self.interaction_runtime = runtime.for_interaction()
         self.tools_factory = tools_factory
-        self.research_prompt = research_prompt
-        self.rsi_prompt = rsi_prompt
+        if research_prompt is not None:
+            self.research_prompt = research_prompt
+        if rsi_prompt is not None:
+            self.rsi_prompt = rsi_prompt
         self.max_concurrent_turns = (
             coordinator.store.brief().limits.max_agents + 2
             if max_concurrent_turns is None
@@ -439,6 +444,9 @@ class ResearchEngine:
     ) -> None:
         self.coordinator.end_turn(agent_id)
 
+    async def _poll_jobs(self) -> bool:
+        return self.tick_hook is not None and bool(await self.tick_hook())
+
     async def tick(self) -> int:
         """Poll jobs, apply controls and dispatch ready actors without awaiting their turns."""
         async with self._tick_lock:
@@ -447,8 +455,7 @@ class ResearchEngine:
                 reason = self._wall_reason()
                 if reason is not None:
                     self._pause_for_budget(reason)
-                if self.tick_hook is not None:
-                    self._jobs_pending = bool(await self.tick_hook())
+                self._jobs_pending = await self._poll_jobs()
             else:
                 self._jobs_pending = False
             status = self.coordinator.state.status

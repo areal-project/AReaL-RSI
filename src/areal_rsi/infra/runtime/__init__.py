@@ -1,1 +1,1 @@
-"""运行时、构建、训练、Benchmark 与评测的具体实现。"""
+"""Agent runtime sessions, sandboxing, and tool bridges."""

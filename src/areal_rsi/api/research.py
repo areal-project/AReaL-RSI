@@ -205,6 +205,15 @@ class VerifiedResult:
 
 
 @dataclass(slots=True)
+class HarnessIteration:
+    """A measured harness snapshot and the evidence motivating its change."""
+
+    candidate: CandidateSnapshot
+    verification: VerifiedResult
+    evidence: EvidenceRecord | None = None
+
+
+@dataclass(slots=True)
 class JobWaiter:
     iteration_id: str | None = None
     notified: bool = False

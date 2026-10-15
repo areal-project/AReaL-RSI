@@ -5,6 +5,7 @@
 
 | 示例 | 研究员修改什么 | 谁完成 Task | 评测 |
 | --- | --- | --- | --- |
+| [math-loop](math_loop/README.md) | prompt/skill，至少三版 | 默认复用研究模型连接的独立解题会话 | 一道组合计数题，四次评测，验收实际迭代链 |
 | arithmetic | prompt/skill | 固定本地接入的目标模型 | 3 道 TRAIN、3 道 VALIDATE 原创算术题 |
 | livecodebench | system prompt | 固定 EnvArena 模型与 Harness | 远端 LCB Reward |
 | [kernelbench](kernelbench/README.md) | 通用 kernel 生成 harness | 固定目标模型生成 kernel | GPU 检查正确性与速度 |

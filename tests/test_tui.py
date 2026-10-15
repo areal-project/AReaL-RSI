@@ -25,6 +25,7 @@ def test_intake_handoff_leader_block_and_user_reply_in_tui(tmp_path: Path) -> No
             nonlocal leader_calls
             handler = delivery["handler"]
             if delivery["recovery_state"]["agent_id"] == "interaction":
+                assert delivery["user_message"] == "Write answer"
                 brief = encode(config().brief)
                 fields = brief_tool("goal")["parameters"]["properties"]["limits"]["properties"]
                 brief["limits"] = {k: v for k, v in brief["limits"].items() if k in fields}

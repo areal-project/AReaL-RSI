@@ -8,6 +8,8 @@ from areal_rsi.api.control import validate_record
 from areal_rsi.api.interfaces import ToolResult
 from areal_rsi.api.records import AgentState, RunState
 from areal_rsi.api.research import GoalContext, ResearchMessage, RunAcceptance
+from areal_rsi.infra.agents.communication import INTEGRITY_PROMPT
+from areal_rsi.infra.agents.leader import PROMPT
 from areal_rsi.infra.coordination.engine import ResearchEngine
 from areal_rsi.infra.coordination.tools.actions import STRING, ResearchActions, definition
 from areal_rsi.infra.storage.files import decode, encode, now
@@ -133,6 +135,8 @@ class GoalActions(ResearchActions):
 
 
 class GoalEngine(ResearchEngine):
+    rsi_prompt = PROMPT + "\n" + INTEGRITY_PROMPT
+
     async def tick(self) -> int:
         self._acquire()
         c = self.coordinator

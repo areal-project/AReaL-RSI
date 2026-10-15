@@ -15,10 +15,10 @@ AReaL-RSI 是基于 DeepSeek Harness 的本地研究与自迭代工具。用户�
 
 ```bash
 uv sync --locked
-cp -n .env.example .env
+uv run --locked rsi config init
 ```
 
-编辑 `.env`，分别填写 teacher 和 target 两组连接。两组服务均需支持 Chat Completions；`BASE_URL` 使用 API 根地址（通常以 `/v1` 结尾），不用附加 `/chat/completions`。
+编辑 `~/.areal_rsi/config.json`，分别填写 teacher 和 target 两组连接。两组服务均需支持 Chat Completions；`BASE_URL` 使用 API 根地址（通常以 `/v1` 结尾），不用附加 `/chat/completions`。
 
 | 配置项 | 用途 |
 | --- | --- |
@@ -27,6 +27,25 @@ cp -n .env.example .env
 | `RSI_TARGET_MODEL` / `RSI_TARGET_BASE_URL` | 待优化的目标模型及服务，供 Task Agent 和评测使用 |
 | `RSI_TARGET_API_KEY` | target 服务认证信息；无需认证时留空，不继承 teacher 密钥 |
 | `RSI_DATA_ROOT` | 共享实验数据目录，可保存多个模型的实验 |
+
+配置文件示例（将模型名、地址和密钥替换为自己的值）：
+
+```json
+{
+  "RSI_TEACHER_MODEL": "teacher-model",
+  "RSI_TEACHER_BASE_URL": "https://teacher.example/v1",
+  "RSI_TEACHER_API_KEY": "",
+  "RSI_TARGET_MODEL": "target-model",
+  "RSI_TARGET_BASE_URL": "https://target.example/v1",
+  "RSI_TARGET_API_KEY": "",
+  "RSI_DATA_ROOT": ".rsi/local",
+  "RSI_BENCHMARK": "arithmetic-v1",
+  "RSI_RESEARCH_AGENT_COUNT": 1,
+  "RSI_AGENT_MODELS": {}
+}
+```
+
+额外认证变量（例如 Agent 覆盖引用的 `RESEARCH_API_KEY`）也可以作为顶层字符串字段填写。
 
 Teacher 与 target 是默认连接，可以来自不同服务。旧的 `RSI_MODEL`、`RSI_BASE_URL`、`RSI_API_KEY` 仅作为 teacher 的兼容配置；target 必须显式配置。
 
@@ -44,7 +63,7 @@ export RSI_AGENT_MODELS='{
 }'
 ```
 
-以上模型名和地址都是占位示例。也可将 JSON 写入本地 env 文件的 `RSI_AGENT_MODELS`。覆盖项的含义是：
+以上模型名和地址都是占位示例。也可将 JSON 写入 `~/.areal_rsi/config.json` 的 `RSI_AGENT_MODELS`（直接使用 JSON 对象）。覆盖项的含义是：
 
 | Agent ID | 默认值与覆盖规则 |
 | --- | --- |
@@ -59,30 +78,30 @@ export RSI_AGENT_MODELS='{
 首次准备当前数据目录的 DSH CLI、TUI 插件和 RSI preset（需要访问 npm 包仓库）：
 
 ```bash
-uv run --env-file .env --locked rsi tui --setup-only
+uv run --locked rsi tui --setup-only
 ```
 
-准备完成后，显式加载配置并启动：
+准备完成后启动（自动读取配置）：
 
 ```bash
-uv run --env-file .env --locked rsi tui
+uv run --locked rsi tui
 ```
 
-`uv sync` 只安装依赖；`.env` 由 `uv run --env-file` 读取。也可以在同一终端 export 这些变量后直接运行 `uv run --locked rsi tui`。Codex 的 TOML 配置不能直接作为 RSI 配置读取；模型名、服务地址和认证信息需映射到上述字段。
+所有 `rsi` 命令默认读取 `~/.areal_rsi/config.json`，无需 `--env-file`。配置键沿用上表的 `RSI_*` 名称，值使用字符串或数字；`RSI_AGENT_MODELS` 可以直接使用 JSON 对象。显式环境变量优先（包括空值）。文件不存在时仍可仅使用环境变量；文件格式错误会明确报错。`rsi config init` 不覆盖已有文件，新文件权限为 `0600`。相对路径仍以启动目录为准。Python API 调用方可先调用 `areal_rsi.config.load_user_config()`。
 
-启动终端已经 export 的同名变量会优先于 env 文件。更换配置文件时，可先清除旧值再加载新文件：
+启动终端已经 export 的同名变量会优先于 JSON 文件。希望使用文件中的配置时，可先清除旧的环境变量：
 
 ```bash
 unset RSI_MODEL RSI_BASE_URL RSI_API_KEY
 unset RSI_TEACHER_MODEL RSI_TEACHER_BASE_URL RSI_TEACHER_API_KEY
 unset RSI_TARGET_MODEL RSI_TARGET_BASE_URL RSI_TARGET_API_KEY
 unset RSI_DATA_ROOT RSI_BENCHMARK RSI_RESEARCH_AGENT_COUNT
-uv run --env-file .env --locked rsi tui
+uv run --locked rsi tui
 ```
 
 各类 Agent 的有效模型、评测集和研究线数量由启动配置决定，写入对话目标不会改变它们。三条研究线设置 `RSI_RESEARCH_AGENT_COUNT=3`；轮数通过 `rsi_plan` 指定。所有 ResearchAgent 接收相同的实验目标并使用同一个模型，但保留独立 Session、workspace、Memory 查询、迭代状态和版本分支。仅改变 Interaction Agent 或未被使用的默认值不会影响后台恢复；后台模型覆盖变化会按角色校验。目标基线只由有效 Task 模型及初始 Harness 决定，同一目录可保存多组配置，不覆盖旧实验。
 
-`.env` 被 Git 忽略，`.env.example` 仅包含空模板。认证信息不写入模型版本或实验配置；模型请求显式设置 `store=false`。
+个人配置保存在仓库外的 `~/.areal_rsi/config.json`。认证信息不写入模型版本或实验配置；模型请求显式设置 `store=false`。
 
 在 DSH TUI 的输入框中直接输入：
 
@@ -103,9 +122,9 @@ DSH 通过本地 MCP 的 `rsi_plan` 生成并展示计划后，输入 `确认`�
 空闲时连续按两次 Ctrl+C 退出 TUI；已提交的实验继续运行。对话 Session 与实验 Run 分别管理：
 
 ```bash
-uv run --env-file .env --locked rsi tui --resume DSH_SESSION_ID
-uv run --env-file .env --locked rsi status
-uv run --env-file .env --locked rsi resume RUN_ID
+uv run --locked rsi tui --resume DSH_SESSION_ID
+uv run --locked rsi status
+uv run --locked rsi resume RUN_ID
 ```
 
 `rsi tui --resume` 恢复 DSH 对话；`rsi resume` 在当前终端恢复实验。使用原来的数据目录和模型配置。旧 Python 界面的 `/status`、`/stop`、`/resume` 不再是 RSI 的界面命令，DSH 自身命令由插件提供。
@@ -117,12 +136,12 @@ uv run --env-file .env --locked rsi resume RUN_ID
 另开一个终端，在项目目录加载同一份配置，使用与 TUI 相同的数据目录：
 
 ```bash
-uv run --env-file .env --locked rsi web --port 8765
+uv run --locked rsi web --port 8765
 ```
 
 浏览器打开 [http://127.0.0.1:8765](http://127.0.0.1:8765)，查看独立研究线、执行阶段、TRAIN/VALIDATE 得分、版本关系及选版依据。页面自动刷新，只读并绑定本机；无需模型连接配置。
 
-指定单个实验：`uv run --env-file .env --locked rsi web --port 8765 --run RUN_ID`。
+指定单个实验：`uv run --locked rsi web --port 8765 --run RUN_ID`。
 
 ## 多研究线与示例
 
@@ -130,7 +149,7 @@ uv run --env-file .env --locked rsi web --port 8765
 
 ```bash
 export RSI_RESEARCH_AGENT_COUNT=3
-uv run --env-file .env --locked rsi tui
+uv run --locked rsi tui
 ```
 
 每条线每轮提出一个修改，所有研究线使用同一实验目标并独立分析证据、生成候选。轮数上限对每条线分别生效；失败和剪枝可能导致实际完成数小于上限。各线只读取 TRAIN 证据，VALIDATE 仅以聚合结果参与选版和剪枝。

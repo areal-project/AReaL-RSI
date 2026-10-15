@@ -23,7 +23,7 @@ RSI 管理实验循环、不可变候选、TRAIN/VALIDATE、评分和选版。Ru
 `RSI_TUI_MODEL_API` 只控制前台模型协议；`RSI_RUNTIME_CONFIG` 控制后台 Harness。
 模型地址和密钥由 `RSI_TEACHER_*`、`RSI_TARGET_*` 提供，`RSI_AGENT_MODELS` 可覆盖前台及研究角色。
 更换模型或 Harness 后请重新生成实验计划，不要继续使用绑定旧配置的计划。
-个人 `.env` 不提交；从 `.env.example` 复制并填写自己的连接信息。
+运行 `uv run --locked rsi config init` 创建 `~/.areal_rsi/config.json`，填写自己的连接信息；个人配置不提交。
 
 ## 安装
 
@@ -48,15 +48,15 @@ Runtime 专用 npm bundle；使用随包 lockfile 冻结安装。每个 Session 
 
 ## 配置与启动
 
-保持 `.env` 中现有 `RSI_TEACHER_*`、`RSI_TARGET_*`、`RSI_AGENT_MODELS` 和 `RSI_DATA_ROOT`。
+保持 `~/.areal_rsi/config.json` 中现有 `RSI_TEACHER_*`、`RSI_TARGET_*`、`RSI_AGENT_MODELS` 和 `RSI_DATA_ROOT`。
 模型连接仍由 RSI 统一管理，后台 Harness 只接触本地模型代理。不要把真实密钥写入 Runtime JSON。
 
 选择一个配置，使用**绝对路径**，因为 TUI/MCP/worker 的工作目录可能不同：
 
 ```sh
 export RSI_RUNTIME_CONFIG="$PWD/examples/runtime/dsh.json"
-uv run --env-file .env --locked rsi tui --setup-only
-uv run --env-file .env --locked rsi tui
+uv run --locked rsi tui --setup-only
+uv run --locked rsi tui
 ```
 
 输入“请启动一个 1 轮的 Harness 自迭代实验”，确认计划后开始后台运行。
@@ -65,10 +65,10 @@ uv run --env-file .env --locked rsi tui
 
 ```sh
 export RSI_RUNTIME_CONFIG="$PWD/examples/runtime/codex.json"
-uv run --env-file .env --locked --extra codex rsi tui
+uv run --locked --extra codex rsi tui
 ```
 
-前台 DSH 可通过 `.env` 中的 `RSI_TUI_MODEL_API=responses` 选择原生 pi-ai Responses 适配器。
+前台 DSH 可通过 `~/.areal_rsi/config.json` 中的 `"RSI_TUI_MODEL_API": "responses"` 选择原生 pi-ai Responses 适配器。
 默认值 `chat-completions` 使用原 DeepSeek 适配器；两者都经本地 GatewayProxy 转发。
 前台模型可单独设置，例如 `RSI_AGENT_MODELS='{"interaction-agent":{"model":"gpt-5.6-luna"}}'`。
 此选项只改变前台协议，不改变后台 Harness；修改后需重启 TUI。

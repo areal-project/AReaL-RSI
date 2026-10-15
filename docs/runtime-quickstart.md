@@ -10,9 +10,9 @@
 
 ```sh
 uv sync --locked
-cp .env.example .env
+uv run --locked rsi config init
 # 填写 RSI_TEACHER_* 和 RSI_TARGET_* 的模型、地址与密钥。
-uv run --env-file .env --locked rsi tui
+uv run --locked rsi tui
 ```
 
 macOS 本地执行需要 Node.js 22.19+（或 24+）和 pnpm。默认后台选择 DSH，首次启动自动安装固定版本 CLI/profile。
@@ -33,6 +33,6 @@ Codex、Anthropic、Claude 分别需要对应 Python extra；原生 CLI 和远�
 ## 数据与验证
 
 Runtime 保存权威事件和资产；RSI 轨迹是兼容导出。后台保留工作区隔离、RSI 工具和候选 MCP。
-个人 `.env`、密钥和实验数据不提交 Git。Runtime wheel 与 DSH npm bundle 固定在仓库，来源及摘要随制品记录。
+个人 `~/.areal_rsi/config.json`、密钥和实验数据不提交 Git。Runtime wheel 与 DSH npm bundle 固定在仓库，来源及摘要随制品记录。
 
 完整配置、能力边界见 [接入指南](runtime-package.md)，实际测试与跳过项见 [验收记录](runtime-package-validation.md)。

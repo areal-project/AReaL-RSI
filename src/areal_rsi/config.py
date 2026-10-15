@@ -1,4 +1,4 @@
-"""从宿主环境读取模型连接配置，不提供部署地址或凭证默认值。"""
+"""从用户 JSON 文件与宿主环境读取模型连接配置，不提供部署地址或凭证默认值。"""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -14,6 +15,68 @@ from areal_rsi.api.base import JsonObject
 
 class ModelConfigurationError(ValueError):
     """模型连接缺失或无效，可以直接向用户展示的配置错误。"""
+
+
+def config_path() -> Path:
+    return Path.home() / ".areal_rsi" / "config.json"
+
+
+def init_config() -> Path:
+    """创建仅当前用户可读写的模板；不覆盖已有配置。"""
+    path = config_path()
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    template = {
+        "RSI_TEACHER_MODEL": "",
+        "RSI_TEACHER_BASE_URL": "",
+        "RSI_TEACHER_API_KEY": "",
+        "RSI_TARGET_MODEL": "",
+        "RSI_TARGET_BASE_URL": "",
+        "RSI_TARGET_API_KEY": "",
+        "RSI_DATA_ROOT": ".rsi/local",
+        "RSI_BENCHMARK": "arithmetic-v1",
+        "RSI_RESEARCH_AGENT_COUNT": 1,
+        "RSI_AGENT_MODELS": {},
+        "RSI_RUNTIME_CONFIG": "",
+        "RSI_TUI_MODEL_API": "chat-completions",
+        "RSI_TURN_TIMEOUT": 1200,
+    }
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return path
+    with os.fdopen(fd, "w") as stream:
+        stream.write(json.dumps(template, ensure_ascii=False, indent=2) + "\n")
+    return path
+
+
+def load_user_config() -> None:
+    """在 CLI 启动时加载默认配置；显式环境变量（包括空值）优先。"""
+    path = config_path()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        raise ModelConfigurationError(f"无法读取 {path}，请检查权限及 JSON 格式。") from None
+    if not isinstance(raw, dict):
+        raise ModelConfigurationError(f"{path} 必须是 JSON 对象。")
+    values: dict[str, str] = {}
+    for key, value in raw.items():
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            raise ModelConfigurationError("config.json 字段名必须为合法环境变量名。")
+        if key == "RSI_AGENT_MODELS" and isinstance(value, dict):
+            values[key] = json.dumps(value, ensure_ascii=False)
+        elif isinstance(value, str):
+            values[key] = value
+        elif type(value) in (int, float):
+            values[key] = str(value)
+        else:
+            raise ModelConfigurationError(
+                "config.json 配置值必须为字符串或数字；RSI_AGENT_MODELS 可使用 JSON 对象。"
+            )
+    # 完整验证后再更新，避免无效文件造成部分配置生效。
+    for key, value in values.items():
+        os.environ.setdefault(key, value)
 
 
 def research_agent_count_from_environment() -> int:

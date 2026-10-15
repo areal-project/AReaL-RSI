@@ -12,7 +12,7 @@ from pathlib import Path
 from areal_rsi.api.base import ExperimentPlan, ExperimentRun, RunState
 from areal_rsi.app import LocalApp
 from areal_rsi.base.storage import FileRecords, decode, encode
-from areal_rsi.config import ModelConfigurationError
+from areal_rsi.config import ModelConfigurationError, init_config, load_user_config
 
 
 def data_root() -> Path:
@@ -50,6 +50,8 @@ async def run_experiment(plan_file: str | None, resume: str | None) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser(description="RSI 本地研发入口")
     commands = parser.add_subparsers(dest="command")
+    config = commands.add_parser("config", help="管理 ~/.areal_rsi/config.json")
+    config.add_argument("action", choices=["init"])
     tui = commands.add_parser("tui", help="打开 DSH 原生 TUI")
     tui.add_argument("--resume", dest="session_id", help="恢复 DSH 对话 Session")
     tui.add_argument("--setup-only", action="store_true", help="安装并准备本地 DSH profile")
@@ -69,6 +71,13 @@ def main() -> None:
     web.add_argument("--port", type=int, default=8765)
     web.add_argument("--run", dest="run_id")
     args = parser.parse_args()
+    try:
+        if args.command == "config":
+            print(f"配置文件：{init_config()}（已有文件不会覆盖）")
+            return
+        load_user_config()
+    except (ModelConfigurationError, OSError) as exc:
+        parser.exit(2, f"配置错误：{exc}\n")
     if args.command == "_mcp":
         from areal_rsi.ui.mcp import serve as serve_mcp
 
@@ -109,7 +118,7 @@ def main() -> None:
         parser.exit(
             2,
             f"配置错误：{exc}\n"
-            "可填写本地 .env（参考 .env.example），然后运行：\n"
-            "  uv run --env-file .env --locked rsi tui\n",
+            "请运行 rsi config init，并填写 ~/.areal_rsi/config.json，然后运行：\n"
+            "  uv run --locked rsi tui\n",
         )
     raise SystemExit(code)

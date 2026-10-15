@@ -1,76 +1,141 @@
-# AReaL RSI
+# AReaL-RSI
 
-一个持续执行目标的研究系统。默认 `goal` 模式由 **Leader 亲自执行**调研、修改、实验和验收；一轮模型回复结束后，目标未完成就继续。Interaction 暂时保留，负责启动前整理需求。交互入口为 TUI。
+AReaL-RSI is a persistent research system. In the default `goal` mode, one **Leader executes the
+work directly**: investigating, editing, running experiments, checking evidence, and accepting the
+result of a run. When a model turn ends with an active goal, the scheduler continues the same
+session. An optional Interaction agent helps clarify requirements before execution starts.
 
-系统只有两种模式：
-
-| 模式 | 执行方式 | 完成责任 |
+| Mode | Execution | Run completion |
 | --- | --- | --- |
-| `goal`（默认） | 一个 Leader，不创建 Researcher | Leader 根据本 run 的验收条件与证据完成任务 |
-| `legacy_passk` | 当前 main 的 v0.1：固定 k 个 Researcher，各自探索完整任务 | 监督者维持独立尝试，系统按目标或预算停止并执行配置的最终验证 |
+| `goal` (default) | One Leader; no Researcher is created | The Leader accepts the run against its criteria and evidence |
+| `legacy_passk` | Fixed k independent Researchers, each attempting the complete task | A supervisor maintains the attempts; the system stops at the target or configured budget and performs final verification when configured |
 
-未来 Agent Team 由 Leader 分解任务并启动 Researcher，Researcher 只完成分派任务，Leader 负责整合和本 run 准出。目前仅保留契约，不提供可运行的 team 模式。旧协作版本、Web 工作台和历史实验启动器已删除，旧 run/config 不迁移。
+Legacy pass@k preserves the v0.1 behavior from `main` at `4771407`. Future Agent Team work will let
+the Leader delegate portions of a task to Researchers while retaining responsibility for integration
+and run acceptance. Only the contracts exist today; there is no runnable team mode.
 
-## 启动
+## Quick start
 
-需要 Python 3.11+、uv；standard 后端还需要 Node.js 22.19+ 和 pnpm。
+Requirements: Python 3.11 or later and [uv](https://docs.astral.sh/uv/). The default `standard`
+backend also needs Node.js 22.19 or later and pnpm. The `standard` and `codex` backends need a
+Responses-compatible model endpoint with tool calling. See [Agent backends](docs/agent-backends.md)
+for configuration, isolation, and optional adapters. macOS uses `sandbox-exec` by default;
+Linux uses unrestricted execution with the launching user's permissions.
 
 ```bash
 uv sync --locked
 cp -n .env.example .env
-# 编辑 .env，填写 RSI_BASE_URL、RSI_API_KEY、RSI_MODEL 等模型连接配置
+# Set RSI_BASE_URL, RSI_API_KEY, RSI_MODEL, and other model settings in .env.
 uv run --env-file .env --locked rsi tui
 ```
 
-也可以运行 `uv run --env-file .env python run.py`。在终端输入目标，与 Interaction 补齐可检查的要求后交给 Leader。已经准备好配置时，执行以下命令，然后在 TUI 中输入 `/start`：
+The terminal UI is the default entry point; `uv run --env-file .env python run.py` starts it too.
+Enter a goal, clarify its acceptance criteria with Interaction, and hand it to the Leader.
+
+For a small task that requires only the research model, load the CSV-script example and enter
+`/start` in the TUI:
 
 ```bash
 uv run --env-file .env --locked rsi tui --config examples/goal.json
 ```
 
-研究已有 Git 项目：
+To work on an existing Git repository:
 
 ```bash
 uv run --env-file .env --locked rsi tui --workspace /absolute/path/to/repository
 ```
 
-Leader 从启动时的 HEAD 创建独立 worktree；用户检出目录中的未提交修改不会带入。工作区路径显示在 TUI 中。普通材料可以通过配置 `seed_dir` 复制到 Leader 工作区。
+The Leader gets a separate worktree from the repository's HEAD at startup. Uncommitted changes in
+the user's checkout are not included. The TUI shows the workspace path. For ordinary files, use
+`seed_dir` in a configuration to copy starting material into the Leader's workspace.
 
-## 交互和恢复
+## Choose a workflow
 
-| 输入 | 行为 |
+| Goal | Start with | Additional requirements |
+| --- | --- | --- |
+| Try a single-agent task | [Goal example](examples/goal.json) | A research model |
+| Optimize a harness with formal evaluation | [Arithmetic](examples/harness/README.md#算术-harness) | A target model in addition to the research model |
+| Optimize a LiveCodeBench system prompt | [LiveCodeBench](examples/harness/README.md#livecodebench-harness) | EnvArena access and a fixed benchmark |
+| Optimize a reusable GPU kernel harness | [KernelBench harness](examples/harness/kernelbench/README.md) | KernelBench data and a GPU evaluation environment |
+
+The [example catalog](examples/README.md) separates runnable workflows, backend profiles,
+components, and deployment assets.
+
+### Arithmetic research with formal verification
+
+Configure research model variables (`RSI_*`) and target model variables (`RSI_TARGET_*`) in `.env`,
+then prepare and run the built-in arithmetic workflow. It needs no GPU, SSH, or EnvArena.
+
+```bash
+uv run --env-file .env --locked rsi prepare arithmetic --directory .rsi/math/setup
+uv run --env-file .env --locked rsi research \
+  --config .rsi/math/setup/research.json --data-root .rsi/math
+```
+
+This generates a `ResearchConfig` for `ResearchSystem`. The Leader improves the task harness,
+compares candidate snapshots on TRAIN, verifies the selected candidate independently on VALIDATE,
+and accepts the run after checking the result. See the [harness guide](examples/harness/README.md)
+for the task and verification contract.
+
+## Interaction and recovery
+
+| Input | Behavior |
 | --- | --- |
-| 普通文字 | 启动前交给 Interaction；运行时直接补充给 Leader |
-| `/start` | 按已保存需求开始执行 |
-| `/pause`、Ctrl+P | 暂停模型执行；已提交作业继续受管理 |
-| `/resume` | 恢复暂停任务；预算耗尽不能直接恢复 |
-| `/retry` | 重试失败的当前角色，复用原任务及会话 |
-| `/stop` | 终止当前 run 并取消受管理的未完成作业 |
-| `/export /new/path` | 将已验收的不可变候选导出到新目录 |
-| `/new` | 当前任务结束后创建新任务 |
-| `/quit`、Ctrl+Q | 保存退出；保留任务状态和作业，供恢复 |
+| Ordinary text | Clarify requirements with Interaction before startup; send input directly to the Leader during execution |
+| `/start` | Start execution using the saved requirements |
+| `/pause`, Ctrl+P | Pause model execution; submitted jobs remain managed |
+| `/resume` | Resume a paused run; an exhausted budget must be addressed first |
+| `/retry` | Retry the failed current role using the existing task and session |
+| `/stop` | Terminate the run and cancel unfinished managed jobs |
+| `/export /new/path` | Export the accepted, immutable candidate to a new directory |
+| `/new` | Create a new task after the current run ends |
+| `/quit`, Ctrl+Q | Save and exit; retain state and jobs for recovery |
 
-重新打开同一 run：
+Reopen a run using its original data directory:
 
 ```bash
 uv run --env-file .env --locked rsi tui --resume <run_id>
 ```
 
-数据目录优先级为 `--data-root`、`RSI_DATA_ROOT`、`.rsi/research-lab`。恢复时使用原数据目录。TUI 每次管理一个 run，同一 run 只允许一个进程控制；已经完成的 run 可查看和导出，追加工作应创建新 run。
+Data directory precedence is `--data-root`, `RSI_DATA_ROOT`, then `.rsi/research-lab`. The TUI manages
+one run at a time, and only one process may control a run. Completed runs can be inspected and
+exported; additional work requires a new run. Closing the TUI interrupts local model execution
+while preserving the active message, session, and managed jobs for recovery.
 
-无交互运行和后端检查：
+## Headless execution and runtime checks
 
 ```bash
 uv run --env-file .env --locked rsi research --config examples/goal.json
 uv run --env-file .env --locked rsi preflight
 ```
 
-无交互执行输出 JSON 事件；等待用户输入时退出码为 3，并打印 TUI 恢复命令。没有配置正式 verifier 的通用任务可以由 Leader 基于测试和产物证据完成。有 verifier 时，系统要求同一候选的正式验证满足协议，不能用文字声明或其他候选的成绩替代。
+Headless execution prints JSON events. When operator input is required, it exits with code 3 and
+prints a TUI resume command. Preflight checks the configured backend, tool calls, and session
+recovery without submitting benchmark or GPU jobs.
 
-## 开发
+A general task without a formal verifier can complete on the Leader's recorded criteria and
+evidence. When a verifier is configured, acceptance requires formal verification of the same
+candidate under the current protocol. A textual claim or another candidate's score cannot replace
+that result. Pausing, reaching a budget, and waiting for input do not mean that the goal was met.
+
+## Compatibility and development
+
+Only `goal` and `legacy_passk` are supported. The Web workbench, older collaboration variants, and
+historical experiment launchers have been removed. Old run records and configurations are not
+migrated. Run acceptance does not automatically merge, publish, or deploy a result.
 
 ```bash
 make check
 ```
 
-核心入口是 `infra/research.py` 的 `ResearchSystem`；`api/` 定义契约，`infra/` 实现运行、存储、评测和编排，`ui/` 只负责展示和输入。详见[架构与后续 Team 设计](docs/architecture.md)、[接口](docs/interfaces/README.md)、[legacy pass@k](docs/passk.md)、[后端](docs/agent-backends.md)。
+`infra/research.py` exposes `ResearchSystem`, the application entry point. `api/` defines contracts,
+`infra/` implements execution, storage, evaluation, and coordination, and `ui/` handles presentation
+and input. `make check` runs Python behavior and architecture tests, Ruff, and Mypy.
+
+| Guide | Contents |
+| --- | --- |
+| [Architecture](docs/architecture.md) | Responsibilities, goal lifecycle, and future Agent Team boundaries |
+| [Interfaces](docs/interfaces/README.md) | Domain APIs, controls, and verification contracts |
+| [Legacy pass@k](docs/passk.md) | Independent attempts, budgets, stopping, and final verification |
+| [Agent backends](docs/agent-backends.md) | Runtime configuration, isolation, tools, and sessions |
+| [Effective time](docs/effective-time.md) | Accounting for API outages and GPU queue delays |

@@ -55,4 +55,3 @@ def test_dependency_and_state_boundaries() -> None:
                     ):
                         errors.append(f"{path}: {target}")
     assert not errors, "\n".join(errors)
-

@@ -1,62 +1,95 @@
-# 架构与演进边界
+# 单 Agent 内核
 
-设计依据：[RSI Design Doc](https://yuque.antfin.com/areal-team/swe/ot9ck3wxptzz4zdh)。本分支保留文档中的基础能力分层，调整 Evolver 的职责：默认 Leader 执行完整任务，未来 Researcher 执行 Leader 分配的局部任务。准出针对一个 run。
-
-```mermaid
-flowchart TD
-    U[用户] --> T[TUI / headless CLI]
-    T --> S[ResearchSystem：一个 run 的生命周期]
-    S --> I[Interaction：启动前整理需求]
-    I --> L[Goal：Leader 直接执行和验收]
-    S --> P[Legacy pass@k：main v0.1]
-    L --> R[ResearchRuntime：模型会话与原生工具]
-    L --> E[ResearchExecution：作业与验证]
-    P --> R
-    P --> E
-    E --> B[基础能力：候选、版本、轨迹、评测、资源]
-    R --> B
+```text
+ui/dsh 原版组件 ← main.mjs ← ui/tui.py、ui/cli.py
+        │ 调用；消费 SessionEvent
+        ▼
+infra/research.py · ResearchSystem
+        ├── agents.py                  当前角色指令
+        ├── coordination/store.py      原子状态、会话占用锁、UI 记录
+        ├── coordination/policies/goal.py  Goal 继续/完成/等待/预算
+        ├── coordination/tools/control.py  三个 Agent 控制工具
+        ├── experience.py              本地文档与独立总结
+        └── codex.py                   原生 app-server JSON-RPC
+                └── Codex             模型、工具、历史、压缩、沙箱
 ```
 
-## 当前职责
+`api/` 定义具名数据契约和协议，不依赖实现；`infra/` 不依赖 UI。
+没有 Researcher、独立 verifier、版本管理、memory、训练或 legacy 内核。
+API 中对应的未来契约保留，当前运行不会实例化它们。
 
-- `api/research.py`：任务、goal、候选、验证、消息和调度状态。`TeamTask` / `TaskReport` 是未来分工契约。
-- `api/interfaces.py`：Runtime、VersionManager、TrajectoryStore、Memory、Builder、TrainingBackend 等能力协议，以及未实现的 `AgentTeam`。
-- `infra/research.py`：create/start/message/pause/resume/stop/export、进程所有权与资源释放。无 HTTP dispatcher。
-- `infra/coordination/coordinator.py`：持久状态与消息交付；`engine.py`：模型回合调度、恢复、使用量、取消和预算。
-- `infra/coordination/policies/goal.py`：Leader 持续执行、阻塞、完成判定。`legacy_passk.py`：独立完整尝试的历史行为。
-- `infra/coordination/tools/`：角色权限、工作区、候选和证据工具；`evaluation/`：受管理作业及可信验证。
-- `infra/runtime/`：DSH、Codex 和 Runtime 包接入、会话、沙箱和工具桥。
-- `infra/storage/`、`infra/tasks/`、`infra/execution/`：内容快照、追加版本、轨迹、Task 执行、评测和资源生命周期。
-- `ui/tui.py`、`ui/cli.py`：展示与输入，不包含研究策略。
+## 一次会话
 
-`ResearchSystem.attach()` 只组装或复用本地运行实例，后台执行由 `_serve()` 管理。
-模型、作业监控和 run 所有权在创建时登记到资源栈，初始化失败、后台退出或提前取消都使用同一套释放逻辑。
-模型调度循环退出后关闭模型会话；作业监控和 run 锁保留至 legacy 最终复测结束。
-两种 Engine 各自提供默认 prompt，legacy 的达标停止、预算停止和最终复测规则集中在 `legacy_passk.py`。
+1. `create(config)` 只保存普通会话。`open(run_id)` 连接独立配置目录中的 Codex。
+2. `send_message()` 开始原生 turn；执行中的补充消息使用 `turn/steer`。
+3. `/rsi` 等当前 turn 结束，在**同一个 thread** 切为 Interaction，继续讨论。
+4. Interaction 用 `rsi_set_task` 保存 `TaskBrief`。用户要求执行时，调用
+   `rsi_start_goal`；用户也能通过 `/start` 交接已准备的任务。
+5. 当前 turn 完整结束后，`thread/fork` 复制原生历史给 Leader。
+   Leader 是唯一执行者，自己读代码、修改、调用工具和验证。
+6. Leader 用 `rsi_update_goal` 保存进展。若 turn 结束但目标仍 active，宿主启动下一 turn。
+7. `/chat` 在当前 Leader thread 回到普通工作，保留刚完成的工作上下文。
 
-## Goal 流程
+角色是同一 Codex 内核的不同阶段，没有额外的 Agent 转发层。执行角色提示词放在
+`infra/agents.py`，总结角色在 `infra/experience.py`，宿主续行/恢复提示词在 `ResearchSystem` 中。
 
-Interaction 可以跳过：完整配置直接 `start`。对话创建时，Interaction 将需求保存为 brief，然后 `start_research`。启动后 Interaction 不再参与执行，用户消息直接投递给 Leader。
+新会话默认 `danger-full-access` / `never`：工作目录是起始目录，不是读写边界；操作受当前系统用户权限约束。
+所有阶段和总结继承同一配置，旧会话恢复时仍使用其已保存权限。角色职责由提示词及 RSI 控制工具授权表达。
 
-Leader 使用自己的工作区、原生文件/终端工具、候选与作业工具执行任务。`update_goal` 持久化摘要、当前步骤、下一步、验收条件、证据和阻塞原因。回合结束而 goal 仍 active 时，调度器在原会话继续。`ask_user` / blocked 停止续跑，用户回答后恢复；等待作业通过持久 waiter 唤醒，不靠模型循环查询。
+## 上下文归属
 
-`completed` 需要明确的验收条件和证据，不允许跳过未完成作业或未处理的用户消息。有正式协议时检查候选、协议摘要、阶段、目标分数和最新验证结果；要求 final 时必须对同一候选完成 final。没有 verifier 时保存 Leader 的验收依据，可信度来自实际工具证据和 Leader 判断，不宣称系统能自动证明任意自然语言要求。
+Codex 保存用户和助手消息、工具调用及结果、图片输入和压缩记录。RSI 不重建消息数组，
+不截取最后几条记录，不用任务配置或 UI transcript 替代原生历史。
+角色指令通过每个 turn 的 application context 更新；原生 Codex 基础指令保留。
+Leader fork 是一个新 thread，但保留来源会话已有的上下文；后续工作继续在这个分支上。
 
-候选是不可变快照。`/export` 只导出验收时选定的快照，工作区之后的修改不会混入。Git worktree 与用户原检出隔离。完成一个 run 不意味着自动发布、合并或部署。
+这仍受模型上下文窗口限制。长会话使用 Codex 自己的压缩结果，并不意味着所有原文、
+工具输出、图片像素会永远同时留在模型输入中。原始文件/图片路径和关键业务约束应写入
+任务配置，便于需要时重新读取。RSI 没有实现第二套会话压缩；经验文档是跨任务的通用方法，不替代原生上下文。
 
-暂停与等待不等于完成。关闭 TUI 中断本地模型执行，但保留活动消息、会话和作业供重启；stop 取消未完成作业，终止 run。预算耗尽保存未完成状态。正式验证失败时 Leader 可以继续修复。
+## Goal 的停止条件
 
-## 未来 Agent Team（仅契约）
+- Leader 提交 `completed` 和非空验证证据，且当前 turn 正常结束：完成。
+- Leader 提交 `blocked` 和问题：等待用户；回答后继续。
+- 用户 `/pause`、`/stop` 或退出：中断/保存，不偷偷重新启动。
+- 用户设置的 token 或执行时间预算耗尽：停止；调整或取消预算后再 `/resume`。
+- 原生 turn 失败或断线：保存不确定的执行状态，等待显式恢复。
+- 连续两次自动续行均未使用工作工具：等待用户，避免空转。
 
-参考 [DeepSeek Harness Agent Team](https://github.com/deepseek-ai/deepseek-harness/tree/master/packages/experimental/tool-agent-team) 的 Leader 派发和持久任务思想。保留现有 Runtime、作业、记录机制，不接入另一套模型循环。
+新目标默认不设 token 和时间预算。Interaction 只保存任务，预算由用户通过 `/budget` 控制；
+调整预算保留已用量，解除 `budget_limited` 后进入暂停状态，等待显式 `/resume`。
+token 用量从 Leader 开始计算，使用 Codex 上报的累计用量差值，包含输入上下文。
+它是收到用量通知后的中断上限，单次模型调用可能超出剩余额度。
+`max_wall_seconds` 在本版计 Leader 活跃执行秒数，排除暂停和等待用户的时间。
+完成证据由 Leader 提交，宿主校验结构；本版没有独立验证器替模型判断质量。
 
-1. Leader 拆分 `TeamTask`：run、任务说明、局部验收条件和授予的输入引用。
-2. Leader 通过 `AgentTeam.delegate` 启动 Researcher。Researcher 使用独立会话/worktree，仅获取任务及授权材料。
-3. Researcher 返回 `TaskReport`：结果、候选、证据或阻塞；完成任务不会完成 run。
-4. Leader 检查报告、整合产物、解决冲突并验证，继续用当前 run 完成入口准出。Leader 也可以自己执行任意步骤。
+## 恢复与持久化
 
-当前没有 Team 的 spawn 工具、task board 调度、同伴通信或集成实现，也不接受 `agent_team` 配置值。将来实现时不复用 legacy 中“每人完整解题”的启动语义。训练后端等尚未接入能力保持协议，不提供返回假成功的占位实现；底层已有 Task HarnessRuntime 承担推理执行。
+```text
+RSI_DATA_ROOT/
+├── codex/                        独立 CODEX_HOME；原生历史及配置
+├── experience/<slug>/            不可变 Markdown 版本与 current.json
+└── sessions/<run_id>/
+    ├── session.json              唯一生命周期状态；原子替换
+    ├── owner.lock                同一会话仅一个宿主
+    ├── transcript.jsonl          UI 展示，不作为模型上下文
+    ├── learning.log              独立总结进程诊断
+    └── codex.log                 原生进程诊断
+```
 
-## 不兼容范围
+投递前记录输入意图；工具控制结果先落盘再回复。重复控制调用按 call ID 复用回执，
+改变参数则拒绝。恢复时核对原生最后一个 turn 的结果；投递结果不明确时，不自动重放命令。
+`/resume` 会让 Agent 先检查历史、文件和进程，再继续未完成工作。这不能保证任意外部副作用
+恰好执行一次，但避免宿主在不知道结果时盲目重试。
 
-只接受 `goal` 和 `legacy_passk`。删除协作模块组合、v0.2.x/leader guidance、旧 Researcher goal、Web/UI 控制协议及个人历史实验配置。新状态使用具名记录并严格校验，不为旧数据加入迁移分支。源代码清理不修改用户仓库、共享数据集或外部实验服务。
+后续接入其他 UI 时复用 `ResearchSystem` 的控制方法和事件流。
+本地经验自进化通过独立总结会话实现；Yuque 同步尚未实现。
+`/learn-mode` 选择完成后自动总结或等待人工复盘；等待状态不占用模型，且不会改变任务已完成的状态。
+经验 Markdown 以语义主题命名，版本目录保留不可变快照，`current.json` 指向最新版本。
+新会话保存经验目录快照，已有会话不静默切换文档版本。普通工作与 Leader 按需读取；
+Interaction 不接收新的经验目录，且不能把经验建议写成用户约束。此前对话中的原始业务上下文仍完整保留。文档发布采用宿主管理的版本比较，
+防止并发总结覆盖新版本；发布冲突需要重新总结。
+
+执行期间持有系统闲置休眠抑制，停止/等待时释放。目标续行参考
+[Codex Goals](https://developers.openai.com/cookbook/examples/codex/using_goals_in_codex)，
+休眠范围参考原生 Codex 的 sleep-inhibitor；本版没有后台守护进程或跨机器恢复。

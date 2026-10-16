@@ -1,1 +1,0 @@
-"""ResearchSystem role prompts."""

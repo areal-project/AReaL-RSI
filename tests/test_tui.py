@@ -1,76 +1,199 @@
-"""Headless terminal interactions exercise the same run lifecycle as real input."""
+"""Real PTY → upstream DSH views → Python transport → native Codex, offline."""
 
 from __future__ import annotations
 
-import asyncio
+import json
+import os
+import pty
+import select
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
-from runtime_fakes import CallbackRuntime
-from test_goal import config, goal, wait_for
-from textual.widgets import Input, RichLog, Static
+from native_model import Json, NativeModel, function
 
-from areal_rsi.api.interfaces import ToolCall, TurnResult
-from areal_rsi.infra.coordination.tools.brief import brief_tool
-from areal_rsi.infra.research import ResearchSystem
-from areal_rsi.infra.storage.files import encode
-from areal_rsi.ui.tui import ResearchTUI
+from areal_rsi.api.control import decode_record
+from areal_rsi.api.research import SessionRecord
 
 
-def test_intake_handoff_leader_block_and_user_reply_in_tui(tmp_path: Path) -> None:
-    async def scenario() -> None:
-        leader_calls = 0
+@unittest.skipUnless(shutil.which("codex") and shutil.which("node"), "Codex and Node are required")
+class TUITests(unittest.TestCase):
+    def test_native_chat_rsi_context_and_reopen_in_a_real_terminal(self) -> None:
+        def respond(request: Json) -> str | list[Json]:
+            if len(model.requests) == 2:
+                return function(
+                    "rsi_set_task",
+                    {
+                        "objective": "Use business context",
+                        "instructions": "Retain the discussion",
+                        "acceptance": ["Earlier context is available"],
+                    },
+                )
+            if len(model.requests) == 5:
+                return function(
+                    "rsi_update_goal",
+                    {
+                        "status": "completed",
+                        "summary": "Context checked",
+                        "evidence": ["BUSINESS_UI_CONTEXT_501 retained after resume"],
+                    },
+                )
+            if len(model.requests) == 7:
+                return json.dumps(
+                    {
+                        "slug": "business-context-handoffs",
+                        "title": "Preserve business context",
+                        "description": "When changing execution roles",
+                        "body": "Retain business constraints and verify them after handoff.",
+                    }
+                )
+            return "NATIVE_UI_REPLY: business context retained"
 
-        async def respond(session: Path, delivery: dict[str, Any]) -> TurnResult:
-            nonlocal leader_calls
-            handler = delivery["handler"]
-            if delivery["recovery_state"]["agent_id"] == "interaction":
-                assert delivery["user_message"] == "Write answer"
-                brief = encode(config().brief)
-                fields = brief_tool("goal")["parameters"]["properties"]["limits"]["properties"]
-                brief["limits"] = {k: v for k, v in brief["limits"].items() if k in fields}
-                brief["limits"]["max_jobs"] = 2
-                updated = await handler(ToolCall("update_brief", brief, "brief"))
-                assert "error" not in updated.output
-                result = await handler(ToolCall("start_research", {}, "start"))
-                assert "error" not in result.output
-            else:
-                leader_calls += 1
-                if leader_calls == 1:
-                    result = await handler(
-                        ToolCall("ask_user", {"question": "Which value?"}, "ask")
+        model = NativeModel(respond)
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / ".env").write_text(
+                    f"RSI_BASE_URL={model.url}\nRSI_API_KEY=offline-fixture\n"
+                    "RSI_AUTO_LEARN=0\nRSI_DATA_ROOT=./data\nRSI_MODEL=gpt-6-astra\n"
+                )
+                environment = {
+                    key: value for key, value in os.environ.items() if not key.startswith("RSI_")
+                }
+                environment["TERM"] = "xterm-256color"
+
+                def session(resume: str = "") -> str:
+                    master, slave = pty.openpty()
+                    arguments = [sys.executable, "-m", "areal_rsi", "tui"]
+                    if resume:
+                        arguments.extend(["--resume", resume])
+                    process = subprocess.Popen(
+                        arguments,
+                        stdin=slave,
+                        stdout=slave,
+                        stderr=slave,
+                        cwd=root,
+                        env=environment,
+                        start_new_session=True,
                     )
-                else:
-                    assert delivery["user_message"] == "42"
-                    result = await handler(ToolCall("update_goal", goal(), "done"))
-            return TurnResult(session.name, delivery["message_id"], "", result.reason, {})
+                    os.close(slave)
+                    output = bytearray()
 
-        runtime = CallbackRuntime(respond)
-        system = ResearchSystem(tmp_path, runtime_factory=lambda _: runtime)
-        app = ResearchTUI(system, config())
-        async with app.run_test(size=(110, 32)) as pilot:
-            app.query_one(Input).value = "Write answer"
-            await pilot.press("enter")
-            await wait_for(lambda: app.run_id and system.coordinator(app.run_id).user_questions())
-            assert app.run_id
-            assert system.active[app.run_id].execution.manager.max_jobs == 2
-            await app.poll()
-            assert "Which value?" in str(app.query_one("#goal", Static).render())
-            assert any("Which value?" in line.text for line in app.query_one(RichLog).lines)
-            await pilot.press("ctrl+p")
-            assert system.coordinator(app.run_id).state.status == "paused"
-            app.query_one(Input).value = "/resume"
-            await pilot.press("enter")
-            app.query_one(Input).value = "42"
-            await pilot.press("enter")
-            await wait_for(lambda: system.coordinator(app.run_id).state.status == "succeeded")
-            await app.poll()
-            assert "succeeded" in str(app.query_one("#status", Static).render())
-            assert not system.coordinator(app.run_id).store.run().research_agents
-            app.query_one(Input).value = "/new"
-            await pilot.press("enter")
-            assert app.run_id is None
-            await pilot.press("ctrl+q")
-        assert app.closed and not system.active
+                    def until(predicate: Callable[[], bool]) -> None:
+                        deadline = time.monotonic() + 25
+                        while not predicate():
+                            if time.monotonic() > deadline or process.poll() is not None:
+                                self.fail(output.decode(errors="replace")[-5000:])
+                            if select.select([master], [], [], 0.05)[0]:
+                                output.extend(os.read(master, 65536))
 
-    asyncio.run(scenario())
+                    def state() -> dict[str, object]:
+                        paths = list((root / "data/sessions").glob("*/session.json"))
+                        return json.loads(paths[0].read_text()) if paths else {}
+
+                    try:
+                        until(lambda: b"DSH terminal" in output and bool(state().get("thread_id")))
+                        run_id = str(state()["run_id"])
+                        if not resume:
+                            os.write(master, b"/learn\r")
+                            until(lambda: "总结经验" in output.decode(errors="replace"))
+                            os.write(master, b"BUSINESS_UI_CONTEXT_501\r")
+                            until(lambda: b"NATIVE_UI_REPLY" in output)
+                            until(lambda: state().get("status") == "idle")
+                            os.write(master, b"/model\r")
+                            until(lambda: "当前模型：" in output.decode(errors="replace"))
+                            until(lambda: b"gpt-6-luna" in output)
+                            self.assertEqual(
+                                model.catalog_requests, [("/v1/models", "Bearer offline-fixture")]
+                            )
+                            self.assertEqual(len(model.requests), 1)
+                            os.write(master, b"/model gpt-6-sol\r")
+                            until(lambda: "从下一回合生效" in output.decode(errors="replace"))
+                            os.write(master, b"/effort\r")
+                            until(lambda: "用法：/effort" in output.decode(errors="replace"))
+                            os.write(master, b"/effort low\r")
+                            until(lambda: "effort：low" in output.decode(errors="replace"))
+                            os.write(master, b"/learn-mode auto\r")
+                            until(lambda: "经验总结模式：auto" in output.decode(errors="replace"))
+                            os.write(master, b"/learn-mode guided\r")
+                            until(lambda: "经验总结模式：guided" in output.decode(errors="replace"))
+                            os.write(master, b"/rsi use earlier business discussion\r")
+                            until(
+                                lambda: len(model.requests) == 3 and state().get("status") == "idle"
+                            )
+                            self.assertIn("BUSINESS_UI_CONTEXT_501", json.dumps(model.requests[1]))
+                            self.assertEqual(model.requests[1]["model"], "gpt-6-sol")
+                            self.assertEqual(model.requests[1]["reasoning"]["effort"], "low")
+                            self.assertEqual(state()["phase"], "interaction")
+                            os.write(master, b"/budget\r")
+                            until(lambda: "Token：0 / 不限" in output.decode(errors="replace"))
+                            os.write(master, b"/budget 1 off\r")
+                            until(lambda: "Token：0 / 1" in output.decode(errors="replace"))
+                            os.write(master, b"/start\r")
+                            until(lambda: state().get("status") == "budget_limited")
+                            until(lambda: not state().get("active_turn_id"))
+                            until(lambda: "预算已耗尽" in output.decode(errors="replace"))
+                        else:
+                            until(lambda: b"NATIVE_UI_REPLY" in output)
+                            until(lambda: b"gpt-6-sol" in output)
+                            self.assertEqual(state()["phase"], "leader")
+                            self.assertEqual(state()["status"], "budget_limited")
+                            self.assertEqual(len(model.requests), 4)
+                            os.write(master, b"/effort\r")
+                            until(lambda: "effort：low" in output.decode(errors="replace"))
+                            os.write(master, b"/learn-mode\r")
+                            until(lambda: "经验总结模式：guided" in output.decode(errors="replace"))
+                            before = state()
+                            os.write(master, b"/budget off\r")
+                            until(lambda: state().get("status") == "paused")
+                            self.assertEqual(state()["tokens_used"], before["tokens_used"])
+                            self.assertEqual(len(model.requests), 4)
+                            os.write(master, b"/resume\r")
+                            until(lambda: state().get("status") == "completed")
+                            self.assertEqual(state()["thread_id"], before["thread_id"])
+                            self.assertIn("BUSINESS_UI_CONTEXT_501", json.dumps(model.requests[4]))
+                            self.assertEqual(len(model.requests), 6)
+                            until(lambda: "等待经验复盘" in output.decode(errors="replace"))
+                            self.assertEqual(
+                                decode_record(SessionRecord, state()).learning.status,
+                                "awaiting_feedback",
+                            )
+                            os.write(master, b"/learn Preserve context before visual polish\r")
+                            until(
+                                lambda: (
+                                    decode_record(SessionRecord, state()).learning.status
+                                    == "completed"
+                                )
+                            )
+                            self.assertIn(
+                                "Preserve context before visual polish",
+                                json.dumps(model.requests[6]),
+                            )
+                            document = decode_record(SessionRecord, state()).learning.document
+                            assert document is not None
+                            self.assertEqual(
+                                Path(document.path).name, "business-context-handoffs.md"
+                            )
+                            self.assertTrue(Path(document.path).is_file())
+                            self.assertEqual(state()["thread_id"], before["thread_id"])
+                        os.write(master, b"\x11")  # Ctrl+Q: graceful shutdown and terminal restore.
+                        until(lambda: process.poll() is not None)
+                        self.assertEqual(process.returncode, 0, output.decode(errors="replace"))
+                        return run_id
+                    finally:
+                        if process.poll() is None:
+                            os.killpg(process.pid, signal.SIGTERM)
+                            process.wait(timeout=15)
+                        os.close(master)
+
+                run_id = session()
+                session(run_id)
+                self.assertFalse(model.errors)
+        finally:
+            model.close()

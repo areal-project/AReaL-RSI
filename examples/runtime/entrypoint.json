@@ -1,8 +1,0 @@
-{
-  "default": {
-    "kind": "entrypoint",
-    "pluginEntrypoint": "your_installed_adapter:create_plugin",
-    "profileBinding": "portable",
-    "config": {}
-  }
-}

@@ -17,6 +17,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install native Codex for offline protocol tests
+        run: npm install -g @openai/codex@0.162.1
       - name: Install locked dependencies
         run: |
           python -m pip install uv

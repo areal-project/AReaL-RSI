@@ -6,13 +6,86 @@ import json
 import re
 import types
 from contextlib import suppress
-from dataclasses import MISSING, fields, is_dataclass
+from dataclasses import MISSING, asdict, dataclass, field, fields, is_dataclass
 from enum import Enum
-from typing import Any, Literal, get_args, get_origin, get_type_hints
+from typing import Any, Literal, TypeVar, cast, get_args, get_origin, get_type_hints
 
 from jsonschema import Draft202012Validator
 
 Json = dict[str, Any]
+T = TypeVar("T")
+
+
+@dataclass(slots=True)
+class TaskProposal:
+    objective: str
+    instructions: str
+    acceptance: list[str]
+
+
+@dataclass(slots=True)
+class GoalUpdate:
+    status: Literal["active", "completed", "blocked"]
+    summary: str
+    next_step: str = ""
+    evidence: list[str] = field(default_factory=list)
+    question: str = ""
+
+
+@dataclass(slots=True)
+class StartGoal:
+    pass
+
+
+@dataclass(slots=True)
+class LessonDraft:
+    slug: str
+    title: str
+    description: str
+    body: str
+
+
+@dataclass(slots=True)
+class TerminalInput:
+    action: Literal["submit", "answer", "pause", "close"]
+    text: str = ""
+    request_id: int | str | None = None
+    approved: bool | None = None
+    answers: dict[str, str] = field(default_factory=dict)
+
+
+def record_schema(kind: type[Any]) -> Json:
+    return _type_schema(kind)
+
+
+def encode_record(value: Any) -> Json:
+    """Encode a named record at a JSON boundary."""
+    return cast(Json, json.loads(json.dumps(asdict(value), ensure_ascii=False, allow_nan=False)))
+
+
+def decode_record(kind: type[T], value: Any) -> T:
+    """Validate once, then use typed fields throughout the implementation."""
+    validate_record(kind, value)
+    return cast(T, _decode(kind, value))
+
+
+def _decode(kind: Any, value: Any) -> Any:
+    origin, args = get_origin(kind), get_args(kind)
+    if origin is types.UnionType:
+        for option in args:
+            if Draft202012Validator(_type_schema(option)).is_valid(value):
+                return _decode(option, value)
+    if isinstance(kind, type) and issubclass(kind, Enum):
+        return kind(value)
+    if isinstance(kind, type) and is_dataclass(kind):
+        hints = get_type_hints(kind)
+        return kind(**{name: _decode(hints[name], item) for name, item in value.items()})
+    if origin in (list, tuple):
+        items = [_decode(args[0], item) for item in value]
+        return tuple(items) if origin is tuple else items
+    if origin is dict:
+        return {name: _decode(args[1], item) for name, item in value.items()}
+    return value
 
 
 def _object(properties: Json, required: tuple[str, ...] = ()) -> Json:

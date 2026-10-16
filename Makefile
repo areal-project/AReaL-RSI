@@ -1,4 +1,4 @@
-.PHONY: help test check lint typecheck architecture
+.PHONY: help test check lint typecheck architecture ui-test
 
 UV ?= uv
 
@@ -18,4 +18,8 @@ typecheck:
 architecture:
 	$(UV) run --locked pytest tests/test_architecture.py
 
-check: test lint typecheck
+ui-test:
+	cd src/areal_rsi/ui/dsh && npm ci --ignore-scripts --no-audit --no-fund
+	cd src/areal_rsi/ui/dsh && node patch.mjs && npm run build && npm test
+
+check: ui-test test lint typecheck

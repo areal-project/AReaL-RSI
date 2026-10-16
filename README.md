@@ -1,142 +1,133 @@
-# AReaL-RSI
+# AReaL RSI
 
-AReaL-RSI is a persistent research system. In the default `goal` mode, one **Leader executes the
-work directly**: investigating, editing, running experiments, checking evidence, and accepting the
-result of a run. When a model turn ends with an active goal, the scheduler continues the same
-session. An optional Interaction agent helps clarify requirements before execution starts.
+基于原生 Codex app-server 的单 Agent 工作框架。默认普通对话；中途 `/rsi` 进入需求讨论，
+Interaction 整理目标，Leader 亲自执行，由宿主维持 Goal 的持续运行。
 
-| Mode | Execution | Run completion |
-| --- | --- | --- |
-| `goal` (default) | One Leader; no Researcher is created | The Leader accepts the run against its criteria and evidence |
-| `legacy_passk` | Fixed k independent Researchers, each attempting the complete task | A supervisor maintains the attempts; the system stops at the target or configured budget and performs final verification when configured |
+本版仅支持 Codex；终端直接复用 DSH 原版组件。研究团队、版本管理、独立评测、memory、训练和
+legacy pass@k 的实现已移除；未来 API 契约保留。经验先沉淀为本地文档，云文档同步后续接入。
 
-Legacy pass@k preserves the v0.1 behavior from `main` at `4771407`. Future Agent Team work will let
-the Leader delegate portions of a task to Researchers while retaining responsibility for integration
-and run acceptance. Only the contracts exist today; there is no runnable team mode.
+## 本地启动
 
-## Quick start
-
-Requirements: Python 3.11 or later and [uv](https://docs.astral.sh/uv/). The default `standard`
-backend also needs Node.js 22.19 or later and pnpm. The `standard` and `codex` backends need a
-Responses-compatible model endpoint with tool calling. See [Agent backends](docs/agent-backends.md)
-for configuration, isolation, and optional adapters. macOS uses `sandbox-exec` by default;
-Linux uses unrestricted execution with the launching user's permissions.
+需要 Python >= 3.11、uv、Node.js >= 22、npm、系统 `patch`，以及 Codex CLI >= 0.162.1（本版验证版本）。
 
 ```bash
+npm install -g @openai/codex@0.162.1
 uv sync --locked
-cp -n .env.example .env
-# Set RSI_BASE_URL, RSI_API_KEY, RSI_MODEL, and other model settings in .env.
-uv run --env-file .env --locked rsi tui
+cp .env.example .env  # 已有 .env 时保留原文件
 ```
 
-The terminal UI is the default entry point; `uv run --env-file .env python run.py` starts it too.
-Enter a goal, clarify its acceptance criteria with Interaction, and hand it to the Leader.
+在 `.env` 中填写 `RSI_API_KEY`、`RSI_BASE_URL` 和 `RSI_MODEL`。
+供应商须支持 Responses API、工具调用；视觉任务还需要图片输入支持。
 
-For a small task that requires only the research model, load the CSV-script example and enter
-`/start` in the TUI:
+之后一行启动：
 
 ```bash
-uv run --env-file .env --locked rsi tui --config examples/goal.json
+uv run --locked rsi tui
 ```
 
-To work on an existing Git repository:
+首次启动自动按锁文件安装 TUI 依赖并应用上游编辑器补丁，需要联网；之后可直接启动。
+启动时自动加载当前目录的 `.env`。在另一个项目中工作：
 
 ```bash
-uv run --env-file .env --locked rsi tui --workspace /absolute/path/to/repository
+uv run --locked rsi tui --workspace /absolute/path/to/project
 ```
 
-The Leader gets a separate worktree from the repository's HEAD at startup. Uncommitted changes in
-the user's checkout are not included. The TUI shows the workspace path. For ordinary files, use
-`seed_dir` in a configuration to copy starting material into the Leader's workspace.
+也可指定 `--env-file /path/to/.env`、`--data-root /path/to/data`。
+API 连接参数、历史和 Codex 设置在 RSI 独立的数据目录中使用；不会改写正常 Codex 的
+登录或 `~/.codex/config.toml`。API key 只由子进程环境读取，不写进会话 JSON 或命令参数。
+工作目录内的项目指令及工具配置仍按原生 Codex 规则生效。
 
-## Choose a workflow
+新会话默认使用 `RSI_SANDBOX=danger-full-access`、`RSI_APPROVAL_POLICY=never`：
+可访问当前系统用户有权限访问的任意目录，执行时不弹审批。workspace 是起始目录，不是权限边界。
+普通模式、Interaction、Leader 和经验总结沿用同一权限配置；总结提示词仍要求只提炼经验。
+需要限制时可在 `.env` 显式设置 `workspace-write` 或 `read-only`。旧会话沿用已保存的权限；
+切换默认值后，退出并重新启动 TUI 创建新会话即可，不使用 `--resume` 恢复旧配置。
 
-| Goal | Start with | Additional requirements |
-| --- | --- | --- |
-| Try a single-agent task | [Goal example](examples/goal.json) | A research model |
-| Test several harness iterations locally | [Single-problem math loop](examples/harness/math_loop/README.md) | A research model; target defaults to the same connection |
-| Optimize a harness with formal evaluation | [Arithmetic](examples/harness/README.md#算术-harness) | A target model in addition to the research model |
-| Optimize a LiveCodeBench system prompt | [LiveCodeBench](examples/harness/README.md#livecodebench-harness) | EnvArena access and a fixed benchmark |
-| Optimize a reusable GPU kernel harness | [KernelBench harness](examples/harness/kernelbench/README.md) | KernelBench data and a GPU evaluation environment |
+## 使用
 
-The [example catalog](examples/README.md) separates runnable workflows, backend profiles,
-components, and deployment assets.
+1. 先普通对话：讨论需求、理解业务、修改小问题；Enter 发送，Shift+Enter 换行。
+2. 输入 `/rsi`，或 `/rsi 基于刚才讨论的内容优化页面`。
+3. Interaction 沿用之前的会话讨论目标、约束和完成标准。明确要求开始后自动交接，
+   也可在任务已保存后输入 `/start`。
+4. Leader 执行；回合结束而目标未完成时，宿主自动继续。
+5. `/chat` 回到普通对话，继续使用最新工作上下文。
 
-### Arithmetic research with formal verification
-
-Configure research model variables (`RSI_*`) and target model variables (`RSI_TARGET_*`) in `.env`,
-then prepare and run the built-in arithmetic workflow. It needs no GPU, SSH, or EnvArena.
-
-```bash
-uv run --env-file .env --locked rsi prepare arithmetic --directory .rsi/math/setup
-uv run --env-file .env --locked rsi research \
-  --config .rsi/math/setup/research.json --data-root .rsi/math
-```
-
-This generates a `ResearchConfig` for `ResearchSystem`. The Leader improves the task harness,
-compares candidate snapshots on TRAIN, verifies the selected candidate independently on VALIDATE,
-and accepts the run after checking the result. See the [harness guide](examples/harness/README.md)
-for the task and verification contract.
-
-## Interaction and recovery
-
-| Input | Behavior |
+| 操作 | 命令 |
 | --- | --- |
-| Ordinary text | Clarify requirements with Interaction before startup; send input directly to the Leader during execution |
-| `/start` | Start execution using the saved requirements |
-| `/pause`, Ctrl+P | Pause model execution; submitted jobs remain managed |
-| `/resume` | Resume a paused run; an exhausted budget must be addressed first |
-| `/retry` | Retry the failed current role using the existing task and session |
-| `/stop` | Terminate the run and cancel unfinished managed jobs |
-| `/export /new/path` | Export the accepted, immutable candidate to a new directory |
-| `/new` | Create a new task after the current run ends |
-| `/quit`, Ctrl+Q | Save and exit; retain state and jobs for recovery |
+| 执行中补充要求 | 直接发送消息，使用原生 steer |
+| 附加参考图 | `/image /path/reference.png`，然后发送描述；或在路径后直接写描述 |
+| 暂停 / 继续 / 停止 | Esc 或 `/pause`；`/resume`；`/stop` |
+| 回答问题 / 显式启用审批后的权限请求 | 原版 DSH 弹窗选择或输入；审批选项默认拒绝 |
+| 展开工具 | Ctrl+O |
+| 总结经验 / 查看文档 | `/learn [复盘反馈]`；`/docs` |
+| 查看 / 切换总结模式 | `/learn-mode`；`/learn-mode auto`；`/learn-mode guided` |
+| 查看当前目标 | `/status` |
+| 查看 / 取消 / 设置预算 | `/budget`；`/budget off`；`/budget <tokens\|off> <秒\|off>` |
+| 查看 API 模型列表 / 切换模型 | `/model`；`/model 模型名` |
+| 查看 / 设置推理强度 | `/effort`；`/effort low\|medium\|high\|xhigh` |
+| 历史会话 | `/sessions`、`/open run-ID`，或启动时 `--resume run-ID` |
+| 新会话 / 保存退出 | `/new`；Ctrl+Q 或 `/quit` |
 
-Reopen a run using its original data directory:
+退出会暂停未完成工作，重新打开不会自动执行，使用 `/resume` 显式继续。
+新目标默认不限制 token 和执行时间，Interaction 不设置预算。需要限额时，在目标保存后由用户
+输入 `/budget 100000 3600`（总 token 上限和活跃执行秒数，包含已用量），任一项用 `off` 表示不限。
+预算耗尽后用 `/budget off` 取消限制，或提高上限，再 `/resume` 继续原目标和上下文；已用量不会清零。
+
+`/model` 使用当前会话的 Base URL 和 API key 查询 `/models`，显示接口实际返回的模型列表。
+查询期间仍可操作 TUI；若接口不支持查询或连接失败，会说明原因，也可继续手动设置模型。
+列表可能包含图片等非 Agent 模型，不代表每个模型都支持 Codex 所需的工具调用。
+
+`/model 模型名` 与 `/effort high` 保留当前上下文，从下一回合生效；已经开始的执行或经验总结使用原设置。
+设置保存在当前会话中，随后 `/new` 创建的会话也沿用，不修改 `.env` 或正常 Codex 的配置。
+本版提供 low、medium、high、xhigh 四档 effort，具体支持情况取决于所选模型和 API 服务。
+
+普通对话 → Interaction 使用同一个原生 thread；Interaction → Leader 使用原生 fork，
+继承此前文字、工具结果、图片和压缩历史。任务配置用于明确目标，不替代完整会话。
+长会话仍受模型窗口和 Codex 压缩机制影响，不能保证所有原始细节永久驻留。
+
+本版界面支持流式输出、常用工具事件、图片路径输入、权限确认和恢复，尚未复刻 Codex TUI
+的全部交互。独立配置目录也不会自动继承正常 Codex 的插件和 MCP 配置；前端任务所需的
+浏览器工具需要在该独立环境配置。本版没有单独实现浏览器或视觉验证器。
+
+## 持续运行与经验
+
+Leader 回合结束后，目标仍未完成时继续执行；预算耗尽、需要用户信息、故障或显式暂停时停止。
+执行和经验整理期间默认抑制系统闲置休眠，没有活动任务后释放。macOS 使用 `caffeinate`，Linux 使用可用的
+`systemd-inhibit`。这不是后台守护进程：关闭终端会暂停；合盖、关机或网络故障仍会中断。
+
+默认 `/learn-mode auto`：RSI 目标完成后自动启动独立总结会话。
+`/learn-mode guided`：完成后先等待你的复盘意见，不启动总结模型；输入 `/learn 你的意见` 后，
+整理者结合原生任务历史和反馈总结。直接 `/learn` 可跳过补充，按历史总结。
+等待复盘的状态和模式随会话保存，重新打开仍会提醒；`/new` 沿用当前模式。
+等待时切回 `auto` 会立即开始总结；已经开始总结时需等它结束后再切换。
+普通工作结束或任务暂停后也可 `/learn`，可附上测试结果等反馈。
+整理者按角色指令从来源历史提炼通用方法，不继续修改工作区；它继承会话权限，不另加只读沙箱。
+宿主发布版本化 Markdown：
+`RSI_DATA_ROOT/experience/<主题>/<版本>/<主题>.md`，例如 `browser-game-validation.md`，
+`current.json` 指向当前版本。文件名描述可复用方法，版本标识放在目录中；旧文档路径仍有效。
+新会话的普通工作/Leader 只带文档目录，按适用范围读取原文；不复制之前任务的对话、代码或答案。
+Interaction 专注整理需求，不把经验建议升级为任务约束。
+总结失败会显示错误，`/learn` 可重试；同一任务重复触发默认复用已发布结果。
+附上新反馈会重新总结；若上一轮仍在运行，会提示等待完成后再提交，不会静默丢弃反馈。
+
+`RSI_AUTO_LEARN=0` 让新会话默认使用 guided 模式，`RSI_USE_EXPERIENCE=0` 关闭新会话参考文档，
+`RSI_KEEP_AWAKE=0` 关闭休眠抑制。总结是额外 API 调用，其回合最多等待 240 秒（连接请求另有超时）；
+普通任务不会逐回合自动总结。
+已开始会话固定其文档版本，后续更新在 `/new` 后生效。文档仍需结合当前任务验证，单次经验不保证正确。
+
+## 命令行与开发
 
 ```bash
-uv run --env-file .env --locked rsi tui --resume <run_id>
+uv run --locked rsi doctor                         # 只检查原生协议，不调用模型
+uv run --locked rsi run '检查项目并总结结构'          # 单次普通工作，输出 JSON 事件
+uv run --locked rsi run --resume run-ID '继续检查'   # 延续原生会话
+uv run --locked rsi learn --resume run-ID '复盘反馈'  # 独立总结
+make check                                        # Python/原版 UI 测试、Ruff、Mypy
 ```
 
-Data directory precedence is `--data-root`, `RSI_DATA_ROOT`, then `.rsi/research-lab`. The TUI manages
-one run at a time, and only one process may control a run. Completed runs can be inspected and
-exported; additional work requires a new run. Closing the TUI interrupts local model execution
-while preserving the active message, session, and managed jobs for recovery.
+`run` 在完成时返回 0，失败返回 1，需要交互、暂停或预算停止时返回 2。
 
-## Headless execution and runtime checks
-
-```bash
-uv run --env-file .env --locked rsi research --config examples/goal.json
-uv run --env-file .env --locked rsi preflight
-```
-
-Headless execution prints JSON events. When operator input is required, it exits with code 3 and
-prints a TUI resume command. Preflight checks the configured backend, tool calls, and session
-recovery without submitting benchmark or GPU jobs.
-
-A general task without a formal verifier can complete on the Leader's recorded criteria and
-evidence. When a verifier is configured, acceptance requires formal verification of the same
-candidate under the current protocol. A textual claim or another candidate's score cannot replace
-that result. Pausing, reaching a budget, and waiting for input do not mean that the goal was met.
-
-## Compatibility and development
-
-Only `goal` and `legacy_passk` are supported. The Web workbench, older collaboration variants, and
-historical experiment launchers have been removed. Old run records and configurations are not
-migrated. Run acceptance does not automatically merge, publish, or deploy a result.
-
-```bash
-make check
-```
-
-`infra/research.py` exposes `ResearchSystem`, the application entry point. `api/` defines contracts,
-`infra/` implements execution, storage, evaluation, and coordination, and `ui/` handles presentation
-and input. `make check` runs Python behavior and architecture tests, Ruff, and Mypy.
-
-| Guide | Contents |
-| --- | --- |
-| [Architecture](docs/architecture.md) | Responsibilities, goal lifecycle, and future Agent Team boundaries |
-| [Interfaces](docs/interfaces/README.md) | Domain APIs, controls, and verification contracts |
-| [Legacy pass@k](docs/passk.md) | Independent attempts, budgets, stopping, and final verification |
-| [Agent backends](docs/agent-backends.md) | Runtime configuration, isolation, tools, and sessions |
-| [Effective time](docs/effective-time.md) | Accounting for API outages and GPU queue delays |
+代码入口：`infra/research.py` 的 `ResearchSystem`。详细说明见
+[结构与上下文管理](docs/architecture.md)、[当前 API 与未来契约](docs/interfaces/README.md)、
+[测试说明](tests/README.md)、[半小时代码导读](docs/walkthrough.md)、
+[TUI 选择与来源](docs/tui-comparison.md)、[真实 API 经验实验](docs/experience-study.md)。

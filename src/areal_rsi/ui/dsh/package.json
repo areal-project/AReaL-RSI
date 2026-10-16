@@ -1,0 +1,21 @@
+{
+  "name": "areal-rsi-terminal",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {"node": ">=22"},
+  "scripts": {
+    "build": "esbuild vendor.ts --bundle --format=esm --platform=node --packages=external --outfile=vendor.mjs",
+    "test": "node --test test.mjs"
+  },
+  "dependencies": {
+    "@earendil-works/pi-tui": "0.80.7",
+    "diff": "9.0.0",
+    "saxes": "6.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12",
+    "@xterm/headless": "5.5.0"
+  }
+}

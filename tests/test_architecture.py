@@ -10,10 +10,6 @@ def test_dependency_and_state_boundaries() -> None:
     forbidden = {
         "api": ("infra", "ui"),
         "infra": ("ui",),
-        "infra.storage": ("infra.coordination", "infra.runtime", "infra.research", "infra.tasks"),
-        "infra.execution": ("infra.coordination", "infra.runtime", "infra.research", "infra.tasks"),
-        "infra.runtime": ("infra.research",),
-        "infra.tasks": ("infra.coordination", "infra.research", "infra.adapters"),
         "infra.coordination": ("infra.research",),
     }
     errors = []
@@ -41,9 +37,9 @@ def test_dependency_and_state_boundaries() -> None:
             elif isinstance(node, ast.ImportFrom):
                 prefix = node.module or ""
                 if node.level:
-                    prefix = ".".join(
-                        [*package[:len(package) - node.level + 1], prefix]
-                    ).rstrip(".")
+                    prefix = ".".join([*package[: len(package) - node.level + 1], prefix]).rstrip(
+                        "."
+                    )
                 targets = [prefix, *(prefix + "." + alias.name for alias in node.names)]
             for target in targets:
                 for layer, denied in forbidden.items():

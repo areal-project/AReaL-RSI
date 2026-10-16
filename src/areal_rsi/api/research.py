@@ -4,11 +4,146 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any, Literal
 
 from areal_rsi.api.execution import JobSpec
 from areal_rsi.api.records import ContentRef, JsonObject, RecordRef
 from areal_rsi.api.records import JsonValue as JsonValue  # Recursive JsonObject type resolution.
+
+
+class SessionPhase(StrEnum):
+    CHAT = "chat"
+    INTERACTION = "interaction"
+    LEADER = "leader"
+
+
+class SessionStatus(StrEnum):
+    IDLE = "idle"
+    RUNNING = "running"
+    WAITING = "waiting"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+    STOPPED = "stopped"
+    FAILED = "failed"
+    BUDGET_LIMITED = "budget_limited"
+
+
+ReasoningEffort = Literal["low", "medium", "high", "xhigh"]
+
+
+@dataclass(slots=True)
+class SessionConfig:
+    workspace: str
+    model: str = "gpt-6-astra"
+    effort: ReasoningEffort = "high"
+    base_url: str = "https://api.openai.com/v1"
+    api_key_env: str = "RSI_API_KEY"
+    codex_bin: str = "codex"
+    sandbox: Literal["read-only", "workspace-write", "danger-full-access"] = "danger-full-access"
+    approval_policy: Literal["on-request", "never"] = "never"
+    keep_awake: bool = True
+    use_experience: bool = True
+    auto_learn: bool = True  # False waits for an explicit /learn after goal completion.
+
+
+@dataclass(slots=True)
+class ExperienceRef:
+    slug: str
+    title: str
+    description: str
+    revision: str
+    path: str
+    source_run: str
+    source_thread: str
+
+
+@dataclass(slots=True)
+class LearningRecord:
+    status: Literal["idle", "awaiting_feedback", "running", "completed", "failed"] = "idle"
+    source_turn: str = ""
+    thread_id: str = ""
+    document: ExperienceRef | None = None
+    error: str = ""
+
+
+@dataclass(slots=True)
+class SessionInput:
+    message_id: str
+    text: str
+    images: list[str] = field(default_factory=list)
+    automatic: bool = False
+
+
+@dataclass(slots=True)
+class GoalProgress:
+    summary: str = ""
+    next_step: str = ""
+    evidence: list[str] = field(default_factory=list)
+    decision: Literal["active", "completed", "blocked"] = "active"
+    question: str = ""
+
+
+@dataclass(slots=True)
+class ToolReceipt:
+    tool: str
+    arguments_digest: str
+    text: str
+    success: bool
+
+
+@dataclass(slots=True)
+class SessionRecord:
+    """The single authoritative lifecycle record; Codex owns conversation history."""
+
+    run_id: str
+    config: SessionConfig
+    phase: SessionPhase = SessionPhase.CHAT
+    status: SessionStatus = SessionStatus.IDLE
+    thread_id: str = ""
+    source_thread_id: str = ""
+    active_turn_id: str = ""
+    last_turn_id: str = ""
+    goal: TaskBrief | None = None
+    progress: GoalProgress = field(default_factory=GoalProgress)
+    next_phase: SessionPhase | None = None
+    handoff_pending: bool = False
+    pending_inputs: list[SessionInput] = field(default_factory=list)
+    in_flight: SessionInput | None = None
+    tokens_used: int = 0
+    seconds_used: float = 0
+    # Native counters are cumulative per thread; a fork may inherit its parent's usage.
+    thread_tokens: dict[str, int] = field(default_factory=dict)
+    empty_continuations: int = 0
+    last_error: str = ""
+    receipts: dict[str, ToolReceipt] = field(default_factory=dict)
+    experience: list[ExperienceRef] = field(default_factory=list)
+    learning: LearningRecord = field(default_factory=LearningRecord)
+
+
+@dataclass(slots=True)
+class PromptQuestion:
+    question_id: str
+    text: str
+    options: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class UserPrompt:
+    request_id: int | str
+    kind: Literal["approval", "question"]
+    text: str
+    questions: list[PromptQuestion] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class SessionEvent:
+    kind: Literal["message", "delta", "tool", "status", "prompt", "error"]
+    role: str = "system"
+    text: str = ""
+    item_id: str = ""
+    prompt: UserPrompt | None = None
+    completed: bool = False
 
 
 @dataclass(slots=True)

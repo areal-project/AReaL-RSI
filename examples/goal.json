@@ -1,9 +1,0 @@
-{
-  "mode": "goal",
-  "brief": {
-    "objective": "编写一个带测试的 CSV 汇总脚本",
-    "instructions": "在工作区编写 summarize.py，读取 CSV 文件，将每个数值列的行数与总和输出为 JSON。编写测试并实际运行，输出使用说明。",
-    "acceptance": ["支持空文件与非数值单元格", "测试通过", "README 给出运行方法"],
-    "limits": {"max_wall_seconds": 1800}
-  }
-}

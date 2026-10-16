@@ -1,128 +1,104 @@
-"""研究模型与独立 Task 模型的连接设置，共用地址校验。"""
+"""Project-owned API configuration; the user's normal Codex home is never changed."""
 
 from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, field
+import re
+import shutil
 from pathlib import Path
-from typing import Literal
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
+from urllib.request import Request, urlopen
 
-from areal_rsi.api.records import JsonObject
-
-
-class ModelConfigurationError(ValueError):
-    """模型连接缺失或无效，可以直接向用户展示的配置错误。"""
+from areal_rsi.api.control import decode_record, encode_record
+from areal_rsi.api.research import SessionConfig
 
 
-def local_codex_auth() -> Path:
-    """Resolve the operator's file-backed Codex login without copying its tokens."""
-    path = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))) / "auth.json"
-    try:
-        value = json.loads(path.read_text())
-        if not (value.get("OPENAI_API_KEY") or (value.get("tokens") or {}).get("access_token")):
-            raise ValueError("No cached login")
-    except (OSError, ValueError, AttributeError):
-        raise ModelConfigurationError(
-            "未找到本地 Codex 文件登录凭据；请运行 codex -c "
-            "'cli_auth_credentials_store=\"file\"' login 后重试。仅支持文件认证存储。"
-        ) from None
-    return path.absolute()
-
-
-@dataclass(frozen=True)
-class ModelConfig:
-    model: str
-    base_url: str
-    api_key: str = field(repr=False)
-
-    @classmethod
-    def from_environment(cls, role: Literal["target"] = "target") -> ModelConfig:
-        prefix = "RSI_TARGET_"
-        model = os.environ.get(prefix + "MODEL", "").strip()
-        base_url = os.environ.get(prefix + "BASE_URL", "").strip().rstrip("/")
-        if not model or not base_url:
-            raise ModelConfigurationError(
-                f"请在本机环境配置 {prefix}MODEL 和 {prefix}BASE_URL（{role} 模型）。"
-            )
-        return cls.validated(model, base_url, os.environ.get(prefix + "API_KEY", ""), prefix)
-
-    @staticmethod
-    def normalize_url(base_url: str, label: str) -> str:
-        base_url = base_url.strip().rstrip("/")
-        try:
-            base_url = validate_base_url(base_url)
-        except ValueError as exc:
-            raise ModelConfigurationError(f"{label}BASE_URL：{exc}") from exc
-        return base_url if base_url.endswith("/v1") else base_url + "/v1"
-
-    @classmethod
-    def validated(cls, model: str, base_url: str, api_key: str, label: str) -> ModelConfig:
-        if not model.strip() or not base_url.strip():
-            raise ModelConfigurationError(
-                f"{label} 缺少模型名或服务地址，请配置默认连接或 Agent 覆盖。"
-            )
-        return cls(model.strip(), cls.normalize_url(base_url, label), api_key)
-
-    def public_identity(self) -> JsonObject:
-        return {"model": self.model, "base_url": self.base_url}
-
-
-def validate_base_url(value: str) -> str:
-    try:
-        parsed = urlsplit(value)
-        valid = (
-            parsed.scheme in {"http", "https"}
-            and parsed.hostname
-            and parsed.port != 0
-            and not any((parsed.username, parsed.password, parsed.query, parsed.fragment))
-            and not any(char.isspace() for char in value)
+def from_environment(workspace: Path | None = None) -> SessionConfig:
+    return validate_config(
+        decode_record(
+            SessionConfig,
+            {
+                "workspace": str((workspace or Path.cwd()).resolve()),
+                "model": os.environ.get("RSI_MODEL", "gpt-6-astra"),
+                "effort": os.environ.get("RSI_REASONING_EFFORT", "high"),
+                "base_url": os.environ.get("RSI_BASE_URL", "https://api.openai.com/v1"),
+                "api_key_env": os.environ.get("RSI_API_KEY_ENV", "RSI_API_KEY"),
+                "codex_bin": os.environ.get("RSI_CODEX_BIN", "codex"),
+                "sandbox": os.environ.get("RSI_SANDBOX", "danger-full-access"),
+                "approval_policy": os.environ.get("RSI_APPROVAL_POLICY", "never"),
+                "keep_awake": os.environ.get("RSI_KEEP_AWAKE", "1") == "1",
+                "use_experience": os.environ.get("RSI_USE_EXPERIENCE", "1") == "1",
+                "auto_learn": os.environ.get("RSI_AUTO_LEARN", "1") == "1",
+            },
         )
-    except ValueError:
-        valid = False
-    if not valid:
-        raise ValueError("API 地址须为不含密钥、查询参数或空格的 HTTP(S) 地址")
-    return value.rstrip("/")
+    )
 
 
-@dataclass(frozen=True)
-class ResearchConnection:
-    base_url: str
-    model: str
-    reasoning_effort: str
-    max_output_tokens: int = 16384
-    context_window_tokens: int | None = None
-    backend: str = "standard"
+def validate_config(config: SessionConfig) -> SessionConfig:
+    config = decode_record(SessionConfig, encode_record(config))
+    workspace = Path(config.workspace).expanduser().resolve()
+    if not workspace.is_dir():
+        raise ValueError(f"Workspace is not a directory: {workspace}")
+    config.workspace = str(workspace)
+    if not config.model.strip():
+        raise ValueError("RSI_MODEL must not be empty")
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", config.api_key_env):
+        raise ValueError("api_key_env must name an environment variable")
+    url = urlsplit(config.base_url)
+    if (
+        url.scheme not in {"http", "https"}
+        or not url.hostname
+        or any((url.username, url.password, url.query, url.fragment))
+    ):
+        raise ValueError("RSI_BASE_URL must be an HTTP(S) URL without credentials or query")
+    config.base_url = config.base_url.rstrip("/")
+    if not url.path.rstrip("/"):
+        config.base_url += "/v1"
+    return config
 
-    def __post_init__(self) -> None:
-        validate_base_url(self.base_url)
-        if not self.model.strip() or not self.reasoning_effort.strip():
-            raise ValueError("model and reasoning_effort must be explicit nonempty values")
-        if type(self.max_output_tokens) is not int or self.max_output_tokens <= 0:
-            raise ValueError("max_output_tokens must be a positive integer")
-        window = self.context_window_tokens
-        if window is not None and (type(window) is not int or window <= self.max_output_tokens):
-            raise ValueError("context window must reserve output space")
-        if (
-            self.backend == "standard"
-            and self.effective_context_window_tokens <= self.max_output_tokens
-        ):
-            raise ValueError("context window must reserve output space")
-        if self.backend == "codex" and self.max_output_tokens != 16384:
-            raise ValueError(
-                "max_output_tokens is only configurable for standard; "
-                "Codex uses its native output limit"
-            )
 
-    @property
-    def effective_context_window_tokens(self) -> int:
-        # Only standard uses this fallback. Codex keeps its native model default.
-        return self.context_window_tokens or (256_000 if self.model == "gpt-6-astra" else 128_000)
+def available_models(config: SessionConfig) -> list[str]:
+    """Read this provider's catalog, independently of Codex's built-in model presets."""
+    key = os.environ.get(config.api_key_env)
+    if not key:
+        raise ValueError(f"未设置 {config.api_key_env}，无法查询模型列表")
+    request = Request(
+        config.base_url.rstrip("/") + "/models", headers={"Accept": "application/json"}
+    )
+    # A redirected request must not forward the provider's credential.
+    request.add_unredirected_header("Authorization", "Bearer " + key)
+    try:
+        with urlopen(request, timeout=10) as response:
+            payload = json.load(response)
+    except HTTPError as exc:
+        raise ValueError(f"模型列表查询失败（HTTP {exc.code}）") from None
+    except (URLError, OSError) as exc:
+        raise ValueError("无法连接模型列表接口，请稍后重试") from exc
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+        raise ValueError("模型列表格式无效：需要包含 data 数组")
+    models = decode_record(
+        list[str],
+        [item.get("id") if isinstance(item, dict) else None for item in payload["data"]],
+    )
+    if any(not model.strip() for model in models):
+        raise ValueError("模型列表包含空模型名")
+    return sorted(set(models))
 
-    @property
-    def runtime_base_url(self) -> str:
-        base = self.base_url.rstrip("/")
-        if base.endswith("/responses"):
-            return base.removesuffix("/responses")
-        return base if base.endswith("/v1") else base + "/v1"
+
+def data_root(root: Path | None = None) -> Path:
+    return (
+        (root or Path(os.environ.get("RSI_DATA_ROOT", str(Path.home() / ".local/share/areal-rsi"))))
+        .expanduser()
+        .resolve()
+    )
+
+
+def executable(config: SessionConfig) -> str:
+    binary = shutil.which(config.codex_bin)
+    if binary is None:
+        raise ValueError("Codex CLI not found. Install Codex >= 0.162.1 or set RSI_CODEX_BIN.")
+    if not os.environ.get(config.api_key_env):
+        raise ValueError(f"Set {config.api_key_env} in the project .env before starting Codex.")
+    return binary

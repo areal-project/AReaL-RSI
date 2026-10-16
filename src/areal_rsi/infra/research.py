@@ -1,392 +1,879 @@
-"""One run owner, shared by the TUI and headless CLI.
-
-Policies own research behavior; Runtime owns model sessions; Execution owns jobs.
-No HTTP dispatcher, UI settings, historical migrations or background web service.
-"""
+"""Conversation lifecycle and RSI handoff over one native Codex execution kernel."""
 
 from __future__ import annotations
 
 import asyncio
-import json
-from collections.abc import AsyncIterator, Callable
-from contextlib import AsyncExitStack, asynccontextmanager
-from dataclasses import dataclass, field
-from functools import partial
+import contextlib
+import copy
+import time
+import uuid
+from collections.abc import AsyncIterator
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO, cast
 
-from areal_rsi.api.interfaces import ResearchAgentRuntime
-from areal_rsi.api.research import CandidateSnapshot, GoalContext, VerifiedResult
-from areal_rsi.infra.agents.communication import tool_instructions
-from areal_rsi.infra.coordination.config import ResearchConfig, config_from_dict, git_head_commit
-from areal_rsi.infra.coordination.coordinator import Coordinator
-from areal_rsi.infra.coordination.engine import ResearchEngine, ToolSet
-from areal_rsi.infra.coordination.evaluation.jobs import ResearchExecution
-from areal_rsi.infra.coordination.evaluation.verification import read_trusted_result
-from areal_rsi.infra.coordination.intake import (
-    ResearchIntake,
-    missing_requirements,
-    validate_execution,
+from areal_rsi.api.control import public_tool_text
+from areal_rsi.api.research import (
+    ExperienceRef,
+    GoalProgress,
+    LearningRecord,
+    PromptQuestion,
+    ReasoningEffort,
+    SessionConfig,
+    SessionEvent,
+    SessionInput,
+    SessionPhase,
+    SessionRecord,
+    SessionStatus,
+    UserPrompt,
 )
-from areal_rsi.infra.coordination.policies.goal import GoalActions, GoalEngine
-from areal_rsi.infra.coordination.policies.legacy_passk import (
-    PassKActions,
-    PassKEngine,
-)
-from areal_rsi.infra.coordination.policies.legacy_passk import (
-    finish_run as finish_legacy_run,
-)
-from areal_rsi.infra.coordination.store import ResearchStore
-from areal_rsi.infra.coordination.tools.actions import ResearchActions
-from areal_rsi.infra.coordination.tools.web import register_sources
-from areal_rsi.infra.execution import JobManager, JobRecord
-from areal_rsi.infra.runtime.research_runtime import ResearchRuntime
-from areal_rsi.infra.storage.files import encode, new_id, now, safe_name, write_json
+from areal_rsi.infra.agents import HOST, instructions
+from areal_rsi.infra.codex import CodexClient, CodexError, NativeEvent
+from areal_rsi.infra.config import available_models, data_root, validate_config
+from areal_rsi.infra.coordination.policies.goal import budget_exhausted, settle, should_continue
+from areal_rsi.infra.coordination.store import SessionStore
+from areal_rsi.infra.coordination.tools.control import apply_control, definitions
+from areal_rsi.infra.experience import ExperienceLibrary
 
 
 @dataclass
-class ActiveResearch:
-    """Components and resource scopes owned by one local worker."""
-
-    coordinator: Coordinator
-    actions: ResearchActions
-    execution: ResearchExecution
-    engine: ResearchEngine
-    resources: AsyncExitStack
-    model_resources: AsyncExitStack
-    task: asyncio.Task[None] = field(init=False)
-
-
-def _toolset(actions: ResearchActions, config: ResearchConfig, agent_id: str) -> ToolSet:
-    workspace = actions.workspace(agent_id)
-    return ToolSet(
-        actions.definitions(agent_id, include_hidden=True),
-        actions.handler(agent_id),
-        tool_instructions(
-            str(workspace),
-            backend=config.backend,
-            supervisor_only=config.mode == "legacy_passk" and agent_id == "rsi",
-        ),
-        actions.definitions(agent_id),
-        workspace,
-        config.execution_env,
-    )
+class LiveSession:
+    record: SessionRecord
+    client: CodexClient
+    lease: TextIO
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    output: asyncio.Queue[SessionEvent] = field(default_factory=asyncio.Queue)
+    prompts: dict[int | str, UserPrompt] = field(default_factory=dict)
+    task: asyncio.Task[None] | None = None
+    did_work: bool = False
+    clock: float = field(default_factory=time.monotonic)
+    checkpoint: float = field(default_factory=time.monotonic)
+    learning_task: asyncio.Task[ExperienceRef] | None = None
 
 
 class ResearchSystem:
-    def __init__(
-        self,
-        root: Path,
-        *,
-        runtime_factory: Callable[[ResearchConfig], ResearchAgentRuntime] | None = None,
-    ):
-        self.root = root.resolve()
-        self.runtime_factory = runtime_factory or ResearchRuntime
-        self.active: dict[str, ActiveResearch] = {}
-        self._locks: dict[str, asyncio.Lock] = {}
+    def __init__(self, root: Path | None = None):
+        self.root = data_root(root)
+        self.store = SessionStore(self.root)
+        self.experience = ExperienceLibrary(self.root / "experience")
+        self.live: dict[str, LiveSession] = {}
+        self.open_lock = asyncio.Lock()
 
-    def coordinator(self, run_id: str) -> Coordinator:
-        safe_name(run_id)
-        active = self.active.get(run_id)
-        return active.coordinator if active else Coordinator(ResearchStore(self.root, run_id))
-
-    @staticmethod
-    def config(c: Coordinator) -> ResearchConfig:
-        config = config_from_dict(
-            json.loads((c.store.root / "coordination/config.json").read_text())
-        )
-        config.brief = c.store.brief()
-        return config
-
-    @asynccontextmanager
-    async def control(self, run_id: str) -> AsyncIterator[Coordinator]:
-        async with self._locks.setdefault(run_id, asyncio.Lock()):
-            c = self.coordinator(run_id)
-            try:
-                c.acquire()
-            except BlockingIOError:
-                raise ValueError("Another live process owns this run") from None
-            try:
-                yield c
-            finally:
-                c.release()
-
-    async def create(
-        self,
-        config: ResearchConfig,
-        *,
-        run_id: str | None = None,
-        simulated: bool = False,
-    ) -> str:
-        """Validate config, pin model settings, save initial records, and return the run ID."""
-        config = config_from_dict(config.public())
-        config.pin_model_settings()
-        if not simulated and (issues := validate_execution(config)):
-            raise ValueError("; ".join(issues))
-        # Check if there is an existing HEAD commit.
-        if config.workspace_dir:
-            git_head_commit(config.workspace_dir)
-
-        c = Coordinator.create(self.root, config.brief, run_id=run_id, simulated=simulated)
-        c.state.mode = config.mode
-        c.state.workspace_dir = config.workspace_dir
-        c.save()
-        write_json(c.store.root / "coordination/config.json", config.public(), immutable=True)
-        return c.store.run_id
-
-    async def start(self, run_id: str) -> None:
-        """Validate the run, prepare its workspace, and start background execution."""
-        async with self.control(run_id) as c:
-            if c.state.status != "planned":
-                raise ValueError("Run has already started")
-            config = self.config(c)
-            if not config.brief.objective.strip() or not config.brief.instructions.strip():
-                raise ValueError("Start requires a task objective and instructions")
-            if c.state.intake.status is not None and (
-                missing := missing_requirements(config.brief)
-            ):
-                raise ValueError("Start requires: " + ", ".join(missing))
-            if not c.state.simulated and (issues := validate_execution(config)):
-                raise ValueError("; ".join(issues))
-            config.validate_clock()
-            c.state.workspace_base_commit = (
-                git_head_commit(config.workspace_dir) if config.workspace_dir else None
+    async def create(self, config: SessionConfig) -> str:
+        """Save a new ordinary conversation without starting a model turn."""
+        run_id = "run-" + uuid.uuid4().hex[:12]
+        config = validate_config(config)
+        self.store.save(
+            SessionRecord(
+                run_id,
+                config,
+                experience=self.experience.snapshot() if config.use_experience else [],
             )
-            if config.mode == "goal":
-                c.state.goal = GoalContext(
-                    acceptance=list(config.brief.acceptance), updated_at=now()
+        )
+        return run_id
+
+    def detail(self, run_id: str) -> SessionRecord:
+        return (
+            copy.deepcopy(self.live[run_id].record)
+            if run_id in self.live
+            else self.store.load(run_id)
+        )
+
+    async def open(self, run_id: str) -> SessionRecord:
+        """Reconnect native history; reopening never silently restarts interrupted work."""
+        return copy.deepcopy((await self._attach(run_id)).record)
+
+    async def set_model(self, run_id: str, model: str) -> None:
+        """Save the model for future turns and curation, leaving active work unchanged."""
+        live = await self._attach(run_id)
+        async with live.lock:
+            config = validate_config(replace(live.record.config, model=model))
+            live.record.config.model = config.model.strip()
+            self._save(live)
+
+    async def set_effort(self, run_id: str, effort: str) -> None:
+        """Save reasoning effort for future turns and curation without interrupting work."""
+        live = await self._attach(run_id)
+        async with live.lock:
+            config = validate_config(
+                replace(live.record.config, effort=cast(ReasoningEffort, effort))
+            )
+            live.record.config.effort = config.effort
+            self._save(live)
+
+    async def list_models(self, run_id: str) -> list[str]:
+        """Query the configured API without starting a model turn or blocking execution."""
+        return await asyncio.to_thread(available_models, self.detail(run_id).config)
+
+    async def set_learning_mode(self, run_id: str, mode: str) -> None:
+        """Choose automatic curation or waiting for the user's review after goal completion."""
+        if mode not in {"auto", "guided"}:
+            raise ValueError("用法：/learn-mode auto | guided")
+        live = await self._attach(run_id)
+        async with live.lock:
+            if live.learning_task and not live.learning_task.done():
+                raise ValueError("正在总结经验，请在本次总结结束后切换模式")
+            if mode == "auto" and live.record.learning.status == "awaiting_feedback":
+                self._schedule_learning(live)
+            live.record.config.auto_learn = mode == "auto"
+            self._save(live)
+
+    async def set_budget(
+        self,
+        run_id: str,
+        *,
+        max_total_tokens: int | None = None,
+        max_wall_seconds: float | None = None,
+    ) -> None:
+        """Set user-owned goal caps without resetting usage or resuming stopped work."""
+        live = await self._attach(run_id)
+        async with live.lock:
+            record = live.record
+            if record.goal is None or record.phase == SessionPhase.CHAT:
+                raise ValueError("请先 /rsi 讨论并保存任务；新目标默认不限制预算")
+            if record.status in {SessionStatus.COMPLETED, SessionStatus.STOPPED}:
+                raise ValueError("任务已结束，不能修改预算")
+            record.goal.limits = replace(
+                record.goal.limits,
+                max_total_tokens=max_total_tokens,
+                max_wall_seconds=max_wall_seconds,
+            )
+            if record.status == SessionStatus.BUDGET_LIMITED and not budget_exhausted(record):
+                record.status = SessionStatus.PAUSED
+            self._save(live)
+
+    async def _attach(self, run_id: str, *, reconnect: bool = False) -> LiveSession:
+        async with self.open_lock:
+            output: asyncio.Queue[SessionEvent] | None = None
+            if run_id in self.live:
+                live = self.live[run_id]
+                disconnected = live.client.closing or (
+                    live.client.reader is not None and live.client.reader.done()
                 )
-            conversation = c.state.intake.status is not None
-            c.state.intake.status = "starting"
-            c.save()
+                if not reconnect or not (
+                    disconnected or live.record.status == SessionStatus.FAILED
+                ):
+                    return live
+                output = live.output
+                await self._detach(run_id)
+            lease = self.store.acquire(run_id)
+            client: CodexClient | None = None
             try:
-                await self._seed(c, config)
-                active = await self.attach(c)
-                active.execution.manager.gpu_ids = config.brief.limits.gpu_ids
-                active.execution.manager.max_jobs = config.brief.limits.max_jobs
-                await active.actions.initialize_workspace("rsi")
-                write_json(
-                    c.store.root / "coordination/started-config.json",
-                    config.public(),
-                    immutable=True,
+                record = self.store.load(run_id)
+                if record.learning.status == "running":
+                    record.learning.status = "failed"
+                    record.learning.error = "总结会话已中断；可通过 /learn 重试。"
+                validate_config(record.config)
+                client = CodexClient(
+                    self.root / "codex", self.store.directory(run_id) / "codex.log", record.config
                 )
-                c.state.intake.status = "ready" if conversation else None
-                c.start()
-                active.engine.wake()
+                await client.start()
+                params = self._thread_options(record)
+                if record.thread_id:
+                    await client.request(
+                        "thread/resume",
+                        {
+                            **params,
+                            "threadId": record.thread_id,
+                            "excludeTurns": True,
+                        },
+                    )
+                    # Inspect persisted outcomes, including a turn completed before a client crash.
+                    if record.in_flight or record.active_turn_id:
+                        result = await client.request(
+                            "thread/turns/list",
+                            {
+                                "threadId": record.thread_id,
+                                "limit": 1,
+                                "itemsView": "summary",
+                            },
+                        )
+                        turns = result["data"]
+                        if (
+                            turns
+                            and turns[0]["id"] == record.active_turn_id
+                            and (turns[0]["status"] == "completed")
+                        ):
+                            settle(record, automatic=False, did_work=True)
+                            record.last_turn_id = turns[0]["id"]
+                            record.in_flight = None
+                        else:
+                            record.last_error = (
+                                "上次回合中断或投递结果不确定。历史已恢复；"
+                                "/resume 会先核对已有工作再继续。"
+                            )
+                        record.active_turn_id = ""
+                    if record.status in {
+                        SessionStatus.RUNNING,
+                        SessionStatus.IDLE,
+                        SessionStatus.WAITING,
+                    } and (
+                        record.phase == SessionPhase.LEADER
+                        or record.in_flight
+                        or record.pending_inputs
+                        or record.handoff_pending
+                    ):
+                        record.status = SessionStatus.PAUSED
+                else:
+                    result = await client.request(
+                        "thread/start",
+                        {
+                            **params,
+                            "dynamicTools": definitions(),
+                        },
+                    )
+                    record.thread_id = result["thread"]["id"]
+                self.store.save(record)
+                live = LiveSession(record, client, lease, output=output or asyncio.Queue())
+                self.live[run_id] = live
+                live.task = asyncio.create_task(self._serve(live), name=f"rsi-{run_id}")
+                return live
             except BaseException:
-                if c.state.status == "planned":
-                    c.state.intake.status = "discussing" if conversation else None
-                    c.save()
+                if client:
+                    await client.close()
+                lease.close()
                 raise
 
-    async def attach(self, c: Coordinator) -> ActiveResearch:
-        """Reuse an active run or assemble and launch its local execution instance."""
-        previous = self.active.get(c.store.run_id)
-        if previous and not previous.task.done():
-            return previous
-        resources = AsyncExitStack()
-        try:
-            c.acquire()
-            resources.callback(c.release)
-            # Models close before legacy final verification; jobs and ownership span it.
-            model_resources = await resources.enter_async_context(AsyncExitStack())
-            config = self.config(c)
-            runtime = self.runtime_factory(config)
-            model_resources.push_async_callback(runtime.close)
-            legacy = config.mode == "legacy_passk"
-            actions = PassKActions(c) if legacy else GoalActions(c)
-            if isinstance(actions, GoalActions):
-                actions.recover_acceptance()
-            register_sources(
-                actions,
-                enabled=config.backend != "codex" and config.metadata.get("allow_web_access", True),
-            )
-            execution = ResearchExecution(
-                actions,
-                commands={cmd.name: cmd for cmd in config.commands},
-                verifier=config.verifier,
-                read_verification=self._verification_reader(c, config),
-                execution_env=config.execution_env,
-                simulated=c.state.simulated,
-            )
-            resources.callback(execution.close)
-            execution.instructions = str(config.metadata.get("execution_instructions", ""))
-            ResearchIntake(actions, partial(self.start, c.store.run_id))
-            engine_type = PassKEngine if legacy else GoalEngine
-            engine = engine_type(
-                c, runtime, partial(_toolset, actions, config), tick_hook=execution.poll
-            )
-            resources.push_async_callback(engine.close)
-            if engine.interaction_runtime is not runtime:
-                model_resources.push_async_callback(engine.interaction_runtime.close)
-            active = ActiveResearch(c, actions, execution, engine, resources, model_resources)
-            active.task = asyncio.create_task(self._serve(active), name="rsi:" + c.store.run_id)
-            self.active[c.store.run_id] = active
-            return active
-        except BaseException:
-            await resources.aclose()
-            raise
-
-    async def _serve(self, active: ActiveResearch) -> None:
-        """Run model turns, finish the run, and release its registered resources."""
-        c = active.coordinator
-        try:
-            await active.engine.serve()
-            await active.model_resources.aclose()
-            if isinstance(active.engine, PassKEngine):
-                await finish_legacy_run(c, self.config(c), active.execution)
-            else:
-                await active.execution.cancel_pending()
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            c.state.status = "failed"
-            c.save()
-            c.store.event("worker_failed", error=str(exc))
-        finally:
-            await active.resources.aclose()
-
-    async def send_message(self, run_id: str, text: str) -> None:
-        async with self.control(run_id) as c:
-            c.user_message(text, key=new_id("user"))
-            active = await self.attach(c)
-            active.engine.wake()
-
-    async def pause(self, run_id: str) -> None:
-        async with self.control(run_id) as c:
-            c.pause()
-            active = self.active.get(run_id)
-            if active:
-                await active.engine.tick()
-
-    async def resume(self, run_id: str) -> None:
-        async with self.control(run_id) as c:
-            if c.state.status == "failed" and c.state.started_at:
-                c.state.status = "running"
-                c.save()
-            if c.state.status == "paused":
-                if c.state.budget_stop_reason:
-                    raise ValueError("The run budget is exhausted; start a new run")
-                c.resume()
-            if c.state.status not in {"planned", "running"}:
-                raise ValueError("Only planned, active or paused runs can resume")
-            active = await self.attach(c)
-            active.engine.wake()
-
-    async def retry(self, run_id: str, agent_id: str = "rsi") -> None:
-        async with self.control(run_id) as c:
-            c.retry_agent(agent_id)
-            active = await self.attach(c)
-            active.engine.wake()
-
-    async def stop(self, run_id: str) -> None:
-        async with self.control(run_id) as c:
-            if c.state.status in {"succeeded", "completed"}:
-                return
-            c.state.user_stopped = True
-            c.stop("Stopped by user")
-            active = self.active.get(run_id)
-            if active:
-                await self._stop_worker(active)
-                # The worker closed its monitor; recover job ownership for cancellation.
-            manager = JobManager(c.store.root, auto_monitor=False, scheduling_enabled=False)
-            await asyncio.to_thread(manager.close, preserve_running=False)
-
-    async def detail(self, run_id: str, *, after: int = 0) -> dict[str, Any]:
-        c = self.coordinator(run_id)
-        active = self.active.get(run_id)
-        events = c.store.events(after=after)
+    @staticmethod
+    def _thread_options(record: SessionRecord) -> dict[str, Any]:
         return {
-            **c.summary(),
-            "events": encode(events),
-            "event_cursor": events[-1].sequence if events else after,
-            "worker_alive": bool(active and not active.task.done()),
-            "selected_candidate_id": c.selected_candidate_id,
-            "finalization": encode(c.completion),
-            "workspace": str(
-                self.root / "worktrees" / run_id / "rsi"
-                if c.state.workspace_dir
-                else c.store.paths.agent("rsi") / "workspace"
-            ),
+            "model": record.config.model,
+            "cwd": record.config.workspace,
+            "approvalPolicy": record.config.approval_policy,
+            "sandbox": record.config.sandbox,
+            "developerInstructions": HOST,
         }
 
-    async def export(self, run_id: str, destination: Path) -> None:
-        async with self.control(run_id) as c:
-            selected = c.selected_candidate_id
-            if not selected or c.state.status not in {"succeeded", "completed"}:
-                raise ValueError("This run has no accepted artifact")
-            if destination.exists():
-                raise FileExistsError(destination)
-            candidate = c.store.get("candidates", selected, CandidateSnapshot)
-            await c.store.content.materialize(candidate.content, destination)
-
-    async def close(self) -> None:
-        await asyncio.gather(*(self._stop_worker(a) for a in self.active.values()))
-        self.active.clear()
-
-    async def _stop_worker(self, active: ActiveResearch) -> None:
-        active.task.cancel()
-        try:
-            await asyncio.gather(active.task, return_exceptions=True)
-        finally:
-            # A task cancelled before its first instruction never enters _serve's finally.
-            await active.resources.aclose()
-
-    async def _seed(self, c: Coordinator, config: ResearchConfig) -> None:
-        if config.seed_dir and not config.workspace_dir and not c.state.seed_candidate_id:
-            candidate = await c.store.snapshot(
-                Path(config.seed_dir), agent_id="operator", description="研究起点"
+    async def send_message(
+        self, run_id: str, text: str, *, images: list[Path] | None = None
+    ) -> None:
+        """Send or steer an existing conversation, retaining the native thread context."""
+        if not text.strip() and not images:
+            raise ValueError("消息不能为空")
+        paths = [str(path.expanduser().resolve(strict=True)) for path in images or []]
+        message = SessionInput(uuid.uuid4().hex, text, paths)
+        live = await self._attach(run_id)
+        async with live.lock:
+            record = live.record
+            if record.status in {
+                SessionStatus.PAUSED,
+                SessionStatus.FAILED,
+                SessionStatus.BUDGET_LIMITED,
+                SessionStatus.STOPPED,
+            }:
+                raise ValueError("当前会话已暂停或停止；先 /resume，或 /chat 返回普通模式")
+            if live.prompts:
+                raise ValueError("请先回答当前问题或批准/拒绝操作")
+            self._emit(
+                live,
+                SessionEvent(
+                    "message",
+                    "user",
+                    text + ("\n" + "\n".join(paths) if paths else ""),
+                    message.message_id,
+                ),
             )
-            c.state.seed_candidate_id = candidate.candidate_id
-            if config.metadata.get("evaluate_seed_as_baseline"):
-                c.state.baseline_candidate_id = candidate.candidate_id
-            c.save()
+            if record.active_turn_id and record.next_phase is None:
+                previous = record.in_flight
+                record.in_flight = message
+                self._save(live)
+                try:
+                    await live.client.request(
+                        "turn/steer",
+                        {
+                            "threadId": record.thread_id,
+                            "expectedTurnId": record.active_turn_id,
+                            "input": self._input(message),
+                            "clientUserMessageId": message.message_id,
+                        },
+                    )
+                    record.progress.decision = "active"
+                    self._save(live)
+                    return
+                except CodexError as exc:
+                    if exc.code not in {-32600, -32602}:
+                        self._fail(live, exc)
+                        raise
+                    # A rejected steer raced turn completion; queue it for the next idle boundary.
+                    record.in_flight = previous
+            if record.status in {SessionStatus.COMPLETED, SessionStatus.WAITING}:
+                record.status = SessionStatus.IDLE
+            record.progress.decision = "active"
+            record.progress.question = ""
+            record.pending_inputs.append(message)
+            self._save(live)
 
-    def _verification_reader(
-        self, c: Coordinator, config: ResearchConfig
-    ) -> Callable[[JobRecord, CandidateSnapshot, str], VerifiedResult]:
-        def read(record: JobRecord, candidate: CandidateSnapshot, phase: str) -> VerifiedResult:
-            kwargs: dict[str, Any] = {
-                "result_id": record.job_id,
-                "candidate_id": candidate.candidate_id,
-                "contract_digest": c.store.contract_digest(),
-                "created_at": now(),
-                "phase": phase,
-                "simulated": c.state.simulated,
-            }
-            if record.state != "succeeded":
-                from areal_rsi.infra.execution.diagnostics import failure_summary
+    async def enter_rsi(
+        self, run_id: str, text: str = "", *, images: list[Path] | None = None
+    ) -> None:
+        """Switch the existing ordinary thread to Interaction at a completed-turn boundary."""
+        paths = [str(path.expanduser().resolve(strict=True)) for path in images or []]
+        live = await self._attach(run_id)
+        async with live.lock:
+            record = live.record
+            if record.phase != SessionPhase.CHAT or record.next_phase is not None:
+                raise ValueError("当前已在 RSI 流程中；/chat 可返回普通模式")
+            if record.status not in {SessionStatus.IDLE, SessionStatus.RUNNING}:
+                raise ValueError("先 /resume 恢复或 /chat 返回普通模式，再进入 RSI")
+            record.next_phase = SessionPhase.INTERACTION
+            record.pending_inputs.append(
+                SessionInput(
+                    uuid.uuid4().hex,
+                    "用户已通过 /rsi 进入需求讨论。基于此前完整上下文讨论并整理 RSI 目标。\n"
+                    + text,
+                    paths,
+                )
+            )
+            self._emit(
+                live,
+                SessionEvent("message", "user", "/rsi " + text + "\n" + "\n".join(paths)),
+            )
+            self._save(live)
 
-                return VerifiedResult(
-                    **kwargs,
-                    status="infra_error",
-                    error=failure_summary(
-                        c.store.root / "execution-outputs" / record.job_id,
-                        record.error or record.state,
+    async def start(self, run_id: str) -> None:
+        """Hand the discussed task and its native history to the executing Leader."""
+        live = await self._attach(run_id)
+        async with live.lock:
+            record = live.record
+            if record.phase != SessionPhase.INTERACTION or record.goal is None:
+                raise ValueError("请先 /rsi 讨论并保存任务配置")
+            if record.status not in {SessionStatus.IDLE, SessionStatus.RUNNING}:
+                raise ValueError("请先恢复需求讨论")
+            record.handoff_pending = True
+            self._save(live)
+
+    async def pause(self, run_id: str) -> None:
+        live = await self._attach(run_id)
+        async with live.lock:
+            if live.record.status in {SessionStatus.COMPLETED, SessionStatus.STOPPED}:
+                return
+            live.record.status = SessionStatus.PAUSED
+            self._save(live)
+            await self._interrupt(live)
+
+    async def stop(self, run_id: str) -> None:
+        live = await self._attach(run_id)
+        async with live.lock:
+            live.record.status = SessionStatus.STOPPED
+            live.record.pending_inputs.clear()
+            live.record.next_phase = None
+            live.record.handoff_pending = False
+            self._save(live)
+            await self._interrupt(live)
+
+    async def resume(self, run_id: str) -> None:
+        """Resume explicitly, auditing interrupted work instead of replaying commands."""
+        live = await self._attach(run_id, reconnect=True)
+        async with live.lock:
+            record = live.record
+            if record.active_turn_id or live.prompts:
+                raise ValueError("上一回合仍在结束或等待回答，请稍后再恢复")
+            if budget_exhausted(record):
+                raise ValueError("目标预算已耗尽；请 /budget off 取消限制或提高预算，再 /resume")
+            if record.status == SessionStatus.COMPLETED:
+                return
+            if record.in_flight:
+                record.pending_inputs.insert(
+                    0,
+                    SessionInput(
+                        uuid.uuid4().hex,
+                        "恢复中断的工作。先核对会话历史、文件和进程状态，保留已经完成的修改，"
+                        "不要重复有副作用的操作。上次输入可能已被接收：\n" + record.in_flight.text,
+                        record.in_flight.images,
                     ),
                 )
-            if c.state.simulated:
-                path = c.store.root / "simulation" / "scores.json"
-                scores = json.loads(path.read_text()) if path.exists() else {}
-                identity = candidate.content.digest
-                if identity not in scores:
-                    index = min(len(scores), len(config.simulation_scores) - 1)
-                    scores[identity] = config.simulation_scores[index]
-                    write_json(path, scores)
-                score = scores[identity]
-                return VerifiedResult(
-                    **kwargs,
-                    status="succeeded",
-                    passed=True,
-                    score=score,
-                    metrics={"simulated_score": score},
-                )
-            return read_trusted_result(
-                c.store,
-                record,
-                candidate,
-                phase,
-                identity=config.metadata["verification_identity"],
-            )
+                record.in_flight = None
+            record.status = SessionStatus.IDLE
+            record.progress.decision = "active"
+            record.progress.question = ""
+            record.empty_continuations = 0
+            record.last_error = ""
+            self._save(live)
 
-        return read
+    async def chat(self, run_id: str) -> None:
+        """Return to ordinary work in the current thread, retaining the latest work context."""
+        live = await self._attach(run_id, reconnect=True)
+        async with live.lock:
+            record = live.record
+            record.status = SessionStatus.PAUSED
+            record.next_phase = SessionPhase.CHAT
+            record.handoff_pending = False
+            record.pending_inputs.clear()
+            self._save(live)
+            await self._interrupt(live)
+
+    async def answer(
+        self,
+        run_id: str,
+        request_id: int | str,
+        *,
+        approved: bool | None = None,
+        answers: dict[str, str] | None = None,
+    ) -> None:
+        live = await self._attach(run_id)
+        async with live.lock:
+            prompt = live.prompts.get(request_id)
+            if prompt is None:
+                raise ValueError("这个问题已失效")
+            if prompt.kind == "approval":
+                if approved is None:
+                    raise ValueError("请选择批准或拒绝")
+                result: dict[str, Any] = {"decision": "accept" if approved else "decline"}
+            else:
+                expected = {question.question_id for question in prompt.questions}
+                if (
+                    not answers
+                    or set(answers) != expected
+                    or any(not v.strip() for v in answers.values())
+                ):
+                    raise ValueError("请回答列出的每个问题")
+                result = {"answers": {key: {"answers": [value]} for key, value in answers.items()}}
+            await live.client.reply(request_id, result)
+            live.prompts.pop(request_id)
+            if not live.prompts and live.record.status == SessionStatus.WAITING:
+                live.record.status = SessionStatus.RUNNING
+            self._save(live)
+
+    async def events(self, run_id: str) -> AsyncIterator[SessionEvent]:
+        live = await self._attach(run_id)
+        while True:
+            yield await live.output.get()
+
+    def prompts(self, run_id: str) -> list[UserPrompt]:
+        return list(self.live[run_id].prompts.values()) if run_id in self.live else []
+
+    async def learn(self, run_id: str, feedback: str = "") -> ExperienceRef:
+        """Curate reusable experience in a separate Codex conversation."""
+        live = await self._attach(run_id)
+        async with live.lock:
+            learning = live.record.learning
+            if (
+                not feedback
+                and learning.status == "completed"
+                and learning.document
+                and learning.source_turn == live.record.last_turn_id
+            ):
+                return learning.document
+            task = self._schedule_learning(live, feedback)
+        return await asyncio.shield(task)
+
+    def _schedule_learning(
+        self, live: LiveSession, feedback: str = ""
+    ) -> asyncio.Task[ExperienceRef]:
+        if live.learning_task and not live.learning_task.done():
+            if feedback.strip():
+                raise ValueError("正在总结经验；完成后请再次 /learn 提交新反馈。")
+            return live.learning_task
+        record = live.record
+        if record.active_turn_id or record.pending_inputs or not record.last_turn_id:
+            raise ValueError("请先结束或暂停当前任务，再总结经验")
+        record.learning = LearningRecord("running", source_turn=record.last_turn_id)
+        self._save(live)
+        snapshot = copy.deepcopy(record)
+        live.learning_task = asyncio.create_task(self._learn(live, snapshot, feedback))
+        # Automatic curation has no awaiting caller; errors are persisted and surfaced below.
+        live.learning_task.add_done_callback(
+            lambda task: task.exception() if not task.cancelled() else None
+        )
+        return live.learning_task
+
+    async def _learn(
+        self, live: LiveSession, snapshot: SessionRecord, feedback: str
+    ) -> ExperienceRef:
+        self._emit(live, SessionEvent("message", "curator", "正在独立会话中整理可复用经验…"))
+        try:
+            document = await self.experience.consolidate(snapshot, self.root, feedback)
+            async with live.lock:
+                live.record.learning = LearningRecord(
+                    "completed",
+                    snapshot.last_turn_id,
+                    document.source_thread,
+                    document,
+                )
+                self._save(live)
+                self._emit(
+                    live,
+                    SessionEvent(
+                        "message", "curator", f"经验已沉淀：{document.title}\n{document.path}"
+                    ),
+                )
+            return document
+        except BaseException as exc:
+            async with live.lock:
+                live.record.learning.status = "failed"
+                live.record.learning.error = (
+                    public_tool_text(str(exc)) or "总结已中断，可 /learn 重试。"
+                )
+                self._save(live)
+                self._emit(live, SessionEvent("error", "curator", live.record.learning.error))
+            raise
+
+    def _save(self, live: LiveSession) -> None:
+        self.store.save(live.record)
+        live.client.keep_awake(
+            live.record.status == SessionStatus.RUNNING
+            or should_continue(live.record)
+            or live.record.learning.status == "running"
+        )
+        live.output.put_nowait(SessionEvent("status"))
+
+    def _emit(self, live: LiveSession, event: SessionEvent) -> None:
+        self.store.append(live.record.run_id, event)
+        live.output.put_nowait(event)
+
+    def _fail(self, live: LiveSession, error: Exception) -> None:
+        live.record.status = SessionStatus.FAILED
+        live.record.last_error = public_tool_text(str(error))
+        self._save(live)
+        self._emit(live, SessionEvent("error", text=live.record.last_error))
+
+    @staticmethod
+    def _input(message: SessionInput) -> list[dict[str, Any]]:
+        return [{"type": "text", "text": message.text}] + [
+            {"type": "localImage", "path": image} for image in message.images
+        ]
+
+    async def _interrupt(self, live: LiveSession) -> None:
+        if live.record.active_turn_id:
+            try:
+                await live.client.request(
+                    "turn/interrupt",
+                    {
+                        "threadId": live.record.thread_id,
+                        "turnId": live.record.active_turn_id,
+                    },
+                    timeout=5,
+                )
+            except CodexError as exc:
+                if exc.code not in {-32600, -32602}:
+                    # Cancellation may wait on a stalled provider. Stop only our owned process,
+                    # retain the uncertain input, and audit history before any later continuation.
+                    await live.client.close()
+                    live.record.last_turn_id = live.record.active_turn_id
+                    live.record.active_turn_id = ""
+                    live.record.last_error = (
+                        "Codex 未及时确认中断，已关闭本次进程；恢复时先核对已执行工作。"
+                    )
+                    self._save(live)
+                    self._emit(live, SessionEvent("error", text=live.record.last_error))
+
+    async def _drive(self, live: LiveSession) -> None:
+        record = live.record
+        if record.active_turn_id or live.prompts:
+            return
+        if record.next_phase is not None and (
+            record.status == SessionStatus.IDLE or record.next_phase == SessionPhase.CHAT
+        ):
+            record.phase = record.next_phase
+            record.next_phase = None
+            record.goal = None
+            record.progress = GoalProgress()
+            record.in_flight = None
+            record.last_error = ""
+            record.empty_continuations = 0
+            record.status = SessionStatus.IDLE
+            self._save(live)
+        if record.status != SessionStatus.IDLE:
+            return
+        if record.handoff_pending:
+            assert record.goal is not None
+            source = record.thread_id
+            # A committed fork ID is reused after restart; only the source-to-Leader boundary forks.
+            if record.phase != SessionPhase.LEADER:
+                result = await live.client.request(
+                    "thread/fork",
+                    {
+                        **self._thread_options(record),
+                        "threadId": source,
+                        "excludeTurns": True,
+                    },
+                )
+                record.source_thread_id = source
+                record.thread_id = result["thread"]["id"]
+                record.thread_tokens[record.thread_id] = record.thread_tokens.get(source, 0)
+                record.phase = SessionPhase.LEADER
+                record.tokens_used = 0
+                record.seconds_used = 0
+                record.progress = GoalProgress()
+                self._save(live)
+            record.handoff_pending = False
+            record.pending_inputs.insert(
+                0,
+                SessionInput(
+                    uuid.uuid4().hex,
+                    "现在由 Leader 执行已讨论并保存的目标。"
+                    "继承此前业务和视觉上下文，先检查现状再推进。",
+                ),
+            )
+            self._save(live)
+        if should_continue(record):
+            record.pending_inputs.append(
+                SessionInput(
+                    uuid.uuid4().hex,
+                    "目标仍未完成。根据既有上下文、保存的进展与真实结果继续执行；"
+                    "若已经完成请核对完成标准并报告证据；若确实阻塞请说明原因。",
+                    automatic=True,
+                )
+            )
+        if not record.pending_inputs:
+            return
+        if budget_exhausted(record):
+            record.status = SessionStatus.BUDGET_LIMITED
+            self._save(live)
+            return
+        message = record.pending_inputs.pop(0)
+        record.in_flight = message
+        record.status = SessionStatus.RUNNING
+        live.did_work = False
+        self._save(live)  # Commit intent before a possibly ambiguous transport operation.
+        result = await live.client.request(
+            "turn/start",
+            {
+                "threadId": record.thread_id,
+                "input": self._input(message),
+                "clientUserMessageId": message.message_id,
+                "model": record.config.model,
+                "effort": record.config.effort,
+                "additionalContext": {
+                    "rsi-role": {"kind": "application", "value": instructions(record)},
+                    "rsi-experience": {
+                        "kind": "application",
+                        "value": (
+                            self.experience.context(record.experience)
+                            if record.phase != SessionPhase.INTERACTION
+                            else "本阶段只整理用户需求；经验文档在 Leader 执行时按需提供。"
+                        ),
+                    },
+                },
+            },
+        )
+        record.active_turn_id = result["turn"]["id"]
+        self._save(live)
+
+    async def _serve(self, live: LiveSession) -> None:
+        while True:
+            try:
+                event = await asyncio.wait_for(live.client.events.get(), 0.2)
+            except TimeoutError:
+                event = None
+            async with live.lock:
+                try:
+                    moment = time.monotonic()
+                    if live.record.phase == SessionPhase.LEADER and (
+                        live.record.status == SessionStatus.RUNNING
+                    ):
+                        live.record.seconds_used += moment - live.clock
+                    live.clock = moment
+                    if event:
+                        await self._event(live, event)
+                    if budget_exhausted(live.record) and live.record.status in {
+                        SessionStatus.RUNNING,
+                        SessionStatus.IDLE,
+                    }:
+                        live.record.status = SessionStatus.BUDGET_LIMITED
+                        self._save(live)
+                        await self._interrupt(live)
+                    await self._drive(live)
+                    if moment - live.checkpoint >= 1 and live.record.active_turn_id:
+                        self._save(live)
+                        live.checkpoint = moment
+                except Exception as exc:
+                    self._fail(live, exc)
+
+    async def _event(self, live: LiveSession, event: NativeEvent) -> None:
+        record, params, method = live.record, event.params, event.method
+        if method == "transport/closed":
+            raise CodexError(params["error"])
+        if params.get("threadId", record.thread_id) != record.thread_id:
+            if event.request_id is not None:
+                await live.client.reject(
+                    event.request_id, "Thread is not owned by this conversation"
+                )
+            return
+        if event.request_id is not None:
+            await self._request(live, event)
+            return
+        if method == "item/agentMessage/delta":
+            live.output.put_nowait(
+                SessionEvent("delta", record.phase.value, params["delta"], params["itemId"])
+            )
+        elif method == "item/completed" and params["item"]["type"] == "agentMessage":
+            item = params["item"]
+            self._emit(live, SessionEvent("message", record.phase.value, item["text"], item["id"]))
+        elif method in {"item/started", "item/completed"}:
+            item = params["item"]
+            kind = item["type"]
+            if kind in {"commandExecution", "fileChange", "mcpToolCall", "webSearch", "imageView"}:
+                live.did_work = True
+                text = str(item.get("command") or item.get("tool") or kind)
+                if kind == "fileChange":
+                    text += "\n" + "\n".join(change["path"] for change in item.get("changes", []))
+                if method == "item/completed":
+                    if kind == "commandExecution":
+                        text += f"\nexit={item.get('exitCode')}\n" + (
+                            item.get("aggregatedOutput") or ""
+                        )
+                    elif kind == "mcpToolCall":
+                        text += "\n" + public_tool_text(item.get("result") or item.get("error"))
+                self._emit(
+                    live,
+                    SessionEvent(
+                        "tool",
+                        record.phase.value,
+                        public_tool_text(text),
+                        item["id"],
+                        completed=method == "item/completed",
+                    ),
+                )
+            elif kind == "contextCompaction":
+                self._emit(
+                    live,
+                    SessionEvent("tool", text="Codex 上下文压缩：" + method, item_id=item["id"]),
+                )
+        elif method == "item/commandExecution/outputDelta":
+            live.output.put_nowait(SessionEvent("delta", "tool", params["delta"], params["itemId"]))
+        elif method == "thread/tokenUsage/updated":
+            total = int(params["tokenUsage"]["total"]["totalTokens"])
+            previous = record.thread_tokens.get(record.thread_id, 0)
+            if record.phase == SessionPhase.LEADER:
+                record.tokens_used += total - previous if total >= previous else total
+            record.thread_tokens[record.thread_id] = total
+        elif method == "serverRequest/resolved":
+            live.prompts.pop(params["requestId"], None)
+            if (
+                not live.prompts
+                and record.status == SessionStatus.WAITING
+                and record.active_turn_id
+            ):
+                record.status = SessionStatus.RUNNING
+                self._save(live)
+        elif method == "turn/completed":
+            turn = params["turn"]
+            if record.active_turn_id and turn["id"] != record.active_turn_id:
+                return
+            record.active_turn_id = ""
+            record.last_turn_id = turn["id"]
+            live.prompts.clear()
+            if turn["status"] == "completed":
+                automatic = record.in_flight.automatic if record.in_flight else False
+                record.in_flight = None
+                if record.status not in {
+                    SessionStatus.PAUSED,
+                    SessionStatus.STOPPED,
+                    SessionStatus.BUDGET_LIMITED,
+                }:
+                    settle(record, automatic=automatic, did_work=live.did_work)
+            elif turn["status"] == "failed":
+                self._fail(live, CodexError(public_tool_text(turn.get("error"))))
+            elif record.status not in {
+                SessionStatus.PAUSED,
+                SessionStatus.STOPPED,
+                SessionStatus.BUDGET_LIMITED,
+            }:
+                record.status = SessionStatus.PAUSED
+            self._save(live)
+            if (
+                record.status == SessionStatus.COMPLETED
+                and record.learning.source_turn != record.last_turn_id
+            ):
+                if record.config.auto_learn:
+                    self._schedule_learning(live)
+                else:
+                    record.learning = LearningRecord(
+                        "awaiting_feedback", source_turn=record.last_turn_id
+                    )
+                    self._save(live)
+                    self._emit(
+                        live,
+                        SessionEvent(
+                            "message",
+                            "curator",
+                            "任务已完成，等待你的复盘意见。可用 /learn 意见 指出有效做法、"
+                            "问题或需记住的教训；直接 /learn 可跳过补充，按任务历史总结。",
+                        ),
+                    )
+        elif method == "error" and not params.get("willRetry", False):
+            self._emit(live, SessionEvent("error", text=public_tool_text(params.get("error"))))
+
+    async def _request(self, live: LiveSession, event: NativeEvent) -> None:
+        assert event.request_id is not None
+        params = event.params
+        if event.method == "item/tool/call":
+            key = f"{params['threadId']}:{params['turnId']}:{params['callId']}"
+            try:
+                if params["turnId"] != live.record.active_turn_id:
+                    raise ValueError("Tool call is not from the current turn")
+                updated = copy.deepcopy(live.record)
+                receipt = apply_control(updated, key, params["tool"], params["arguments"])
+                self.store.save(updated)
+                live.record = updated
+                text, success = receipt.text, receipt.success
+                self._emit(
+                    live, SessionEvent("tool", updated.phase.value, params["tool"], completed=True)
+                )
+            except (TypeError, ValueError) as exc:
+                text, success = str(exc), False
+            await live.client.reply(
+                event.request_id,
+                {
+                    "contentItems": [{"type": "inputText", "text": text}],
+                    "success": success,
+                },
+            )
+            return
+        if event.method in {
+            "item/commandExecution/requestApproval",
+            "item/fileChange/requestApproval",
+        }:
+            prompt = UserPrompt(
+                event.request_id,
+                "approval",
+                public_tool_text(
+                    params.get("command") or params.get("reason") or "允许此文件修改？"
+                ),
+            )
+        elif event.method == "item/tool/requestUserInput":
+            questions = [
+                PromptQuestion(
+                    item["id"],
+                    item["question"],
+                    [option["label"] for option in item.get("options") or []],
+                )
+                for item in params["questions"]
+            ]
+            prompt = UserPrompt(event.request_id, "question", "请补充以下信息", questions)
+        else:
+            await live.client.reject(
+                event.request_id, "Unsupported client request: " + event.method
+            )
+            self._emit(live, SessionEvent("error", text="尚未支持的 Codex 交互：" + event.method))
+            return
+        live.prompts[event.request_id] = prompt
+        live.record.status = SessionStatus.WAITING
+        self._save(live)
+        live.output.put_nowait(SessionEvent("prompt", prompt=prompt))
+
+    async def _detach(self, run_id: str) -> None:
+        live = self.live.pop(run_id)
+        if live.task:
+            live.task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await live.task
+        if live.learning_task and not live.learning_task.done():
+            live.learning_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await live.learning_task
+        try:
+            if live.record.status in {SessionStatus.RUNNING, SessionStatus.WAITING} or (
+                live.record.phase == SessionPhase.LEADER
+                and live.record.status == SessionStatus.IDLE
+            ):
+                live.record.status = SessionStatus.PAUSED
+                self.store.save(live.record)
+            await live.client.close()
+        finally:
+            live.lease.close()
+
+    async def close(self) -> None:
+        for run_id in list(self.live):
+            await self._detach(run_id)

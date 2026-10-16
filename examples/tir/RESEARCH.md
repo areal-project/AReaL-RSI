@@ -34,6 +34,23 @@ prepare 冻结数据哈希、harness、reward、worker、数据读入和后端�
 512 题的区间可能较宽；目标没有达成时应如实报告，不能反复用同一 final 调参。
 本例的 held-out 限制依赖研究规范和哈希校验，不宣称同一 Unix 用户下有恶意访问隔离。
 
+### 区分格式收益与数值正确率
+
+整数 reward 会拒绝 `\boxed{9.00}` 等数学等价的小数。`numeric_audit.py` 是独立的
+二级诊断，保留原始结果，使用最后一个完整 boxed 中的精确数值比较，支持有限小数、
+整数分数、千位逗号和文字单位；不执行模型表达式，不从解释文字中猜答案。
+审计保存评分源码、数据与原评测的内容引用，生成独立样本用于逐题配对比较。
+Leader 应同时分析两个指标，训练后的数值等价准确率也应提升，才能把收益解释为解题能力
+改善。生成的新题应针对数值推理失败模式，不能仅训练答案格式。final 同样报告两个指标。
+
+```bash
+python -m examples.tir.numeric_audit --evaluation /absolute/study/dev/base.json \
+  --dataset /absolute/benchmark/dev.jsonl --output /absolute/study/numeric-dev/base
+```
+
+如果 study 中已有 `bootstrap-r1`，它是宿主验证 pipeline 的初始轮，不能当作由 RSI
+Leader 执行的轮次。Leader 应在它的轨迹基础上至少再研究和训练两轮，并保存研发依据。
+
 ## 运行
 
 以下命令从项目根目录执行。准备 parquet 的可选依赖 pyarrow 位于 AReaL 镜像中，

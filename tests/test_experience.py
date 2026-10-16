@@ -29,6 +29,9 @@ class ExperienceTests(unittest.IsolatedAsyncioTestCase):
             )
             earlier = await system.create(source.config)
             self.assertEqual(Path(first.path).name, "graph-testing.md")
+            readable = library.document_path(first.slug)
+            self.assertEqual(readable, library.root / "graph-testing.md")
+            self.assertEqual(readable.resolve(), Path(first.path))
             second = library.publish(
                 LessonDraft(
                     "graph-testing",
@@ -42,6 +45,8 @@ class ExperienceTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(system.detail(earlier).experience, [first])
             self.assertNotEqual(first.path, second.path)
+            self.assertEqual(readable.resolve(), Path(second.path))
+            self.assertIn(".versions", Path(second.path).parts)
             newer = await system.create(source.config)
             self.assertEqual(system.detail(newer).experience, [second])
             self.assertEqual(
@@ -56,6 +61,7 @@ class ExperienceTests(unittest.IsolatedAsyncioTestCase):
                     previous_revision=first.revision,
                 )
             self.assertEqual(library.snapshot(), [second])
+            self.assertEqual(readable.read_text(), Path(second.path).read_text())
             disabled = await system.create(SessionConfig(str(root), use_experience=False))
             self.assertFalse(system.detail(disabled).experience)
 

@@ -224,7 +224,12 @@ async def serve(args: argparse.Namespace) -> int:
                         elif name == "/docs":
                             send(
                                 "notice",
-                                text=system.experience.context(system.experience.snapshot()),
+                                text="\n\n".join(
+                                    f"{doc.title}\n{doc.description}\n"
+                                    f"{system.experience.document_path(doc.slug)}"
+                                    for doc in system.experience.snapshot()
+                                )
+                                or "暂无已沉淀经验。",
                             )
                         elif name == "/image":
                             parts = shlex.split(body)

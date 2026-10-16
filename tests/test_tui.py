@@ -181,6 +181,13 @@ class TUITests(unittest.TestCase):
                                 Path(document.path).name, "business-context-handoffs.md"
                             )
                             self.assertTrue(Path(document.path).is_file())
+                            readable = root / "data/experience/business-context-handoffs.md"
+                            self.assertEqual(readable.resolve(), Path(document.path))
+                            until(lambda: "经验已沉淀" in output.decode(errors="replace"))
+                            self.assertNotIn(document.revision.encode(), output)
+                            os.write(master, b"/docs\r")
+                            until(lambda: b"When changing execution roles" in output)
+                            self.assertNotIn(document.revision.encode(), output)
                             self.assertEqual(state()["thread_id"], before["thread_id"])
                         os.write(master, b"\x11")  # Ctrl+Q: graceful shutdown and terminal restore.
                         until(lambda: process.poll() is not None)

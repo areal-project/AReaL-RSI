@@ -494,7 +494,10 @@ class ResearchSystem:
                 self._emit(
                     live,
                     SessionEvent(
-                        "message", "curator", f"经验已沉淀：{document.title}\n{document.path}"
+                        "message",
+                        "curator",
+                        f"经验已沉淀：{document.title}\n"
+                        f"{self.experience.document_path(document.slug)}",
                     ),
                 )
             return document

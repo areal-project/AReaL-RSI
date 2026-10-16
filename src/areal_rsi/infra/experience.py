@@ -42,6 +42,10 @@ class ExperienceLibrary:
             for path in sorted(self.root.glob("*/current.json"))
         ]
 
+    def document_path(self, slug: str) -> Path:
+        """Readable entry for people; agents use the pinned ExperienceRef.path."""
+        return self.root / f"{slug}.md"
+
     @staticmethod
     def context(documents: list[ExperienceRef]) -> str:
         if not documents:
@@ -85,7 +89,7 @@ class ExperienceLibrary:
                 raise ValueError("Experience changed during curation; rerun learning to merge it")
             content = f"# {draft.title}\n\n{draft.description}\n\n{draft.body.strip()}\n"
             revision = hashlib.sha256(content.encode()).hexdigest()
-            path = directory / revision / f"{draft.slug}.md"
+            path = directory / ".versions" / revision / f"{draft.slug}.md"
             document = ExperienceRef(
                 draft.slug,
                 draft.title,
@@ -101,14 +105,18 @@ class ExperienceLibrary:
                 path.chmod(0o600)
             # Publish the pointer last: a reader sees either a complete old or new document.
             fd, temporary = tempfile.mkstemp(prefix=".publish-", dir=directory)
+            readable = Path(temporary + ".md")
             try:
                 with os.fdopen(fd, "w") as output:
                     json.dump(encode_record(document), output, ensure_ascii=False, indent=2)
                     output.flush()
                     os.fsync(output.fileno())
+                readable.symlink_to(path)
+                os.replace(readable, self.document_path(draft.slug))
                 os.replace(temporary, current)
             finally:
                 Path(temporary).unlink(missing_ok=True)
+                readable.unlink(missing_ok=True)
             return document
 
     async def consolidate(

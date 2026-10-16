@@ -225,9 +225,8 @@ async def serve(args: argparse.Namespace) -> int:
                             send(
                                 "notice",
                                 text="\n\n".join(
-                                    f"{doc.title}\n{doc.description}\n"
-                                    f"{system.experience.document_path(doc.slug)}"
-                                    for doc in system.experience.snapshot()
+                                    f"{doc.title}\n{doc.description}\n{doc.path}"
+                                    for doc in system.experience.documents()
                                 )
                                 or "暂无已沉淀经验。",
                             )

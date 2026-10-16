@@ -68,7 +68,8 @@ token 用量从 Leader 开始计算，使用 Codex 上报的累计用量差值�
 ```text
 RSI_DATA_ROOT/
 ├── codex/                        独立 CODEX_HOME；原生历史及配置
-├── experience/<slug>/            不可变 Markdown 版本与 current.json
+├── experience/<topic>.md         每个主题一份文档，直接更新
+├── experience.lock               总结写入锁，不放入经验目录
 └── sessions/<run_id>/
     ├── session.json              唯一生命周期状态；原子替换
     ├── owner.lock                同一会话仅一个宿主
@@ -85,11 +86,13 @@ RSI_DATA_ROOT/
 后续接入其他 UI 时复用 `ResearchSystem` 的控制方法和事件流。
 本地经验自进化通过独立总结会话实现；Yuque 同步尚未实现。
 `/learn-mode` 选择完成后自动总结或等待人工复盘；等待状态不占用模型，且不会改变任务已完成的状态。
-经验通过 `experience/<主题>.md` 提供可读入口，TUI 不展示版本哈希。
-内部 `.versions` 目录保留不可变快照，`current.json` 指向最新版本；会话继续读取固定快照。
-新会话保存经验目录快照，已有会话不静默切换文档版本。普通工作与 Leader 按需读取；
-Interaction 不接收新的经验目录，且不能把经验建议写成用户约束。此前对话中的原始业务上下文仍完整保留。文档发布采用宿主管理的版本比较，
-防止并发总结覆盖新版本；发布冲突需要重新总结。
+总结会话收到最新目录和上次总结主题的最新正文；模型按适用场景与方法选择合并或新增。
+同主题输出去重后的完整正文，保留 slug；完全相同的内容不重复写入。正文硬上限 4000 字符。
+经验目录只保存 `experience/<主题>.md` 普通文件，不使用历史版本、哈希名称或软链接。
+普通工作与 Leader 每个新回合刷新经验目录，按需读取最新正文；旧对话内容仍保留。
+Interaction 不接收新的经验目录，且不能把经验建议写成用户约束。此前对话中的原始业务上下文仍完整保留。
+保存时加锁并比较总结开始时的原文，防止并发总结覆盖其他修改；冲突需要重新总结。
+写入临时文件后原子替换正文，锁和临时文件留在数据根目录，不混入经验目录。
 
 执行期间持有系统闲置休眠抑制，停止/等待时释放。目标续行参考
 [Codex Goals](https://developers.openai.com/cookbook/examples/codex/using_goals_in_codex)，

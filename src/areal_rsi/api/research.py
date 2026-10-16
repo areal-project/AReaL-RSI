@@ -52,17 +52,13 @@ class ExperienceRef:
     slug: str
     title: str
     description: str
-    revision: str
     path: str
-    source_run: str
-    source_thread: str
 
 
 @dataclass(slots=True)
 class LearningRecord:
     status: Literal["idle", "awaiting_feedback", "running", "completed", "failed"] = "idle"
     source_turn: str = ""
-    thread_id: str = ""
     document: ExperienceRef | None = None
     error: str = ""
 

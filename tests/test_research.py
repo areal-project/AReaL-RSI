@@ -236,8 +236,6 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.system.detail(self.run_id).status, SessionStatus.COMPLETED)
             document = self.system.experience.publish(
                 LessonDraft("validation", "Validation", "When changing behavior", "Check results"),
-                self.system.detail(self.run_id),
-                "curator-thread",
             )
             summarize.side_effect = None
             summarize.return_value = document
@@ -254,8 +252,6 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         await self.leader()
         document = self.system.experience.publish(
             LessonDraft("validation", "Validation", "After edits", "Check results"),
-            self.system.detail(self.run_id),
-            "curator-thread",
         )
         summarize = AsyncMock(return_value=document)
         with patch.object(self.system.experience, "consolidate", summarize):
@@ -289,6 +285,25 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.system.detail(self.run_id).learning.status, "completed")
         self.assertEqual(self.system.detail(self.run_id).status, SessionStatus.COMPLETED)
 
+        # A follow-up fix must retain the last document through both waiting and curation.
+        await self.system.send_message(self.run_id, "Fix a rendering regression")
+        await self.active()
+        await self.client.tool(
+            100,
+            "rsi_update_goal",
+            {"status": "completed", "summary": "Fixed", "evidence": ["Checked updated output"]},
+        )
+        await self.client.finish()
+        await eventually(
+            lambda: self.system.detail(self.run_id).learning.status == "awaiting_feedback"
+        )
+        self.assertEqual(self.system.detail(self.run_id).learning.document, document)
+        summarize.reset_mock()
+        with patch.object(self.system.experience, "consolidate", summarize):
+            await self.system.learn(self.run_id, "Merge the new regression lesson")
+        assert summarize.await_args is not None
+        self.assertEqual(summarize.await_args.args[0].learning.document, document)
+
     async def test_switch_from_guided_to_auto_starts_pending_summary(self) -> None:
         from unittest.mock import AsyncMock
 
@@ -304,8 +319,6 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         )
         document = self.system.experience.publish(
             LessonDraft("validation", "Validation", "After edits", "Check results"),
-            self.system.detail(self.run_id),
-            "curator-thread",
         )
         summarize = AsyncMock(return_value=document)
         with patch.object(self.system.experience, "consolidate", summarize):
@@ -315,14 +328,13 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.system.store.load(self.run_id).config.auto_learn)
         self.assertEqual(self.system.detail(self.run_id).learning.status, "completed")
 
-    async def test_experience_is_execution_advice_not_interaction_requirements(self) -> None:
-        source = self.system.detail(self.run_id)
+    async def test_existing_run_refreshes_experience_without_adding_interaction_requirements(
+        self,
+    ) -> None:
+        self.assertFalse(self.system.detail(self.run_id).experience)
         document = self.system.experience.publish(
             LessonDraft("validation", "Validation", "After edits", "Check results"),
-            source,
-            "curator-thread",
         )
-        self.run_id = await self.system.create(source.config)
         await self.leader()
         starts = [params for method, params in self.client.requests if method == "turn/start"]
         interaction = starts[0]["additionalContext"]["rsi-experience"]["value"]
@@ -337,8 +349,6 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         await self.leader()
         document = self.system.experience.publish(
             LessonDraft("validation", "Validation", "After edits", "Check results"),
-            self.system.detail(self.run_id),
-            "curator-thread",
         )
         release = asyncio.Event()
 

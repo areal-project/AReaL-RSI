@@ -7,7 +7,7 @@
 | `api/research.py`：SessionConfig、SessionRecord、SessionEvent | 配置、持久状态和 UI 事件 |
 | 同文件：TaskBrief、ResearchLimits、GoalProgress | Interaction 任务、Leader 进展与预算 |
 | `api/control.py`：TaskProposal、StartGoal、GoalUpdate | 三个 Agent 控制工具的请求 |
-| `api/research.py`：ExperienceRef、LearningRecord | 固定经验版本与总结状态 |
+| `api/research.py`：ExperienceRef、LearningRecord | 主题文档路径与总结状态 |
 | `api/control.py`：LessonDraft、TerminalInput | 总结输出和终端 JSON 输入边界 |
 | `api/control.py`：decode_record、encode_record、record_schema | JSON 边界统一校验/转换 |
 | `api/interfaces.py` | 保留未来协议；本版没有对应注册/实现 |

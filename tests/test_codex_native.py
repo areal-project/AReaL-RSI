@@ -257,7 +257,7 @@ class NativeContextTests(unittest.IsolatedAsyncioTestCase):
                         source, "An independent check revealed stale cached data"
                     )
                     document_path = doc.path
-                    self.assertNotEqual(source_thread, doc.source_thread)
+                    self.assertEqual(system.detail(source).thread_id, source_thread)
                     self.assertEqual(model.requests[0]["model"], config.model)
                     self.assertEqual(model.requests[1]["model"], "gpt-6-sol")
                     self.assertEqual(model.requests[1]["reasoning"]["effort"], "medium")

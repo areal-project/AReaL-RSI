@@ -67,7 +67,7 @@ class ResearchSystem:
             SessionRecord(
                 run_id,
                 config,
-                experience=self.experience.snapshot() if config.use_experience else [],
+                experience=self.experience.documents() if config.use_experience else [],
             )
         )
         return run_id
@@ -467,7 +467,9 @@ class ResearchSystem:
         record = live.record
         if record.active_turn_id or record.pending_inputs or not record.last_turn_id:
             raise ValueError("请先结束或暂停当前任务，再总结经验")
-        record.learning = LearningRecord("running", source_turn=record.last_turn_id)
+        record.learning = LearningRecord(
+            "running", source_turn=record.last_turn_id, document=record.learning.document
+        )
         self._save(live)
         snapshot = copy.deepcopy(record)
         live.learning_task = asyncio.create_task(self._learn(live, snapshot, feedback))
@@ -487,7 +489,6 @@ class ResearchSystem:
                 live.record.learning = LearningRecord(
                     "completed",
                     snapshot.last_turn_id,
-                    document.source_thread,
                     document,
                 )
                 self._save(live)
@@ -496,8 +497,7 @@ class ResearchSystem:
                     SessionEvent(
                         "message",
                         "curator",
-                        f"经验已沉淀：{document.title}\n"
-                        f"{self.experience.document_path(document.slug)}",
+                        f"经验已沉淀：{document.title}\n{document.path}",
                     ),
                 )
             return document
@@ -627,6 +627,7 @@ class ResearchSystem:
         message = record.pending_inputs.pop(0)
         record.in_flight = message
         record.status = SessionStatus.RUNNING
+        record.experience = self.experience.documents() if record.config.use_experience else []
         live.did_work = False
         self._save(live)  # Commit intent before a possibly ambiguous transport operation.
         result = await live.client.request(
@@ -783,7 +784,9 @@ class ResearchSystem:
                     self._schedule_learning(live)
                 else:
                     record.learning = LearningRecord(
-                        "awaiting_feedback", source_turn=record.last_turn_id
+                        "awaiting_feedback",
+                        source_turn=record.last_turn_id,
+                        document=record.learning.document,
                     )
                     self._save(live)
                     self._emit(

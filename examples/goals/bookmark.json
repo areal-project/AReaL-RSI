@@ -1,0 +1,50 @@
+{
+  "target": "artifact",
+  "allowed_paths": [
+    "index.html",
+    "*.css",
+    "*.js"
+  ],
+  "invariants": [
+    "model fixed",
+    "execution harness fixed",
+    "verifier fixed",
+    "other artifacts fixed"
+  ],
+  "budget": {
+    "max_iterations": 5,
+    "max_seconds": 3600,
+    "max_retries": 1
+  },
+  "skill_paths": [],
+  "description": "Finish a bookmark management web app with add, edit, star, filter, delete and persistence. Include data-testid=\"url-input\" for a valid URL; keep it when editing. Active means unstarred; completed means starred. Use a static index.html with local CSS/JS, no remote resources. Use data-testid=\"title-input\", \"add\", \"item\" for each row; each row contains \"edit\", \"edit-input\" when editing, \"save\", checkbox \"toggle\" and \"delete\". Filters use \"filter-all\", \"filter-active\", \"filter-completed\". Trim and reject empty titles. Treat user input as literal text, including long Unicode or HTML-like strings. Persist all data and toggle state in localStorage. Fit 375px and 1280px screens without horizontal scrolling. All controls and rows at least 24x24px. Preserve adding existing items. Editing uses a row-scoped edit-input and save button. Each bookmark must render an anchor with its saved URL as href. Accept absolute http/https URLs only; reject empty, malformed, relative and javascript URLs. Preserve the URL when editing and after reload.",
+  "benchmark": "bookmark-web-v1",
+  "artifact_path": "examples/goals/bookmark-app",
+  "artifact_name": "bookmark-app",
+  "acceptance": {
+    "metrics": [
+      {
+        "metric": "accuracy",
+        "threshold": 1.0
+      }
+    ],
+    "required_checks": [
+      "add",
+      "edit",
+      "toggle",
+      "filter",
+      "persistence",
+      "empty_input",
+      "boundary",
+      "delete",
+      "layout",
+      "runtime",
+      "url",
+      "invalid_url"
+    ],
+    "verifier_version": "bookmark-web-v1-verifier"
+  },
+  "assets": {
+    "capture_candidates": false
+  }
+}

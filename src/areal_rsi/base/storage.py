@@ -63,6 +63,8 @@ def decode(kind: Any, value: Any) -> Any:
     origin = get_origin(kind)
     if origin is types.UnionType:
         for option in get_args(kind):
+            if get_origin(option) in (tuple, list) and isinstance(value, list):
+                return decode(option, value)
             if dataclasses.is_dataclass(option):
                 names = {f.name for f in dataclasses.fields(option)}
                 if isinstance(value, dict) and set(value) <= names:

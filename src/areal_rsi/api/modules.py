@@ -35,6 +35,7 @@ from areal_rsi.api.base import (
     VerificationResult,
     VerifierSpec,
 )
+from areal_rsi.api.training import ManagedTrainingBackend
 
 
 class ContentStore(Protocol):
@@ -211,8 +212,11 @@ class ArtifactBuilder(Protocol):
     ) -> ContentRef: ...
 
 
-class TrainingBackend(Protocol):
-    """Backend-neutral model training interface; AReaL is one implementation."""
+class TrainingBackend(ManagedTrainingBackend, Protocol):
+    """Managed training lifecycle plus the legacy train convenience operation.
+
+    A deployment must install a real backend before Model execution is enabled.
+    """
 
     async def train(self, base: ModelVersion, change: ModelChange) -> ContentRef: ...
 

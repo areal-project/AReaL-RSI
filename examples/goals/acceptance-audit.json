@@ -1,0 +1,163 @@
+{
+  "schema_version": 1,
+  "delivery_complete": true,
+  "requirements": [
+    {
+      "id": "clarification_and_confirmation",
+      "status": "passed",
+      "evidence_summary": "Native TUI real model: three questions, rejected malformed attempts, ready revision 2, unconfirmed and no Run. CLI/MCP contract tests cover missing fields and denied start.",
+      "references": [
+        "results/native-tui-clarification.json",
+        "results/clarification-real.json",
+        "../../tests/test_rsi_mcp.py"
+      ]
+    },
+    {
+      "id": "continuous_execution",
+      "status": "passed",
+      "evidence_summary": "Goal/Run states separate. Budget, final failure, dependency failure and pause outcomes are tested; development gain stopping was corrected after formal Harness ended.",
+      "references": [
+        "../../tests/test_goal_execution.py",
+        "results/contract-fixes.json"
+      ]
+    },
+    {
+      "id": "dual_entry_and_idempotency",
+      "status": "passed",
+      "evidence_summary": "TUI/MCP and CLI share GoalService and independent worker; real worker idempotency plus NDJSON protocol verified.",
+      "references": [
+        "results/worker-idempotency.json",
+        "../../tests/test_goal_cli_protocol.py"
+      ]
+    },
+    {
+      "id": "pause_resume",
+      "status": "passed",
+      "evidence_summary": "Evaluation/build/selection checkpoints survive interruption; deterministic duplicate-descriptor case fixed; actual browser dependency blocked -> restored -> achieved on the same revision with zero model calls.",
+      "references": [
+        "../../tests/test_goal_execution.py",
+        "../../tests/test_workflows.py",
+        "results/run-lock-regression.json",
+        "results/browser-dependency-recovery.json"
+      ]
+    },
+    {
+      "id": "cache_and_identity",
+      "status": "passed",
+      "evidence_summary": "Task inputs, verifier, model, runtime config/binary content, baseline and Skill snapshots frozen; final input freshness checks all exposed revisions.",
+      "references": [
+        "results/contract-fixes.json",
+        "../../tests/test_runtime_package.py"
+      ]
+    },
+    {
+      "id": "target_isolation",
+      "status": "passed",
+      "evidence_summary": "Target component/path constraints and sandbox sibling data denial verified.",
+      "references": [
+        "../../tests/test_artifact_builder.py",
+        "../../tests/test_runtime_package.py"
+      ]
+    },
+    {
+      "id": "skill_loading",
+      "status": "passed",
+      "evidence_summary": "Native DSH method loading in all formal Skill proposals; independent A-derived Skill capability check read one checklist and ran the scenario script successfully.",
+      "references": [
+        "results/skill-reuse-analysis.json",
+        "results/a-derived-skill-resource-capability.json"
+      ]
+    },
+    {
+      "id": "skill_freezing",
+      "status": "passed",
+      "evidence_summary": "Source mutation/deletion preserves content snapshots; new versions do not overwrite old packages.",
+      "references": [
+        "../../tests/test_goal_contracts.py"
+      ]
+    },
+    {
+      "id": "skill_capture",
+      "status": "passed_with_recorded_timeout_and_checkpoint_recovery",
+      "evidence_summary": "Model-written A development method packaged after a recorded 600-second timeout; nine synthetic scenarios validated, explicit CLI activation and provenance preserved; no hidden final detail input.",
+      "references": [
+        "results/skill-capture-recovery.json",
+        "deliveries/research-skill/record.json"
+      ]
+    },
+    {
+      "id": "skill_reuse",
+      "status": "comparison_completed_overall_efficiency_not_proven",
+      "evidence_summary": "All six Goals achieved; median -30.5%, two pairs slower, total +16.9%; one-time costs additional and fees/human/token totals unverified.",
+      "references": [
+        "results/skill-reuse.json",
+        "results/skill-reuse-analysis.json",
+        "results/cost-evidence.json"
+      ]
+    },
+    {
+      "id": "acceptance_integrity",
+      "status": "passed",
+      "evidence_summary": "Independent final closes search; missing/nonfinite evidence fails closed; timeout/dependency errors do not imply acceptance.",
+      "references": [
+        "../../tests/test_goal_execution.py",
+        "results/harness-final.json"
+      ]
+    },
+    {
+      "id": "visualization",
+      "status": "passed",
+      "evidence_summary": "Real browser checks confirm current states, independent final metrics and actual time axis, strict resource counts, lifecycle and downstream report; failed preview errors preserved separately.",
+      "references": [
+        "results/harness-panel-final.json",
+        "results/artifact-panel-final.json",
+        "results/bookmarks-skill-panel-final.json",
+        "results/bookmarks-retry-panel-final.json"
+      ]
+    },
+    {
+      "id": "model_interface",
+      "status": "passed_simulated_contract_only",
+      "evidence_summary": "Submit/status/cancel/resume/idempotency and parent/checkpoint relation tested with simulated backend; real training explicitly unsupported.",
+      "references": [
+        "../../tests/test_goal_contracts.py"
+      ]
+    },
+    {
+      "id": "real_effect_reports",
+      "status": "completed_with_failed_effect_gates_explicit",
+      "evidence_summary": "Artifact quality passed. Harness gain +6.67pp failed +10pp gate. Skill median gate passed but aggregate time regressed and complete efficiency gate unproven.",
+      "references": [
+        "results/artifact-final.json",
+        "results/harness-final.json",
+        "results/skill-reuse-analysis.json"
+      ]
+    }
+  ],
+  "effect_gates": {
+    "artifact": true,
+    "harness": false,
+    "skill_median_time": true,
+    "skill_overall_efficiency": false
+  },
+  "limitations": [
+    "No real model training was attempted.",
+    "Exact token/fee/human costs are unverified; revision elapsed time is not total delivery time.",
+    "The original formal Harness used frozen pre-fix implementation; later stopping/contract fixes do not alter its outcome.",
+    "Formal Skill production sessions loaded method text but did not read or execute auxiliary resources; separate capability verification proves availability only.",
+    "The first failure cause in the old control-pair-3 retry was not retained; reported unknown. New executions retain failed-attempt events.",
+    "The original intermittent lock failure descriptor provenance was unknown; an equivalent deterministic inherited-descriptor case was reproduced and fixed."
+  ],
+  "offline_validation": {
+    "pytest_passed": 201,
+    "pytest_skipped": 11,
+    "subtests_passed": 52,
+    "pytest_seconds": 185.74,
+    "ruff_passed": true,
+    "mypy_files_passed": 98,
+    "javascript_syntax_passed": true,
+    "lockfile_check_passed": true
+  },
+  "recorded_at": "2026-10-15T18:40:21.480109+00:00",
+  "remaining_work": []
+}

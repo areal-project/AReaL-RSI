@@ -121,6 +121,23 @@ class HarnessInputTest(unittest.IsolatedAsyncioTestCase):
         self.session.finish.assert_awaited_once()
         self.assertEqual(self.runtime.mcp_registry, {"existing": {"serverName": "keep"}})
 
+    async def test_turn_timeout_commits_failed_result_and_trace(self) -> None:
+        self.session.send.side_effect = TimeoutError()
+        result = await self.harness.run(self.solution, Task("task", "public task"))
+        output = json.loads(await self.content.read_text(result.output))
+        self.assertEqual(output["execution_status"], "timeout")
+        self.assertEqual(output["response"], "")
+        self.assertEqual(result.trajectory.trajectory_id, "fixture-trace")
+        self.session.finish.assert_awaited_once()
+        self.assertEqual(self.runtime.mcp_registry, {"existing": {"serverName": "keep"}})
+
+    async def test_transport_failure_is_not_scored_as_a_model_timeout(self) -> None:
+        self.session.send.side_effect = ConnectionError("model service disconnected")
+        with self.assertRaisesRegex(ConnectionError, "model service disconnected"):
+            await self.harness.run(self.solution, Task("task", "public task"))
+        self.session.finish.assert_awaited_once()
+        self.assertEqual(self.runtime.mcp_registry, {"existing": {"serverName": "keep"}})
+
     async def test_registry_is_cleaned_even_when_finish_fails(self) -> None:
         self.session.finish.side_effect = RuntimeError("finish failed")
         with self.assertRaisesRegex(RuntimeError, "finish failed"):

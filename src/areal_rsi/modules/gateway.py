@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -28,14 +29,86 @@ def normalize_tool_deltas(body: bytes) -> bytes:
     return ("\n".join(lines) + "\n\n").encode()
 
 
+class ChatStreamBatcher:
+    """Coalesce adjacent string deltas without changing text or tool-call boundaries.
+
+    Runtime 0.3 rewrites its canonical log for every event. Token-sized chunks make
+    long tool arguments quadratic to persist. Keep the first event immediate and
+    retain the unmodified upstream stream separately in the proxy audit.
+    """
+
+    def __init__(self, *, max_chars: int = 2048, interval: float = 1.0):
+        self.max_chars, self.interval = max_chars, interval
+        self.pending: dict[str, Any] | None = None
+        self.slot: dict[str, Any] = {}
+        self.field = self.key = ""
+        self.last_flush = time.monotonic()
+        self.sent = False
+
+    def flush(self) -> list[bytes]:
+        if self.pending is None:
+            return []
+        data = ("data: " + json.dumps(self.pending, ensure_ascii=False) + "\n\n").encode()
+        self.pending = None
+        self.last_flush = time.monotonic()
+        self.sent = True
+        return [data]
+
+    def push(self, data: bytes) -> list[bytes]:
+        normalized = normalize_tool_deltas(data)
+        lines = normalized.decode().strip().splitlines()
+        candidate: dict[str, Any] | None = None
+        slot: dict[str, Any] = {}
+        field = ""
+        if len(lines) == 1 and lines[0].startswith("data: {"):
+            item = json.loads(lines[0][6:])
+            choices = item.get("choices", [])
+            if len(choices) == 1 and choices[0].get("finish_reason") is None:
+                delta = choices[0].get("delta", {})
+                if len(delta) == 1:
+                    for name in ("content", "reasoning_content"):
+                        if isinstance(delta.get(name), str):
+                            slot, field, candidate = delta, name, item
+                    calls = delta.get("tool_calls")
+                    if isinstance(calls, list) and len(calls) == 1:
+                        call = calls[0]
+                        function = call.get("function", {})
+                        if (
+                            set(call) <= {"index", "function"}
+                            and set(function) == {"arguments"}
+                            and isinstance(function["arguments"], str)
+                        ):
+                            slot, field, candidate = function, "arguments", item
+        if candidate is None or not self.sent:
+            result = self.flush()
+            self.sent = True
+            return [*result, normalized]
+        value = slot[field]
+        slot[field] = ""
+        key = json.dumps(candidate, sort_keys=True, ensure_ascii=False)
+        slot[field] = value
+        result = [] if key == self.key else self.flush()
+        if self.pending is None:
+            self.pending, self.slot, self.field, self.key = candidate, slot, field, key
+        else:
+            self.slot[self.field] += value
+        if (
+            len(self.slot[self.field]) >= self.max_chars
+            or time.monotonic() - self.last_flush >= self.interval
+        ):
+            result.extend(self.flush())
+        return result
+
+
 class GatewayProxy:
-    def __init__(self, base_url: str, api_key: str):
+    def __init__(self, base_url: str, api_key: str, *, model: str | None = None):
         self.requests: list[dict[str, Any]] = []
         owner = self
         upstream_root = base_url.rstrip("/")
 
         class Handler(BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"
+            disable_nagle_algorithm = True
 
             def do_POST(self) -> None:
                 route = self.path.removeprefix("/v1")
@@ -45,6 +118,9 @@ class GatewayProxy:
                     return
                 upstream = upstream_root + route
                 original = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                if model is not None and original.get("model") != model:
+                    self.send_error(403, "model is fixed by the confirmed deployment")
+                    return
                 # 兼容标准 chat 服务，移除 DSH 专有字段。
                 # 不改变 model/messages/tools、token 上限或模型返回内容。
                 removed: tuple[str, ...] = (
@@ -95,20 +171,21 @@ class GatewayProxy:
                             self.end_headers()
                             self.close_connection = headers_sent = True
                             raw, event = bytearray(), bytearray()
+                            batcher = ChatStreamBatcher() if route == "/chat/completions" else None
 
                             def send_event(data: bytes) -> None:
-                                chunk = (
-                                    normalize_tool_deltas(data)
-                                    if route == "/chat/completions"
-                                    else data
-                                )
-                                self.wfile.write(f"{len(chunk):x}\r\n".encode())
-                                self.wfile.write(chunk + b"\r\n")
+                                for chunk in batcher.push(data) if batcher else [data]:
+                                    write_chunk(chunk)
+
+                            def write_chunk(chunk: bytes) -> None:
+                                self.wfile.write(f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n")
                                 self.wfile.flush()
 
                             try:
                                 while line := response.readline():
                                     raw.extend(line)
+                                    entry["received_bytes"] = len(raw)
+                                    entry["last_received_at"] = time.monotonic()
                                     event.extend(line)
                                     if line in (b"\n", b"\r\n"):
                                         completed_event = bytes(event)
@@ -123,6 +200,9 @@ class GatewayProxy:
                                             break
                                 if event:
                                     send_event(bytes(event))
+                                if batcher:
+                                    for chunk in batcher.flush():
+                                        write_chunk(chunk)
                                 self.wfile.write(b"0\r\n\r\n")
                                 self.wfile.flush()
                             finally:

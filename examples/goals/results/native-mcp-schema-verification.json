@@ -1,0 +1,48 @@
+{
+  "passed": true,
+  "runtime": "native DSH 0.1.2-rc.1",
+  "method": "installed DSH assertSupportedJsonSchema against real MCP tools/list",
+  "tools": [
+    {
+      "tool": "rsi_plan",
+      "schema_supported": true
+    },
+    {
+      "tool": "rsi_start",
+      "schema_supported": true
+    },
+    {
+      "tool": "rsi_status",
+      "schema_supported": true
+    },
+    {
+      "tool": "rsi_stop",
+      "schema_supported": true
+    },
+    {
+      "tool": "rsi_resume",
+      "schema_supported": true
+    },
+    {
+      "tool": "rsi_goal_draft",
+      "schema_supported": true
+    },
+    {
+      "tool": "rsi_goal_answer",
+      "schema_supported": true
+    },
+    {
+      "tool": "rsi_goal_start",
+      "schema_supported": true
+    },
+    {
+      "tool": "rsi_goal_status",
+      "schema_supported": true
+    },
+    {
+      "tool": "rsi_goal_control",
+      "schema_supported": true
+    }
+  ],
+  "server_constraints": "Pydantic bounds, patterns and StrictBool retained and verified by invalid-input MCP tests"
+}

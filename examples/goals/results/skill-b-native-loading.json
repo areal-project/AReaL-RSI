@@ -1,0 +1,47 @@
+{
+  "classification": "real_a_derived_skill_in_bookmark_production",
+  "goal_id": "goal_c1fd0758fcab4f38",
+  "run_id": "run_e67940e02f2f447b",
+  "state": "achieved",
+  "skill": [
+    {
+      "content": {
+        "digest": "sha256:16d64b1983e4c38478591dc867276e4aac2fc9fa57120f56668cbb2671730c71",
+        "media_type": "application/vnd.areal-rsi.directory+json",
+        "uri": "content://16d64b1983e4c38478591dc867276e4aac2fc9fa57120f56668cbb2671730c71"
+      },
+      "dependencies": [
+        "python3"
+      ],
+      "description": "Build and validate small interactive task-style interfaces from behavioral evidence using an explicit state model, stable selectors, persistence boundaries, and scenario-based checks.",
+      "entrypoint": "SKILL.md",
+      "scope": "Applies to browser or UI tasks whose evidence specifies add/edit/delete, completion, filtering, persistence, validation, accessibility, and responsive behavior. It is a reusable implementation and validation method, not a product template.",
+      "skill_id": "evidence-guided-interactive-state-skill",
+      "version": "1.0.0"
+    }
+  ],
+  "proposal_evidence": [
+    {
+      "proposal_trajectory_id": "trajectory_ed0fd8e770bc412b",
+      "configured": [
+        "sha256:f3764a79941fab9654b93ddf0e3c9e2cab25e0494add517a7a66b90c4677830d"
+      ],
+      "loaded_events": 1,
+      "resource_events": 1,
+      "semantic_effect": "unknown",
+      "resource_directory_listing_events": 1,
+      "resource_read_events": 0,
+      "resource_script_execution_events": 0,
+      "resource_use_verified": false
+    }
+  ],
+  "efficiency_conclusion": "pending_all_three_pairs",
+  "resource_capability_preflight": {
+    "passed": true,
+    "loaded": 1,
+    "resources": 5,
+    "trajectory_id": "trajectory_c11dd38a55744c27",
+    "source_is_a_derived": false
+  },
+  "resource_event_count_limitation": "Historical Runtime resource_events includes directory listing. Directory enumeration is not counted as reading or executing a reusable resource."
+}

@@ -120,9 +120,14 @@ class ArtifactResearchAgent(DefaultResearchAgent):
             "bounded prior research is in memory.json. "
             "Read bounded portions of files and raw trajectories only when needed. "
             "Choose the improvement yourself from the goal and available evidence. "
+            "Use concise code that implements the complete requested behavior. "
+            "Preserve existing layout and styling where they satisfy the requirements. "
             "Do not change Model, Harness, evaluation, or other artifacts. "
-            "The workspace is a disposable copy; submit edits in your final JSON. "
-            'Return exactly {"files":{"relative/path":"complete new file text"},'
+            "You may edit artifact/ directly with workspace tools and reusable Skill scripts. "
+            'For direct edits return {"workspace_files":["index.html"],"reason":"brief reason"}. '
+            "The host validates paths and diffs those files against the immutable baseline. "
+            "Alternatively submit complete file texts in the following JSON format. "
+            'For complete texts return {"files":{"relative/path":"complete new file text"},'
             '"reason":"brief rationale"}. Include only changed text files, '
             "with 1 to 8 files and at most 100000 characters per file. "
             "All paths are relative to artifact/; "
@@ -147,6 +152,39 @@ class ArtifactResearchAgent(DefaultResearchAgent):
             )
         finally:
             self.last_trajectory = (await session.finish()).trajectory_id
+        workspace_files = proposal.get("workspace_files")
+        if workspace_files is not None:
+            if (
+                set(proposal) != {"workspace_files", "reason"}
+                or not isinstance(workspace_files, list)
+                or not 1 <= len(workspace_files) <= 8
+                or any(not isinstance(name, str) for name in workspace_files)
+                or len(set(workspace_files)) != len(workspace_files)
+            ):
+                raise ValueError("Invalid direct-workspace proposal")
+            artifact_root = workspace / "artifact"
+            if artifact_root.is_symlink():
+                raise ValueError("Artifact workspace cannot be a symlink")
+            files = {}
+            for name in workspace_files:
+                relative = safe_relative(name)
+                file = artifact_root / relative
+                if (
+                    file.is_symlink()
+                    or not file.is_file()
+                    or not file.resolve().is_relative_to(artifact_root.resolve())
+                    or any(
+                        parent.is_symlink()
+                        for parent in file.parents
+                        if parent.is_relative_to(artifact_root)
+                    )
+                    or file.stat().st_size > 100000
+                ):
+                    raise ValueError(
+                        "Direct workspace edit escapes the target or exceeds size limit"
+                    )
+                files[name] = file.read_text()
+            proposal = {"files": files, "reason": proposal.get("reason")}
         changes, reason = proposal.get("files"), proposal.get("reason")
         if (
             set(proposal) != {"files", "reason"}

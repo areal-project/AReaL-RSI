@@ -51,6 +51,9 @@ ignore = ["RUF001", "RUF002", "RUF003"] # 中文注释和 TUI 文本使用全角
 codex = ["areal-agent-runtime[codex]==0.3.0"]
 claude = ["areal-agent-runtime[claude]==0.3.0"]
 anthropic = ["areal-agent-runtime[anthropic]==0.3.0"]
+browser = [
+    "playwright>=1.50,<2",
+]
 
 [tool.uv.sources]
 areal-agent-runtime = { path = "vendor/areal_agent_runtime-0.3.0-py3-none-any.whl" }

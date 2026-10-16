@@ -5,10 +5,81 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any
 
 import pytest
 
-from areal_rsi.modules.gateway import GatewayProxy, normalize_tool_deltas
+from areal_rsi.modules.gateway import ChatStreamBatcher, GatewayProxy, normalize_tool_deltas
+
+
+def test_chat_batching_preserves_tool_arguments_text_usage_and_boundaries() -> None:
+    batcher = ChatStreamBatcher(max_chars=64, interval=3600)
+    events: list[dict[str, Any]] = [{"choices": [{"index": 0, "delta": {"role": "assistant"}}]}]
+    for call_index in range(2):
+        events.append(
+            {
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": call_index,
+                                    "id": f"call_{call_index}",
+                                    "function": {"name": "tool", "arguments": ""},
+                                }
+                            ]
+                        },
+                    }
+                ]
+            }
+        )
+        for character in '{"text":"你好\\n"}':
+            events.append(
+                {
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "index": call_index,
+                                        "id": None,
+                                        "function": {"name": None, "arguments": character},
+                                    }
+                                ]
+                            },
+                        }
+                    ]
+                }
+            )
+    for character in "final response":
+        events.append({"choices": [{"index": 0, "delta": {"content": character}}]})
+    events.extend(
+        [
+            {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+            {"choices": [], "usage": {"completion_tokens": 42}},
+        ]
+    )
+    output = []
+    for event in events:
+        output.extend(batcher.push(("data: " + json.dumps(event) + "\n\n").encode()))
+    output.extend(batcher.push(b"data: [DONE]\n\n"))
+    output.extend(batcher.flush())
+    chunks = [json.loads(x.decode().strip()[6:]) for x in output[:-1]]
+    assert len(chunks) < 12
+    arguments = ["", ""]
+    text = ""
+    for chunk in chunks:
+        for choice in chunk["choices"]:
+            delta = choice["delta"]
+            text += delta.get("content", "")
+            for call in delta.get("tool_calls", []):
+                arguments[call["index"]] += call["function"]["arguments"]
+    assert arguments == ['{"text":"你好\\n"}'] * 2
+    assert text == "final response"
+    assert chunks[-2:] == events[-2:]
+    assert output[-1].strip() == b"data: [DONE]"
 
 
 @contextmanager
@@ -283,3 +354,22 @@ def test_authentication_stays_between_proxy_and_configured_service(api_key: str)
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def test_confirmed_model_cannot_be_changed_through_proxy() -> None:
+    import urllib.error
+
+    # A request for another model must fail locally, before any upstream connection.
+    proxy = GatewayProxy("http://127.0.0.1:1/v1", "private-key", model="fixed-model")
+    try:
+        request = urllib.request.Request(
+            proxy.url + "/v1/chat/completions",
+            data=json.dumps({"model": "another-model", "messages": []}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with pytest.raises(urllib.error.HTTPError) as error:
+            urllib.request.urlopen(request, timeout=3)
+        assert error.value.code == 403
+        assert not proxy.requests
+    finally:
+        proxy.close()

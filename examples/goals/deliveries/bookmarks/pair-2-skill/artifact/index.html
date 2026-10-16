@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bookmark shelf</title>
+<style>
+:root{color-scheme:light;--ink:#172033;--muted:#64708a;--line:#d9dfeb;--accent:#315efb;--soft:#f5f7fb;--star:#e7a91b}
+*{box-sizing:border-box}body{margin:0;background:#f5f7fb;color:var(--ink);font:16px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}main{width:min(100% - 32px,900px);margin:0 auto;padding:42px 0 60px}header{margin-bottom:26px}h1{font-size:clamp(28px,5vw,42px);line-height:1.1;margin:0 0 8px;letter-spacing:-.03em}header p{margin:0;color:var(--muted)}form{display:grid;grid-template-columns:1fr 1.3fr auto;gap:10px;background:#fff;padding:14px;border:1px solid var(--line);border-radius:14px;box-shadow:0 5px 18px #1720330b}input,button{font:inherit;min-height:42px;border-radius:9px}input{width:100%;border:1px solid #c6cede;padding:9px 11px;color:var(--ink);background:#fff}input:focus,button:focus-visible{outline:3px solid #315efb44;outline-offset:1px}button{border:1px solid #c6cede;background:#fff;color:var(--ink);padding:8px 14px;cursor:pointer;font-weight:650}button:hover{background:var(--soft)}button.primary{background:var(--accent);border-color:var(--accent);color:#fff}.message{min-height:22px;margin:8px 2px;color:#b42318;font-size:14px}.toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:20px 0 12px}.filters{display:flex;gap:7px;flex-wrap:wrap}.filters button[aria-selected=true]{background:#e6ecff;border-color:#9db2ff;color:#1d43bd}.count{color:var(--muted);font-size:14px}.list{display:grid;gap:10px}.item{display:flex;align-items:flex-start;gap:12px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:13px;min-height:70px;box-shadow:0 2px 8px #17203308}.check{flex:0 0 auto;padding-top:2px}.check input{width:22px;height:22px;min-height:22px;accent-color:var(--accent);cursor:pointer}.bookmark{min-width:0;flex:1}.bookmark a{display:block;color:#1d4ed8;font-weight:700;overflow-wrap:anywhere;text-decoration:none}.bookmark a:hover{text-decoration:underline}.bookmark small{display:block;color:var(--muted);overflow-wrap:anywhere;margin-top:3px}.item.starred .bookmark a{color:var(--muted);text-decoration:line-through}.actions{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end}.actions button{min-width:62px;min-height:32px;padding:5px 10px}.edit-wrap{display:flex;gap:7px;align-items:center}.edit-wrap input{min-height:36px}.empty{padding:28px 16px;text-align:center;border:1px dashed #c6cede;border-radius:12px;color:var(--muted);background:#fff}@media(max-width:620px){main{width:min(100% - 20px,900px);padding-top:26px}form{grid-template-columns:1fr;gap:8px}.toolbar{align-items:flex-start;flex-direction:column}.item{gap:8px;padding:11px}.actions{width:100%;justify-content:flex-start}.bookmark{order:1}.check{order:0}.actions{order:2}.item{flex-wrap:wrap}.bookmark{flex-basis:calc(100% - 40px)}}
+</style>
+</head>
+<body>
+<main>
+<header><h1>Bookmark shelf</h1><p>Keep useful links close at hand.</p></header>
+<form id="bookmark-form" novalidate>
+<input data-testid="title-input" id="title-input" aria-label="Bookmark title" placeholder="Title" autocomplete="off">
+<input data-testid="url-input" id="url-input" aria-label="Bookmark URL" placeholder="https://example.com" inputmode="url" autocomplete="url">
+<button class="primary" data-testid="add" type="submit">Add bookmark</button>
+</form>
+<div class="message" id="message" role="status" aria-live="polite"></div>
+<div class="toolbar"><div class="filters" role="group" aria-label="Bookmark filters"><button type="button" data-testid="filter-all" aria-selected="true">All</button><button type="button" data-testid="filter-active" aria-selected="false">Active</button><button type="button" data-testid="filter-completed" aria-selected="false">Completed</button></div><span class="count" id="count"></span></div>
+<section class="list" id="items" aria-live="polite"></section>
+</main>
+<script>
+(function(){
+ const KEY='bookmark-shelf-v1'; let state={items:[],filter:'all',editing:null};
+ const $=s=>document.querySelector(s), form=$('#bookmark-form'), title=$('[data-testid="title-input"]'), url=$('[data-testid="url-input"]'), list=$('#items'), msg=$('#message'), count=$('#count');
+ function validUrl(value){try{const u=new URL(value.trim());return (u.protocol==='http:'||u.protocol==='https:')&&!!u.hostname}catch(e){return false}}
+ function load(){try{const raw=localStorage.getItem(KEY), parsed=raw&&JSON.parse(raw);if(parsed&&Array.isArray(parsed.items))state.items=parsed.items.filter(x=>x&&typeof x.id==='string'&&typeof x.title==='string'&&typeof x.url==='string'&&validUrl(x.url)&&typeof x.starred==='boolean')}catch(e){state.items=[]}}
+ function persist(){try{localStorage.setItem(KEY,JSON.stringify({items:state.items}))}catch(e){}}
+ function say(text){msg.textContent=text; if(text)setTimeout(()=>{if(msg.textContent===text)msg.textContent=''},3500)}
+ function make(tag,props,children){const el=document.createElement(tag);if(props)Object.entries(props).forEach(([k,v])=>{if(k==='text')el.textContent=v;else if(k==='class')el.className=v;else if(k==='testid')el.dataset.testid=v;else el.setAttribute(k,v)});(children||[]).forEach(c=>el.append(c));return el}
+ function render(){
+  list.replaceChildren(); const shown=state.items.filter(x=>state.filter==='all'||(state.filter==='active'&&!x.starred)||(state.filter==='completed'&&x.starred));
+  count.textContent=state.items.length+' bookmark'+(state.items.length===1?'':'s');
+  ['all','active','completed'].forEach(k=>{const b=$('[data-testid="filter-'+k+'"]');b.setAttribute('aria-selected',String(state.filter===k))});
+  if(!shown.length){list.append(make('div',{class:'empty',text:state.items.length?'No bookmarks in this filter.':'No bookmarks yet.'}));return}
+  shown.forEach(item=>{const row=make('article',{class:'item'+(item.starred?' starred':''),testid:'item'});const check=make('div',{class:'check'});const toggle=make('input',{testid:'toggle',type:'checkbox',title:item.starred?'Unstar bookmark':'Star bookmark'});toggle.checked=item.starred;toggle.addEventListener('change',()=>{item.starred=toggle.checked;persist();render()});check.append(toggle);
+   const body=make('div',{class:'bookmark'}); if(state.editing===item.id){const wrap=make('div',{class:'edit-wrap'}), input=make('input',{testid:'edit-input',value:item.title,'aria-label':'Edit bookmark title'}), save=make('button',{testid:'save',type:'button',text:'Save'});const saveIt=()=>{const next=input.value.trim();if(!next){say('Title cannot be empty.');input.focus();return}item.title=next;state.editing=null;persist();render()};save.addEventListener('click',saveIt);input.addEventListener('keydown',e=>{if(e.key==='Enter')saveIt();if(e.key==='Escape'){state.editing=null;render()}});wrap.append(input,save);body.append(wrap);setTimeout(()=>input.focus(),0)}else{body.append(make('a',{href:item.url,target:'_blank',rel:'noopener',text:item.title}),make('small',{text:item.url}))}
+   const actions=make('div',{class:'actions'});if(state.editing!==item.id){const edit=make('button',{testid:'edit',type:'button',text:'Edit'});edit.addEventListener('click',()=>{state.editing=item.id;render()});actions.append(edit)}const del=make('button',{testid:'delete',type:'button',text:'Delete'});del.addEventListener('click',()=>{state.items=state.items.filter(x=>x.id!==item.id);if(state.editing===item.id)state.editing=null;persist();render()});actions.append(del);row.append(check,body,actions);list.append(row)
+  })
+ }
+ form.addEventListener('submit',e=>{e.preventDefault();const t=title.value.trim(), u=url.value.trim();if(!t){say('Title cannot be empty.');title.focus();return}if(!validUrl(u)){say('Enter a valid absolute http or https URL.');url.focus();return}state.items.push({id:(crypto.randomUUID?crypto.randomUUID():Date.now()+'-'+Math.random()),title:t,url:u,starred:false});persist();title.value='';url.value='';say('Bookmark added.');render();title.focus()});
+ ['all','active','completed'].forEach(k=>$('[data-testid="filter-'+k+'"]').addEventListener('click',()=>{state.filter=k;state.editing=null;render()}));load();render();
+})();
+</script>
+</body></html>

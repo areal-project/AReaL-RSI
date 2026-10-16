@@ -134,6 +134,28 @@ class WebTest(unittest.TestCase):
             self.assertTrue(json.loads(self.request("/api/runs/run_fixture")[2])["worker_alive"])
         self.assertFalse(RunReader(self.root).worker_alive("run_fixture"))
 
+    def test_goal_timing_uses_launch_events_and_excludes_paused_time(self) -> None:
+        events = [
+            {"type": "started", "at": "2026-10-15T00:00:00+00:00"},
+            {"type": "outcome", "at": "2026-10-15T00:00:10+00:00"},
+            {"type": "started", "at": "2026-10-15T00:01:00+00:00"},
+            {"type": "outcome", "at": "2026-10-15T00:01:20+00:00"},
+        ]
+        self.assertEqual(RunReader.active_seconds(events, "2026-10-15T00:01:15Z"), 25)
+        self.assertEqual(RunReader.active_seconds(events, "2026-10-15T00:00:30Z"), 10)
+        self.experiment.plan.config.update(goal_id="goal_fixture", goal_revision=1)
+        write_json(self.root / "run-states/run_fixture.json", self.experiment)
+        for index, event in enumerate(events):
+            write_json(self.root / f"goal-events/goal_fixture-r1/{index}.json", event)
+        reader = RunReader(self.root)
+        self.assertEqual(reader.list()[0]["started_at"], events[0]["at"])
+        self.assertEqual(reader.detail("run_fixture")["started_at"], events[0]["at"])
+        write_json(
+            self.root / "runs/run_fixture/final/report.json",
+            {"at": "2026-10-15T00:01:15Z", "candidate": {"score": 1}, "passed": True},
+        )
+        self.assertEqual(reader.detail("run_fixture")["final_elapsed_seconds"], 25)
+
     def test_asset_allowlist_and_read_only_routes(self) -> None:
         for path in ("/", "/app.js", "/style.css"):
             status, headers, body = self.request(path)

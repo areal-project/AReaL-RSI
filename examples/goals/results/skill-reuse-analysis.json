@@ -1,0 +1,310 @@
+{
+  "schema_version": 1,
+  "all_six_independent_acceptance_passed": true,
+  "paired_runs": [
+    {
+      "pair": 1,
+      "control_seconds": 686.5930349454284,
+      "skill_seconds": 476.8815653398633,
+      "skill_time_reduction": 0.3054378051216807,
+      "both_passed": true
+    },
+    {
+      "pair": 2,
+      "control_seconds": 338.49620319902897,
+      "skill_seconds": 429.54762651771307,
+      "skill_time_reduction": -0.26898801953517837,
+      "both_passed": true
+    },
+    {
+      "pair": 3,
+      "control_seconds": 824.520441621542,
+      "skill_seconds": 1256.0124510526657,
+      "skill_time_reduction": -0.5233248172507774,
+      "both_passed": true
+    }
+  ],
+  "runs_with_attempt_and_iteration_counts": [
+    {
+      "pair": 1,
+      "group": "control",
+      "state": "achieved",
+      "goal_id": "goal_d73049c896ce4590",
+      "root": "/storage/openpsi/users/fenghui/projects/AReaL-RSI/.rsi/demos/reuse-final/pair-1-control",
+      "seconds": 686.5930349454284,
+      "token_usage": {
+        "complete": false,
+        "covered_trajectories": 2,
+        "limitation": "Uncommitted or interrupted sessions may have unreported usage",
+        "observed": {
+          "inputTokens": 22160,
+          "outputTokens": 6259,
+          "reasoningTokens": 629,
+          "totalTokens": 70403
+        },
+        "referenced_trajectories": 12
+      },
+      "cost": null,
+      "attempts": 1,
+      "completed_iterations": 1
+    },
+    {
+      "pair": 1,
+      "group": "skill",
+      "state": "achieved",
+      "goal_id": "goal_c1fd0758fcab4f38",
+      "root": "/storage/openpsi/users/fenghui/projects/AReaL-RSI/.rsi/demos/reuse-final/pair-1-skill",
+      "seconds": 476.8815653398633,
+      "token_usage": {
+        "complete": false,
+        "covered_trajectories": 2,
+        "limitation": "Uncommitted or interrupted sessions may have unreported usage",
+        "observed": {
+          "inputTokens": 30983,
+          "outputTokens": 4300,
+          "reasoningTokens": 784,
+          "totalTokens": 78803
+        },
+        "referenced_trajectories": 12
+      },
+      "cost": null,
+      "attempts": 1,
+      "completed_iterations": 1
+    },
+    {
+      "pair": 2,
+      "group": "skill",
+      "state": "achieved",
+      "goal_id": "goal_e9ecea71fda34a78",
+      "root": "/storage/openpsi/users/fenghui/projects/AReaL-RSI/.rsi/demos/reuse-final/pair-2-skill",
+      "seconds": 429.54762651771307,
+      "token_usage": {
+        "complete": false,
+        "covered_trajectories": 2,
+        "limitation": "Uncommitted or interrupted sessions may have unreported usage",
+        "observed": {
+          "inputTokens": 18204,
+          "outputTokens": 3840,
+          "reasoningTokens": 507,
+          "totalTokens": 58396
+        },
+        "referenced_trajectories": 12
+      },
+      "cost": null,
+      "attempts": 1,
+      "completed_iterations": 1
+    },
+    {
+      "pair": 2,
+      "group": "control",
+      "state": "achieved",
+      "goal_id": "goal_e261a8f2aa014896",
+      "root": "/storage/openpsi/users/fenghui/projects/AReaL-RSI/.rsi/demos/reuse-final/pair-2-control",
+      "seconds": 338.49620319902897,
+      "token_usage": {
+        "complete": false,
+        "covered_trajectories": 2,
+        "limitation": "Uncommitted or interrupted sessions may have unreported usage",
+        "observed": {
+          "inputTokens": 11930,
+          "outputTokens": 3556,
+          "reasoningTokens": 401,
+          "totalTokens": 29310
+        },
+        "referenced_trajectories": 12
+      },
+      "cost": null,
+      "attempts": 1,
+      "completed_iterations": 1
+    },
+    {
+      "pair": 3,
+      "group": "control",
+      "state": "achieved",
+      "goal_id": "goal_949ca8d9fbd2465f",
+      "root": "/storage/openpsi/users/fenghui/projects/AReaL-RSI/.rsi/demos/reuse-final/pair-3-control",
+      "seconds": 824.520441621542,
+      "token_usage": {
+        "complete": false,
+        "covered_trajectories": 2,
+        "limitation": "Uncommitted or interrupted sessions may have unreported usage",
+        "observed": {
+          "inputTokens": 18772,
+          "outputTokens": 7669,
+          "reasoningTokens": 617,
+          "totalTokens": 59209
+        },
+        "referenced_trajectories": 12
+      },
+      "cost": null,
+      "attempts": 2,
+      "completed_iterations": 1
+    },
+    {
+      "pair": 3,
+      "group": "skill",
+      "state": "achieved",
+      "goal_id": "goal_377d2858163846f5",
+      "root": "/storage/openpsi/users/fenghui/projects/AReaL-RSI/.rsi/demos/reuse-final/pair-3-skill",
+      "seconds": 1256.0124510526657,
+      "token_usage": {
+        "complete": false,
+        "covered_trajectories": 4,
+        "limitation": "Uncommitted or interrupted sessions may have unreported usage",
+        "observed": {
+          "inputTokens": 41707,
+          "outputTokens": 16655,
+          "reasoningTokens": 1464,
+          "totalTokens": 140794
+        },
+        "referenced_trajectories": 18
+      },
+      "cost": null,
+      "attempts": 1,
+      "completed_iterations": 2
+    }
+  ],
+  "median_seconds_all_runs": {
+    "control": 686.5930349454284,
+    "skill": 476.8815653398633
+  },
+  "predeclared_median_time_reduction": 0.3054378051216807,
+  "median_time_gate_passed": true,
+  "sum_seconds": {
+    "control": 1849.6096797659993,
+    "skill": 2162.441642910242
+  },
+  "skill_total_time_increase": 0.1691340430181032,
+  "pairs_where_skill_slower": 2,
+  "efficiency_proven": false,
+  "interpretation": "Median gate passed, but Skill was slower in two of three pairs and total production time regressed. One-time capture/validation costs are additional; exact token/fee/human costs are unverified. Three pairs do not establish general effects.",
+  "formal_native_skill_evidence": [
+    {
+      "root": "pair-1-skill",
+      "iteration": 1,
+      "trajectory_id": "trajectory_ed0fd8e770bc412b",
+      "loaded_events": 1,
+      "resource_counts": {
+        "reads": 0,
+        "commands": 0,
+        "discovery": 1,
+        "entrypoints": 0,
+        "failed": 0,
+        "unverified": 0
+      },
+      "semantic_effect": "unknown"
+    },
+    {
+      "root": "pair-2-skill",
+      "iteration": 1,
+      "trajectory_id": "trajectory_b5b6ba5d211f4081",
+      "loaded_events": 1,
+      "resource_counts": {
+        "reads": 0,
+        "commands": 0,
+        "discovery": 0,
+        "entrypoints": 0,
+        "failed": 0,
+        "unverified": 0
+      },
+      "semantic_effect": "unknown"
+    },
+    {
+      "root": "pair-3-skill",
+      "iteration": 1,
+      "trajectory_id": "trajectory_4251b9a004194235",
+      "loaded_events": 1,
+      "resource_counts": {
+        "reads": 0,
+        "commands": 0,
+        "discovery": 1,
+        "entrypoints": 0,
+        "failed": 0,
+        "unverified": 0
+      },
+      "semantic_effect": "unknown"
+    },
+    {
+      "root": "pair-3-skill",
+      "iteration": 2,
+      "trajectory_id": "trajectory_f78cb79534894fe1",
+      "loaded_events": 1,
+      "resource_counts": {
+        "reads": 0,
+        "commands": 0,
+        "discovery": 0,
+        "entrypoints": 0,
+        "failed": 0,
+        "unverified": 0
+      },
+      "semantic_effect": "unknown"
+    }
+  ],
+  "separate_resource_capability_report": "examples/goals/results/a-derived-skill-resource-capability.json",
+  "known_failures": [
+    "Control pair 3 retried once; old code did not retain the first failure cause.",
+    "Skill pair 3 first candidate had a JavaScript invalid-left-hand-side runtime error; second iteration passed."
+  ],
+  "delivery_verification": [
+    {
+      "root": "pair-1-control",
+      "solution_id": "solution_8f6a5d662e2f444a",
+      "export_matches_evaluated_snapshot": true,
+      "artifact_content": {
+        "digest": "sha256:f95aa3a2e443d84578c8014b548470f1f4f80c69a5235177c0d519d8de87ef39",
+        "media_type": "application/vnd.areal-rsi.directory+json",
+        "uri": "content://f95aa3a2e443d84578c8014b548470f1f4f80c69a5235177c0d519d8de87ef39"
+      }
+    },
+    {
+      "root": "pair-1-skill",
+      "solution_id": "solution_5882f2df11d64b02",
+      "export_matches_evaluated_snapshot": true,
+      "artifact_content": {
+        "digest": "sha256:e0d5576948e66206d5a3a93c84db5616bc36e47878d91e477cd0f1beeb25cb65",
+        "media_type": "application/vnd.areal-rsi.directory+json",
+        "uri": "content://e0d5576948e66206d5a3a93c84db5616bc36e47878d91e477cd0f1beeb25cb65"
+      }
+    },
+    {
+      "root": "pair-2-skill",
+      "solution_id": "solution_f9b4240eb0004a79",
+      "export_matches_evaluated_snapshot": true,
+      "artifact_content": {
+        "digest": "sha256:0d16f30d0ba9617ff117f509997f69c48ccb948365bd97c4dd2e033d854f0074",
+        "media_type": "application/vnd.areal-rsi.directory+json",
+        "uri": "content://0d16f30d0ba9617ff117f509997f69c48ccb948365bd97c4dd2e033d854f0074"
+      }
+    },
+    {
+      "root": "pair-2-control",
+      "solution_id": "solution_bceca50a8af84735",
+      "export_matches_evaluated_snapshot": true,
+      "artifact_content": {
+        "digest": "sha256:2d5de4f55b582fcf047309a69c7bca098aaa60e4821bf6cd4dc8dcabe3a2ff1e",
+        "media_type": "application/vnd.areal-rsi.directory+json",
+        "uri": "content://2d5de4f55b582fcf047309a69c7bca098aaa60e4821bf6cd4dc8dcabe3a2ff1e"
+      }
+    },
+    {
+      "root": "pair-3-control",
+      "solution_id": "solution_234af8128ee3400f",
+      "export_matches_evaluated_snapshot": true,
+      "artifact_content": {
+        "digest": "sha256:6d5043930201991f3ed738800bbc3af184fc97d7913712bb66682bc861f121a9",
+        "media_type": "application/vnd.areal-rsi.directory+json",
+        "uri": "content://6d5043930201991f3ed738800bbc3af184fc97d7913712bb66682bc861f121a9"
+      }
+    },
+    {
+      "root": "pair-3-skill",
+      "solution_id": "solution_9458416023b7408f",
+      "export_matches_evaluated_snapshot": true,
+      "artifact_content": {
+        "digest": "sha256:84f04c79a3fa306d41781335de2683f710a91a4be4d89d8bda8a6d7dedaa65ed",
+        "media_type": "application/vnd.areal-rsi.directory+json",
+        "uri": "content://84f04c79a3fa306d41781335de2683f710a91a4be4d89d8bda8a6d7dedaa65ed"
+      }
+    }
+  ]
+}

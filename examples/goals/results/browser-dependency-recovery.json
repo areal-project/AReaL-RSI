@@ -1,0 +1,49 @@
+{
+  "classification": "real_cli_browser_dependency_recovery_integration",
+  "goal_id": "goal_8042545dcd79469d",
+  "revision": 1,
+  "run_id": "run_fedb55a9e82343be",
+  "missing_browser_cli_exit_code": 5,
+  "restored_browser_cli_exit_code": 0,
+  "before": {
+    "acceptance_report": null,
+    "achieved": false,
+    "attempts": 1,
+    "cancellation_grace_seconds": 0.0,
+    "cost": null,
+    "elapsed_seconds": 12.058142885565758,
+    "goal_id": "goal_8042545dcd79469d",
+    "human_seconds": null,
+    "revision": 1,
+    "solution_id": null,
+    "state": "blocked",
+    "stop_reason": "FileNotFoundError: dependency unavailable (Chromium is unavailable; run python -m playwright install chromium or restore PLAYWRIGHT_BROWSERS_PATH); restore it and resume",
+    "token_usage": null
+  },
+  "after": {
+    "acceptance_report": {
+      "digest": "sha256:4aa4a07e8cf7e920456c45ed026d19fb16087002b65c8f917a2425390c2149e9",
+      "media_type": "application/json",
+      "uri": "content://4aa4a07e8cf7e920456c45ed026d19fb16087002b65c8f917a2425390c2149e9"
+    },
+    "achieved": true,
+    "attempts": 2,
+    "cancellation_grace_seconds": 0.0,
+    "cost": null,
+    "elapsed_seconds": 56.310074508190155,
+    "goal_id": "goal_8042545dcd79469d",
+    "human_seconds": null,
+    "revision": 1,
+    "solution_id": "solution_91985f51abb4456b",
+    "state": "achieved",
+    "stop_reason": "independent_acceptance_passed",
+    "token_usage": null
+  },
+  "same_revision_and_frozen_contract": true,
+  "fixed_already_delivered_artifact": true,
+  "benchmark_seed": 20261031,
+  "new_model_requests": 0,
+  "research_iterations": 0,
+  "passed": true,
+  "elapsed_is_cumulative_after_resume": true
+}

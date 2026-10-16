@@ -1,0 +1,252 @@
+{
+  "budget_seconds": 300.0,
+  "classification": "independent_real_runtime_resource_capability_check",
+  "counts": {
+    "commands": 1,
+    "discovery": 0,
+    "entrypoints": 0,
+    "failed": 0,
+    "reads": 1,
+    "unverified": 0
+  },
+  "elapsed_seconds": 49.65077418833971,
+  "fee": null,
+  "human_seconds": null,
+  "loaded": 1,
+  "not_part_of_paired_production_timings": true,
+  "passed": true,
+  "resource_evidence": {
+    "commands": [
+      {
+        "completion": {
+          "agentAttemptId": "aat_85746bf1205b4720ab82b16bcd8a3cc2",
+          "agentEnvironmentId": "env_8d0ebe48a242abd763e0273a",
+          "agentId": "agent_root",
+          "apiVersion": "areal.agent-runtime.event/v1",
+          "causationId": "evt_a9b9c02d1e51430ea3a2943d8334ef37",
+          "correlationId": "run_5d281ffc41f34136a75affdf81c6c1cf",
+          "data": {
+            "arguments": {
+              "argv": [
+                "python3",
+                "research-skills/evidence-guided-interactive-state-skill/1.0.0/scripts/validate.py"
+              ],
+              "cwd": "."
+            },
+            "callId": "tool_mcp_4629c411a7c83475d713424a",
+            "content": [
+              {
+                "text": "{\n  \"checks\": [\n    {\n      \"name\": \"trimmed_add\",\n      \"passed\": true\n    },\n    {\n      \"name\": \"reject_empty\",\n      \"passed\": true\n    },\n    {\n      \"name\": \"toggle_is_scoped\",\n      \"passed\": true\n    },\n    {\n      \"name\": \"filter_active\",\n      \"passed\": true\n    },\n    {\n      \"name\": \"filter_completed\",\n      \"passed\": true\n    },\n    {\n      \"name\": \"edit_is_scoped\",\n      \"passed\": true\n    },\n    {\n      \"name\": \"round_trip\",\n      \"passed\": true\n    },\n    {\n      \"name\": \"delete\",\n      \"passed\": true\n    },\n    {\n      \"name\": \"literal_text_data\",\n      \"passed\": true\n    }\n  ],\n  \"passed\": true\n}\n",
+                "type": "text"
+              }
+            ],
+            "error": null,
+            "modelCallId": null,
+            "name": "workspace.run",
+            "rawArguments": null,
+            "value": {
+              "argv": [
+                "python3",
+                "research-skills/evidence-guided-interactive-state-skill/1.0.0/scripts/validate.py"
+              ],
+              "exitCode": 0,
+              "stderr": "",
+              "stdout": "{\n  \"checks\": [\n    {\n      \"name\": \"trimmed_add\",\n      \"passed\": true\n    },\n    {\n      \"name\": \"reject_empty\",\n      \"passed\": true\n    },\n    {\n      \"name\": \"toggle_is_scoped\",\n      \"passed\": true\n    },\n    {\n      \"name\": \"filter_active\",\n      \"passed\": true\n    },\n    {\n      \"name\": \"filter_completed\",\n      \"passed\": true\n    },\n    {\n      \"name\": \"edit_is_scoped\",\n      \"passed\": true\n    },\n    {\n      \"name\": \"round_trip\",\n      \"passed\": true\n    },\n    {\n      \"name\": \"delete\",\n      \"passed\": true\n    },\n    {\n      \"name\": \"literal_text_data\",\n      \"passed\": true\n    }\n  ],\n  \"passed\": true\n}\n"
+            }
+          },
+          "environmentId": "environment_aa219e16c9224ff5b9074e29e98c29d1",
+          "episodeId": null,
+          "eventId": "evt_8fec6907b2e64f8ca9a681fbc986b91d",
+          "executionId": "exe_4e71079cf7214852a68ab327c4cc9982",
+          "governance": {
+            "classification": "confidential",
+            "policyId": "runtime-authority-boundary/v1",
+            "redaction": "not-required",
+            "retention": "standard"
+          },
+          "ignorable": false,
+          "parentAgentId": null,
+          "projectId": null,
+          "runId": "run_5d281ffc41f34136a75affdf81c6c1cf",
+          "sequence": 55,
+          "sessionId": "ses_8fc2b71ba61246f6817efa14b6e3e266",
+          "spanId": null,
+          "tenantId": null,
+          "time": "2026-10-15T18:13:37.482751Z",
+          "traceId": null,
+          "type": "tool.completed",
+          "workspaceId": "trajectory_d9ff34aa7a92493d"
+        },
+        "request": {
+          "agentAttemptId": "aat_85746bf1205b4720ab82b16bcd8a3cc2",
+          "agentEnvironmentId": "env_8d0ebe48a242abd763e0273a",
+          "agentId": "agent_root",
+          "apiVersion": "areal.agent-runtime.event/v1",
+          "causationId": null,
+          "correlationId": "run_5d281ffc41f34136a75affdf81c6c1cf",
+          "data": {
+            "arguments": {
+              "argv": [
+                "python3",
+                "research-skills/evidence-guided-interactive-state-skill/1.0.0/scripts/validate.py"
+              ],
+              "cwd": "."
+            },
+            "callId": "tool_mcp_4629c411a7c83475d713424a",
+            "context": {
+              "parentExecutionId": "exe_4e71079cf7214852a68ab327c4cc9982",
+              "runtimeToolName": "mcp__areal_agent_runtime_application__workspace_run_4546b2465b0c",
+              "vendor": "dsh"
+            },
+            "execution": "application",
+            "name": "workspace.run"
+          },
+          "environmentId": "environment_aa219e16c9224ff5b9074e29e98c29d1",
+          "episodeId": null,
+          "eventId": "evt_a9b9c02d1e51430ea3a2943d8334ef37",
+          "executionId": "exe_4e71079cf7214852a68ab327c4cc9982",
+          "governance": {
+            "classification": "confidential",
+            "policyId": "runtime-authority-boundary/v1",
+            "redaction": "not-required",
+            "retention": "standard"
+          },
+          "ignorable": false,
+          "parentAgentId": null,
+          "projectId": null,
+          "runId": "run_5d281ffc41f34136a75affdf81c6c1cf",
+          "sequence": 52,
+          "sessionId": "ses_8fc2b71ba61246f6817efa14b6e3e266",
+          "spanId": null,
+          "tenantId": null,
+          "time": "2026-10-15T18:13:36.593555Z",
+          "traceId": null,
+          "type": "tool.requested",
+          "workspaceId": "trajectory_d9ff34aa7a92493d"
+        }
+      }
+    ],
+    "discovery": [],
+    "entrypoints": [],
+    "failed": [],
+    "reads": [
+      {
+        "completion": {
+          "agentAttemptId": "aat_85746bf1205b4720ab82b16bcd8a3cc2",
+          "agentEnvironmentId": "env_8d0ebe48a242abd763e0273a",
+          "agentId": "agent_root",
+          "apiVersion": "areal.agent-runtime.event/v1",
+          "causationId": "evt_01e53ddeef4e44bdbe459b0d2060fd43",
+          "correlationId": "run_5d281ffc41f34136a75affdf81c6c1cf",
+          "data": {
+            "arguments": {
+              "path": "research-skills/evidence-guided-interactive-state-skill/1.0.0/references/checklist.md"
+            },
+            "callId": "tool_mcp_653606d86aac388ecacb2121",
+            "content": [
+              {
+                "text": "# Evidence-guided UI checklist\n\n## Contract extraction\n- [ ] List observable actions and outcomes before writing UI code.\n- [ ] Distinguish durable state, derived view state, and transient editing state.\n- [ ] Record stable semantic selectors and accessible names.\n\n## State and boundaries\n- [ ] Add trims input and rejects empty/whitespace-only values.\n- [ ] Every record has an opaque id; actions target that id.\n- [ ] Toggle changes only the selected record.\n- [ ] Save validates the edited title and preserves the record id.\n- [ ] Delete removes only the selected record.\n- [ ] Filtering is derived and does not mutate durable state.\n\n## Persistence and safety\n- [ ] Load is defensive against missing or malformed data.\n- [ ] Durable mutations are persisted at a defined boundary.\n- [ ] Reload restores records and completion flags.\n- [ ] User text is rendered as text, never interpreted as markup.\n\n## UI and responsive behavior\n- [ ] Empty collection and empty-filter results are explicit.\n- [ ] Controls have usable labels and stable hooks.\n- [ ] Long titles wrap without horizontal overflow.\n- [ ] Row actions remain associated with their row on narrow screens.\n\n## Scenario validation\n- [ ] Add two synthetic records.\n- [ ] Reject a whitespace-only title.\n- [ ] Toggle one record and verify the other is unchanged.\n- [ ] Check all/active/completed partitions.\n- [ ] Edit one record and verify row scoping.\n- [ ] Delete one record and verify count.\n- [ ] Round-trip through persistence.\n- [ ] Run the validator with `python3 scripts/validate.py --self-test`.\n- [ ] Investigate every non-zero exit code before declaring success.\n",
+                "type": "text"
+              }
+            ],
+            "error": null,
+            "modelCallId": null,
+            "name": "workspace.read",
+            "rawArguments": null,
+            "value": {
+              "content": "# Evidence-guided UI checklist\n\n## Contract extraction\n- [ ] List observable actions and outcomes before writing UI code.\n- [ ] Distinguish durable state, derived view state, and transient editing state.\n- [ ] Record stable semantic selectors and accessible names.\n\n## State and boundaries\n- [ ] Add trims input and rejects empty/whitespace-only values.\n- [ ] Every record has an opaque id; actions target that id.\n- [ ] Toggle changes only the selected record.\n- [ ] Save validates the edited title and preserves the record id.\n- [ ] Delete removes only the selected record.\n- [ ] Filtering is derived and does not mutate durable state.\n\n## Persistence and safety\n- [ ] Load is defensive against missing or malformed data.\n- [ ] Durable mutations are persisted at a defined boundary.\n- [ ] Reload restores records and completion flags.\n- [ ] User text is rendered as text, never interpreted as markup.\n\n## UI and responsive behavior\n- [ ] Empty collection and empty-filter results are explicit.\n- [ ] Controls have usable labels and stable hooks.\n- [ ] Long titles wrap without horizontal overflow.\n- [ ] Row actions remain associated with their row on narrow screens.\n\n## Scenario validation\n- [ ] Add two synthetic records.\n- [ ] Reject a whitespace-only title.\n- [ ] Toggle one record and verify the other is unchanged.\n- [ ] Check all/active/completed partitions.\n- [ ] Edit one record and verify row scoping.\n- [ ] Delete one record and verify count.\n- [ ] Round-trip through persistence.\n- [ ] Run the validator with `python3 scripts/validate.py --self-test`.\n- [ ] Investigate every non-zero exit code before declaring success.\n",
+              "path": "research-skills/evidence-guided-interactive-state-skill/1.0.0/references/checklist.md"
+            }
+          },
+          "environmentId": "environment_aa219e16c9224ff5b9074e29e98c29d1",
+          "episodeId": null,
+          "eventId": "evt_02acb165c2e54a679401ee322e855ac1",
+          "executionId": "exe_4e71079cf7214852a68ab327c4cc9982",
+          "governance": {
+            "classification": "confidential",
+            "policyId": "runtime-authority-boundary/v1",
+            "redaction": "not-required",
+            "retention": "standard"
+          },
+          "ignorable": false,
+          "parentAgentId": null,
+          "projectId": null,
+          "runId": "run_5d281ffc41f34136a75affdf81c6c1cf",
+          "sequence": 41,
+          "sessionId": "ses_8fc2b71ba61246f6817efa14b6e3e266",
+          "spanId": null,
+          "tenantId": null,
+          "time": "2026-10-15T18:13:31.638533Z",
+          "traceId": null,
+          "type": "tool.completed",
+          "workspaceId": "trajectory_d9ff34aa7a92493d"
+        },
+        "request": {
+          "agentAttemptId": "aat_85746bf1205b4720ab82b16bcd8a3cc2",
+          "agentEnvironmentId": "env_8d0ebe48a242abd763e0273a",
+          "agentId": "agent_root",
+          "apiVersion": "areal.agent-runtime.event/v1",
+          "causationId": null,
+          "correlationId": "run_5d281ffc41f34136a75affdf81c6c1cf",
+          "data": {
+            "arguments": {
+              "path": "research-skills/evidence-guided-interactive-state-skill/1.0.0/references/checklist.md"
+            },
+            "callId": "tool_mcp_653606d86aac388ecacb2121",
+            "context": {
+              "parentExecutionId": "exe_4e71079cf7214852a68ab327c4cc9982",
+              "runtimeToolName": "mcp__areal_agent_runtime_application__workspace_rea_8027f158f7b1",
+              "vendor": "dsh"
+            },
+            "execution": "application",
+            "name": "workspace.read"
+          },
+          "environmentId": "environment_aa219e16c9224ff5b9074e29e98c29d1",
+          "episodeId": null,
+          "eventId": "evt_01e53ddeef4e44bdbe459b0d2060fd43",
+          "executionId": "exe_4e71079cf7214852a68ab327c4cc9982",
+          "governance": {
+            "classification": "confidential",
+            "policyId": "runtime-authority-boundary/v1",
+            "redaction": "not-required",
+            "retention": "standard"
+          },
+          "ignorable": false,
+          "parentAgentId": null,
+          "projectId": null,
+          "runId": "run_5d281ffc41f34136a75affdf81c6c1cf",
+          "sequence": 39,
+          "sessionId": "ses_8fc2b71ba61246f6817efa14b6e3e266",
+          "spanId": null,
+          "tenantId": null,
+          "time": "2026-10-15T18:13:31.363906Z",
+          "traceId": null,
+          "type": "tool.requested",
+          "workspaceId": "trajectory_d9ff34aa7a92493d"
+        }
+      }
+    ],
+    "unverified": []
+  },
+  "response": "RESOURCE_CHECK_DONE",
+  "scenario_success": true,
+  "semantic_effect": "unknown",
+  "skill": {
+    "content": {
+      "digest": "sha256:16d64b1983e4c38478591dc867276e4aac2fc9fa57120f56668cbb2671730c71",
+      "media_type": "application/vnd.areal-rsi.directory+json",
+      "uri": "content://16d64b1983e4c38478591dc867276e4aac2fc9fa57120f56668cbb2671730c71"
+    },
+    "dependencies": [
+      "python3"
+    ],
+    "description": "Build and validate small interactive task-style interfaces from behavioral evidence using an explicit state model, stable selectors, persistence boundaries, and scenario-based checks.",
+    "entrypoint": "SKILL.md",
+    "scope": "Applies to browser or UI tasks whose evidence specifies add/edit/delete, completion, filtering, persistence, validation, accessibility, and responsive behavior. It is a reusable implementation and validation method, not a product template.",
+    "skill_id": "evidence-guided-interactive-state-skill",
+    "version": "1.0.0"
+  },
+  "trajectory_id": "trajectory_d9ff34aa7a92493d",
+  "model": "gpt-6.1-sol",
+  "scope": "Separate post-cohort capability check; production traces did not read or execute auxiliary resources."
+}

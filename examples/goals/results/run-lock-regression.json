@@ -1,0 +1,29 @@
+{
+  "original_full_suite": {
+    "passed": 199,
+    "failed": 1,
+    "skipped": 11,
+    "subtests_passed": 52,
+    "seconds": 191.4,
+    "failure": "test_cancel_and_resume_keeps_completed_train_tasks: unexpected live Run lock"
+  },
+  "deterministic_regression_before_fix": {
+    "test": "test_resume_releases_lock_when_descriptor_is_inherited",
+    "failed": true,
+    "same_symptom": "Run still appeared locked after cancellation while a duplicate descriptor survived"
+  },
+  "fix": "Explicit LOCK_UN at the end of every acquired execution context; unrelated live owners are still rejected.",
+  "original_failure_cause_inference": "The deterministic case proves descriptor retention can produce the same symptom; the original intermittent failure did not record descriptor provenance.",
+  "targeted_after_fix": {
+    "command": ".venv/bin/python -m pytest tests/test_workflows.py tests/test_goal_execution.py -q --tb=short",
+    "exit_code": 0,
+    "passed": true
+  },
+  "full_suite_after_fix": {
+    "passed": 201,
+    "failed": 0,
+    "skipped": 11,
+    "subtests_passed": 52,
+    "seconds": 185.74
+  }
+}

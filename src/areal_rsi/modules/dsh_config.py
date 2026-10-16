@@ -18,6 +18,9 @@ PERSONA = files("areal_rsi").joinpath("resources/dsh/persona.md").read_text()
 MCP_ENVIRONMENT = (
     "RSI_AGENT_MODELS",
     "RSI_RUNTIME_CONFIG",
+    "RSI_DSH_ROOT",
+    "RSI_SESSION_ROOT",
+    "RSI_RESEARCH_SKILLS",
     "RSI_TEACHER_MODEL",
     "RSI_TEACHER_BASE_URL",
     "RSI_TEACHER_API_KEY",

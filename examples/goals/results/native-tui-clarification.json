@@ -1,0 +1,96 @@
+{
+  "kind": "real_native_dsh_tui_integration",
+  "goal_id": "goal_7b5d72f1069d46e2",
+  "revision": 2,
+  "model_names": [
+    "gpt-6.1-sol"
+  ],
+  "http_statuses": [
+    200,
+    200,
+    200,
+    200,
+    200,
+    200,
+    200,
+    200,
+    200,
+    200
+  ],
+  "model_requests": 10,
+  "native_question_count": 3,
+  "tool_names_observed_in_model_responses": [
+    "mcp__rsi__rsi_goal_draft",
+    "ask_user_question",
+    "mcp__rsi__rsi_goal_answer",
+    "mcp__rsi__rsi_goal_status",
+    "mcp__rsi__rsi_goal_answer",
+    "mcp__rsi__rsi_goal_answer",
+    "mcp__rsi__rsi_goal_draft",
+    "mcp__rsi__rsi_goal_answer"
+  ],
+  "unique_tool_names_in_followup_requests": [
+    "ask_user_question",
+    "mcp__rsi__rsi_goal_answer",
+    "mcp__rsi__rsi_goal_draft",
+    "mcp__rsi__rsi_goal_status"
+  ],
+  "state": "ready",
+  "confirmed_at": null,
+  "run_id": null,
+  "worker_started": false,
+  "contract": {
+    "acceptance": {
+      "final_protocol": "independent-holdout-v1",
+      "metrics": [
+        {
+          "metric": "accuracy",
+          "threshold": 1
+        }
+      ],
+      "required_checks": [
+        "add",
+        "edit",
+        "toggle",
+        "filter",
+        "persistence",
+        "empty_input",
+        "boundary",
+        "delete",
+        "layout",
+        "runtime"
+      ],
+      "verifier_version": "task-web-v1-verifier"
+    },
+    "allowed_paths": [
+      "index.html",
+      "*.css",
+      "*.js"
+    ],
+    "artifact_name": "task-app",
+    "artifact_path": "examples/goals/task-app",
+    "benchmark": "task-web-v1",
+    "budget": {
+      "max_iterations": 5,
+      "max_retries": 1,
+      "max_seconds": 3600
+    },
+    "description": "持续完善任务管理网页产物。",
+    "invariants": [
+      "model fixed",
+      "execution harness fixed",
+      "verifier fixed",
+      "other artifacts fixed"
+    ],
+    "skill_paths": [],
+    "target": "artifact"
+  },
+  "draft_history_preserved": true,
+  "raw_audit_sha256": "22d52d4626dc467e655d8bd8a0b1303ac90f128744d9c58b71fb7a7f726a630c",
+  "data_root": ".rsi/demos/tui-clarification-real",
+  "observed_limitations": [
+    "Initial model attempts used malformed fields and failed without creating a Run; explicit corrective follow-up produced ready revision 2.",
+    "Native MCP schema and startup defects were fixed before this session; earlier failed attempts are preserved."
+  ],
+  "passed": true
+}

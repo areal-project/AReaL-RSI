@@ -12,6 +12,38 @@ from areal_rsi.modules.runtime_package import PackageAgentRuntime, RuntimeSettin
 
 
 class PackageRuntimeTest(unittest.IsolatedAsyncioTestCase):
+    def test_local_binary_content_and_symlink_changes_invalidate_runtime_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            binary = root / "dsh"
+            binary.write_text("first executable")
+            config = {"default": {"kind": "dsh", "config": {"dshBin": str(binary)}}}
+            settings = RuntimeSettings(config)
+            settings.validate_artifacts()
+            original = settings.identity
+            binary.write_text("second executable")
+            self.assertNotEqual(RuntimeSettings(config).identity, original)
+            with self.assertRaisesRegex(ValueError, "new Goal revision"):
+                settings.validate_artifacts()
+            binary.unlink()
+            with self.assertRaises(FileNotFoundError):
+                settings.validate_artifacts()
+            binary.write_text("first executable")
+            settings.validate_artifacts()
+            self.assertEqual(RuntimeSettings(config).identity, original)
+            alternate = root / "replacement"
+            alternate.write_text("different executable")
+            binary.unlink()
+            binary.symlink_to(alternate)
+            with self.assertRaisesRegex(ValueError, "new Goal revision"):
+                settings.validate_artifacts()
+
+    def test_runtime_config_caller_cannot_mutate_the_frozen_selection(self) -> None:
+        config = {"default": {"kind": "dsh", "config": {}}}
+        settings = RuntimeSettings(config)
+        config["default"]["kind"] = "fake"
+        self.assertEqual(settings.select("task-agent")["kind"], "dsh")
+
     async def _check_composition(self, selection: dict[str, str]) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp).resolve()
@@ -69,39 +101,34 @@ class PackageRuntimeTest(unittest.IsolatedAsyncioTestCase):
             workspace.mkdir()
             hidden = root / "hidden-validation.txt"
             hidden.write_text("hidden-answer")
-            prefix = sandbox_command(directory, workspace, ())[:3]
             script = "import pathlib,sys; pathlib.Path(sys.argv[1]).read_text()"
             import sys
 
             process = await asyncio.create_subprocess_exec(
-                *prefix,
-                sys.executable,
-                "-c",
-                script,
-                str(hidden),
+                *sandbox_command(
+                    directory, workspace, (), payload=[sys.executable, "-c", script, str(hidden)]
+                ),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
             out, err = await process.communicate()
             self.assertNotEqual(process.returncode, 0)
             self.assertNotIn(b"hidden-answer", out)
-            self.assertIn(b"PermissionError", err)
+            self.assertTrue(b"PermissionError" in err or b"FileNotFoundError" in err, err)
             import areal_rsi
 
             evaluator = Path(areal_rsi.__file__).parent / "modules/benchmark.py"
             process = await asyncio.create_subprocess_exec(
-                *prefix,
-                sys.executable,
-                "-c",
-                script,
-                str(evaluator),
+                *sandbox_command(
+                    directory, workspace, (), payload=[sys.executable, "-c", script, str(evaluator)]
+                ),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=workspace,
             )
             out, err = await process.communicate()
             self.assertNotEqual(process.returncode, 0)
-            self.assertIn(b"PermissionError", err)
+            self.assertTrue(b"PermissionError" in err or b"FileNotFoundError" in err, err)
 
     def test_all_bootstrap_kinds_are_selectable(self) -> None:
         for kind in (

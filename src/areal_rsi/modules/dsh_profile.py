@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import shutil
@@ -20,6 +21,14 @@ PROFILE = "rsi-chimney"
 
 
 def ensure_profile(root: Path) -> tuple[Path, Path]:
+    root = root.resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / ".dsh-tui-profile.lock").open("a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _ensure_profile(root)
+
+
+def _ensure_profile(root: Path) -> tuple[Path, Path]:
     home = root.resolve() / "dsh-home"
     manifest = home / "profiles" / PROFILE / "package.json"
     binary = ensure_cli(root)
@@ -40,6 +49,11 @@ def ensure_profile(root: Path) -> tuple[Path, Path]:
     bundles = configured.get("dsh", {}).get("profile", {}).get("bundles", [])
     if "@deepseek-ai/dsh-base" not in bundles or TUI_PACKAGE not in bundles:
         raise RuntimeError("DSH profile 缺少基础或 TUI bundle，请检查该 profile 的 package.json")
+    # The generated model/MCP patch is fixed for one launch; it does not need
+    # the optional Cordis HMR service required by live patch watching.
+    if configured["dsh"]["profile"].get("patchReload") != "startup":
+        configured["dsh"]["profile"]["patchReload"] = "startup"
+        manifest.write_text(json.dumps(configured, indent=2) + "\n")
     ensure_rsi_preset(root, home)
     return binary, home
 

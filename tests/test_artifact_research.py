@@ -290,6 +290,40 @@ class ArtifactResearchTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse((self.root / "escape").exists())
         self.assertEqual(self.session.finish.await_count, len(proposals))
 
+    async def test_direct_workspace_edits_are_diffed_against_immutable_baseline(self) -> None:
+        artifact = await self.artifact("user-game", "original\n")
+        current = await self.versions.create_solution(
+            self.model, self.harness, artifacts=[artifact]
+        )
+
+        async def reply(prompt: str) -> str:
+            target = self.workspace() / "artifact"
+            (target / "index.html").write_text("generated from reusable method\n")
+            (target / "unsubmitted.txt").write_text("not part of the candidate")
+            return '{"workspace_files":["index.html"],"reason":"Apply a reusable method"}'
+
+        self.session.send.side_effect = reply
+        change = await self.propose(current)
+        patch = await self.content.read_text(change.patch)
+        self.assertIn("-original", patch)
+        self.assertNotIn("unsubmitted", patch)
+        built = await self.builder.build(artifact, change)
+        result = await self.content.materialize(built, self.root / "direct-result")
+        self.assertEqual((result / "index.html").read_text(), "generated from reusable method\n")
+        self.assertFalse((result / "unsubmitted.txt").exists())
+
+    async def test_direct_workspace_proposal_rejects_symlink_escape(self) -> None:
+        private = self.root / "private.txt"
+        private.write_text("private content")
+
+        async def reply(prompt: str) -> str:
+            (self.workspace() / "artifact/leak.txt").symlink_to(private)
+            return '{"workspace_files":["leak.txt"],"reason":"unsafe"}'
+
+        self.session.send.side_effect = reply
+        with self.assertRaisesRegex(ValueError, "escapes"):
+            await self.propose()
+
     async def test_rejects_unchanged_snapshot(self) -> None:
         artifact = await self.artifact("user-game", "unchanged\n")
         current = await self.versions.create_solution(

@@ -1,0 +1,67 @@
+{
+  "state": "applied_after_formal_run_terminated",
+  "files": [
+    {
+      "file": "src/areal_rsi/app.py",
+      "source": "/tmp/rsi-contract-fixes-tehoi3lh/areal_rsi/app.py",
+      "base_sha256": "d74e91770ff45a5746906a75ff8b99c05c34444626aacb7dba924c7f6984790a",
+      "new_sha256": "8c435b3c73b2108be74ccd9df8b2918cbd4914d8551211ad2a247fc7e8193796"
+    },
+    {
+      "file": "src/areal_rsi/goals.py",
+      "source": "/tmp/rsi-contract-fixes-tehoi3lh/areal_rsi/goals.py",
+      "base_sha256": "df26c0550513d681419aa221ed24705f0f6c15b7b01be56a843d422578856556",
+      "new_sha256": "526fcc8c3185cf20863bb3c7ec4c5b4c91ac2e5ea2263f1d41342b9c9235ba71"
+    },
+    {
+      "file": "src/areal_rsi/api/goal.py",
+      "source": "/tmp/rsi-contract-fixes-tehoi3lh/areal_rsi/api/goal.py",
+      "base_sha256": "7d0b800af43df16a78a6cee59cadb7b92402dc6b6409382ea1e21ea4be35c9f1",
+      "new_sha256": "77eaebab57d95f1da8f725b1e66053d484f70239730a3b81f04c3ba6a95667fa"
+    },
+    {
+      "file": "src/areal_rsi/modules/browser.py",
+      "source": "/tmp/rsi-contract-fixes-tehoi3lh/areal_rsi/modules/browser.py",
+      "base_sha256": "1fedf4ed283ded092aa854e8ce42edf88918202fc0bef50601ee819e46898286",
+      "new_sha256": "f94ccdde7465e46910f65fa3b6c31e8108a2999a8862a03a95c494e02a2df1b1"
+    },
+    {
+      "file": "src/areal_rsi/modules/runtime_package.py",
+      "source": "/tmp/rsi-contract-fixes-tehoi3lh/areal_rsi/modules/runtime_package.py",
+      "base_sha256": "ebb5b7a066e75af8cba0a666f960fa8fa8e04ed9801a50c2a5f302844dee2d5c",
+      "new_sha256": "d28264b190f271c34c47d8eb42486d20046fee59ed43a7d0ac4f12bbd7baf5e4"
+    },
+    {
+      "file": "src/areal_rsi/workflows/evolution.py",
+      "source": "/tmp/rsi-contract-fixes-tehoi3lh/areal_rsi/workflows/evolution.py",
+      "base_sha256": "d3a893ed1951715db0cc4efb372b1caf226a43d2ef705404a33a14c171d77897",
+      "new_sha256": "4a7fe409a74811554388c6ff1db20a3d995920180fb85e2d9d745abb221987e6"
+    },
+    {
+      "file": "tests/test_goal_contracts.py",
+      "source": "/tmp/rsi-contract-fixes-tehoi3lh/tests/test_goal_contracts.py",
+      "base_sha256": "6a9f469edf8f84c3d7bd1c4b50fe4e2ffb6715b860290012d8558ad16a85cdbe",
+      "new_sha256": "fb49b1d0d200c93dd5a591c09d19721513766bb4d0540a6aed1440bb10610e81"
+    },
+    {
+      "file": "tests/test_goal_execution.py",
+      "source": "/tmp/rsi-contract-fixes-tehoi3lh/tests/test_goal_execution.py",
+      "base_sha256": "be57b7baf119bfa38154af4c25d4ca234de87522007de62f0d3be6fad805f9f0",
+      "new_sha256": "860dcaa116aeea0a16f8085650566f9517be6412afc07f4b71c4b01994501106"
+    },
+    {
+      "file": "tests/test_runtime_package.py",
+      "source": "/tmp/rsi-contract-fixes-tehoi3lh/tests/test_runtime_package.py",
+      "base_sha256": "dfd0eb3d63c0a45486b406c7956b26686d6129d04bc20a0e54ad74aee6dd2935",
+      "new_sha256": "173e35e5e6feb278f47dca2208e0cb5347d7b35f68f071d1d56869276597ac63"
+    },
+    {
+      "file": "tests/test_browser_bookmarks.py",
+      "source": "/tmp/rsi-contract-fixes-tehoi3lh/tests/test_browser_bookmarks.py",
+      "base_sha256": null,
+      "new_sha256": "8fb332dfb88591b4647fc47d9cf6bd459d8803394d896a92ac7a945ad64326e9"
+    }
+  ],
+  "targeted_tests_passed": 44,
+  "formal_run_terminated_before_application": true
+}

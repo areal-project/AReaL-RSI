@@ -1,0 +1,45 @@
+{
+  "target": "artifact",
+  "allowed_paths": [
+    "index.html",
+    "*.css",
+    "*.js"
+  ],
+  "invariants": [
+    "model fixed",
+    "execution harness fixed",
+    "verifier fixed",
+    "other artifacts fixed"
+  ],
+  "budget": {
+    "max_iterations": 5,
+    "max_seconds": 3600,
+    "max_retries": 1
+  },
+  "skill_paths": [],
+  "description": "Finish a task management web app with add, edit, complete, filter, delete and persistence. Use a static index.html with local CSS/JS, no remote resources. Use data-testid=\"title-input\", \"add\", \"item\" for each row; each row contains \"edit\", \"edit-input\" when editing, \"save\", checkbox \"toggle\" and \"delete\". Filters use \"filter-all\", \"filter-active\", \"filter-completed\". Trim and reject empty titles. Treat user input as literal text, including long Unicode or HTML-like strings. Persist all data and toggle state in localStorage. Fit 375px and 1280px screens without horizontal scrolling. All controls and rows at least 24x24px. Preserve adding existing items. Editing uses a row-scoped edit-input and save button.",
+  "benchmark": "task-web-v1",
+  "artifact_path": "examples/goals/task-app",
+  "artifact_name": "task-app",
+  "acceptance": {
+    "metrics": [
+      {
+        "metric": "accuracy",
+        "threshold": 1.0
+      }
+    ],
+    "required_checks": [
+      "add",
+      "edit",
+      "toggle",
+      "filter",
+      "persistence",
+      "empty_input",
+      "boundary",
+      "delete",
+      "layout",
+      "runtime"
+    ],
+    "verifier_version": "task-web-v1-verifier"
+  }
+}

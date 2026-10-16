@@ -3,20 +3,25 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import inspect
 import os
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from areal_rsi.agents.research import DefaultResearchAgent
+from areal_rsi.agents.research.artifact import ArtifactResearchAgent
 from areal_rsi.agents.rsi import DefaultRsiAgent
 from areal_rsi.api.base import (
+    EvolutionTarget,
     ExperimentPlan,
     JsonObject,
     ModelVersion,
     SolutionVersion,
     VerifierSpec,
 )
-from areal_rsi.api.modules import Benchmark, Verifier
+from areal_rsi.api.goal import GoalSpec, SkillVersion
+from areal_rsi.api.modules import Benchmark, HarnessRuntime, Verifier
 from areal_rsi.api.workflow import WorkflowContext
 from areal_rsi.base.catalog import LocalModelCatalog
 from areal_rsi.base.storage import (
@@ -24,6 +29,7 @@ from areal_rsi.base.storage import (
     FileMemory,
     FileTrajectoryStore,
     FileVersionManager,
+    decode,
     new_id,
     write_json,
 )
@@ -33,11 +39,14 @@ from areal_rsi.config import (
     ModelConfigurationError,
     research_agent_count_from_environment,
 )
+from areal_rsi.modules.artifact import LocalArtifactBuilder
 from areal_rsi.modules.benchmark import AccuracyEvaluation, ArithmeticBenchmark, ArithmeticVerifier
 from areal_rsi.modules.gateway import GatewayProxy
 from areal_rsi.modules.gsm8k import Gsm8kBenchmark, Gsm8kVerifier
 from areal_rsi.modules.harness import LocalHarnessBuilder, LocalHarnessRuntime
 from areal_rsi.modules.runtime_package import PackageAgentRuntime, RuntimeSettings
+from areal_rsi.workflows.artifact import ArtifactEvolutionWorkflow
+from areal_rsi.workflows.evolution import HarnessEvolutionWorkflow
 from areal_rsi.workflows.service import LocalExperimentService, WorkflowFactory
 
 
@@ -65,14 +74,31 @@ class LocalApp:
         *,
         workflows: Mapping[str, WorkflowFactory] | None = None,
         workflow_name: str = "harness-evolution",
+        goal: GoalSpec | None = None,
+        frozen: Mapping[str, object] | None = None,
+        skills: tuple[SkillVersion, ...] = (),
     ) -> LocalApp:
+        target = goal.target if goal else EvolutionTarget.HARNESS
+        if target == EvolutionTarget.MODEL:
+            raise ValueError(
+                "Model training backend is not installed; real training is unsupported"
+            )
+        if target == EvolutionTarget.ARTIFACT:
+            workflow_name = "artifact-evolution"
+        if workflows is None:
+            workflows = {
+                "harness-evolution": HarnessEvolutionWorkflow,
+                "artifact-evolution": ArtifactEvolutionWorkflow,
+            }
         if workflow_name not in (
             workflows if workflows is not None else {"harness-evolution": None}
         ):
             raise ValueError("选中的 Python Workflow 尚未注册")
         runtime_settings = RuntimeSettings.from_environment()
         model_settings = AgentModelSettings.from_environment()
-        research_agent_count = research_agent_count_from_environment()
+        research_agent_count = (
+            goal.research_agent_count if goal else research_agent_count_from_environment()
+        )
         agent_ids = [
             "rsi-agent",
             *(f"research-agent-{index}" for index in range(1, research_agent_count + 1)),
@@ -102,8 +128,48 @@ class LocalApp:
         self.memory = FileMemory(self.root / "memory")
         benchmark: Benchmark
         verifier: Verifier
-        benchmark_kind = os.environ.get("RSI_BENCHMARK", "arithmetic-v1")
-        if benchmark_kind == "gsm8k":
+        benchmark_kind = (
+            goal.benchmark if goal else os.environ.get("RSI_BENCHMARK", "arithmetic-v1")
+        )
+        if target == EvolutionTarget.ARTIFACT:
+            from areal_rsi.modules.browser import BrowserBenchmark, BrowserVerifier
+
+            seed = goal.assets.get("benchmark_seed") if goal else None
+            if seed is not None and type(seed) is not int:
+                raise ValueError("benchmark_seed must be an integer")
+            benchmark = BrowserBenchmark(benchmark_kind, seed=seed)
+            verifier = BrowserVerifier(self.content)
+            description = "Deterministic browser interaction and responsive layout checks."
+        elif benchmark_kind == "ledger-arithmetic-v1":
+            from areal_rsi.modules.ledger import LedgerBenchmark, LedgerVerifier
+
+            seed = goal.assets.get("benchmark_seed", 20261019) if goal else 20261019
+            if type(seed) is not int:
+                raise ValueError("benchmark_seed must be an integer")
+            benchmark = LedgerBenchmark(self.content, seed=seed)
+            verifier = LedgerVerifier(self.content, benchmark)
+            description = "Exact sequential ledger arithmetic, ordered fees and per-step rounding."
+        elif benchmark_kind in {
+            "structured-arithmetic-v1",
+            "structured-arithmetic-v2",
+            "structured-arithmetic-v3",
+        }:
+            from areal_rsi.modules.structured_arithmetic import (
+                StructuredArithmeticBenchmark,
+                StructuredArithmeticVerifier,
+            )
+
+            seed = goal.assets.get("benchmark_seed", 20261015) if goal else 20261015
+            if type(seed) is not int:
+                raise ValueError("benchmark_seed must be an integer")
+            benchmark = StructuredArithmeticBenchmark(
+                seed=seed,
+                exact_division=benchmark_kind == "structured-arithmetic-v2",
+                rational_terms=benchmark_kind == "structured-arithmetic-v3",
+            )
+            verifier = StructuredArithmeticVerifier(self.content, benchmark)
+            description = "Frozen disjoint multi-step arithmetic and exact JSON output contract."
+        elif benchmark_kind == "gsm8k":
             benchmark = Gsm8kBenchmark(
                 Path(os.environ.get("RSI_GSM8K_DATA", ".rsi/datasets/gsm8k")),
                 train_limit=int(os.environ.get("RSI_TRAIN_LIMIT", "16")),
@@ -132,12 +198,41 @@ class LocalApp:
             self.target_model,
             await self.content.snapshot(Path(__file__).parent / "default_harness"),
         )
+        if goal and target == EvolutionTarget.ARTIFACT:
+            import json
+
+            if frozen and "artifact" in frozen:
+                from areal_rsi.api.base import ContentRef
+
+                artifact_content = decode(ContentRef, frozen["artifact"])
+            else:
+                artifact_content = await self.content.snapshot(
+                    Path(goal.artifact_path or "").expanduser()
+                )
+            artifact = await self.versions.create_artifact(goal.artifact_name, artifact_content)
+            self.baseline = await self.versions.create_solution(
+                self.target_model, self.baseline.harness, artifacts=(artifact,)
+            )
+        if goal and target == EvolutionTarget.HARNESS and goal.assets.get("harness_path"):
+            from areal_rsi.api.base import ContentRef
+
+            if frozen and "harness" in frozen:
+                harness_content = decode(ContentRef, frozen["harness"])
+            else:
+                source = goal.assets["harness_path"]
+                if not isinstance(source, str):
+                    raise ValueError("harness_path must be a directory path")
+                harness_content = await self.content.snapshot(Path(source).expanduser())
+            harness = await self.versions.create_harness("goal-baseline", harness_content)
+            self.baseline = await self.versions.create_solution(self.target_model, harness)
         self.agent_proxies, self.agent_runtimes = {}, {}
         proxies: dict[ModelConfig, GatewayProxy] = {}
         runtimes: dict[tuple[ModelConfig, int, str], PackageAgentRuntime] = {}
         for agent_id, connection in runtime_connections.items():
             if connection not in proxies:
-                proxies[connection] = GatewayProxy(connection.base_url, connection.api_key)
+                proxies[connection] = GatewayProxy(
+                    connection.base_url, connection.api_key, model=connection.model
+                )
             proxy = proxies[connection]
             budget = 4096 if agent_id == "task-agent" else 12288
             selection = runtime_settings.select(agent_id)
@@ -146,7 +241,12 @@ class LocalApp:
             key = (connection, budget, json.dumps(selection, sort_keys=True))
             if key not in runtimes:
                 runtimes[key] = PackageAgentRuntime(
-                    self.root / "sessions",
+                    (
+                        Path(os.environ["RSI_SESSION_ROOT"]).expanduser()
+                        / hashlib.sha256(str(self.root).encode()).hexdigest()[:16]
+                        if os.environ.get("RSI_SESSION_ROOT")
+                        else self.root / "sessions"
+                    ),
                     self.content,
                     self.trajectories,
                     settings=runtime_settings,
@@ -155,7 +255,7 @@ class LocalApp:
                     api_key="local-proxy",
                     timeout=float(os.environ.get("RSI_TURN_TIMEOUT", "1200")),
                     max_tokens=budget,
-                    dsh_root=self.root,
+                    dsh_root=Path(os.environ.get("RSI_DSH_ROOT", str(self.root))).expanduser(),
                     credential_env_names=model_settings.credential_env_names,
                 )
             self.agent_proxies[agent_id] = proxy
@@ -171,8 +271,9 @@ class LocalApp:
             target_model_name=self.baseline.model.name,
             model_plan_config=self.model_plan_config(),
         )
-        researchers = tuple(
-            DefaultResearchAgent(
+        researchers_list: list[DefaultResearchAgent] = []
+        for index in range(1, research_agent_count + 1):
+            args = (
                 f"research-agent-{index}",
                 self.agent_runtimes[f"research-agent-{index}"],
                 self.agent_models[f"research-agent-{index}"],
@@ -181,11 +282,29 @@ class LocalApp:
                 self.versions,
                 self.root / "research-workspaces",
             )
-            for index in range(1, research_agent_count + 1)
-        )
-        harness_runtime = LocalHarnessRuntime(
+            if goal and target == EvolutionTarget.ARTIFACT:
+                researcher: DefaultResearchAgent = ArtifactResearchAgent(
+                    *args, artifact_name=goal.artifact_name
+                )
+            else:
+                researcher = DefaultResearchAgent(*args)
+            researchers_list.append(researcher)
+        researchers = tuple(researchers_list)
+        for research_agent in researchers:
+            research_agent.skills = skills
+        self.rsi.evolution_target = target
+        harness_runtime: HarnessRuntime = LocalHarnessRuntime(
             self.agent_runtimes["task-agent"], self.content, self.root / "task-workspaces"
         )
+        if target == EvolutionTarget.ARTIFACT:
+            from areal_rsi.modules.browser import BrowserArtifactRuntime
+
+            harness_runtime = BrowserArtifactRuntime(
+                self.content,
+                self.trajectories,
+                self.root / "browser-workspaces",
+                artifact_name=goal.artifact_name if goal else "app",
+            )
         builder = LocalHarnessBuilder(self.content, self.root / "builds")
         evaluation = AccuracyEvaluation()
         context = WorkflowContext(
@@ -201,10 +320,25 @@ class LocalApp:
             VerifierSpec(
                 verifier_id=f"{benchmark.name}-verifier",
                 provider="injected",
+                digest="sha256:"
+                + hashlib.sha256(
+                    Path(inspect.getfile(type(verifier))).read_bytes()
+                    + Path(inspect.getfile(type(harness_runtime))).read_bytes()
+                    + Path(inspect.getfile(type(evaluation))).read_bytes()
+                ).hexdigest(),
             ),
             evaluation,
             builder,
         )
+        if target == EvolutionTarget.ARTIFACT:
+            context.artifact_builder = LocalArtifactBuilder(
+                self.content, self.root / "artifact-builds"
+            )
+        if goal:
+            concurrency = goal.assets.get("evaluation_concurrency", 1)
+            if type(concurrency) is not int or not 1 <= concurrency <= 16:
+                raise ValueError("evaluation_concurrency must be in [1,16]")
+            context.evaluation_concurrency = concurrency
         self.service = LocalExperimentService(self.root, context, emit, workflows=workflows)
         return self
 
@@ -294,6 +428,8 @@ class LocalApp:
                     raise ModelConfigurationError(
                         f"{agent_id} 与旧计划的 teacher 配置不一致，请恢复对应配置或创建新计划。"
                     )
+        if plan.target == EvolutionTarget.ARTIFACT and not baseline.artifacts:
+            raise ValueError("Artifact baseline is missing")
         self.service.validate(plan)
         self.baseline = baseline
         self.rsi.baseline = baseline.solution_id

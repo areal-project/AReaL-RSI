@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -79,6 +79,9 @@ class WorkflowContext:
     harness_builder: HarnessBuilder | None = None
     training_backend: TrainingBackend | None = None
     artifact_builder: ArtifactBuilder | None = None
+    remaining_seconds: Callable[[], float] | None = None
+    evaluation_concurrency: int = 1
+    stop_requested: Callable[[], bool] | None = None
 
 
 class RsiWorkflow(Protocol):

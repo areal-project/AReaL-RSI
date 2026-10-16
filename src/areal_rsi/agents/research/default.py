@@ -21,6 +21,7 @@ from areal_rsi.api.base import (
     ResearchChange,
     SolutionVersion,
 )
+from areal_rsi.api.goal import SkillVersion
 from areal_rsi.api.modules import AgentSession, ConfiguredAgentRuntime
 from areal_rsi.base.storage import (
     FileContentStore,
@@ -32,6 +33,7 @@ from areal_rsi.base.storage import (
     write_json,
 )
 from areal_rsi.modules.harness import editable
+from areal_rsi.modules.skills import SkillLoader
 
 
 class DefaultResearchAgent:
@@ -59,9 +61,16 @@ class DefaultResearchAgent:
         self.root = root
         self.editable_path = editable_path
         self.harness_description = harness_description
+        self.skills: tuple[SkillVersion, ...] = ()
         self.last_trajectory: str | None = None
+        self.last_selection_reason = ""
 
     async def _session(self, system: str, workspace: Path, *, tools: bool = True) -> AgentSession:
+        skill_refs = []
+        if tools:
+            for skill in self.skills:
+                _, ref = await SkillLoader(self.content).materialize(skill, workspace)
+                skill_refs.append(ref)
         prompt = await self.content.put_text(system)
         return await self.runtime.open(
             AgentSpec(
@@ -69,6 +78,7 @@ class DefaultResearchAgent:
                 "areal-agent-runtime@v1",
                 self.model,
                 (prompt,),
+                skills=tuple(skill_refs),
                 tools=("bash@v1",) if tools else (),
             ),
             workspace_root=str(workspace),
@@ -213,12 +223,14 @@ class DefaultResearchAgent:
             "Prefer the highest observed validation score; ties may explore the latest candidate. "
             "All inputs are aggregate results. No case details are available. "
             "Versions can be read from versions.json if useful. "
-            'Return JSON {"candidate_index": integer} using the explicit zero-based index. '
+            'Return JSON {"candidate_index": integer, "reason": "brief evidence-based reason"} '
+            "using the explicit zero-based index. "
             'Use {"candidate_index": null} only to end this research line. '
             "Do not copy long version IDs into the reply; "
             "the runtime maps the chosen index exactly. "
             "The workflow enforces iteration limits; continue exploration when a candidate exists.",
             workspace,
+            tools=False,
         )
         try:
             selected = await ask_json(
@@ -253,6 +265,9 @@ class DefaultResearchAgent:
                 )
             if not valid(selected):
                 raise ValueError("选版返回了无效候选编号")
+            self.last_selection_reason = str(
+                selected.get("reason", "aggregate validation ranking")
+            )[:2000]
             index = selected["candidate_index"]
             identifier = None if index is None else candidates[index].solution_id
         finally:

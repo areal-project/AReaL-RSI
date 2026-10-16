@@ -16,7 +16,8 @@ from areal_rsi.modules.gateway import GatewayProxy
 
 def launch_tui(root: Path, *, resume: str | None = None, setup_only: bool = False) -> int:
     model_config = AgentModelSettings.from_environment().resolve("interaction-agent")
-    binary, home = ensure_profile(root)
+    dependency_root = Path(os.environ.get("RSI_DSH_ROOT", str(root))).expanduser()
+    binary, home = ensure_profile(dependency_root)
     patch = write_profile_patch(root, Path.cwd(), model_config.model)
     if setup_only:
         print(f"DSH TUI profile 已准备：{home / 'profiles' / PROFILE}")

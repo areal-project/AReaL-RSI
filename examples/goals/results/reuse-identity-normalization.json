@@ -1,0 +1,16 @@
+{
+  "at": "2026-10-15T17:08:31.179862+00:00",
+  "phase": "pair_1_control_proposal_before_any_terminal_result",
+  "original_runner_sha256": "01110640a1079fecd82dd601efe0db4b86bd50e20c1390291aef207b7a9ed1b7",
+  "corrected_runner_sha256": "9dc0f373387a0a1d52bb57b188078734cc3e6543fe3ba1286abe9dd3f226194e",
+  "change": "Normalize per-root generated model version IDs to model name and immutable content reference for identity comparison. No model/task/verifier/budget/acceptance change.",
+  "original_process_loaded_old_comparator": true,
+  "recovery_plan": "If old comparator stops after pair 1, restart corrected runner from persisted receipts; do not re-execute completed Goals.",
+  "verification": {
+    "same_model_content_different_generated_ids_equal": true,
+    "same_model_name_different_content_not_equal": true
+  },
+  "old_wrapper_stopped_after_pair_1": true,
+  "original_wrapper_exit_code": 1,
+  "resume_uses_existing_receipts_without_re_execution": true
+}

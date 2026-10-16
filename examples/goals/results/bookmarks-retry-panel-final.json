@@ -1,0 +1,15 @@
+{
+  "passed": true,
+  "root": ".rsi/demos/reuse-final/pair-3-control",
+  "run_id": "run_807c6bd7f00b4c04",
+  "goal_state": "achieved",
+  "goal_outcome_matches_state": true,
+  "independent_acceptance_passed": true,
+  "chart_axis_toggle": true,
+  "final_time_within_rendered_axis": true,
+  "skill_evidence": [],
+  "skill_lifecycle_records": 0,
+  "skill_reuse_reports": 0,
+  "page_errors": [],
+  "screenshot": "examples/goals/results/bookmarks-retry-panel-final.png"
+}

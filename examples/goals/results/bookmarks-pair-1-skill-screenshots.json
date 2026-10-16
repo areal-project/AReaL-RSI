@@ -1,0 +1,12 @@
+[
+  {
+    "file": "examples/goals/results/bookmarks-pair-1-skill-1280.png",
+    "task_id": "bookmark-web-v1-final-1280",
+    "digest": "sha256:f3b8b7490ebdf9d11d1ccd0f524c8f845842b4362cf75d4495d9ef23d88f8063"
+  },
+  {
+    "file": "examples/goals/results/bookmarks-pair-1-skill-375.png",
+    "task_id": "bookmark-web-v1-final-375",
+    "digest": "sha256:d893e39add0adb3cf1fd5e4aea17532d9703a7159f061990a3febe371baff212"
+  }
+]

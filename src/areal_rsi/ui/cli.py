@@ -70,6 +70,42 @@ def main() -> None:
     web = commands.add_parser("web", help="启动本地只读研究面板，不启动实验")
     web.add_argument("--port", type=int, default=8765)
     web.add_argument("--run", dest="run_id")
+    execute = commands.add_parser("exec", help="澄清、确认并持续执行生产目标")
+    execute.add_argument("description", nargs="?")
+    execute.add_argument("--spec")
+    execute.add_argument("--target", choices=["harness", "artifact", "model"])
+    execute.add_argument("--artifact")
+    execute.add_argument("--yes", action="store_true")
+    execute.add_argument("--json", action="store_true")
+    execute.add_argument("--detach", action="store_true")
+    goals = commands.add_parser("goal", help="Goal 生命周期")
+    goal_actions = goals.add_subparsers(dest="action", required=True)
+    for action in ("status", "answer", "pause", "resume", "cancel", "export"):
+        sub = goal_actions.add_parser(action)
+        sub.add_argument("goal_id")
+        sub.add_argument("--json", action="store_true")
+        if action == "export":
+            sub.add_argument("--destination", type=Path, required=True)
+        if action == "answer":
+            sub.add_argument("--answers", required=True)
+            sub.add_argument("--yes", action="store_true")
+    skills = commands.add_parser("skill", help="版本化 Research Skill 库")
+    skill_actions = skills.add_subparsers(dest="action", required=True)
+    skill_actions.add_parser("list")
+    capture = skill_actions.add_parser("capture")
+    capture.add_argument("--goal", required=True)
+    capture.add_argument("--max-seconds", type=float, default=600)
+    for action in ("inspect", "validate", "activate", "deprecate"):
+        sub = skill_actions.add_parser(action)
+        sub.add_argument("skill_id")
+        sub.add_argument("--version", required=True)
+        if action == "deprecate":
+            sub.add_argument("--reason", required=True)
+    goal_worker = commands.add_parser("_goal-worker", help=argparse.SUPPRESS)
+    goal_worker.add_argument("--root", type=Path, required=True)
+    goal_worker.add_argument("--goal-id", required=True)
+    goal_worker.add_argument("--revision", type=int, required=True)
+    goal_worker.add_argument("--lock-fd", type=int, required=True)
     args = parser.parse_args()
     try:
         if args.command == "config":
@@ -77,7 +113,38 @@ def main() -> None:
             return
         load_user_config()
     except (ModelConfigurationError, OSError) as exc:
+        if args.command in {"exec", "goal", "skill"} and getattr(args, "json", False):
+            from areal_rsi.ui.goal_cli import output
+
+            output({"schema_version": 1, "type": "error", "error": str(exc)})
+            raise SystemExit(2) from None
         parser.exit(2, f"配置错误：{exc}\n")
+    if args.command in {"exec", "goal", "skill"}:
+        from areal_rsi.ui.goal_cli import dispatch, output
+
+        try:
+            raise SystemExit(asyncio.run(dispatch(args, data_root())))
+        except KeyboardInterrupt:
+            raise SystemExit(130) from None
+        except (ValueError, TypeError, KeyError, OSError) as exc:
+            import sys
+
+            output(
+                {
+                    "schema_version": 1,
+                    "type": "error",
+                    "error": str(exc),
+                    "goal_id": getattr(args, "goal_id", None),
+                },
+                stream=sys.stdout if getattr(args, "json", False) else sys.stderr,
+            )
+            raise SystemExit(2) from None
+    if args.command == "_goal-worker":
+        from areal_rsi.goals import run_goal_worker
+
+        raise SystemExit(
+            asyncio.run(run_goal_worker(args.root, args.goal_id, args.revision, args.lock_fd))
+        )
     if args.command == "_mcp":
         from areal_rsi.ui.mcp import serve as serve_mcp
 

@@ -1,0 +1,265 @@
+{
+  "recorded_at": "2026-10-15T18:36:07.073692+00:00",
+  "recorded_goal_outcomes": [
+    {
+      "goal_id": "goal_4a2f68abd85b4d80",
+      "revision": 1,
+      "state": "failed",
+      "elapsed_seconds": 2293.109241835773,
+      "attempts": 4,
+      "token_usage": null,
+      "cost": null,
+      "human_seconds": null,
+      "root": ".rsi/demos/artifact-a-final"
+    },
+    {
+      "goal_id": "goal_4a2f68abd85b4d80",
+      "revision": 2,
+      "state": "achieved",
+      "elapsed_seconds": 372.19475404173136,
+      "attempts": 1,
+      "token_usage": {
+        "complete": false,
+        "covered_trajectories": 2,
+        "limitation": "Uncommitted or interrupted sessions may have unreported usage",
+        "observed": {
+          "inputTokens": 11448,
+          "outputTokens": 2980,
+          "reasoningTokens": 303,
+          "totalTokens": 28764
+        },
+        "referenced_trajectories": 12
+      },
+      "cost": null,
+      "human_seconds": null,
+      "root": ".rsi/demos/artifact-a-final"
+    },
+    {
+      "goal_id": "goal_79d25640d6cc4c88",
+      "revision": 1,
+      "state": "paused",
+      "elapsed_seconds": 918.8663295507431,
+      "attempts": 2,
+      "token_usage": null,
+      "cost": null,
+      "human_seconds": null,
+      "root": ".rsi/demos/harness"
+    },
+    {
+      "goal_id": "goal_0a28303efe5148da",
+      "revision": 1,
+      "state": "failed",
+      "elapsed_seconds": 358.11056661605835,
+      "attempts": 2,
+      "token_usage": null,
+      "cost": null,
+      "human_seconds": null,
+      "root": ".rsi/demos/artifact-a"
+    },
+    {
+      "goal_id": "goal_713bd69120f74bcb",
+      "revision": 1,
+      "state": "failed",
+      "elapsed_seconds": 4615.149292483926,
+      "attempts": 2,
+      "token_usage": {
+        "complete": false,
+        "covered_trajectories": 212,
+        "limitation": "Uncommitted or interrupted sessions may have unreported usage",
+        "observed": {
+          "inputTokens": 1557169,
+          "outputTokens": 240141,
+          "reasoningTokens": 68011,
+          "totalTokens": 3445950
+        },
+        "referenced_trajectories": 212
+      },
+      "cost": null,
+      "human_seconds": null,
+      "root": ".rsi/demos/harness-final"
+    },
+    {
+      "goal_id": "goal_85681d618b2c4acb",
+      "revision": 1,
+      "state": "budget_exhausted",
+      "elapsed_seconds": 1803.6216776371002,
+      "attempts": 2,
+      "token_usage": null,
+      "cost": null,
+      "human_seconds": null,
+      "root": ".rsi/demos/artifact-a-followup"
+    },
+    {
+      "goal_id": "goal_e9ecea71fda34a78",
+      "revision": 1,
+      "state": "achieved",
+      "elapsed_seconds": 429.54762651771307,
+      "attempts": 1,
+      "token_usage": {
+        "complete": false,
+        "covered_trajectories": 2,
+        "limitation": "Uncommitted or interrupted sessions may have unreported usage",
+        "observed": {
+          "inputTokens": 18204,
+          "outputTokens": 3840,
+          "reasoningTokens": 507,
+          "totalTokens": 58396
+        },
+        "referenced_trajectories": 12
+      },
+      "cost": null,
+      "human_seconds": null,
+      "root": ".rsi/demos/reuse-final/pair-2-skill"
+    },
+    {
+      "goal_id": "goal_e261a8f2aa014896",
+      "revision": 1,
+      "state": "achieved",
+      "elapsed_seconds": 338.49620319902897,
+      "attempts": 1,
+      "token_usage": {
+        "complete": false,
+        "covered_trajectories": 2,
+        "limitation": "Uncommitted or interrupted sessions may have unreported usage",
+        "observed": {
+          "inputTokens": 11930,
+          "outputTokens": 3556,
+          "reasoningTokens": 401,
+          "totalTokens": 29310
+        },
+        "referenced_trajectories": 12
+      },
+      "cost": null,
+      "human_seconds": null,
+      "root": ".rsi/demos/reuse-final/pair-2-control"
+    },
+    {
+      "goal_id": "goal_d73049c896ce4590",
+      "revision": 1,
+      "state": "achieved",
+      "elapsed_seconds": 686.5930349454284,
+      "attempts": 1,
+      "token_usage": {
+        "complete": false,
+        "covered_trajectories": 2,
+        "limitation": "Uncommitted or interrupted sessions may have unreported usage",
+        "observed": {
+          "inputTokens": 22160,
+          "outputTokens": 6259,
+          "reasoningTokens": 629,
+          "totalTokens": 70403
+        },
+        "referenced_trajectories": 12
+      },
+      "cost": null,
+      "human_seconds": null,
+      "root": ".rsi/demos/reuse-final/pair-1-control"
+    },
+    {
+      "goal_id": "goal_c1fd0758fcab4f38",
+      "revision": 1,
+      "state": "achieved",
+      "elapsed_seconds": 476.8815653398633,
+      "attempts": 1,
+      "token_usage": {
+        "complete": false,
+        "covered_trajectories": 2,
+        "limitation": "Uncommitted or interrupted sessions may have unreported usage",
+        "observed": {
+          "inputTokens": 30983,
+          "outputTokens": 4300,
+          "reasoningTokens": 784,
+          "totalTokens": 78803
+        },
+        "referenced_trajectories": 12
+      },
+      "cost": null,
+      "human_seconds": null,
+      "root": ".rsi/demos/reuse-final/pair-1-skill"
+    },
+    {
+      "goal_id": "goal_949ca8d9fbd2465f",
+      "revision": 1,
+      "state": "achieved",
+      "elapsed_seconds": 824.520441621542,
+      "attempts": 2,
+      "token_usage": {
+        "complete": false,
+        "covered_trajectories": 2,
+        "limitation": "Uncommitted or interrupted sessions may have unreported usage",
+        "observed": {
+          "inputTokens": 18772,
+          "outputTokens": 7669,
+          "reasoningTokens": 617,
+          "totalTokens": 59209
+        },
+        "referenced_trajectories": 12
+      },
+      "cost": null,
+      "human_seconds": null,
+      "root": ".rsi/demos/reuse-final/pair-3-control"
+    },
+    {
+      "goal_id": "goal_377d2858163846f5",
+      "revision": 1,
+      "state": "achieved",
+      "elapsed_seconds": 1256.0124510526657,
+      "attempts": 1,
+      "token_usage": {
+        "complete": false,
+        "covered_trajectories": 4,
+        "limitation": "Uncommitted or interrupted sessions may have unreported usage",
+        "observed": {
+          "inputTokens": 41707,
+          "outputTokens": 16655,
+          "reasoningTokens": 1464,
+          "totalTokens": 140794
+        },
+        "referenced_trajectories": 18
+      },
+      "cost": null,
+      "human_seconds": null,
+      "root": ".rsi/demos/reuse-final/pair-3-skill"
+    },
+    {
+      "goal_id": "goal_8042545dcd79469d",
+      "revision": 1,
+      "state": "achieved",
+      "elapsed_seconds": 56.310074508190155,
+      "attempts": 2,
+      "token_usage": null,
+      "cost": null,
+      "human_seconds": null,
+      "root": ".rsi/demos/browser-dependency-recovery",
+      "classification": "fixed_artifact_dependency_recovery_integration_no_model_calls"
+    }
+  ],
+  "recorded_revision_seconds": 14429.413259349763,
+  "live_run_cost_included": false,
+  "all_formal_runs_terminal": true,
+  "skill_one_time": {
+    "failed_capture_seconds": 603.8067866116762,
+    "committed_file_recovery_seconds": 0.9907034412026405,
+    "native_resource_capability_probe_seconds": 49.65077418833971,
+    "scenario_validation_seconds": null,
+    "known_seconds_lower_bound": 654.4482642412186,
+    "fee": null,
+    "human_seconds": null
+  },
+  "reuse_production_seconds": {
+    "control": 1849.6096797659993,
+    "skill": 2162.441642910242
+  },
+  "reuse_total_skill_time_increase": 0.1691340430181032,
+  "time_cost_amortized_in_these_three_pairs": false,
+  "recorded_extra_skill_seconds_including_known_one_time_cost": 967.2802273854613,
+  "token_counter_limitation": "Observed counters are partial, may exclude failed uncommitted sessions, and input/output/total fields do not reconcile; not billable totals.",
+  "unknown_costs": [
+    "setup",
+    "unrecorded preflights",
+    "validation overhead without recorded durations",
+    "human time",
+    "unobservable fees"
+  ],
+  "overall_end_to_end_cost": null
+}

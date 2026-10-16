@@ -1,0 +1,333 @@
+{
+  "integration": {
+    "browser_panel_artifact": {
+      "passed": true,
+      "evidence": "examples/goals/results/artifact-panel-final.json"
+    },
+    "real_model_patch_replay": {
+      "artifact_digest": "sha256:4dcd7b9f3b1dd90a23a2f3926e9042ef2ea9ca409b45cac12bf58cad36c904fb",
+      "classification": "build_recovery_diagnostic_not_final_acceptance",
+      "passed": true,
+      "source_goal": "goal_4a2f68abd85b4d80",
+      "source_revision": 1
+    },
+    "runtime_skill_loading": {
+      "classification": "integration_only_not_efficiency_evidence",
+      "evidence": ".rsi/skill-preflight-nodelay/skill-integration-report.json"
+    },
+    "browser_panel_harness": {
+      "passed": true,
+      "evidence": "examples/goals/results/harness-panel-final.json"
+    },
+    "natural_language_clarification": {
+      "passed": true,
+      "evidence": "examples/goals/results/clarification-real.json",
+      "model": "gpt-6.1-sol",
+      "ready_but_not_confirmed_or_started": true
+    },
+    "worker_idempotency": {
+      "passed": true,
+      "evidence": "examples/goals/results/worker-idempotency.json"
+    },
+    "native_mcp_schema": {
+      "passed": true,
+      "evidence": "examples/goals/results/native-mcp-schema-verification.json",
+      "prior_failure_retained": ".rsi/demos/tui-clarification-real/schema-failure.json",
+      "server_constraints_retained": true
+    },
+    "goal_mcp_clarification": {
+      "passed": true,
+      "command": "uv run --extra browser pytest tests/test_rsi_mcp.py -k goal_tools",
+      "result": "1 passed, 4 deselected",
+      "state_after_two_tool_turns": "ready",
+      "worker_started": false
+    },
+    "native_tui_model_conversation": {
+      "passed": true,
+      "evidence": "examples/goals/results/native-tui-clarification.json",
+      "state": "ready",
+      "confirmed_at": null,
+      "run_id": null,
+      "model": "gpt-6.1-sol"
+    },
+    "browser_dependency_recovery": {
+      "passed": true,
+      "evidence": "examples/goals/results/browser-dependency-recovery.json",
+      "model_requests": 0
+    },
+    "a_derived_skill_resources": {
+      "passed": true,
+      "evidence": "examples/goals/results/a-derived-skill-resource-capability.json",
+      "classification": "separate_capability_check_not_production_efficiency"
+    },
+    "browser_panel_skill": {
+      "passed": true,
+      "evidence": "examples/goals/results/bookmarks-skill-panel-final.json",
+      "failed_preview_errors_recorded_separately": true
+    },
+    "run_lock_regression": {
+      "passed": true,
+      "evidence": "examples/goals/results/run-lock-regression.json"
+    },
+    "delivery_snapshots": {
+      "passed": true,
+      "evidence": "examples/goals/results/delivery-manifest-verification.json"
+    }
+  },
+  "limitations": [
+    "Mock training contracts do not verify real model training.",
+    "Passing unit tests does not establish real model effects.",
+    "The six-case Harness development preflight is not a final acceptance result."
+  ],
+  "offline": {
+    "credential_scan": {
+      "public_files_and_archived_members_checked": 282,
+      "leak_count": 0,
+      "machine_config_mode": "0o600",
+      "user_owned_nohup_out_excluded": true,
+      "files_with_matches": []
+    },
+    "mypy": {
+      "command": ".venv/bin/mypy src tests examples/goals/*.py",
+      "files": 98,
+      "passed": true
+    },
+    "pytest": {
+      "command": ".venv/bin/python -m pytest",
+      "passed": 201,
+      "skipped": 11,
+      "subtests_passed": 52,
+      "seconds": 185.74
+    },
+    "ruff": {
+      "command": ".venv/bin/ruff check src tests examples/goals/*.py",
+      "passed": true
+    },
+    "targeted_web_after_full_suite": {
+      "passed": 4,
+      "command": "uv run --extra browser pytest tests/test_web.py",
+      "reason": "Goal launch time projection and active execution axis excludes pause intervals"
+    },
+    "targeted_dsh_after_full_suite": {
+      "passed": 9,
+      "command": "uv run --extra browser pytest tests/test_dsh_entry.py"
+    },
+    "targeted_skill_capture_after_full_suite": {
+      "command": ".venv/bin/python -m pytest tests/test_goal_contracts.py",
+      "passed": 24,
+      "reason": "Model-written file manifest packaging and recovery path boundary"
+    },
+    "javascript_syntax": {
+      "passed": true
+    },
+    "lockfile": {
+      "command": "uv lock --check --offline",
+      "passed": true
+    },
+    "lock_failure_and_regression_evidence": "examples/goals/results/run-lock-regression.json"
+  },
+  "overall_status": "delivery_complete_effect_results_mixed",
+  "real_demos": {
+    "artifact": {
+      "effect_acceptance": "passed",
+      "goal_id": "goal_4a2f68abd85b4d80",
+      "prior_revision": "failed_build_context_bug_retained",
+      "revision": 2,
+      "root": ".rsi/demos/artifact-a-final",
+      "run_id": "run_864af556e3f64f29",
+      "solution_id": "solution_b47cd650d8594822",
+      "completed_iterations": 1,
+      "revision_seconds": 372.19475404173136,
+      "prior_revision_seconds": 2293.109241835773,
+      "all_development_and_recovery_costs_included": false,
+      "report": "examples/goals/results/artifact-final.json",
+      "limitations": [
+        "This successful revision elapsed time excludes earlier failed roots and implementation work; it is not end-to-end delivery efficiency.",
+        "Observed token counters are partial and input/output/total counters do not reconcile; exact token cost is unverified."
+      ]
+    },
+    "harness": {
+      "effect_acceptance": "failed_gain_below_frozen_threshold",
+      "goal_id": "goal_713bd69120f74bcb",
+      "revision": 1,
+      "root": ".rsi/demos/harness-final",
+      "run_id": "run_4b7922871afb4f52",
+      "completed_iterations": 1,
+      "baseline_validate_accuracy": 0.9,
+      "candidate_validate_accuracy": 0.9333333333333333,
+      "solution_id": "solution_4401643c7fa247e3",
+      "baseline_final_correct": 54,
+      "candidate_final_correct": 58,
+      "final_tasks": 60,
+      "baseline_final_accuracy": 0.9,
+      "candidate_final_accuracy": 0.9666666666666667,
+      "gain_percentage_points": 6.666666666666665,
+      "report": "examples/goals/results/harness-final.json",
+      "revision_seconds": 4615.149292483926,
+      "search_closed": true
+    },
+    "skill_reuse": {
+      "state": "completed_quality_passed_overall_efficiency_not_proven",
+      "user_priority": "low",
+      "capture_failure_seconds": 603.8067866116762,
+      "checkpoint_recovery_seconds": 0.9907034412026405,
+      "capture_report": "examples/goals/results/skill-capture-recovery.json",
+      "root": ".rsi/demos/reuse-final",
+      "skill_id": "evidence-guided-interactive-state-skill",
+      "version": "1.0.0",
+      "validation": "nine_synthetic_state_scenarios_passed",
+      "activation": "explicit_cli_under_delegated_user_task_authorization",
+      "completed_pairs": 3,
+      "completed_runs": [
+        {
+          "pair": 1,
+          "group": "control",
+          "state": "achieved",
+          "goal_id": "goal_d73049c896ce4590",
+          "root": "/storage/openpsi/users/fenghui/projects/AReaL-RSI/.rsi/demos/reuse-final/pair-1-control",
+          "seconds": 686.5930349454284,
+          "token_usage": {
+            "complete": false,
+            "covered_trajectories": 2,
+            "limitation": "Uncommitted or interrupted sessions may have unreported usage",
+            "observed": {
+              "inputTokens": 22160,
+              "outputTokens": 6259,
+              "reasoningTokens": 629,
+              "totalTokens": 70403
+            },
+            "referenced_trajectories": 12
+          },
+          "cost": null,
+          "attempts": 1,
+          "completed_iterations": 1
+        },
+        {
+          "pair": 1,
+          "group": "skill",
+          "state": "achieved",
+          "goal_id": "goal_c1fd0758fcab4f38",
+          "root": "/storage/openpsi/users/fenghui/projects/AReaL-RSI/.rsi/demos/reuse-final/pair-1-skill",
+          "seconds": 476.8815653398633,
+          "token_usage": {
+            "complete": false,
+            "covered_trajectories": 2,
+            "limitation": "Uncommitted or interrupted sessions may have unreported usage",
+            "observed": {
+              "inputTokens": 30983,
+              "outputTokens": 4300,
+              "reasoningTokens": 784,
+              "totalTokens": 78803
+            },
+            "referenced_trajectories": 12
+          },
+          "cost": null,
+          "attempts": 1,
+          "completed_iterations": 1
+        },
+        {
+          "pair": 2,
+          "group": "skill",
+          "state": "achieved",
+          "goal_id": "goal_e9ecea71fda34a78",
+          "root": "/storage/openpsi/users/fenghui/projects/AReaL-RSI/.rsi/demos/reuse-final/pair-2-skill",
+          "seconds": 429.54762651771307,
+          "token_usage": {
+            "complete": false,
+            "covered_trajectories": 2,
+            "limitation": "Uncommitted or interrupted sessions may have unreported usage",
+            "observed": {
+              "inputTokens": 18204,
+              "outputTokens": 3840,
+              "reasoningTokens": 507,
+              "totalTokens": 58396
+            },
+            "referenced_trajectories": 12
+          },
+          "cost": null,
+          "attempts": 1,
+          "completed_iterations": 1
+        },
+        {
+          "pair": 2,
+          "group": "control",
+          "state": "achieved",
+          "goal_id": "goal_e261a8f2aa014896",
+          "root": "/storage/openpsi/users/fenghui/projects/AReaL-RSI/.rsi/demos/reuse-final/pair-2-control",
+          "seconds": 338.49620319902897,
+          "token_usage": {
+            "complete": false,
+            "covered_trajectories": 2,
+            "limitation": "Uncommitted or interrupted sessions may have unreported usage",
+            "observed": {
+              "inputTokens": 11930,
+              "outputTokens": 3556,
+              "reasoningTokens": 401,
+              "totalTokens": 29310
+            },
+            "referenced_trajectories": 12
+          },
+          "cost": null,
+          "attempts": 1,
+          "completed_iterations": 1
+        },
+        {
+          "pair": 3,
+          "group": "control",
+          "state": "achieved",
+          "goal_id": "goal_949ca8d9fbd2465f",
+          "root": "/storage/openpsi/users/fenghui/projects/AReaL-RSI/.rsi/demos/reuse-final/pair-3-control",
+          "seconds": 824.520441621542,
+          "token_usage": {
+            "complete": false,
+            "covered_trajectories": 2,
+            "limitation": "Uncommitted or interrupted sessions may have unreported usage",
+            "observed": {
+              "inputTokens": 18772,
+              "outputTokens": 7669,
+              "reasoningTokens": 617,
+              "totalTokens": 59209
+            },
+            "referenced_trajectories": 12
+          },
+          "cost": null,
+          "attempts": 2,
+          "completed_iterations": 1
+        },
+        {
+          "pair": 3,
+          "group": "skill",
+          "state": "achieved",
+          "goal_id": "goal_377d2858163846f5",
+          "root": "/storage/openpsi/users/fenghui/projects/AReaL-RSI/.rsi/demos/reuse-final/pair-3-skill",
+          "seconds": 1256.0124510526657,
+          "token_usage": {
+            "complete": false,
+            "covered_trajectories": 4,
+            "limitation": "Uncommitted or interrupted sessions may have unreported usage",
+            "observed": {
+              "inputTokens": 41707,
+              "outputTokens": 16655,
+              "reasoningTokens": 1464,
+              "totalTokens": 140794
+            },
+            "referenced_trajectories": 18
+          },
+          "cost": null,
+          "attempts": 1,
+          "completed_iterations": 2
+        }
+      ],
+      "all_required_checks_passed": true,
+      "median_time_reduction": 0.3054378051216807,
+      "total_time_increase": 0.1691340430181032,
+      "efficiency_proven": false,
+      "report": "examples/goals/results/skill-reuse-analysis.json",
+      "capture_and_resource_capability_known_seconds": 654.4482642412186
+    }
+  },
+  "recorded_at": "2026-10-15T18:44:38.579690+00:00",
+  "remaining_audit": [],
+  "schema_version": 1,
+  "acceptance_audit": "examples/goals/acceptance-audit.json"
+}

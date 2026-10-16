@@ -1,0 +1,32 @@
+{
+  "implementation": "prepared_in_isolated_copy_not_applied_during_formal_runs",
+  "classification": "real_record_reaudit_not_new_model_evaluation",
+  "trajectories": [
+    {
+      "root": ".rsi/skill-preflight-nodelay",
+      "trajectory_id": "trajectory_c11dd38a55744c27",
+      "counts": {
+        "reads": 2,
+        "commands": 1,
+        "discovery": 2,
+        "entrypoints": 0,
+        "failed": 0,
+        "unverified": 0
+      },
+      "semantic_effect": "unknown"
+    },
+    {
+      "root": ".rsi/demos/reuse-final/pair-1-skill",
+      "trajectory_id": "trajectory_ed0fd8e770bc412b",
+      "counts": {
+        "reads": 0,
+        "commands": 0,
+        "discovery": 1,
+        "entrypoints": 0,
+        "failed": 0,
+        "unverified": 0
+      },
+      "semantic_effect": "unknown"
+    }
+  ]
+}

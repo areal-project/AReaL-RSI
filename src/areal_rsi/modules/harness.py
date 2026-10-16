@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -76,12 +77,15 @@ class LocalHarnessBuilder:
             patch = await self.content.read_bytes(change.patch)
             if not patch.strip():
                 raise ValueError("拒绝空 patch")
+            env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+            env["GIT_CEILING_DIRECTORIES"] = str(directory.parent.resolve())
             # git apply 校验路径穿越并在全部 hunk 合法后应用；不修改用户 checkout。
             check = await asyncio.to_thread(
                 subprocess.run,
                 ["git", "apply", "--no-index", "--check", "-"],
                 input=patch,
                 cwd=directory,
+                env=env,
                 capture_output=True,
             )
             if check.returncode:
@@ -91,6 +95,7 @@ class LocalHarnessBuilder:
                 ["git", "apply", "--no-index", "-"],
                 input=patch,
                 cwd=directory,
+                env=env,
                 capture_output=True,
             )
             if applied.returncode:
@@ -200,7 +205,14 @@ class LocalHarnessRuntime:
                 tuple(servers),
             )
             session = await self.runtime.open(spec, workspace_root=str(workspace))
-            response = await session.send(message)
+            execution_status = "completed"
+            try:
+                response = await session.send(message)
+            except TimeoutError:
+                # A completed timeout observation is a task failure, with its committed trace.
+                # Transport/configuration failures still propagate as infrastructure errors.
+                response = ""
+                execution_status = "timeout"
         finally:
             try:
                 if session is not None:
@@ -215,5 +227,6 @@ class LocalHarnessRuntime:
             "model_version_id": solution.model.version_id,
             "harness_digest": solution.harness.content.digest,
             "response": response,
+            "execution_status": execution_status,
         }
         return TaskResult(await self.content.put_json(output), ref)

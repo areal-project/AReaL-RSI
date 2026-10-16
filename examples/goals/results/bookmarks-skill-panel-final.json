@@ -1,0 +1,59 @@
+{
+  "passed": true,
+  "root": ".rsi/demos/reuse-final/pair-3-skill",
+  "run_id": "run_e1f08c4b5f4b4d7e",
+  "goal_state": "achieved",
+  "goal_outcome_matches_state": true,
+  "independent_acceptance_passed": true,
+  "chart_axis_toggle": true,
+  "final_time_within_rendered_axis": true,
+  "skill_evidence": [
+    {
+      "trajectory_id": "trajectory_f78cb79534894fe1",
+      "configured": [
+        "sha256:f3764a79941fab9654b93ddf0e3c9e2cab25e0494add517a7a66b90c4677830d"
+      ],
+      "loaded": 1,
+      "resources": 0,
+      "resource_reads": 0,
+      "resource_commands": 0,
+      "resource_discovery": 0,
+      "resource_failures": 0,
+      "resource_unverified": 0,
+      "semantic_effect": "unknown"
+    },
+    {
+      "trajectory_id": "trajectory_4251b9a004194235",
+      "configured": [
+        "sha256:f3764a79941fab9654b93ddf0e3c9e2cab25e0494add517a7a66b90c4677830d"
+      ],
+      "loaded": 1,
+      "resources": 0,
+      "resource_reads": 0,
+      "resource_commands": 0,
+      "resource_discovery": 1,
+      "resource_failures": 0,
+      "resource_unverified": 0,
+      "semantic_effect": "unknown"
+    }
+  ],
+  "skill_lifecycle_records": 0,
+  "skill_reuse_reports": 0,
+  "page_errors": [],
+  "preview_errors": [
+    {
+      "origin": "http://127.0.0.1:34129",
+      "message": "SyntaxError: Invalid left-hand side in assignment"
+    },
+    {
+      "origin": "http://127.0.0.1:34129",
+      "message": "SyntaxError: Invalid left-hand side in assignment"
+    }
+  ],
+  "unattributed_errors": [],
+  "all_pageerror_events": [
+    "Invalid left-hand side in assignment",
+    "Invalid left-hand side in assignment"
+  ],
+  "screenshot": "examples/goals/results/bookmarks-skill-panel-final.png"
+}

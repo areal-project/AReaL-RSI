@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bookmarks</title>
+<style>
+:root{color-scheme:light;--ink:#172033;--muted:#667085;--line:#d9dee8;--accent:#315efb;--soft:#f5f7fb;--danger:#b42318}
+*{box-sizing:border-box}body{margin:0;background:#f7f8fc;color:var(--ink);font:16px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}main{width:min(100% - 24px,1000px);margin:0 auto;padding:28px 0 48px}h1{margin:0 0 6px;font-size:clamp(1.7rem,4vw,2.35rem)}.subtitle{margin:0 0 24px;color:var(--muted)}.panel,.item{background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:0 3px 12px #1720330b}.panel{padding:18px;margin-bottom:18px}.form{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.25fr) auto;gap:12px;align-items:end}.field{display:flex;flex-direction:column;gap:6px}label{font-weight:650;font-size:.9rem}input[type=text],input[type=url]{width:100%;min-height:42px;border:1px solid #b8c0cf;border-radius:8px;padding:8px 11px;font:inherit;color:inherit;background:#fff}input:focus,button:focus-visible,a:focus-visible{outline:3px solid #b9c7ff;outline-offset:2px}button{min-height:42px;min-width:76px;padding:8px 14px;border:1px solid #b8c0cf;border-radius:8px;background:#fff;color:var(--ink);font:inherit;font-weight:650;cursor:pointer}button:hover{background:#f0f3f9}.primary{background:var(--accent);border-color:var(--accent);color:#fff}.primary:hover{background:#254bd0}.message{min-height:22px;margin:10px 0 0;color:var(--danger);font-size:.92rem}.filters{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px}.filters button[aria-pressed=true]{background:#e6ebff;border-color:#9aabff;color:#173aa8}.list{display:flex;flex-direction:column;gap:12px}.item{padding:14px;display:flex;gap:12px;align-items:flex-start;min-width:0}.check{width:24px;height:24px;min-width:24px;margin:3px 0 0;accent-color:var(--accent);cursor:pointer}.item-body{min-width:0;flex:1}.title-link{color:var(--ink);font-weight:650;overflow-wrap:anywhere;word-break:break-word}.title-link.starred{text-decoration:line-through;color:var(--muted)}.url-text{color:var(--muted);font-size:.86rem;overflow-wrap:anywhere;word-break:break-word;margin-top:3px}.actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}.actions button{min-width:64px}.danger{color:var(--danger)}.editbox{display:flex;gap:8px;flex-wrap:wrap}.editbox input{flex:1 1 220px;min-width:0}.empty{padding:30px 14px;text-align:center;color:var(--muted);border:1px dashed var(--line);border-radius:12px;background:#fff}@media(max-width:620px){main{width:min(100% - 16px,1000px);padding-top:18px}.form{grid-template-columns:1fr}.form button{width:100%}.item{padding:12px;gap:9px}.actions{width:100%;justify-content:flex-start}.actions button{flex:1 1 70px}.item{flex-wrap:wrap}.item-body{flex-basis:calc(100% - 38px)}}
+</style>
+</head>
+<body>
+<main>
+<h1>Bookmarks</h1><p class="subtitle">Keep useful links close at hand.</p>
+<section class="panel" aria-label="Add bookmark">
+<form id="bookmark-form" class="form" novalidate>
+<div class="field"><label for="title-input">Title</label><input id="title-input" data-testid="title-input" type="text" autocomplete="off" required></div>
+<div class="field"><label for="url-input">URL</label><input id="url-input" data-testid="url-input" type="url" inputmode="url" placeholder="https://example.com" autocomplete="off" required></div>
+<button class="primary" data-testid="add" type="submit">Add</button>
+</form><div id="message" class="message" role="status" aria-live="polite"></div>
+</section>
+<nav class="filters" aria-label="Bookmark filters"><button type="button" data-testid="filter-all" data-filter="all" aria-pressed="true">All</button><button type="button" data-testid="filter-active" data-filter="active" aria-pressed="false">Active</button><button type="button" data-testid="filter-completed" data-filter="completed" aria-pressed="false">Completed</button></nav>
+<section id="list" class="list" aria-live="polite"></section>
+</main>
+<script>
+(function(){
+  const KEY='bookmark-app:v1';
+  let state={items:[],filter:'all',editing:null};
+  const form=document.getElementById('bookmark-form'), titleInput=document.getElementById('title-input'), urlInput=document.getElementById('url-input'), list=document.getElementById('list'), message=document.getElementById('message');
+  function validUrl(value){try{const u=new URL(value.trim());return (u.protocol==='http:'||u.protocol==='https:')&&!!u.hostname}catch(e){return false}}
+  function load(){try{const raw=localStorage.getItem(KEY);const data=JSON.parse(raw||'null');if(data&&Array.isArray(data.items)){state.items=data.items.filter(x=>x&&typeof x.id==='string'&&typeof x.title==='string'&&typeof x.url==='string'&&validUrl(x.url)&&typeof x.starred==='boolean')}}catch(e){state.items=[]}}
+  function save(){try{localStorage.setItem(KEY,JSON.stringify({items:state.items}))}catch(e){}}
+  function say(text){message.textContent=text}
+  function make(tag,props,children){const el=document.createElement(tag);if(props)Object.keys(props).forEach(k=>{if(k==='text')el.textContent=props[k];else if(k==='class')el.className=props[k];else el.setAttribute(k,props[k])});(children||[]).forEach(c=>el.appendChild(c));return el}
+  function visible(){return state.items.filter(x=>state.filter==='all'||(state.filter==='completed'?x.starred:!x.starred))}
+  function render(){
+    document.querySelectorAll('[data-filter]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.filter===state.filter)));
+    list.replaceChildren(); const rows=visible();
+    if(!rows.length){list.appendChild(make('div',{class:'empty',text:state.items.length?'No bookmarks in this filter.':'No bookmarks yet.'}));return}
+    rows.forEach(item=>{const row=make('article',{'data-testid':'item',class:'item'});const toggle=make('input',{'data-testid':'toggle',type:'checkbox',class:'check',ariaLabel:item.starred?'Unstar bookmark':'Star bookmark'});toggle.checked=item.starred;toggle.addEventListener('change',()=>{item.starred=toggle.checked;save();render()});row.appendChild(toggle);
+      const body=make('div',{class:'item-body'});
+      const a=make('a',{class:'title-link'+(item.starred?' starred':''),href:item.url,target:'_blank',rel:'noopener noreferrer',text:item.title});body.appendChild(a);body.appendChild(make('div',{class:'url-text',text:item.url}));
+      if(state.editing===item.id){const box=make('div',{class:'editbox'});const edit=make('input',{'data-testid':'edit-input',type:'text',value:item.title,ariaLabel:'Edit title'});const saveBtn=make('button',{'data-testid':'save',type:'button',text:'Save'});saveBtn.addEventListener('click',()=>{const next=edit.value.trim();if(!next){say('Title cannot be empty.');edit.focus();return}item.title=next;state.editing=null;say('');save();render()});box.append(edit,saveBtn);body.appendChild(box);setTimeout(()=>edit.focus(),0)}
+      row.appendChild(body);const actions=make('div',{class:'actions'});if(state.editing!==item.id){const editBtn=make('button',{'data-testid':'edit',type:'button',text:'Edit'});editBtn.addEventListener('click',()=>{state.editing=item.id;say('');render()});actions.appendChild(editBtn)}const del=make('button',{'data-testid':'delete',type:'button',class:'danger',text:'Delete'});del.addEventListener('click',()=>{state.items=state.items.filter(x=>x.id!==item.id);if(state.editing===item.id)state.editing=null;save();render()});actions.appendChild(del);row.appendChild(actions);list.appendChild(row)});
+  }
+  form.addEventListener('submit',e=>{e.preventDefault();const title=titleInput.value.trim(), url=urlInput.value.trim();if(!title){say('Title cannot be empty.');titleInput.focus();return}if(!validUrl(url)){say('Enter a valid absolute http or https URL.');urlInput.focus();return}state.items.push({id:(crypto.randomUUID?crypto.randomUUID():String(Date.now())+Math.random()),title,url,starred:false});save();form.reset();say('');render();titleInput.focus()});
+  document.querySelectorAll('[data-filter]').forEach(b=>b.addEventListener('click',()=>{state.filter=b.dataset.filter;state.editing=null;render()}));
+  load();render();
+})();
+</script>
+</body>
+</html>

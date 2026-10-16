@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import json
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from areal_rsi.api.base import (
+    ArtifactChange,
     BenchmarkSplit,
     ContentRef,
     EvaluationReport,
@@ -21,13 +24,22 @@ from areal_rsi.api.base import (
     ResearchIteration,
     RunState,
     SolutionVersion,
+    Task,
     TaskResult,
     TrajectoryRef,
     VerificationRequest,
     VerificationResult,
 )
+from areal_rsi.api.goal import (
+    AcceptanceSpec,
+    IterationEvidence,
+    ResearcherSpec,
+    accepts,
+    comparison_metrics,
+)
 from areal_rsi.api.workflow import ResearchAgent, WorkflowContext
 from areal_rsi.base.storage import FileRecords, decode, encode, now, safe_name, write_json
+from areal_rsi.config import ModelConfigurationError
 from areal_rsi.framework.verifier import VerifierExecutor
 
 PRUNED = "RSI Agent 已停止此研究线"
@@ -44,6 +56,12 @@ class HarnessEvolutionWorkflow:
         self.folder = root / safe_name(run.run_id)
         path = self.folder / "progress.json"
         self.progress: dict[str, Any] = json.loads(path.read_text()) if path.exists() else {}
+        baseline_path = self.folder / "baseline/validate/evaluation.json"
+        self.development_baseline: EvaluationReport | None = (
+            decode(EvaluationReport, json.loads(baseline_path.read_text())["report"])
+            if baseline_path.exists()
+            else None
+        )
 
     def save(self) -> None:
         self.records.save(self.state.run_id, self.state, immutable=False)
@@ -62,6 +80,7 @@ class HarnessEvolutionWorkflow:
         # 扩展工作流只替换版本构建与校验，复用下面的检查点和多研究线编排。
         assert ctx.harness_builder is not None and isinstance(change, HarnessChange)
         content = await ctx.harness_builder.build(current.harness, change)
+        await self.validate_paths(ctx, current.harness.content, content)
         harness = await ctx.versions.create_harness(
             current.harness.name, content, parent_version_id=current.harness.version_id
         )
@@ -72,6 +91,26 @@ class HarnessEvolutionWorkflow:
             parent_solution_id=current.solution_id,
         )
 
+    async def validate_paths(
+        self, ctx: WorkflowContext, before: ContentRef | None, after: ContentRef
+    ) -> None:
+        allowed = self.state.plan.config.get("allowed_paths")
+        if not isinstance(allowed, list):
+            return
+        old = json.loads(await ctx.content_store.read_text(before))["files"] if before else {}
+        new = json.loads(await ctx.content_store.read_text(after))["files"]
+        changed = {p for p in set(old) | set(new) if old.get(p) != new.get(p)}
+        if any(
+            not any(
+                isinstance(pattern, str)
+                and fnmatch.fnmatchcase(p, pattern)
+                and ("**" in pattern or len(p.split("/")) == len(pattern.split("/")))
+                for pattern in allowed
+            )
+            for p in changed
+        ):
+            raise ValueError("Candidate modifies files outside the confirmed Goal scope")
+
     def _validate_candidate(
         self,
         candidate: SolutionVersion,
@@ -79,8 +118,18 @@ class HarnessEvolutionWorkflow:
         baseline: SolutionVersion,
         change: ResearchChange,
     ) -> None:
-        if candidate.model != baseline.model or candidate.parent_solution_id != current.solution_id:
+        if (
+            candidate.model != baseline.model
+            or candidate.artifacts != baseline.artifacts
+            or candidate.parent_solution_id != current.solution_id
+        ):
             raise ValueError("Harness 实验禁止改变模型或丢失父版本关系")
+
+    def check_budget(self, ctx: WorkflowContext) -> None:
+        if ctx.stop_requested is not None and ctx.stop_requested():
+            raise asyncio.CancelledError("Goal stop requested")
+        if ctx.remaining_seconds is not None and ctx.remaining_seconds() <= 0:
+            raise TimeoutError("Goal execution time budget exhausted")
 
     async def evaluate(
         self,
@@ -91,6 +140,7 @@ class HarnessEvolutionWorkflow:
         *,
         agent_id: str = "baseline",
     ) -> tuple[EvaluationReport, ContentRef]:
+        self.check_budget(ctx)
         tasks = await ctx.benchmark.list_tasks(split)
         if not tasks or len({t.task_id for t in tasks}) != len(tasks):
             raise ValueError("Benchmark 必须返回非空、无重复的任务集合")
@@ -99,6 +149,11 @@ class HarnessEvolutionWorkflow:
             "solution_id": solution.solution_id,
             "split": split.value,
             "tasks": encode(tasks),
+            "solution": encode(solution),
+            "verifier": encode(ctx.verifier_spec),
+            "runtime": self.state.plan.config.get("runtime_config_digest"),
+            "researcher": self.state.plan.config.get("researcher"),
+            "goal_revision": self.state.plan.config.get("goal_revision"),
         }
         identity = folder / "identity.json"
         if identity.exists() and json.loads(identity.read_text()) != signature:
@@ -113,60 +168,93 @@ class HarnessEvolutionWorkflow:
             return report, decode(ContentRef, cached["trajectories"])
         results: list[VerificationResult] = []
         refs: list[TrajectoryRef] = []
-        for index, task in enumerate(tasks, 1):
-            self.update_progress(
-                agent_id,
-                phase=f"evaluate_{split.value}",
-                task=index,
-                task_count=len(tasks),
-                solution_id=solution.solution_id,
-            )
-            self.emit(
-                f"[{agent_id}] 评测 {split.value} {index}/{len(tasks)} · {solution.solution_id}"
-            )
-            checkpoint = folder / f"task-{index}.json"
-            if checkpoint.exists():
-                cached_task = json.loads(checkpoint.read_text())
-                if cached_task["task"] != encode(task):
-                    raise ValueError("任务缓存身份不匹配")
-                task_result = decode(TaskResult, cached_task["result"])
-                verification = decode(VerificationResult, cached_task["verification"])
-                if (
-                    verification.task_id != task.task_id
-                    or verification.trajectory_id != task_result.trajectory.trajectory_id
-                ):
-                    raise ValueError("任务缓存轨迹身份不匹配")
-            else:
-                # 给远端实现稳定的幂等键，进程重启不重新提交同一次任务。
-                task_result = await ctx.harness_runtime.run(
-                    solution,
-                    task,
-                    config={
-                        "execution_key": (
-                            f"{self.state.run_id}/{folder.relative_to(self.folder)}/{task.task_id}"
+        semaphore = asyncio.Semaphore(ctx.evaluation_concurrency)
+
+        async def evaluate_task(index: int, task: Task) -> tuple[VerificationResult, TrajectoryRef]:
+            async with semaphore:
+                self.check_budget(ctx)
+                self.update_progress(
+                    agent_id,
+                    phase=f"evaluate_{split.value}",
+                    task=index,
+                    task_count=len(tasks),
+                    solution_id=solution.solution_id,
+                )
+                self.emit(
+                    f"[{agent_id}] 评测 {split.value} {index}/{len(tasks)} · {solution.solution_id}"
+                )
+                checkpoint = folder / f"task-{index}.json"
+                if checkpoint.exists():
+                    cached_task = json.loads(checkpoint.read_text())
+                    if cached_task["task"] != encode(task):
+                        raise ValueError("任务缓存身份不匹配")
+                    task_result = decode(TaskResult, cached_task["result"])
+                    verification = decode(VerificationResult, cached_task["verification"])
+                    if (
+                        verification.task_id != task.task_id
+                        or verification.trajectory_id != task_result.trajectory.trajectory_id
+                    ):
+                        raise ValueError("任务缓存轨迹身份不匹配")
+                else:
+                    # 给远端实现稳定的幂等键，进程重启不重新提交同一次任务。
+                    task_result = await ctx.harness_runtime.run(
+                        solution,
+                        task,
+                        config={
+                            "execution_key": (
+                                f"{self.state.run_id}/{folder.relative_to(self.folder)}/{task.task_id}"
+                            ),
+                        },
+                    )
+                    verification = await VerifierExecutor().verify(
+                        ctx.verifier,
+                        VerificationRequest(
+                            task=task,
+                            solution=solution,
+                            result=task_result,
+                            verifier=ctx.verifier_spec,
                         ),
-                    },
-                )
-                verification = await VerifierExecutor().verify(
-                    ctx.verifier,
-                    VerificationRequest(
-                        task=task,
-                        solution=solution,
-                        result=task_result,
-                        verifier=ctx.verifier_spec,
-                    ),
-                )
-                write_json(
-                    checkpoint,
-                    {"task": task, "result": task_result, "verification": verification},
-                    immutable=True,
-                )
-            results.append(verification)
-            refs.append(task_result.trajectory)
+                    )
+                    write_json(
+                        checkpoint,
+                        {"task": task, "result": task_result, "verification": verification},
+                        immutable=True,
+                    )
+                return verification, task_result.trajectory
+
+        pending = [
+            asyncio.create_task(evaluate_task(index, task)) for index, task in enumerate(tasks, 1)
+        ]
+        try:
+            outcomes = await asyncio.gather(*pending)
+        except BaseException:
+            for task_future in pending:
+                task_future.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            raise
+        results = [value[0] for value in outcomes]
+        refs = [value[1] for value in outcomes]
         report = await ctx.evaluation.evaluate(solution, split, results)
         bundle = await ctx.trajectories.bundle(refs)
         write_json(completed, {"report": report, "trajectories": bundle}, immutable=True)
         return report, bundle
+
+    def development_passed(self, report: EvaluationReport) -> bool:
+        contract = self.state.plan.config.get("acceptance")
+        if isinstance(contract, dict):
+            spec = decode(AcceptanceSpec, contract)
+            if any(item.metric.startswith("gain_") for item in spec.metrics):
+                if self.development_baseline is None:
+                    return False
+                # Search uses only VALIDATE aggregates; independent FINAL stays sealed.
+                return accepts(
+                    spec, comparison_metrics(self.development_baseline, report), final=True
+                )
+            return accepts(spec, {**report.metrics, "score": report.score})
+        return report.passed
+
+    def rank(self, report: EvaluationReport) -> tuple[bool, bool, float]:
+        return self.development_passed(report), report.passed, report.score
 
     async def step(
         self,
@@ -192,7 +280,17 @@ class HarnessEvolutionWorkflow:
             current = await ctx.versions.get_solution(current_id)
             if current is None:
                 raise ValueError("恢复版本不存在")
-            started = now()
+            start_path = folder / "started.json"
+            if start_path.exists():
+                started = json.loads(start_path.read_text())["started_at"]
+            else:
+                earlier = folder / "train/identity.json"
+                started = (
+                    datetime.fromtimestamp(earlier.stat().st_mtime, UTC).isoformat()
+                    if earlier.exists()
+                    else now()
+                )
+                write_json(start_path, {"started_at": started}, immutable=True)
             self.update_progress(
                 agent.agent_id, iteration=iteration, phase="research", input_solution_id=current_id
             )
@@ -204,6 +302,7 @@ class HarnessEvolutionWorkflow:
                 change = decode(self._change_type, json.loads(change_path.read_text()))
             else:
                 self.update_progress(agent.agent_id, phase="propose")
+                self.check_budget(ctx)
                 change = await researcher.propose(
                     self.state.plan.goal, self.state.plan.target, current, train_report, bundle
                 )
@@ -211,12 +310,14 @@ class HarnessEvolutionWorkflow:
                     label = self._change_type.__name__.removesuffix("Change")
                     raise ValueError(f"ResearchAgent 返回了非 {label} 修改")
                 write_json(change_path, change, immutable=True)
+            proposal_trajectory = getattr(researcher, "last_trajectory", None)
             self.update_progress(agent.agent_id, phase="build", reason=change.reason)
             self.emit(f"[{agent.agent_id}] 第 {iteration} 轮改进依据：{change.reason}")
             candidate_path = folder / "candidate.json"
             if candidate_path.exists():
                 candidate = decode(SolutionVersion, json.loads(candidate_path.read_text()))
             else:
+                self.check_budget(ctx)
                 candidate = await self._build_candidate(ctx, current, change)
                 write_json(candidate_path, candidate, immutable=True)
             self._validate_candidate(candidate, current, baseline, change)
@@ -233,12 +334,24 @@ class HarnessEvolutionWorkflow:
             if selection_path.exists():
                 selected = json.loads(selection_path.read_text())["next_solution_id"]
             else:
+                self.check_budget(ctx)
                 selected = await researcher.select(current_id, tuple(candidates))
                 if selected is not None and selected not in {r.solution_id for r in candidates}:
                     raise ValueError("ResearchAgent 选择了其他研究线或未评测版本")
-                write_json(selection_path, {"next_solution_id": selected}, immutable=True)
+                write_json(
+                    selection_path,
+                    {
+                        "next_solution_id": selected,
+                        "reason": getattr(researcher, "last_selection_reason", "aggregate ranking"),
+                        "trajectory_id": getattr(researcher, "last_trajectory", None),
+                    },
+                    immutable=True,
+                )
             if selected is not None and selected not in {r.solution_id for r in candidates}:
                 raise ValueError("ResearchAgent 选择了其他研究线或未评测版本")
+            policy_continued = selected is None and bool(self.state.plan.config.get("acceptance"))
+            if policy_continued:
+                selected = max(candidates, key=self.rank).solution_id
             record = ResearchIteration(
                 iteration,
                 current_id,
@@ -250,19 +363,61 @@ class HarnessEvolutionWorkflow:
                 selected,
                 started,
                 now(),
+                selection_reason=(
+                    json.loads(selection_path.read_text()).get("reason", "historical selection")
+                    + (
+                        "; Workflow continued the best evaluated version "
+                        "because Goal acceptance is pending"
+                        if policy_continued
+                        else ""
+                    )
+                ),
+                proposal_trajectory_id=proposal_trajectory,
+                selection_trajectory_id=json.loads(selection_path.read_text()).get("trajectory_id"),
+                skill_usage={"configured": self.state.plan.config.get("researcher")},
             )
             write_json(completed, record, immutable=True)
+        goal_id = self.state.plan.config.get("goal_id")
+        revision = self.state.plan.config.get("goal_revision")
+        researcher_binding = self.state.plan.config.get("researcher")
+        if (
+            isinstance(goal_id, str)
+            and type(revision) is int
+            and isinstance(researcher_binding, dict)
+            and isinstance(record.change, (HarnessChange, ArtifactChange))
+        ):
+            binding = decode(ResearcherSpec, researcher_binding)
+            evidence = IterationEvidence(
+                goal_id,
+                revision,
+                self.state.run_id,
+                record.iteration,
+                agent.agent_id,
+                record.input_solution_id,
+                record.candidate_solution_id,
+                record.next_solution_id,
+                record.change.patch,
+                ctx.verifier_spec.digest,
+                record.selection_reason,
+                binding.skills,
+                record.started_at,
+                record.finished_at,
+            )
+            write_json(folder / "evidence.json", evidence, immutable=True)
         agent.iterations = (*agent.iterations, record)
         candidates = [
             baseline_report,
             *(i.validation_report for a in self.state.research_agents for i in a.iterations),
         ]
         # 稳定顺序决定平局，异步完成顺序不会改变最终 best。
-        self.state.best_solution_id = max(candidates, key=lambda r: (r.passed, r.score)).solution_id
+        self.state.best_solution_id = max(candidates, key=self.rank).solution_id
         if (
-            record.next_solution_id is None
+            (record.next_solution_id is None and not self.state.plan.config.get("acceptance"))
             or iteration >= self.state.plan.max_iterations
-            or (self.state.plan.stop_when_goal_reached and record.validation_report.passed)
+            or (
+                self.state.plan.stop_when_goal_reached
+                and self.development_passed(record.validation_report)
+            )
         ):
             agent.state = RunState.SUCCEEDED
         self.update_progress(
@@ -304,8 +459,22 @@ class HarnessEvolutionWorkflow:
         baseline_report, _ = await self.evaluate(
             context, baseline, BenchmarkSplit.VALIDATE, self.folder / "baseline" / "validate"
         )
+        self.development_baseline = baseline_report
         self.update_progress("baseline", phase="completed", score=baseline_report.score)
         while active := [a for a in self.state.research_agents if a.state == RunState.RUNNING]:
+            if plan.config.get("acceptance") and plan.stop_when_goal_reached:
+                reports = [
+                    baseline_report,
+                    *(
+                        i.validation_report
+                        for a in self.state.research_agents
+                        for i in a.iterations
+                    ),
+                ]
+                accepted = [r for r in reports if self.development_passed(r)]
+                if accepted:
+                    self.state.best_solution_id = max(accepted, key=lambda r: r.score).solution_id
+                    break
             work = [
                 asyncio.create_task(
                     self.step(context, researchers[a.agent_id], a, baseline, baseline_report)
@@ -325,6 +494,11 @@ class HarnessEvolutionWorkflow:
                     agent.error = f"{type(outcome).__name__}: {outcome}"
                     self.update_progress(agent.agent_id, phase="failed", error=agent.error)
             self.save()
+            for outcome in outcomes:
+                if plan.config.get("goal_id") and isinstance(
+                    outcome, (FileNotFoundError, PermissionError, ModelConfigurationError)
+                ):
+                    raise outcome
             remaining = {
                 a.agent_id for a in self.state.research_agents if a.state == RunState.RUNNING
             }
@@ -334,6 +508,13 @@ class HarnessEvolutionWorkflow:
                 stopped = set(await context.rsi_agent.prune(snapshot))
                 if not stopped <= remaining:
                     raise ValueError("剪枝只能选择仍在运行的研究线")
+                if plan.config.get("acceptance") and stopped == remaining:
+                    # Goal mode must keep exploring while acceptance is unmet and iterations remain.
+                    continuing = max(
+                        (a for a in self.state.research_agents if a.agent_id in remaining),
+                        key=lambda a: (a.iterations[-1].validation_report.score, a.agent_id),
+                    )
+                    stopped.discard(continuing.agent_id)
                 for agent in self.state.research_agents:
                     if agent.agent_id in stopped:
                         agent.state, agent.error = RunState.CANCELLED, PRUNED

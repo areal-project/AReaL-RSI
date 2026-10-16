@@ -1,0 +1,18 @@
+{
+  "passed": true,
+  "root": ".rsi/demos/artifact-a-final",
+  "run_id": "run_864af556e3f64f29",
+  "goal_state": "achieved",
+  "goal_outcome_matches_state": true,
+  "independent_acceptance_passed": true,
+  "chart_axis_toggle": true,
+  "final_time_within_rendered_axis": true,
+  "skill_evidence": [],
+  "skill_lifecycle_records": 1,
+  "skill_reuse_reports": 1,
+  "page_errors": [],
+  "preview_errors": [],
+  "unattributed_errors": [],
+  "all_pageerror_events": [],
+  "screenshot": "examples/goals/results/artifact-panel-final.png"
+}

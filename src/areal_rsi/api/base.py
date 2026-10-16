@@ -23,6 +23,7 @@ class EvolutionTarget(StrEnum):
 class BenchmarkSplit(StrEnum):
     TRAIN = "train"
     VALIDATE = "validate"
+    FINAL = "final"
 
 
 class RunState(StrEnum):
@@ -371,6 +372,10 @@ class ResearchIteration:
     next_solution_id: str | None
     started_at: str
     finished_at: str
+    selection_reason: str = "historical record: selection reason not recorded"
+    proposal_trajectory_id: str | None = None
+    selection_trajectory_id: str | None = None
+    skill_usage: JsonObject = field(default_factory=dict)
 
 
 @dataclass(slots=True)

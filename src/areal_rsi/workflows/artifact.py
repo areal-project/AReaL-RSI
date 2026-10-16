@@ -37,8 +37,12 @@ class ArtifactEvolutionWorkflow(HarnessEvolutionWorkflow):
         assert ctx.artifact_builder is not None and isinstance(change, ArtifactChange)
         if not change.artifact_name.strip():
             raise ValueError("Artifact 修改必须指定非空产物名称")
+        target_name = self.state.plan.config.get("artifact_name")
+        if target_name is not None and target_name != change.artifact_name:
+            raise ValueError("Only the confirmed target Artifact may change")
         base = self._artifacts(current).get(change.artifact_name)
         content = await ctx.artifact_builder.build(base, change)
+        await self.validate_paths(ctx, base.content if base else None, content)
         artifact = await ctx.versions.create_artifact(
             change.artifact_name,
             content,

@@ -64,7 +64,7 @@ def load_user_config() -> None:
     for key, value in raw.items():
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
             raise ModelConfigurationError("config.json 字段名必须为合法环境变量名。")
-        if key == "RSI_AGENT_MODELS" and isinstance(value, dict):
+        if key in {"RSI_AGENT_MODELS", "RSI_RESEARCH_SKILLS"} and isinstance(value, dict):
             values[key] = json.dumps(value, ensure_ascii=False)
         elif isinstance(value, str):
             values[key] = value
@@ -72,7 +72,8 @@ def load_user_config() -> None:
             values[key] = str(value)
         else:
             raise ModelConfigurationError(
-                "config.json 配置值必须为字符串或数字；RSI_AGENT_MODELS 可使用 JSON 对象。"
+                "config.json 配置值必须为字符串或数字；"
+                "RSI_AGENT_MODELS、RSI_RESEARCH_SKILLS 可使用 JSON 对象。"
             )
     # 完整验证后再更新，避免无效文件造成部分配置生效。
     for key, value in values.items():

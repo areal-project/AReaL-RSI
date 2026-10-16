@@ -9,6 +9,7 @@ from typing import Annotated, Any
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
+from mcp.types import Tool as MCPTool
 from mcp.types import ToolAnnotations
 from pydantic import Field, StrictBool
 
@@ -18,6 +19,55 @@ from areal_rsi.ui.experiments import ExperimentController
 Goal = Annotated[str, Field(strict=True, min_length=1, max_length=4000)]
 Iterations = Annotated[int, Field(strict=True, ge=1, le=20)]
 Identifier = Annotated[str, Field(strict=True, pattern=r"^[A-Za-z0-9_-]{1,128}$")]
+GOAL_CONTRACT_HINT = (
+    "Goal 字段格式无效：target 为 harness/artifact/model；acceptance.metrics 为 "
+    '[{"metric":"accuracy","threshold":1.0}]；required_checks 为检查 ID 字符串数组；'
+    "budget 包含 max_iterations、max_seconds、max_retries 数值；allowed_paths 为目标内相对路径。"
+    "请修正同一草稿，完整字段格式见 rsi_goal_draft。"
+)
+
+
+def _goal_contract(operation: Callable[[], Any]) -> str:
+    from areal_rsi.base.storage import encode
+
+    try:
+        return json.dumps(encode(operation()), ensure_ascii=False)
+    except (ValueError, TypeError, AttributeError, KeyError):
+        raise ToolError(GOAL_CONTRACT_HINT) from None
+
+
+def dsh_input_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Advertise DSH's schema subset; Pydantic still enforces every server constraint."""
+    limits = {"minLength", "maxLength", "minimum", "maximum", "pattern"}
+    result = {key: value for key, value in schema.items() if key not in limits}
+    constraints = {key: value for key, value in schema.items() if key in limits}
+    if constraints:
+        result["description"] = (
+            str(result.get("description", ""))
+            + " Server-enforced constraints: "
+            + json.dumps(constraints, ensure_ascii=False)
+        ).strip()
+    if "properties" in result:
+        result["properties"] = {
+            name: dsh_input_schema(value) for name, value in result["properties"].items()
+        }
+    if "items" in result:
+        result["items"] = dsh_input_schema(result["items"])
+    if "anyOf" in result:
+        branches = result.pop("anyOf")
+        types = [branch.get("type") for branch in branches]
+        if any(not isinstance(kind, str) for kind in types) or len(set(types)) != len(types):
+            raise ValueError("DSH requires disjoint types for a nullable MCP parameter")
+        result["oneOf"] = [dsh_input_schema(branch) for branch in branches]
+    return result
+
+
+class RsiMCPServer(MCPServer):
+    async def list_tools(self) -> list[MCPTool]:
+        return [
+            tool.model_copy(update={"input_schema": dsh_input_schema(tool.input_schema)})
+            for tool in await super().list_tools()
+        ]
 
 
 def _agent_models(value: Any) -> dict[str, dict[str, str]]:
@@ -123,7 +173,7 @@ async def _invoke(operation: Callable[[], Awaitable[dict[str, Any]]]) -> str:
 
 
 def create_server(controller: ExperimentController) -> MCPServer:
-    server = MCPServer(
+    server = RsiMCPServer(
         "areal-rsi",
         instructions=(
             "先用 rsi_plan 生成固定配置的实验计划并展示给用户。"
@@ -191,6 +241,61 @@ def create_server(controller: ExperimentController) -> MCPServer:
         if confirmed is not True:
             raise ToolError("请先取得用户恢复实验的确认，再设置 confirmed=true。")
         return await _invoke(lambda: controller.resume(run_id, confirmed=confirmed))
+
+    from areal_rsi.goals import GoalService
+
+    goals = GoalService(controller.root)
+
+    @server.tool(structured_output=False)
+    async def rsi_goal_draft(spec: dict[str, Any]) -> str:
+        """创建 Goal 草稿，返回缺失问题；完整验收、预算和范围才可确认。
+
+        内置 benchmark：Harness 用 arithmetic-v1、structured-arithmetic-v1/v2/v3、
+        ledger-arithmetic-v1；Artifact 静态网页用 task-web-v1 或 bookmark-web-v1。
+        对应 verifier_version 为 benchmark 名加 -verifier。Artifact 网页契约包含
+        data-testid 的增删改、toggle、filter、localStorage、边界及响应式布局检查，
+        需先与用户约定适用范围，不能为任意产物虚构已安装的验收器。
+
+        字段格式：target 为 harness/artifact/model 字面量；description 为用户目标；
+        acceptance={"metrics":[{"metric":"accuracy","threshold":1.0}],
+        "required_checks":["add","edit","toggle","filter","persistence","empty_input",
+        "boundary","delete","layout","runtime"],"verifier_version":"task-web-v1-verifier",
+        "final_protocol":"independent-holdout-v1"}；budget={"max_iterations":5,
+        "max_seconds":3600,"max_retries":1}；allowed_paths=["index.html","*.css","*.js"]；
+        invariants=["model fixed","execution harness fixed","verifier fixed"]。
+        Artifact 还需 artifact_path、artifact_name、benchmark；skill_paths=[] 显式不选 Skill。
+        required_checks 必须使用检查 ID，不能翻译；书签另含 url、invalid_url。
+        不完整草稿可省略缺失字段，由返回问题继续澄清；不要用 null/空对象伪造完整契约。
+        """
+        return _goal_contract(lambda: goals.draft(spec))
+
+    @server.tool(structured_output=False)
+    async def rsi_goal_answer(goal_id: Identifier, answers: dict[str, Any]) -> str:
+        """补充同一草稿；字段格式遵循 rsi_goal_draft，修改产生新 revision。"""
+        return _goal_contract(lambda: goals.answer(goal_id, answers))
+
+    @server.tool(structured_output=False)
+    async def rsi_goal_start(goal_id: Identifier, confirmed: StrictBool) -> str:
+        """用户确认完整契约后启动同一 Goal worker，范围内不逐轮确认。"""
+        if confirmed is not True:
+            raise ToolError("请先展示完整契约并取得确认。")
+        await goals.confirm(goal_id, source="tui-mcp-user-confirmation")
+        goals.launch(goal_id)
+        return json.dumps(goals.status(goal_id), ensure_ascii=False)
+
+    @server.tool(structured_output=False)
+    async def rsi_goal_status(goal_id: Identifier) -> str:
+        """Goal 状态、预算及独立最终验收结论。"""
+        return json.dumps(goals.status(goal_id), ensure_ascii=False)
+
+    @server.tool(structured_output=False)
+    async def rsi_goal_control(goal_id: Identifier, action: str) -> str:
+        """按用户指令 pause/resume/cancel；恢复沿用冻结 revision。"""
+        if action == "resume":
+            goals.launch(goal_id, resume=True)
+        else:
+            goals.request(goal_id, action)
+        return json.dumps(goals.status(goal_id), ensure_ascii=False)
 
     return server
 

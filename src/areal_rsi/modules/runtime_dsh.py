@@ -5,12 +5,13 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
 
 
-def ensure_profile(root: Path) -> Path:
+def ensure_profile(root: Path, *, binary: Path | None = None) -> Path:
     archive = Path(__file__).parents[1] / "resources/runtime/areal-agent-runtime-dsh-0.3.0.tgz"
     digest = hashlib.sha256(
         archive.read_bytes() + (archive.parent / "pnpm-lock.yaml").read_bytes()
@@ -22,6 +23,8 @@ def ensure_profile(root: Path) -> Path:
         profile = home / "profiles/agent-runtime"
         marker = home / ".ready"
         if marker.exists() and marker.read_text() == digest:
+            if binary is not None and not (home / "profiles/node_modules").exists():
+                _prepare_module_fallback(home, binary)
             return home
         if not shutil.which("pnpm"):
             raise RuntimeError("DSH Runtime profile requires pnpm and Node.js 22.19+ / 24+")
@@ -58,5 +61,27 @@ def ensure_profile(root: Path) -> Path:
                 stdout=log,
                 stderr=subprocess.STDOUT,
             )
+        if binary is not None:
+            _prepare_module_fallback(home, binary)
         marker.write_text(digest)
         return home
+
+
+def _prepare_module_fallback(home: Path, binary: Path) -> None:
+    """Prime DSH's managed ESM proxies once, before readonly session mounts.
+
+    DSH composes these during config dumping; this performs no model inference.
+    Copying only the profile's pnpm node_modules forces every new session to
+    regenerate the shared profiles/node_modules fallback and can exceed SDK startup timeouts.
+    """
+    with (home / "module-fallback.log").open("wb") as log:
+        subprocess.run(
+            [str(binary), "--profile", "agent-runtime", "--dump-config"],
+            env={**os.environ, "DSH_HOME": str(home), "DSH_TELEMETRY_DISABLED": "1"},
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            check=True,
+            timeout=180,
+        )
+    if not (home / "profiles/node_modules").is_dir():
+        raise RuntimeError("DSH module fallback was not materialized")

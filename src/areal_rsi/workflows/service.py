@@ -4,18 +4,35 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TypeAlias
 
 from areal_rsi.api.base import EvolutionTarget, ExperimentPlan, ExperimentRun, RunState
 from areal_rsi.api.workflow import RsiWorkflow, WorkflowContext
 from areal_rsi.base.storage import FileRecords, decode, encode, new_id, now, safe_name
+from areal_rsi.config import ModelConfigurationError
 from areal_rsi.workflows.evolution import HarnessEvolutionWorkflow
 
 WorkflowFactory: TypeAlias = Callable[
     [Path, FileRecords, ExperimentRun, Callable[[str], None]], RsiWorkflow
 ]
+
+
+@contextmanager
+def _run_lock(path: Path) -> Iterator[None]:
+    with path.open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError("此 Run 正由另一个进程执行") from None
+        try:
+            yield
+        finally:
+            # Closing one descriptor can retain a flock through a duplicated or
+            # inherited descriptor. End this execution's ownership explicitly.
+            fcntl.flock(lock, fcntl.LOCK_UN)
 
 
 class LocalExperimentService:
@@ -55,11 +72,7 @@ class LocalExperimentService:
         locks = self.root / "locks"
         locks.mkdir(parents=True, exist_ok=True)
         # OS 锁随着进程退出释放；旧文件本身不代表任务仍在运行。
-        with (locks / f"{safe_name(run.run_id)}.lock").open("a") as lock:
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                raise RuntimeError("此 Run 正由另一个进程执行") from None
+        with _run_lock(locks / f"{safe_name(run.run_id)}.lock"):
             # 获取锁后重读，避免等待前拿到的旧状态覆盖刚完成的另一个执行。
             latest = self.records.get(run.run_id, ExperimentRun)
             if latest is not None:
@@ -87,6 +100,10 @@ class LocalExperimentService:
                         agent.state, agent.error = run.state, run.error
                 self.records.save(run.run_id, run, immutable=False)
                 self.emit(f"实验 {run.state.value}：{run.error}")
+                if run.plan.config.get("goal_id") and isinstance(
+                    exc, (FileNotFoundError, PermissionError, ModelConfigurationError)
+                ):
+                    raise
                 return run
 
     async def start(self, plan: ExperimentPlan) -> ExperimentRun:

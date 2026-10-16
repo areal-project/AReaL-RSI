@@ -56,10 +56,10 @@ from areal_rsi.api.workflow import ResearchAgent, RsiAgent, WorkflowContext
 
 
 class InterfaceDesignTest(unittest.TestCase):
-    def test_only_train_and_validate_splits_exist(self) -> None:
+    def test_development_and_independent_final_splits_exist(self) -> None:
         self.assertEqual(
             list(BenchmarkSplit),
-            [BenchmarkSplit.TRAIN, BenchmarkSplit.VALIDATE],
+            [BenchmarkSplit.TRAIN, BenchmarkSplit.VALIDATE, BenchmarkSplit.FINAL],
         )
 
     def test_artifact_is_a_first_class_evolution_target(self) -> None:
@@ -176,8 +176,14 @@ class InterfaceDesignTest(unittest.TestCase):
         self.assertNotIn("evaluation", field_names)
         self.assertNotIn("selection", field_names)
         for field in fields(ResearchIteration):
-            self.assertIs(field.default, MISSING)
-            self.assertIs(field.default_factory, MISSING)
+            if field.name not in {
+                "selection_reason",
+                "proposal_trajectory_id",
+                "selection_trajectory_id",
+                "skill_usage",
+            }:
+                self.assertIs(field.default, MISSING)
+                self.assertIs(field.default_factory, MISSING)
 
     def test_public_dataclasses_are_not_frozen(self) -> None:
         version = self._harness()

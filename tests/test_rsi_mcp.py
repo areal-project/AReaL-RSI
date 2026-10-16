@@ -25,6 +25,7 @@ class FixtureController(ExperimentController):
     """只用于协议进程的离线替身，不加载 App，也不调用任何模型。"""
 
     def __init__(self, root: Path):
+        self.root = root
         self.fixture_root = root
         self.fixture_plans: set[str] = set()
         self.child: subprocess.Popen[bytes] | None = None
@@ -156,7 +157,19 @@ class RsiMcpTest(unittest.IsolatedAsyncioTestCase):
         async with self.client() as session:
             tools = {tool.name: tool for tool in (await session.list_tools()).tools}
             self.assertEqual(
-                set(tools), {"rsi_plan", "rsi_start", "rsi_status", "rsi_stop", "rsi_resume"}
+                set(tools),
+                {
+                    "rsi_plan",
+                    "rsi_start",
+                    "rsi_status",
+                    "rsi_stop",
+                    "rsi_resume",
+                    "rsi_goal_draft",
+                    "rsi_goal_answer",
+                    "rsi_goal_start",
+                    "rsi_goal_status",
+                    "rsi_goal_control",
+                },
             )
             for name in ("rsi_start", "rsi_resume"):
                 self.assertIn("confirmed", tools[name].input_schema["required"])
@@ -164,6 +177,14 @@ class RsiMcpTest(unittest.IsolatedAsyncioTestCase):
                     tools[name].input_schema["properties"]["confirmed"]["type"], "boolean"
                 )
             self.assertIn("plan_id", tools["rsi_start"].input_schema["required"])
+            advertised = json.dumps([tool.input_schema for tool in tools.values()])
+            for unsupported in ('"anyOf":', '"pattern":', '"maximum":', '"minLength":'):
+                self.assertNotIn(unsupported, advertised)
+            self.assertIn("oneOf", tools["rsi_status"].input_schema["properties"]["run_id"])
+            self.assertIn(
+                "Server-enforced constraints",
+                tools["rsi_plan"].input_schema["properties"]["goal"]["description"],
+            )
             status_annotations = tools["rsi_status"].annotations
             start_annotations = tools["rsi_start"].annotations
             stop_annotations = tools["rsi_stop"].annotations
@@ -239,6 +260,78 @@ class RsiMcpTest(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(response.is_error)
                 self.assertNotIn("SECRET", response.model_dump_json())
         self.assertFalse((self.root / "calls.txt").exists())
+
+    async def test_goal_tools_clarify_shared_revision_without_starting(self) -> None:
+        async with self.client() as session:
+            draft = self.body(
+                await session.call_tool(
+                    "rsi_goal_draft",
+                    {
+                        "spec": {
+                            "description": "Complete the task app",
+                            "target": "artifact",
+                            "artifact_path": str(self.root / "app"),
+                        }
+                    },
+                )
+            )
+            self.assertEqual(draft["state"], "needs_input")
+            goal_id = draft["goal_id"]
+            ready = self.body(
+                await session.call_tool(
+                    "rsi_goal_answer",
+                    {
+                        "goal_id": goal_id,
+                        "answers": {
+                            "acceptance": {
+                                "metrics": [{"metric": "accuracy", "threshold": 1.0}],
+                                "verifier_version": "task-web-v1-verifier",
+                            },
+                            "budget": {"max_iterations": 3, "max_seconds": 300},
+                            "allowed_paths": ["index.html"],
+                            "invariants": ["fixed model"],
+                        },
+                    },
+                )
+            )
+            self.assertEqual(ready["state"], "ready")
+            self.assertEqual(ready["revision"], 2)
+            self.assertIsNone(ready["confirmed_at"])
+            self.assertIsNone(ready["run_id"])
+            denied = await session.call_tool(
+                "rsi_goal_start", {"goal_id": goal_id, "confirmed": False}
+            )
+            self.assertTrue(denied.is_error)
+            status = self.body(await session.call_tool("rsi_goal_status", {"goal_id": goal_id}))
+            self.assertEqual(status["state"], "ready")
+            self.assertFalse(status["worker_active"])
+
+    async def test_goal_schema_error_allows_repair_without_persisting_invalid_revision(
+        self,
+    ) -> None:
+        async with self.client() as session:
+            draft = self.body(
+                await session.call_tool("rsi_goal_draft", {"spec": {"description": "Build"}})
+            )
+            invalid = {
+                "target": "artifact",
+                "description": "Build",
+                "artifact_path": ".",
+                "acceptance": {"metrics": ["All features"], "verifier_version": "v1"},
+                "budget": {"max_iterations": 1, "max_seconds": 10},
+                "allowed_paths": ["index.html"],
+                "invariants": ["model fixed"],
+            }
+            response = await session.call_tool(
+                "rsi_goal_answer", {"goal_id": draft["goal_id"], "answers": invalid}
+            )
+            self.assertTrue(response.is_error)
+            self.assertIn("acceptance.metrics", response.model_dump_json())
+            status = self.body(
+                await session.call_tool("rsi_goal_status", {"goal_id": draft["goal_id"]})
+            )
+            self.assertEqual(status["revision"], 1)
+            self.assertIsNone(status["run_id"])
 
     async def test_status_is_bounded_and_errors_do_not_expose_private_data(self) -> None:
         async with self.client() as session:

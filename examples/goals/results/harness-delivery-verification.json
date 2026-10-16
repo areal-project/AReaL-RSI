@@ -1,0 +1,23 @@
+{
+  "goal_id": "goal_713bd69120f74bcb",
+  "revision": 1,
+  "run_id": "run_4b7922871afb4f52",
+  "solution_id": "solution_4401643c7fa247e3",
+  "harness_content": {
+    "digest": "sha256:700f44e0086e39293043e79add0e549b5bd61b16cb39997efac558d768dafbce",
+    "media_type": "application/vnd.areal-rsi.directory+json",
+    "uri": "content://700f44e0086e39293043e79add0e549b5bd61b16cb39997efac558d768dafbce"
+  },
+  "export_digest_verified": true,
+  "files": [
+    "mcp.json",
+    "prompt.md",
+    "skills/arithmetic.md",
+    "tools/check.py",
+    "tools/math_mcp.py"
+  ],
+  "effect_acceptance_passed": false,
+  "failed_gate": "gain_accuracy >= 0.1",
+  "observed_gain_accuracy": 0.06666666666666665,
+  "formal_implementation_archive": "examples/goals/deliveries/frozen-demo-implementation.tar.gz"
+}

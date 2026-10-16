@@ -6,10 +6,13 @@ import asyncio
 import difflib
 import fcntl
 import json
+import os
 import tempfile
 import unittest
 from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import TextIO
+from unittest.mock import patch
 
 from areal_rsi.api.base import (
     BenchmarkSplit,
@@ -260,6 +263,30 @@ class WorkflowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(finished.state.value, "succeeded", finished.error)
         for path, data in original.items():
             self.assertEqual(path.read_bytes(), data)
+
+    async def test_resume_releases_lock_when_descriptor_is_inherited(self) -> None:
+        self.researchers[1].block = asyncio.Event()
+        inherited: list[int] = []
+        original_flock = fcntl.flock
+
+        def duplicate_owner(file: int | TextIO, operation: int) -> None:
+            original_flock(file, operation)
+            if operation == fcntl.LOCK_EX | fcntl.LOCK_NB and not inherited:
+                inherited.append(os.dup(file if isinstance(file, int) else file.fileno()))
+
+        try:
+            with patch("areal_rsi.workflows.service.fcntl.flock", side_effect=duplicate_owner):
+                run = await self.service.start(self.plan)
+                await asyncio.wait_for(self.researchers[1].started.wait(), timeout=5)
+                stopped = await self.service.stop(run.run_id)
+                self.assertEqual(stopped.state, RunState.CANCELLED)
+                self.researchers[1].block.set()
+                await self.service.resume(run.run_id)
+                finished = await self.service.tasks[run.run_id]
+                self.assertEqual(finished.state, RunState.SUCCEEDED, finished.error)
+        finally:
+            for descriptor in inherited:
+                os.close(descriptor)
 
     async def test_stop_before_execution_and_cross_process_lock(self) -> None:
         run = await self.service.start(self.plan)

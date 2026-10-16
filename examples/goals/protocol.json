@@ -1,0 +1,66 @@
+{
+  "version": "2026-10-16-v4-bookmark-url",
+  "model": "gpt-6.1-sol",
+  "harness": {
+    "train": 30,
+    "validate": 30,
+    "final": 60,
+    "accuracy": 0.9,
+    "gain_accuracy": 0.1,
+    "structured_output": 1.0,
+    "evaluation_concurrency": 8,
+    "benchmark": "ledger-arithmetic-v1",
+    "benchmark_seed": 20261025,
+    "max_seconds": 7200,
+    "max_iterations": 5,
+    "budget_reason": "Six-case development preflight took about 200 seconds with six concurrent cases; allow full 30/30/60 development and independent baseline/candidate evaluation. Quality gates unchanged.",
+    "preflight": {
+      "root": ".rsi/demos/harness-ledger-preflight-batched",
+      "cases": 6,
+      "correct": 5,
+      "structured_output": 1.0,
+      "final_cases_exposed": 0
+    }
+  },
+  "artifact": {
+    "all_required_checks": true,
+    "widths": [
+      1280,
+      375
+    ],
+    "max_seconds": 3600,
+    "budget_reason": "Frozen after throughput and storage preflight; quality gates unchanged"
+  },
+  "reuse": {
+    "pairs": 3,
+    "order": [
+      "control",
+      "skill",
+      "skill",
+      "control",
+      "control",
+      "skill"
+    ],
+    "primary_metric": "time_to_all_checks",
+    "median_reduction": 0.2,
+    "all_runs_must_pass": true,
+    "sampling": "runtime defaults; seed unavailable; record actual request configuration",
+    "token_cost_human_regression": "unknown if not observable; cannot claim full efficiency gate",
+    "max_seconds": 3600,
+    "bookmark_url_checks": [
+      "absolute HTTP/HTTPS anchor href",
+      "URL preserved on edit and reload",
+      "empty malformed relative javascript URLs rejected"
+    ],
+    "identity_checks": [
+      "target model",
+      "research model",
+      "runtime",
+      "full GoalSpec except skill_paths",
+      "baseline model/harness/artifact contents",
+      "tasks across all splits",
+      "verifier",
+      "implementation"
+    ]
+  }
+}

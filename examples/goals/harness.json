@@ -1,0 +1,43 @@
+{
+  "description": "Improve exact multi-step accounting arithmetic, per-step rounding and strict JSON output compliance. Use general tools and verification. Never embed task-specific answers.",
+  "target": "harness",
+  "benchmark": "ledger-arithmetic-v1",
+  "allowed_paths": [
+    "prompt.md",
+    "skills/*.md",
+    "tools/*.py",
+    "mcp.json"
+  ],
+  "invariants": [
+    "model fixed",
+    "benchmark fixed",
+    "verifier fixed"
+  ],
+  "budget": {
+    "max_iterations": 5,
+    "max_seconds": 7200,
+    "max_retries": 1
+  },
+  "acceptance": {
+    "metrics": [
+      {
+        "metric": "accuracy",
+        "threshold": 0.9
+      },
+      {
+        "metric": "gain_accuracy",
+        "threshold": 0.1
+      }
+    ],
+    "required_checks": [
+      "structured_output"
+    ],
+    "verifier_version": "ledger-arithmetic-v1-verifier"
+  },
+  "assets": {
+    "harness_path": "examples/goals/minimal-harness",
+    "evaluation_concurrency": 8,
+    "benchmark_seed": 20261025
+  },
+  "skill_paths": []
+}

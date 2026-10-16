@@ -1,0 +1,12 @@
+[
+  {
+    "file": "examples/goals/results/bookmarks-pair-1-control-1280.png",
+    "task_id": "bookmark-web-v1-final-1280",
+    "digest": "sha256:eab4455a0876a855e540d5eb313ca49f684732820658527780107266fa5b23b9"
+  },
+  {
+    "file": "examples/goals/results/bookmarks-pair-1-control-375.png",
+    "task_id": "bookmark-web-v1-final-375",
+    "digest": "sha256:122d2087a69ff0aa34e3e0bcdbfe3a8ee97ebae3640f9ba9e5e7dab2003e8c93"
+  }
+]

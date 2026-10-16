@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Task desk</title>
+<style>
+:root{color-scheme:light;--ink:#172033;--muted:#667085;--line:#d9e0ea;--accent:#375dfb;--soft:#f5f7fb;--danger:#c0392b}
+*{box-sizing:border-box}
+body{margin:0;min-width:0;background:#eef2f7;color:var(--ink);font:16px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}
+.app{width:min(100% - 24px,760px);margin:clamp(20px,6vw,64px) auto;padding:clamp(18px,4vw,32px);background:#fff;border:1px solid var(--line);border-radius:18px;box-shadow:0 12px 35px #17203312}
+h1{margin:0 0 4px;font-size:clamp(26px,5vw,36px)}
+.subtitle{margin:0 0 24px;color:var(--muted)}
+.add-form{display:flex;gap:10px;margin-bottom:20px}
+input,button{font:inherit;min-height:44px;border-radius:10px}
+input{min-width:0;border:1px solid #b9c4d4;padding:9px 12px;color:var(--ink);background:#fff}
+.add-form input{flex:1}
+button{border:1px solid var(--line);background:#fff;color:var(--ink);padding:8px 13px;cursor:pointer}
+button:hover{border-color:var(--accent);color:var(--accent)}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:650}
+.filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+.filters button[aria-pressed="true"]{background:#e8edff;border-color:var(--accent);color:#2446d8;font-weight:650}
+.items{display:grid;gap:10px}
+.task{display:flex;align-items:center;gap:10px;min-width:0;padding:12px;border:1px solid var(--line);border-radius:12px;background:#fff}
+.task .title{flex:1;min-width:0;overflow-wrap:anywhere;word-break:break-word}
+.task.completed .title{text-decoration:line-through;color:var(--muted)}
+.task-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.toggle{width:24px;height:24px;min-height:24px;flex:0 0 24px;accent-color:var(--accent);cursor:pointer}
+.edit-input{flex:1;min-width:80px;min-height:40px}
+.empty{padding:26px 8px;text-align:center;color:var(--muted)}
+.error{min-height:22px;margin:-10px 0 12px;color:var(--danger);font-size:14px}
+@media(max-width:480px){.app{width:100%;margin:0;border:0;border-radius:0;min-height:100vh;padding:20px 14px}.add-form{gap:7px}.add-form button{padding-inline:11px}.task{align-items:flex-start;padding:10px;gap:8px}.task-actions{width:100%;margin-left:32px;justify-content:flex-start}.task.editing{flex-wrap:wrap}.task.editing .edit-input{order:1;width:calc(100% - 34px)}.task.editing .task-actions{order:2;margin-left:0}.task:not(.editing){flex-wrap:wrap}}
+</style>
+</head>
+<body>
+<main class="app">
+<h1>Task desk</h1><p class="subtitle">Keep track of what needs doing.</p>
+<form class="add-form" id="form"><input id="titleInput" data-testid="title-input" aria-label="Task title" autocomplete="off"><button class="primary" data-testid="add" type="submit">Add task</button></form>
+<div class="error" id="error" role="alert" aria-live="polite"></div>
+<nav class="filters" aria-label="Task filters"><button type="button" data-testid="filter-all" data-filter="all" aria-pressed="true">All</button><button type="button" data-testid="filter-active" data-filter="active" aria-pressed="false">Active</button><button type="button" data-testid="filter-completed" data-filter="completed" aria-pressed="false">Completed</button></nav>
+<section class="items" id="items" aria-live="polite"></section>
+</main>
+<script>
+(function(){
+ const KEY='task-desk-tasks-v1'; let tasks=[]; let filter='all'; let editingId=null;
+ const form=document.getElementById('form'), input=document.querySelector('[data-testid="title-input"]'), list=document.getElementById('items'), error=document.getElementById('error');
+ try{const saved=JSON.parse(localStorage.getItem(KEY)||'[]');if(Array.isArray(saved))tasks=saved.filter(t=>t&&typeof t.id==='string'&&typeof t.title==='string').map(t=>({id:t.id,title:t.title,completed:t.completed===true}));}catch(e){tasks=[]}
+ function persist(){try{localStorage.setItem(KEY,JSON.stringify(tasks))}catch(e){}}
+ function showError(msg){error.textContent=msg||''}
+ function make(tag,attrs,txt){const el=document.createElement(tag);Object.keys(attrs||{}).forEach(k=>el.setAttribute(k,attrs[k]));if(txt!==undefined)el.textContent=txt;return el}
+ function render(){
+  list.textContent=''; const visible=tasks.filter(t=>filter==='all'||(filter==='active'&&!t.completed)||(filter==='completed'&&t.completed));
+  if(!visible.length){list.append(make('div',{class:'empty'},tasks.length?'No tasks match this filter.':'No tasks yet.'));return}
+  visible.forEach(task=>{const row=make('article',{class:'task'+(task.completed?' completed':'')+(editingId===task.id?' editing':''),'data-testid':'item'});row.dataset.id=task.id;
+   const toggle=make('input',{type:'checkbox','data-testid':'toggle','aria-label':'Complete task'});toggle.className='toggle';toggle.checked=task.completed;row.append(toggle);
+   if(editingId===task.id){const edit=make('input',{type:'text','data-testid':'edit-input','aria-label':'Edit task title',value:task.title});edit.className='edit-input';row.append(edit);const actions=make('div',{class:'task-actions'});actions.append(make('button',{type:'button','data-testid':'save'},'Save'),make('button',{type:'button','data-testid':'delete'},'Delete'));row.append(actions);}
+   else{row.append(make('span',{class:'title'},task.title));const actions=make('div',{class:'task-actions'});actions.append(make('button',{type:'button','data-testid':'edit'},'Edit'),make('button',{type:'button','data-testid':'delete'},'Delete'));row.append(actions)}
+   list.append(row);
+  });
+ }
+ form.addEventListener('submit',function(e){e.preventDefault();const title=input.value.trim();if(!title){showError('Enter a task title.');input.focus();return}tasks.push({id:Date.now().toString(36)+'-'+Math.random().toString(36).slice(2),title,completed:false});input.value='';showError('');persist();render()});
+ document.querySelector('.filters').addEventListener('click',function(e){const b=e.target.closest('button[data-filter]');if(!b)return;filter=b.dataset.filter;document.querySelectorAll('.filters button').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));render()});
+ list.addEventListener('click',function(e){const row=e.target.closest('[data-testid="item"]');if(!row)return;const task=tasks.find(t=>t.id===row.dataset.id);if(!task)return;
+  if(e.target.closest('[data-testid="edit"]')){editingId=task.id;showError('');render();const edit=row.querySelector('[data-testid="edit-input"]')||list.querySelector('[data-testid="item"][data-id="'+task.id+'"] [data-testid="edit-input"]');if(edit){edit.focus();edit.select()} }
+  else if(e.target.closest('[data-testid="save"]')){const edit=row.querySelector('[data-testid="edit-input"]');const title=edit.value.trim();if(!title){showError('Enter a task title.');edit.focus();return}task.title=title;editingId=null;showError('');persist();render()}
+  else if(e.target.closest('[data-testid="delete"]')){tasks=tasks.filter(t=>t.id!==task.id);if(editingId===task.id)editingId=null;persist();render()}
+ });
+ list.addEventListener('change',function(e){if(!e.target.matches('[data-testid="toggle"]'))return;const row=e.target.closest('[data-testid="item"]'),task=tasks.find(t=>t.id===row.dataset.id);if(task){task.completed=e.target.checked;persist();render()}});
+ render();
+})();
+</script>
+</body>
+</html>

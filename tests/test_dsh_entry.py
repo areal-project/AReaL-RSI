@@ -76,10 +76,26 @@ def test_installed_profile_preparation_is_idempotent_without_pnpm(
         "@deepseek-ai/dsh-base",
         dsh_profile.TUI_PACKAGE,
     ]
-    assert configured["dsh"]["profile"]["patchReload"] == "live"
+    assert configured["dsh"]["profile"]["patchReload"] == "startup"
     assert configured["dependencies"][dsh_profile.TUI_PACKAGE] == dsh_profile.TUI_VERSION
     assert source.read_text() == PLUGIN_PATCH
     installer.assert_not_called()
+
+
+def test_shared_tui_cache_does_not_move_goal_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = tmp_path / "goal-data"
+    cache = tmp_path / "local-cache"
+    home, _, _ = installed_profile(cache)
+    monkeypatch.setenv("RSI_DSH_ROOT", str(cache))
+    monkeypatch.setenv("RSI_TEACHER_MODEL", "fixture-model")
+    monkeypatch.setenv("RSI_TEACHER_BASE_URL", "http://127.0.0.1:1/v1")
+    monkeypatch.setattr(dsh_profile, "ensure_cli", lambda _: cache / "fake-dsh")
+    assert dsh.launch_tui(data, setup_only=True) == 0
+    assert (home / "profiles" / dsh_profile.PROFILE / "package.json").is_file()
+    assert (data / "dsh-entry.patch.yml").is_file()
+    assert not (data / "dsh-home").exists()
 
 
 def test_missing_pnpm_fails_before_attempting_installation(

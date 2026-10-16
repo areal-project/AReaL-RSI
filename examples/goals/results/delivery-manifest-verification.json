@@ -1,0 +1,79 @@
+{
+  "deliveries": [
+    {
+      "goal_id": "goal_4a2f68abd85b4d80",
+      "revision": 2,
+      "solution_id": "solution_b47cd650d8594822",
+      "state": "achieved",
+      "destination": "examples/goals/deliveries/task-app/artifact",
+      "matches_evaluated_snapshot": true,
+      "files": 1
+    },
+    {
+      "goal_id": "goal_713bd69120f74bcb",
+      "revision": 1,
+      "solution_id": "solution_4401643c7fa247e3",
+      "state": "failed",
+      "destination": "examples/goals/deliveries/ledger-harness/harness",
+      "matches_evaluated_snapshot": true,
+      "files": 5
+    },
+    {
+      "goal_id": "goal_d73049c896ce4590",
+      "revision": 1,
+      "solution_id": "solution_8f6a5d662e2f444a",
+      "state": "achieved",
+      "destination": "examples/goals/deliveries/bookmarks/pair-1-control/artifact",
+      "matches_evaluated_snapshot": true,
+      "files": 1
+    },
+    {
+      "goal_id": "goal_c1fd0758fcab4f38",
+      "revision": 1,
+      "solution_id": "solution_5882f2df11d64b02",
+      "state": "achieved",
+      "destination": "examples/goals/deliveries/bookmarks/pair-1-skill/artifact",
+      "matches_evaluated_snapshot": true,
+      "files": 1
+    },
+    {
+      "goal_id": "goal_e261a8f2aa014896",
+      "revision": 1,
+      "solution_id": "solution_bceca50a8af84735",
+      "state": "achieved",
+      "destination": "examples/goals/deliveries/bookmarks/pair-2-control/artifact",
+      "matches_evaluated_snapshot": true,
+      "files": 1
+    },
+    {
+      "goal_id": "goal_e9ecea71fda34a78",
+      "revision": 1,
+      "solution_id": "solution_f9b4240eb0004a79",
+      "state": "achieved",
+      "destination": "examples/goals/deliveries/bookmarks/pair-2-skill/artifact",
+      "matches_evaluated_snapshot": true,
+      "files": 1
+    },
+    {
+      "goal_id": "goal_949ca8d9fbd2465f",
+      "revision": 1,
+      "solution_id": "solution_234af8128ee3400f",
+      "state": "achieved",
+      "destination": "examples/goals/deliveries/bookmarks/pair-3-control/artifact",
+      "matches_evaluated_snapshot": true,
+      "files": 1
+    },
+    {
+      "goal_id": "goal_377d2858163846f5",
+      "revision": 1,
+      "solution_id": "solution_9458416023b7408f",
+      "state": "achieved",
+      "destination": "examples/goals/deliveries/bookmarks/pair-3-skill/artifact",
+      "matches_evaluated_snapshot": true,
+      "files": 1
+    }
+  ],
+  "skill_content_digest": "sha256:16d64b1983e4c38478591dc867276e4aac2fc9fa57120f56668cbb2671730c71",
+  "skill_package_matches_activated_version": true,
+  "cross_task_evidence_idempotent": true
+}

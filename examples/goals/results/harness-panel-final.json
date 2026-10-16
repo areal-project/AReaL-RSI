@@ -1,0 +1,15 @@
+{
+  "passed": true,
+  "root": ".rsi/demos/harness-final",
+  "run_id": "run_4b7922871afb4f52",
+  "goal_state": "failed",
+  "goal_outcome_matches_state": true,
+  "independent_acceptance_passed": false,
+  "chart_axis_toggle": true,
+  "final_time_within_rendered_axis": true,
+  "skill_evidence": [],
+  "skill_lifecycle_records": 0,
+  "skill_reuse_reports": 0,
+  "page_errors": [],
+  "screenshot": "examples/goals/results/harness-panel-final.png"
+}

@@ -190,3 +190,6 @@ make check  # 单元测试、Ruff、Mypy
 ```
 
 运行记录位于 `RSI_DATA_ROOT`：`content/` 保存按摘要寻址的内容，`versions/` 保存版本，`model-index/` 复用模型描述，`baselines/` 按目标模型与初始 Harness 快照保存基线，`run-states/` 保存状态，`runs/` 保存逐轮结果，`trajectories/` 保存轨迹索引，`dsh-home/` 保存 DSH 对话，`experiment-plans/` 保存待确认计划，`workers/` 保存后台进程状态和日志，`gateway/` 保存实验模型请求和响应审计。旧 `tui/` 对话记录继续保留。这些运行数据由 Git 忽略；Web UI 只返回聚合状态。
+
+持续生产目标可使用 `rsi exec --spec goal.json --yes --json`，TUI 使用相同 Goal 服务。
+详见 [Goal 模式与配置](docs/goal-mode.md) 和 [真实双 Target demo](examples/goals/README.md)。

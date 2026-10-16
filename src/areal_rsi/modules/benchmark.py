@@ -47,6 +47,22 @@ _CASES = {
 }
 
 
+_CASES[BenchmarkSplit.FINAL] = (
+    (
+        "A theater has 180 seats. Three groups of 24 arrive, then 17 leave. How many empty seats?",
+        "125",
+    ),
+    (
+        "A worker earns 18 dollars per hour for 7 hours and spends 29 dollars. How much remains?",
+        "97",
+    ),
+    (
+        "There are 96 apples, packed into bags of 8. Four bags are sold. How many apples remain?",
+        "64",
+    ),
+)
+
+
 class ArithmeticBenchmark:
     name = "arithmetic-v1"
 
@@ -121,6 +137,10 @@ class AccuracyEvaluation:
             {
                 "accuracy": score,
                 "task_count": float(len(results)),
+                **{
+                    key: sum(r.metrics.get(key, 0.0) for r in results) / len(results)
+                    for key in {k for r in results for k in r.metrics}
+                },
             },
             now(),
         )

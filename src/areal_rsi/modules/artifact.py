@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import tempfile
 from pathlib import Path
 
@@ -27,11 +28,16 @@ class LocalArtifactBuilder:
                 await self.content.materialize(base.content, directory)
             else:
                 directory.mkdir()
+            # git apply otherwise discovers the user's repository and silently skips
+            # paths when the isolated build lives in an ignored subdirectory.
+            env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+            env["GIT_CEILING_DIRECTORIES"] = str(directory.parent.resolve())
             for check in (True, False):
                 command = ["git", "apply", "--no-index", *(["--check"] if check else []), "-"]
                 child = await asyncio.create_subprocess_exec(
                     *command,
                     cwd=directory,
+                    env=env,
                     stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,

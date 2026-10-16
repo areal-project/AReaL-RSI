@@ -1,0 +1,71 @@
+{
+  "protocol": "Runtime defaults; seed unavailable; all observed settings reported, no hidden sampling control claimed.",
+  "runs": [
+    {
+      "root": "pair-1-control",
+      "request_count": 11,
+      "request_configurations": [
+        {
+          "max_tokens": 12288,
+          "model": "gpt-6.1-sol",
+          "stream": true
+        }
+      ]
+    },
+    {
+      "root": "pair-1-skill",
+      "request_count": 10,
+      "request_configurations": [
+        {
+          "max_tokens": 12288,
+          "model": "gpt-6.1-sol",
+          "stream": true
+        }
+      ]
+    },
+    {
+      "root": "pair-2-control",
+      "request_count": 6,
+      "request_configurations": [
+        {
+          "max_tokens": 12288,
+          "model": "gpt-6.1-sol",
+          "stream": true
+        }
+      ]
+    },
+    {
+      "root": "pair-2-skill",
+      "request_count": 9,
+      "request_configurations": [
+        {
+          "max_tokens": 12288,
+          "model": "gpt-6.1-sol",
+          "stream": true
+        }
+      ]
+    },
+    {
+      "root": "pair-3-control",
+      "request_count": 16,
+      "request_configurations": [
+        {
+          "max_tokens": 12288,
+          "model": "gpt-6.1-sol",
+          "stream": true
+        }
+      ]
+    },
+    {
+      "root": "pair-3-skill",
+      "request_count": 17,
+      "request_configurations": [
+        {
+          "max_tokens": 12288,
+          "model": "gpt-6.1-sol",
+          "stream": true
+        }
+      ]
+    }
+  ]
+}

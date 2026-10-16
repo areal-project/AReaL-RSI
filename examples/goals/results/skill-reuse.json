@@ -1,0 +1,409 @@
+{
+  "protocol": {
+    "pairs": 3,
+    "order": [
+      "control",
+      "skill",
+      "skill",
+      "control",
+      "control",
+      "skill"
+    ],
+    "primary_metric": "time_to_all_checks",
+    "median_reduction": 0.2,
+    "all_runs_must_pass": true,
+    "sampling": "runtime defaults; seed unavailable; record actual request configuration",
+    "token_cost_human_regression": "unknown if not observable; cannot claim full efficiency gate",
+    "max_seconds": 3600,
+    "bookmark_url_checks": [
+      "absolute HTTP/HTTPS anchor href",
+      "URL preserved on edit and reload",
+      "empty malformed relative javascript URLs rejected"
+    ],
+    "identity_checks": [
+      "target model",
+      "research model",
+      "runtime",
+      "full GoalSpec except skill_paths",
+      "baseline model/harness/artifact contents",
+      "tasks across all splits",
+      "verifier",
+      "implementation"
+    ]
+  },
+  "runs": [
+    {
+      "pair": 1,
+      "group": "control",
+      "state": "achieved",
+      "goal_id": "goal_d73049c896ce4590",
+      "root": "/storage/openpsi/users/fenghui/projects/AReaL-RSI/.rsi/demos/reuse-final/pair-1-control",
+      "seconds": 686.5930349454284,
+      "token_usage": {
+        "complete": false,
+        "covered_trajectories": 2,
+        "limitation": "Uncommitted or interrupted sessions may have unreported usage",
+        "observed": {
+          "inputTokens": 22160,
+          "outputTokens": 6259,
+          "reasoningTokens": 629,
+          "totalTokens": 70403
+        },
+        "referenced_trajectories": 12
+      },
+      "cost": null
+    },
+    {
+      "pair": 1,
+      "group": "skill",
+      "state": "achieved",
+      "goal_id": "goal_c1fd0758fcab4f38",
+      "root": "/storage/openpsi/users/fenghui/projects/AReaL-RSI/.rsi/demos/reuse-final/pair-1-skill",
+      "seconds": 476.8815653398633,
+      "token_usage": {
+        "complete": false,
+        "covered_trajectories": 2,
+        "limitation": "Uncommitted or interrupted sessions may have unreported usage",
+        "observed": {
+          "inputTokens": 30983,
+          "outputTokens": 4300,
+          "reasoningTokens": 784,
+          "totalTokens": 78803
+        },
+        "referenced_trajectories": 12
+      },
+      "cost": null
+    },
+    {
+      "pair": 2,
+      "group": "skill",
+      "state": "achieved",
+      "goal_id": "goal_e9ecea71fda34a78",
+      "root": "/storage/openpsi/users/fenghui/projects/AReaL-RSI/.rsi/demos/reuse-final/pair-2-skill",
+      "seconds": 429.54762651771307,
+      "token_usage": {
+        "complete": false,
+        "covered_trajectories": 2,
+        "limitation": "Uncommitted or interrupted sessions may have unreported usage",
+        "observed": {
+          "inputTokens": 18204,
+          "outputTokens": 3840,
+          "reasoningTokens": 507,
+          "totalTokens": 58396
+        },
+        "referenced_trajectories": 12
+      },
+      "cost": null
+    },
+    {
+      "pair": 2,
+      "group": "control",
+      "state": "achieved",
+      "goal_id": "goal_e261a8f2aa014896",
+      "root": "/storage/openpsi/users/fenghui/projects/AReaL-RSI/.rsi/demos/reuse-final/pair-2-control",
+      "seconds": 338.49620319902897,
+      "token_usage": {
+        "complete": false,
+        "covered_trajectories": 2,
+        "limitation": "Uncommitted or interrupted sessions may have unreported usage",
+        "observed": {
+          "inputTokens": 11930,
+          "outputTokens": 3556,
+          "reasoningTokens": 401,
+          "totalTokens": 29310
+        },
+        "referenced_trajectories": 12
+      },
+      "cost": null
+    },
+    {
+      "pair": 3,
+      "group": "control",
+      "state": "achieved",
+      "goal_id": "goal_949ca8d9fbd2465f",
+      "root": "/storage/openpsi/users/fenghui/projects/AReaL-RSI/.rsi/demos/reuse-final/pair-3-control",
+      "seconds": 824.520441621542,
+      "token_usage": {
+        "complete": false,
+        "covered_trajectories": 2,
+        "limitation": "Uncommitted or interrupted sessions may have unreported usage",
+        "observed": {
+          "inputTokens": 18772,
+          "outputTokens": 7669,
+          "reasoningTokens": 617,
+          "totalTokens": 59209
+        },
+        "referenced_trajectories": 12
+      },
+      "cost": null
+    },
+    {
+      "pair": 3,
+      "group": "skill",
+      "state": "achieved",
+      "goal_id": "goal_377d2858163846f5",
+      "root": "/storage/openpsi/users/fenghui/projects/AReaL-RSI/.rsi/demos/reuse-final/pair-3-skill",
+      "seconds": 1256.0124510526657,
+      "token_usage": {
+        "complete": false,
+        "covered_trajectories": 4,
+        "limitation": "Uncommitted or interrupted sessions may have unreported usage",
+        "observed": {
+          "inputTokens": 41707,
+          "outputTokens": 16655,
+          "reasoningTokens": 1464,
+          "totalTokens": 140794
+        },
+        "referenced_trajectories": 18
+      },
+      "cost": null
+    }
+  ],
+  "common_identity": {
+    "model": {
+      "digest": "sha256:ec83831f149650c700d4047eadec5f412cd988e6567d7a93b864ebf939440723",
+      "media_type": "application/json",
+      "uri": "content://ec83831f149650c700d4047eadec5f412cd988e6567d7a93b864ebf939440723"
+    },
+    "harness": {
+      "digest": "sha256:e7a1cc4e3a2b5662c2f6a7ed2e800f0df7058428de7bc0ccc7036eb29167611d",
+      "media_type": "application/vnd.areal-rsi.directory+json",
+      "uri": "content://e7a1cc4e3a2b5662c2f6a7ed2e800f0df7058428de7bc0ccc7036eb29167611d"
+    },
+    "artifacts": [
+      {
+        "digest": "sha256:1db03c4b9d6f79b233c465ec18cb22857ddd8b3e52b905b004b2f1007937d729",
+        "media_type": "application/vnd.areal-rsi.directory+json",
+        "uri": "content://1db03c4b9d6f79b233c465ec18cb22857ddd8b3e52b905b004b2f1007937d729"
+      }
+    ],
+    "runtime": "b660236ea5460e3d28acd5b8655879f227ae1f06b2b8234b5ea37097c4717459",
+    "research_model": {
+      "agents": {
+        "research-agent-1": {
+          "model": "gpt-6.1-sol",
+          "content": {
+            "digest": "sha256:ec83831f149650c700d4047eadec5f412cd988e6567d7a93b864ebf939440723",
+            "media_type": "application/json",
+            "uri": "content://ec83831f149650c700d4047eadec5f412cd988e6567d7a93b864ebf939440723"
+          }
+        },
+        "rsi-agent": {
+          "model": "gpt-6.1-sol",
+          "content": {
+            "digest": "sha256:ec83831f149650c700d4047eadec5f412cd988e6567d7a93b864ebf939440723",
+            "media_type": "application/json",
+            "uri": "content://ec83831f149650c700d4047eadec5f412cd988e6567d7a93b864ebf939440723"
+          }
+        }
+      },
+      "interaction_model_name": "gpt-6.1-sol"
+    },
+    "tasks": {
+      "final": [
+        {
+          "input": {
+            "contract": "data-testid CRUD interface v1; see examples/goals/README.md",
+            "height": 900,
+            "kind": "bookmarks",
+            "scenario": "final",
+            "width": 1280
+          },
+          "metadata": {},
+          "task_id": "bookmark-web-v1-final-1280"
+        },
+        {
+          "input": {
+            "contract": "data-testid CRUD interface v1; see examples/goals/README.md",
+            "height": 812,
+            "kind": "bookmarks",
+            "scenario": "final",
+            "width": 375
+          },
+          "metadata": {},
+          "task_id": "bookmark-web-v1-final-375"
+        }
+      ],
+      "train": [
+        {
+          "input": {
+            "contract": "data-testid CRUD interface v1; see examples/goals/README.md",
+            "height": 900,
+            "kind": "bookmarks",
+            "scenario": "train",
+            "width": 1280
+          },
+          "metadata": {},
+          "task_id": "bookmark-web-v1-train-1280"
+        },
+        {
+          "input": {
+            "contract": "data-testid CRUD interface v1; see examples/goals/README.md",
+            "height": 812,
+            "kind": "bookmarks",
+            "scenario": "train",
+            "width": 375
+          },
+          "metadata": {},
+          "task_id": "bookmark-web-v1-train-375"
+        }
+      ],
+      "validate": [
+        {
+          "input": {
+            "contract": "data-testid CRUD interface v1; see examples/goals/README.md",
+            "height": 900,
+            "kind": "bookmarks",
+            "scenario": "validate",
+            "width": 1280
+          },
+          "metadata": {},
+          "task_id": "bookmark-web-v1-validate-1280"
+        },
+        {
+          "input": {
+            "contract": "data-testid CRUD interface v1; see examples/goals/README.md",
+            "height": 812,
+            "kind": "bookmarks",
+            "scenario": "validate",
+            "width": 375
+          },
+          "metadata": {},
+          "task_id": "bookmark-web-v1-validate-375"
+        }
+      ]
+    },
+    "verifier": {
+      "config": {},
+      "digest": "sha256:997b006c5a2f79e8a3dce82c61c092aa4b70a33d3424fbd919391f8c9adaba33",
+      "entrypoint": null,
+      "provider": "injected",
+      "timeout_seconds": null,
+      "verifier_id": "bookmark-web-v1-verifier"
+    },
+    "implementation": {
+      "agents/research/artifact.py": "5b9056308a0159983eda2c341fff6a6626a445606dbd4fcc3bca874b787813b5",
+      "agents/research/default.py": "75a3053cdbfc3c629813cfc6eafd81740c86f75e6c982bae1105f12840baeae0",
+      "api/goal.py": "77eaebab57d95f1da8f725b1e66053d484f70239730a3b81f04c3ba6a95667fa",
+      "api/workflow.py": "7d0d67721ddec531fe349be115924b7c0ec5c733df0ec2d9a7bce8d2fa8348d3",
+      "app.py": "8c435b3c73b2108be74ccd9df8b2918cbd4914d8551211ad2a247fc7e8193796",
+      "base/storage.py": "149cd3a06dc53cb82ff17dc32156f56ca188759efff0ef99a2de01e1e289107a",
+      "framework/verifier.py": "2709575a8743c7d78c95a868cfb1d0036824cd6dfa4696291ffbe02d8809ad36",
+      "goals.py": "526fcc8c3185cf20863bb3c7ec4c5b4c91ac2e5ea2263f1d41342b9c9235ba71",
+      "modules/artifact.py": "fdbe9d8528d522d405fb4fc7f3e145c268d3b702d19279109375d14fdf5b4e9d",
+      "modules/benchmark.py": "e8ec9e6e9e956c5c596daffe26ed3967e87cc3ab8b7036484052da41bfd2d757",
+      "modules/browser.py": "f94ccdde7465e46910f65fa3b6c31e8108a2999a8862a03a95c494e02a2df1b1",
+      "modules/gateway.py": "7d2df6ff0b3d9c364cdec2fdeb39bcf945baf246175110c20e6e228db9d97c39",
+      "modules/harness.py": "c9c2d06938a26af4b35d5bdb677970084486ea22018aa8f5f530ff534bb71206",
+      "modules/ledger.py": "bb88ee2ec8f961080809acc9dff2534e41204af14e4bc9c55802f8f2627c0f83",
+      "modules/linux_sandbox.py": "de03aa5054682272b6dbd3689f4bc1f0189d45437b6c5501b1ada5203717bcd3",
+      "modules/runtime_dsh.py": "2ab57a1c2b9943bdd69ca50efe7aa0f2fae38b0e405a008853c67a34f50e1265",
+      "modules/runtime_package.py": "d28264b190f271c34c47d8eb42486d20046fee59ed43a7d0ac4f12bbd7baf5e4",
+      "modules/runtime_worker.py": "3d0a004b11e802b12367c45091965c126cdaca060c44177f13736a08cecb13f4",
+      "modules/structured_arithmetic.py": "c56ff63fb680f9c64a8158f4461ba853d67f5733a799c1b348cd93add86b5af4",
+      "workflows/artifact.py": "0e9246aee419333a75b301c421ed4bad73f7c03f6805eea4f21fb44f4900cdf5",
+      "workflows/evolution.py": "4a7fe409a74811554388c6ff1db20a3d995920180fb85e2d9d745abb221987e6",
+      "workflows/service.py": "c9a00dbcbdb4bfe4c379f5a2c43a29e04d915253da17873a0a2c3005d39ddcd3"
+    },
+    "goal_spec_without_skill_paths": {
+      "description": "Finish a bookmark management web app with add, edit, star, filter, delete and persistence. Include data-testid=\"url-input\" for a valid URL; keep it when editing. Active means unstarred; completed means starred. Use a static index.html with local CSS/JS, no remote resources. Use data-testid=\"title-input\", \"add\", \"item\" for each row; each row contains \"edit\", \"edit-input\" when editing, \"save\", checkbox \"toggle\" and \"delete\". Filters use \"filter-all\", \"filter-active\", \"filter-completed\". Trim and reject empty titles. Treat user input as literal text, including long Unicode or HTML-like strings. Persist all data and toggle state in localStorage. Fit 375px and 1280px screens without horizontal scrolling. All controls and rows at least 24x24px. Preserve adding existing items. Editing uses a row-scoped edit-input and save button. Each bookmark must render an anchor with its saved URL as href. Accept absolute http/https URLs only; reject empty, malformed, relative and javascript URLs. Preserve the URL when editing and after reload.",
+      "target": "artifact",
+      "acceptance": {
+        "metrics": [
+          {
+            "metric": "accuracy",
+            "threshold": 1.0,
+            "direction": "gte"
+          }
+        ],
+        "verifier_version": "bookmark-web-v1-verifier",
+        "required_checks": [
+          "add",
+          "edit",
+          "toggle",
+          "filter",
+          "persistence",
+          "empty_input",
+          "boundary",
+          "delete",
+          "layout",
+          "runtime",
+          "url",
+          "invalid_url"
+        ],
+        "final_protocol": "independent-holdout-v1"
+      },
+      "budget": {
+        "max_iterations": 5,
+        "max_seconds": 3600,
+        "max_retries": 1
+      },
+      "allowed_paths": [
+        "index.html",
+        "*.css",
+        "*.js"
+      ],
+      "invariants": [
+        "model fixed",
+        "execution harness fixed",
+        "verifier fixed",
+        "other artifacts fixed"
+      ],
+      "benchmark": "bookmark-web-v1",
+      "artifact_path": "/storage/openpsi/users/fenghui/projects/AReaL-RSI/examples/goals/bookmark-app",
+      "artifact_name": "bookmark-app",
+      "research_agent_count": 1,
+      "assets": {
+        "capture_candidates": false
+      }
+    },
+    "budget": {
+      "max_iterations": 5,
+      "max_seconds": 3600,
+      "max_retries": 1
+    },
+    "acceptance": {
+      "metrics": [
+        {
+          "metric": "accuracy",
+          "threshold": 1.0,
+          "direction": "gte"
+        }
+      ],
+      "verifier_version": "bookmark-web-v1-verifier",
+      "required_checks": [
+        "add",
+        "edit",
+        "toggle",
+        "filter",
+        "persistence",
+        "empty_input",
+        "boundary",
+        "delete",
+        "layout",
+        "runtime",
+        "url",
+        "invalid_url"
+      ],
+      "final_protocol": "independent-holdout-v1"
+    }
+  },
+  "only_treatment_difference": "frozen research Skill version",
+  "success_rates": {
+    "control": 1.0,
+    "skill": 1.0
+  },
+  "median_seconds_all_runs": {
+    "control": 686.5930349454284,
+    "skill": 476.8815653398633
+  },
+  "sum_seconds_all_runs": {
+    "control": 1849.6096797659993,
+    "skill": 2162.441642910242
+  },
+  "skill_total_time_increase": 0.1691340430181032,
+  "time_reduction": 0.3054378051216807,
+  "time_gate_passed": true,
+  "efficiency_proven": false,
+  "limitation": "Token/fee/human non-regression gate requires observable costs; three pairs are demo evidence only."
+}

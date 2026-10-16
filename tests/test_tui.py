@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import pty
@@ -88,10 +89,25 @@ class TUITests(unittest.TestCase):
                     def until(predicate: Callable[[], bool]) -> None:
                         deadline = time.monotonic() + 25
                         while not predicate():
-                            if time.monotonic() > deadline or process.poll() is not None:
+                            if time.monotonic() > deadline:
+                                self.fail(output.decode(errors="replace")[-5000:])
+                            if process.poll() is not None:
+                                if predicate():
+                                    return
                                 self.fail(output.decode(errors="replace")[-5000:])
                             if select.select([master], [], [], 0.05)[0]:
-                                output.extend(os.read(master, 65536))
+                                try:
+                                    data = os.read(master, 65536)
+                                except OSError as exc:
+                                    if exc.errno != errno.EIO:
+                                        raise
+                                    data = b""  # Linux reports PTY closure as EIO, not empty bytes.
+                                if not data:
+                                    process.wait(timeout=max(0.1, deadline - time.monotonic()))
+                                    if not predicate():
+                                        self.fail(output.decode(errors="replace")[-5000:])
+                                    return
+                                output.extend(data)
 
                     def state() -> dict[str, object]:
                         paths = list((root / "data/sessions").glob("*/session.json"))

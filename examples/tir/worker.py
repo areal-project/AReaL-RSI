@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import signal
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -13,8 +15,15 @@ from areal_rsi.api.control import encode_record
 from areal_rsi.api.execution import TrainingReceipt
 from areal_rsi.api.records import EvaluationSample
 from areal_rsi.infra.artifacts import read_record, write_record
+from examples.tir.benchmark import read_examples
 from examples.tir.data import read_problems
 from examples.tir.pipeline import WorkerRequest
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerAllocation:
+    slurm_job_id: str
+    node: str
 
 
 def prepare_config(request: WorkerRequest) -> Any:
@@ -56,12 +65,12 @@ def prepare_config(request: WorkerRequest) -> Any:
             },
             "rollout": {
                 "backend": "sglang:d1p1t1",
-                "max_concurrent_rollouts": 4,
+                "max_concurrent_rollouts": 16,
                 "max_head_offpolicyness": 0,
             },
             "sglang": {
                 "model_path": request.model,
-            "context_length": config.harness.max_length + 16,
+                "context_length": config.harness.max_length + 16,
                 "mem_fraction_static": 0.55,
             },
             "gconfig": {
@@ -80,7 +89,12 @@ def prepare_config(request: WorkerRequest) -> Any:
                 "batch_size": config.training.batch_size,
                 "num_workers": 0,
             },
-            "saver": {"freq_steps": 1, "freq_epochs": None, "freq_secs": None, "mode": "sync"},
+            "saver": {
+                "freq_steps": config.training.max_steps,
+                "freq_epochs": None,
+                "freq_secs": None,
+                "mode": "sync",
+            },
             "evaluator": {"freq_epochs": None, "freq_steps": None, "freq_secs": None},
             "recover": {
                 "mode": "disabled",
@@ -115,7 +129,7 @@ def workflow_kwargs(config: Any, trace_directory: Path | None = None) -> dict[st
     }
 
 
-def dataset(path: str) -> Any:
+def dataset(path: str, request: WorkerRequest) -> Any:
     from datasets import Dataset
 
     return Dataset.from_list(
@@ -125,7 +139,11 @@ def dataset(path: str) -> Any:
                 "messages": [{"role": "user", "content": item.prompt}],
                 "answer": item.answer,
             }
-            for item in read_problems(Path(path))
+            for item in (
+                read_examples(Path(path))
+                if request.dataset_format == "benchmark"
+                else read_problems(Path(path))
+            )
         ]
     )
 
@@ -150,7 +168,13 @@ def train(request: WorkerRequest, config: Any) -> None:
     from areal.utils.saver import Saver
 
     key, initial = parameter_probe(Path(request.model))
-    with PPOTrainer(config, dataset(request.dataset), dataset(request.dev_dataset)) as trainer:
+    training_data = dataset(request.dataset, request)
+    possible_steps = (
+        len(training_data) // config.train_dataset.batch_size * config.total_train_epochs
+    )
+    if possible_steps < request.config.training.max_steps:
+        raise ValueError("Training epochs and dataset cannot supply the requested update count")
+    with PPOTrainer(config, training_data, dataset(request.dev_dataset, request)) as trainer:
         trainer.train(
             workflow="examples.tir.workflow.RecordedTIRWorkflow",
             workflow_kwargs=workflow_kwargs(config),
@@ -169,6 +193,8 @@ def train(request: WorkerRequest, config: Any) -> None:
     if not checkpoints:
         raise ValueError(f"AReaL completed without a saved checkpoint in {root}")
     step, checkpoint = max(checkpoints)
+    if step + 1 != request.config.training.max_steps:
+        raise ValueError("AReaL did not save the requested final training step")
     _, final = parameter_probe(checkpoint, key)
     delta = float((final - initial).abs().max())
     if delta <= 0:
@@ -201,7 +227,7 @@ def evaluate(request: WorkerRequest, config: Any) -> None:
             config.sglang, tp_size=allocation.parallel.tp_size, base_gpu_id=0
         )
         rollout.initialize(role="eval-rollout", server_args=server_args)
-        items = dataset(request.dataset)
+        items = dataset(request.dataset, request)
         for item in items:
             rollout.submit(
                 item,
@@ -235,6 +261,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--request", type=Path, required=True)
     request = read_record(parser.parse_args().request, WorkerRequest)
+    write_record(
+        Path(request.output) / "allocation.json",
+        WorkerAllocation(os.environ.get("SLURM_JOB_ID", ""), os.environ.get("SLURMD_NODENAME", "")),
+    )
     config = prepare_config(request)
     if request.mode == "train":
         train(request, config)

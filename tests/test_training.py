@@ -162,9 +162,12 @@ def test_evaluation_requires_exact_task_coverage(
     traces = LocalTrajectoryStore(tmp_path / "traces")
     evaluator = EvaluationService(jobs, traces)
     directory = jobs.directory("run", "eval")
-    sample = EvaluationSample("a", "answer", 1, True, (TraceEvent("generation", "answer"),))
+    sample = EvaluationSample(
+        "a", "answer\u2028line", 1, True, (TraceEvent("generation", "answer\u2028line"),)
+    )
     payload = "\n".join(
-        json.dumps(encode_record(replace(sample, task_id=name))) for name in task_ids
+        json.dumps(encode_record(replace(sample, task_id=name)), ensure_ascii=False)
+        for name in task_ids
     )
     code = (
         "from pathlib import Path; "

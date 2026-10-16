@@ -80,9 +80,8 @@ def validate_problem(item: MathProblem) -> None:
 
 
 def read_problems(path: Path) -> tuple[MathProblem, ...]:
-    items = tuple(
-        decode_record(MathProblem, json.loads(line)) for line in path.read_text().splitlines()
-    )
+    with path.open() as stream:
+        items = tuple(decode_record(MathProblem, json.loads(line)) for line in stream)
     for item in items:
         validate_problem(item)
     if not items or len({item.task_id for item in items}) != len(items):

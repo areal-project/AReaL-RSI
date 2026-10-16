@@ -1,0 +1,11 @@
+{
+  "hypothesis": "Start with 75% real training word problems and 25% independently verified multi-step synthetic problems; GRPO should improve boxed-answer correctness without changing inference.",
+  "parent": "base",
+  "data": {"seed": 17, "real_count": 768, "synthetic_count": 256},
+  "training_steps": 32,
+  "batch_size": 16,
+  "n_samples": 4,
+  "learning_rate": 0.00001,
+  "max_new_tokens": 768,
+  "temperature": 1.0
+}

@@ -107,6 +107,7 @@ class WorkerRequest:
     dev_dataset: str
     output: str
     trial: str
+    dataset_format: Literal["procedural", "benchmark"] = "procedural"
 
 
 @dataclass(frozen=True, slots=True)

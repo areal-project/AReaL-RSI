@@ -24,6 +24,7 @@ class EvolutionTarget(StrEnum):
 class BenchmarkSplit(StrEnum):
     TRAIN = "train"
     VALIDATE = "validate"
+    TEST = "test"
 
 
 class RunState(StrEnum):

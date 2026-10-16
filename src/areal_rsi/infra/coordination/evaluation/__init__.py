@@ -41,10 +41,8 @@ class EvaluationService:
         job = await self.jobs.run(run_id, name, spec)
         directory = Path(job.result_path)
         path = directory / "samples.jsonl"
-        samples = [
-            decode_record(EvaluationSample, json.loads(line))
-            for line in path.read_text().splitlines()
-        ]
+        with path.open() as stream:
+            samples = [decode_record(EvaluationSample, json.loads(line)) for line in stream]
         actual = [sample.task_id for sample in samples]
         if len(actual) != len(set(actual)) or set(actual) != set(task_ids):
             raise ValueError(

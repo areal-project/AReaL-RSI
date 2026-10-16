@@ -1,1 +1,0 @@
-{"servers": [{"name": "arithmetic", "script": "tools/math_mcp.py", "enabled": false}]}

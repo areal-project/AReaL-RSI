@@ -1,4 +1,0 @@
-interface:
-  display_name: "Benchmark Adapter"
-  short_description: "Adapt a Benchmark to AReaL-RSI"
-  default_prompt: "Adapt the requested Benchmark to AReaL-RSI using the repository Benchmark catalog and trusted adapter contracts."

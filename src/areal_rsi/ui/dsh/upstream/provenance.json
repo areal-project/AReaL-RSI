@@ -1,0 +1,45 @@
+{
+  "repository": "https://github.com/deepseek-ai/deepseek-harness",
+  "commit": "7248b5ec8f8769f882f12fd521504fa48e97bcf3",
+  "directory": "packages/ui/tui/src",
+  "license": "BSD-3-Clause",
+  "files": [
+    {
+      "path": "components/content.ts",
+      "sha256": "79fb36177d43b7024421551f5af43deb9591fed9a2a71753c0b87d691ce09830"
+    },
+    {
+      "path": "components/dialogs.ts",
+      "sha256": "fc984da29b87e7a2b7e20d9912c6b087ca118c97c39dc7444fc64803b51e11da"
+    },
+    {
+      "path": "components/text.ts",
+      "sha256": "4e4d4b6a75d53eb8f9bf96ce0507dc3600decfbafa475b386ecec974625e751e"
+    },
+    {
+      "path": "components/theme.ts",
+      "sha256": "51c7e999ca6fa5dfa2286de4d41dd3416f187b19dbd39262c550af551666f801"
+    },
+    {
+      "path": "components/transcript.ts",
+      "sha256": "94fa95c8813f0f2960a1fde7f73f06759b65aeb1d625860366daf85b08d268e0"
+    },
+    {
+      "path": "components/xml-tool-output.ts",
+      "sha256": "e3c2d9ec7f204f53d3c1547c86dbf3154b58527de2f012a485c9209c55c020b5"
+    },
+    {
+      "path": "chat/timing.ts",
+      "sha256": "bdfd603297cc2dbeccdca1791ef4438792a198b58c9452afb83fdbf1d8320a90"
+    },
+    {
+      "path": "prompt.ts",
+      "sha256": "5f33d2a3631c12f4f80ce04e659b23563b3bf82b595c7c5730dc1282b73dd8f0"
+    }
+  ],
+  "dependency_patch": {
+    "path": "pi-tui.patch",
+    "source": "patches/@earendil-works__pi-tui@0.80.7.patch",
+    "sha256": "6c30c5386c0159131e1361023cddf31377f5728962524841964373312c1ed946"
+  }
+}

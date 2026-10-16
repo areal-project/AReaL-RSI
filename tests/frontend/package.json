@@ -1,7 +1,0 @@
-{
-  "name": "rsi-workbench-tests",
-  "private": true,
-  "type": "module",
-  "scripts": { "test": "node --test workbench.test.mjs" },
-  "devDependencies": { "happy-dom": "20.14.5" }
-}

@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import subprocess
 import sys
+import tarfile
 from dataclasses import replace
 from pathlib import Path
 
@@ -14,15 +16,92 @@ import pytest
 from areal_rsi.api.control import encode_record
 from areal_rsi.api.execution import AReaLRuntime, JobSpec, TrainingReceipt
 from areal_rsi.api.records import EvaluationSample, TraceEvent, TrajectoryQuery
-from areal_rsi.infra.artifacts import read_record
+from areal_rsi.infra.artifacts import read_record, snapshot_source
 from areal_rsi.infra.coordination.evaluation import EvaluationService
 from areal_rsi.infra.execution import JobExecutionError, JobExecutor
 from areal_rsi.infra.training import AReaLBackend
 from areal_rsi.infra.trajectories import LocalTrajectoryStore
+from examples.tir.data import SynthesisConfig, read_problems, synthesize, validate_problem
+from examples.tir.pipeline import ExperimentConfig, ExperimentState, local_path, run
+from examples.tir.reward import integer_reward
 
 
 def command(code: str, cwd: Path, *, timeout: float = 10) -> JobSpec:
     return JobSpec((sys.executable, "-c", code), cwd=str(cwd), timeout_seconds=timeout)
+
+
+def git_repository(root: Path) -> None:
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+        check=True,
+    )
+
+
+def test_prepare_isolated_runs_and_archives_dirty_source(tmp_path: Path) -> None:
+    repository = tmp_path / "backend"
+    (repository / "areal").mkdir(parents=True)
+    (repository / "areal" / "__init__.py").touch()
+    (repository / "examples" / "tir").mkdir(parents=True)
+    (repository / "examples" / "tir" / "workflow.py").write_text("original = True\n")
+    git_repository(repository)
+    (repository / "examples" / "tir" / "workflow.py").write_text("original = False\n")
+    model = tmp_path / "model"
+    model.mkdir()
+    (model / "config.json").write_text("{}")
+    config = ExperimentConfig(
+        AReaLRuntime(str(repository), sys.executable),
+        str(model),
+        output_root=str(tmp_path / "runs"),
+    )
+    first = asyncio.run(run(config, prepare_only=True))
+    second = asyncio.run(run(config, prepare_only=True))
+    assert first != second
+    state = read_record(first / "experiment.json", ExperimentState)
+    assert state.status == "prepared" and state.provenance is not None
+    assert state.provenance.backend.dirty
+    with tarfile.open(local_path(state.provenance.backend.archive)) as archive:
+        content = archive.extractfile("examples/tir/workflow.py")
+        assert content is not None and content.read() == b"original = False\n"
+    original = state.provenance.backend.content.digest
+    (repository / "examples" / "tir" / "workflow.py").write_text("another_change = True\n")
+    changed = snapshot_source(repository, tmp_path / "changed.json", paths=("areal", "examples"))
+    assert original != changed.content.digest
+    data = local_path(state.provenance.datasets.train)
+    data.write_text(data.read_text() + "\n")
+    with pytest.raises(ValueError, match="changed"):
+        local_path(state.provenance.datasets.train)
+
+
+def test_synthesis_reproducible_verified_and_disjoint(tmp_path: Path) -> None:
+    first = synthesize(SynthesisConfig(), tmp_path / "first")
+    second = synthesize(SynthesisConfig(), tmp_path / "second")
+    assert first.train.digest == second.train.digest
+    assert first.evaluation.digest == second.evaluation.digest
+    larger = synthesize(SynthesisConfig(train_size=64), tmp_path / "larger")
+    assert first.evaluation.digest == larger.evaluation.digest
+    assert first.dev.digest == larger.dev.digest
+    splits = [
+        read_problems(tmp_path / "first" / f"{name}.jsonl") for name in ("train", "dev", "eval")
+    ]
+    identities = [{problem.task_id for problem in split} for split in splits]
+    assert len(set.union(*identities)) == sum(len(split) for split in splits)
+    with pytest.raises(ValueError, match="answer"):
+        validate_problem(replace(splits[0][0], answer="wrong"))
+    assert integer_reward("", r"Earlier \boxed{2}, final \boxed{1,234}", (), (), "1234") == 1
+    assert integer_reward("", "1234 without the required answer format", (), (), "1234") == 0
 
 
 def test_jobs_log_failure_and_refuse_to_overwrite(tmp_path: Path) -> None:

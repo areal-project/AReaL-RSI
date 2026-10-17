@@ -10,10 +10,10 @@ test:
 	$(UV) run --locked pytest tests
 
 lint:
-	$(UV) run --locked ruff check src tests
+	$(UV) run --locked ruff check src tests examples
 
 typecheck:
-	$(UV) run --locked mypy src tests
+	$(UV) run --locked mypy src tests examples/tir/pipeline.py examples/tir/data.py examples/tir/reward.py
 
 architecture:
 	$(UV) run --locked pytest tests/test_architecture.py

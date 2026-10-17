@@ -74,8 +74,7 @@ Examples use shared infrastructure through their own entry points; they are not 
 
 | Example | Description | Resources |
 | --- | --- | --- |
-| TIR training loop | Synthetic data → baseline → GRPO → checkpoint → reevaluation | [Guide](examples/tir/README.md) |
-| Multi-round ToRL research | Iterate on data and training recipes, select on valid, then evaluate on test | [Setup](examples/tir/RESEARCH.md) · [Results](examples/tir/RESULTS.md) |
+| TIR research | Agent-driven, multi-round research on data and training recipes; select on valid, then evaluate on test | [Setup](examples/tir/RESEARCH.md) · [Results](examples/tir/RESULTS.md) |
 
 For multi-round TIR, configure `examples/tir/experiment.json` and `.env` on a Slurm cluster
 with Apptainer and an AReaL training environment, then run from the repository root:

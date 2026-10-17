@@ -1,7 +1,9 @@
 # TIR 多轮训练研究
 
-`pipeline.py` 保留最小独立端到端例子；`experiment.py` 管理真实数据上的分阶段研究，
-`rsi.py` 才是实际 `/rsi` 的例子入口。训练并不是 `/rsi` 的必选步骤。
+TIR research 是一个独立示例，`rsi.py` 是 Agent 驱动多轮研究的主入口，
+`experiment.py` 管理真实数据上的分阶段实验。需要先检查训练链路时，可使用
+`pipeline.py`，具体步骤见 [单次 pipeline 接入检查](README.md)。
+训练并不是 `/rsi` 的必选步骤。
 其他任务可以只优化 harness，或调用同一套 infra 服务组织自己的训练过程。
 
 公共 `JobExecutor` 执行进程并处理失败/取消，`EvaluationService` 检查完整覆盖并保存轨迹，

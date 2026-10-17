@@ -1,6 +1,7 @@
-# 独立 TIR 训练示例
+# TIR 单次 pipeline 接入检查
 
-本例独立执行“合成数据 → 基线评测 → AReaL GRPO → checkpoint → 复评 → 对比”。
+本文说明 TIR research 示例中的单次 pipeline，用于训练链路接入检查。
+它独立执行“合成数据 → 基线评测 → AReaL GRPO → checkpoint → 复评 → 对比”。
 不启动 Codex、TUI 或 `/rsi`，也不修改现有会话流程。默认是验证接入的两步训练，
 不代表充分训练或质量收益实验。
 

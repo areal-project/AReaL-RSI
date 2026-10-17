@@ -42,6 +42,10 @@ def test_dependency_and_state_boundaries() -> None:
                     )
                 targets = [prefix, *(prefix + "." + alias.name for alias in node.names)]
             for target in targets:
+                if parts[0] in {"api", "infra"} and (
+                    target == "examples" or target.startswith("examples.")
+                ):
+                    errors.append(f"{path}: core cannot import task example {target}")
                 for layer, denied in forbidden.items():
                     module = ".".join(parts)
                     if (module == layer or module.startswith(layer + ".")) and any(

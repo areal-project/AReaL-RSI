@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
+from areal_rsi.api.records import ContentRef
+
 JobState = Literal[
     "queued", "starting", "running", "succeeded", "failed", "cancelled", "timed_out", "lost"
 ]
@@ -73,6 +75,31 @@ class JobEvent:
     state: JobState
     timestamp: float
     record_path: str
+
+
+@dataclass(frozen=True, slots=True)
+class AReaLRuntime:
+    repository: str
+    python: str
+    environment: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class TrainingReceipt:
+    """Written only after the trainer closes and finishes checkpoint writes."""
+
+    checkpoint: str
+    global_step: int
+    metrics: dict[str, float] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class TrainingResult:
+    job_id: str
+    checkpoint: ContentRef
+    manifest: ContentRef
+    global_step: int
+    metrics: dict[str, float]
 
 
 @dataclass(frozen=True)

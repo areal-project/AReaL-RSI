@@ -9,8 +9,71 @@ from pathlib import Path
 
 import pytest
 
+from areal_rsi.api.records import DirectorySnapshot
+from areal_rsi.infra.artifacts import read_record, snapshot_directory
 from examples.search.analysis import paired_statistics, read_official_results, wilson_interval
-from examples.search.final_evaluation import counters
+from examples.search.final_evaluation import counters, export_checkpoint
+
+
+def test_hf5_export_preserves_weights_and_restores_legacy_position_metadata(tmp_path: Path) -> None:
+    source = tmp_path / "trained"
+    source.mkdir()
+    parameters = {
+        "rope_type": "yarn",
+        "rope_theta": 1000000,
+        "factor": 4.0,
+        "original_max_position_embeddings": 32768,
+    }
+    configuration = {"model_type": "qwen3", "rope_parameters": parameters, "dtype": "bfloat16"}
+    original = json.dumps(configuration)
+    (source / "config.json").write_text(original)
+    (source / "model.safetensors").write_bytes(b"unchanged checkpoint payload")
+    source_manifest = tmp_path / "trained.json"
+    reference = snapshot_directory(source, source_manifest)
+    output = tmp_path / "inference"
+    manifest = export_checkpoint(source_manifest, output, source_sha256=reference.digest)
+    exported = json.loads((output / "config.json").read_text())
+    assert exported["rope_theta"] == 1000000
+    assert exported["torch_dtype"] == "bfloat16"
+    assert exported["rope_parameters"] == parameters
+    assert exported["rope_scaling"] == {
+        key: value for key, value in parameters.items() if key != "rope_theta"
+    }
+    assert (source / "config.json").read_text() == original
+    assert (output / "model.safetensors").read_bytes() == (
+        source / "model.safetensors"
+    ).read_bytes()
+    before = read_record(source_manifest, DirectorySnapshot)
+    after = read_record(manifest, DirectorySnapshot)
+    assert next(x.sha256 for x in before.files if x.path == "model.safetensors") == next(
+        x.sha256 for x in after.files if x.path == "model.safetensors"
+    )
+    assert export_checkpoint(source_manifest, output, source_sha256=reference.digest) == manifest
+    (output / "config.json").write_text("{}")
+    with pytest.raises(ValueError, match="Checkpoint file changed"):
+        export_checkpoint(source_manifest, output, source_sha256=reference.digest)
+
+
+def test_hf5_export_rejects_conflicting_legacy_theta(tmp_path: Path) -> None:
+    source = tmp_path / "trained"
+    source.mkdir()
+    (source / "config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "qwen3",
+                "dtype": "bfloat16",
+                "rope_theta": 10000,
+                "rope_parameters": {"rope_type": "yarn", "rope_theta": 1000000, "factor": 4.0},
+            }
+        )
+    )
+    (source / "model.safetensors").write_bytes(b"original weights")
+    manifest = tmp_path / "trained.json"
+    reference = snapshot_directory(source, manifest)
+    output = tmp_path / "inference"
+    with pytest.raises(ValueError, match="Conflicting modern and legacy RoPE"):
+        export_checkpoint(manifest, output, source_sha256=reference.digest)
+    assert not output.exists()
 
 
 def test_paired_bootstrap_preserves_constant_within_question_gain() -> None:

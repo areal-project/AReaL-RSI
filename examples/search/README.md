@@ -50,6 +50,15 @@ python -m examples.search.pipeline --submit \
 
 全量评测使用 `FinalEvalConfig` JSON，分别指定模型、原始 tokenizer/generation-config、模型文件 manifest 及其 SHA256、`asset_lock` 及其 SHA256、原检索环境 Python 和 vLLM Python。asset lock 引用并校验原模型、embedding、judge、官方索引、语料、题目/标签、snippet tokenizer、Qwen-Agent 和冻结评测源码的文件清单。题目和标签仅用于全量评测，不能成为训练输入。官方索引文件另按公开 LFS SHA256 校验来源。提交脚本传入 host 核验的 `rsi` allocation，使用3张 GPU，并在同一个预算账本中登记整个 allocation。
 
+训练镜像使用 HF5，最终 vLLM 镜像使用 Transformers4.57。HF5 将 `rope_theta` 移入 `rope_parameters`；直接使用该 checkpoint 时，旧环境会采用错误的默认 theta。先在项目环境中生成兼容导出，补齐对应的 legacy RoPE/dtype 字段，并检查每个权重文件的 SHA256 未变。原始 checkpoint 保留，导出 manifest 与来源记录位于新目录旁。最终配置的 `model` 和 `checkpoint_manifest` 指向导出目录及其 manifest；评测仍使用原冻结 H0 运行时和 asset lock。
+
+```bash
+python -m examples.search.final_evaluation \
+  --export-checkpoint /path/to/original/checkpoint.json \
+  --source-sha256 ORIGINAL_CHECKPOINT_MANIFEST_SHA256 \
+  --output /path/to/new/inference-export
+```
+
 ```bash
 python -m examples.search.final_evaluation --config /path/to/frozen-final-config.json
 python -m examples.search.analysis \

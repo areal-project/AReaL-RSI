@@ -36,6 +36,23 @@ def read_official_results(directory: Path, expected: set[str]) -> dict[str, bool
         if question_id in result:
             raise ValueError(f"Duplicate judged query: {question_id}")
         judge = record["judge_result"]
+        # The unmodified official evaluator omits `correct` for its explicit
+        # no-answer skip. This is a model/budget failure in the full denominator,
+        # unlike an attempted judge response that could not be parsed.
+        no_answer_skip = (
+            judge.get("parse_error") is True
+            and judge.get("error") == "Response incomplete or cannot be parsed"
+            and record.get("judge_prompt") is None
+            and not record.get("judge_response")
+            and (record["is_completed"] is False or record.get("response") == "")
+        )
+        if no_answer_skip:
+            if "correct" in judge and judge["correct"] is not False:
+                raise ValueError(
+                    f"Invalid correctness on an official no-answer skip: {question_id}"
+                )
+            result[question_id] = False
+            continue
         if record["is_completed"] and (
             judge.get("parse_error") or not record.get("judge_response")
         ):

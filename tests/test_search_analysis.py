@@ -125,6 +125,30 @@ def test_official_judge_failures_and_missing_queries_cannot_be_hidden(tmp_path: 
         read_official_results(tmp_path, {"one"})
 
 
+@pytest.mark.parametrize("marked_completed", [False, True])
+def test_real_official_no_answer_shape_stays_wrong_without_hiding_judge_failure(
+    tmp_path: Path, marked_completed: bool
+) -> None:
+    path = tmp_path / "run_external_eval.json"
+    record = {
+        "query_id": "external",
+        "is_completed": marked_completed,
+        "response": "",
+        "judge_prompt": None,
+        "judge_response": None,
+        "judge_result": {
+            "parse_error": True,
+            "error": "Response incomplete or cannot be parsed",
+        },
+    }
+    path.write_text(json.dumps(record))
+    assert read_official_results(tmp_path, {"external"}) == {"external": False}
+    record.update(is_completed=True, response="a real final answer", judge_prompt="attempted judge")
+    path.write_text(json.dumps(record))
+    with pytest.raises(ValueError, match="Judge failed"):
+        read_official_results(tmp_path, {"external"})
+
+
 def test_server_token_counters_sum_replicas_without_counting_cache_twice() -> None:
     payload = b"""vllm:prompt_tokens_total{engine="0"} 17
 vllm:prompt_tokens_total{engine="1"} 23

@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Literal
 
 from areal_rsi.api.execution import AReaLRuntime, TrainingResult
-from areal_rsi.api.records import EvaluationResult
+from areal_rsi.api.records import BenchmarkSplit, EvaluationResult
 from areal_rsi.infra.artifacts import file_ref, read_record, write_record
 from areal_rsi.infra.coordination.evaluation import EvaluationService
 from areal_rsi.infra.execution import JobExecutor, ProcessIdentity
@@ -123,6 +123,7 @@ class ExperimentState:
     candidate: EvaluationResult | None = None
     selected_model: str = ""
     error: str = ""
+    evaluation_split: Literal["dev", "test"] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,10 +214,19 @@ def refresh_budget(path: Path) -> ComputeBudget:
     return updated
 
 
-def submit(config_path: Path, run_id: str, image: Path, budget_path: Path, time_limit: int) -> str:
-    """Submit a serialized candidate allocation after reserving its worst-case cost."""
+def submit(
+    config_path: Path,
+    run_id: str,
+    image: Path,
+    budget_path: Path,
+    time_limit: int,
+    *,
+    evaluation_split: Literal["dev", "test"] | None = None,
+) -> str:
+    """Reserve and submit a candidate or independent evaluation allocation."""
     config = read_record(config_path, SearchConfig)
-    gpus = config.actor_gpus + config.rollout_gpus + 1
+    gpus = 2 if evaluation_split else config.actor_gpus + config.rollout_gpus + 1
+    kind = f"external-{evaluation_split}-evaluation" if evaluation_split else "training-candidate"
     time_limit = ((time_limit + 59) // 60) * 60
     if not 0 < time_limit <= 24 * 3600 or not config.project:
         raise ValueError("Submission requires a frozen project path and a positive time limit")
@@ -229,8 +239,16 @@ def submit(config_path: Path, run_id: str, image: Path, budget_path: Path, time_
         receipt = directory / "slurm-job.json"
         if receipt.exists():
             job = read_record(receipt, ComputeJob)
+            if (
+                job.kind != kind
+                or job.gpus != gpus
+                or read_record(directory / "config.json", SearchConfig) != config
+            ):
+                raise ValueError("Existing submission has a different configuration or mode")
             return job.job_id  # Never duplicate an allocation after an observation timeout.
-        if any(job.kind == "training-candidate" and job.active for job in budget.jobs):
+        if evaluation_split is None and any(
+            job.kind == "training-candidate" and job.active for job in budget.jobs
+        ):
             raise ValueError("Another candidate allocation is active; inspect its Slurm state")
         if budget.reserved_gpu_seconds + gpus * time_limit > budget.gpu_hours_limit * 3600:
             raise ValueError("Candidate would exceed the total GPU-hour budget")
@@ -251,6 +269,8 @@ def submit(config_path: Path, run_id: str, image: Path, budget_path: Path, time_
             "--run-id",
             run_id,
         ]
+        if evaluation_split:
+            command.extend(("--evaluate-only", evaluation_split))
         # Pass paths as argv with shell quoting; neither config text nor credentials
         # become executable shell substitutions. The planner key is not exported.
         inside = "\n".join(
@@ -318,7 +338,11 @@ def submit(config_path: Path, run_id: str, image: Path, budget_path: Path, time_
         }
         job_id = subprocess.check_output(args, env=environment, text=True).strip().split(";")[0]
         job = ComputeJob(
-            job_id, "training-candidate", gpus, "PENDING", time_limit_seconds=time_limit
+            job_id,
+            kind,
+            gpus,
+            "PENDING",
+            time_limit_seconds=time_limit,
         )
         write_record(receipt, job)
         write_record(budget_path, replace(budget, jobs=(*budget.jobs, job)))
@@ -345,8 +369,13 @@ async def wait_for_dense(process: asyncio.subprocess.Process, url: str) -> None:
     raise TimeoutError("Dense service readiness deadline exceeded")
 
 
-async def run(config: SearchConfig, run_id: str) -> Path:
-    """Run one real candidate inside an existing Slurm allocation, with durable stages.
+async def run(
+    config: SearchConfig,
+    run_id: str,
+    *,
+    evaluation_split: Literal["dev", "test"] | None = None,
+) -> Path:
+    """Run one candidate or independent evaluation in a verified Slurm allocation.
 
     A native ResearchSystem Goal chooses subsequent configs from dev evidence.
     This runner owns execution and incumbent integrity, never the research policy.
@@ -355,7 +384,7 @@ async def run(config: SearchConfig, run_id: str) -> Path:
     if not job_id:
         raise ValueError("Search experiments require an existing Slurm reservation allocation")
     GPUs = tuple(item for item in os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",") if item)
-    required = config.actor_gpus + config.rollout_gpus + 1
+    required = 2 if evaluation_split else config.actor_gpus + config.rollout_gpus + 1
     if len(GPUs) < required:
         raise ValueError(f"Allocation requires {required} GPUs including dense retrieval")
     # The training SIF omits Slurm clients. The host submission script supplies
@@ -376,9 +405,10 @@ async def run(config: SearchConfig, run_id: str) -> Path:
     jobs = JobExecutor(root)
     directory = jobs.directory(run_id, "train").parents[1]
     directory.mkdir(parents=True, exist_ok=True)
-    # Serialize whole allocations so a second driver cannot race incumbent updates
-    # or start another training run. The OS releases the lease on process death.
-    with (root / "experiment.lock").open("a") as lease:
+    # Training serializes incumbent writes. Independent evaluation never selects
+    # a model and uses its own lease, so a held-out result cannot update incumbent.
+    lock = directory / "evaluation.lock" if evaluation_split else root / "experiment.lock"
+    with lock.open("a") as lease:
         fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
         config_path = directory / "config.json"
         if config_path.exists():
@@ -391,12 +421,14 @@ async def run(config: SearchConfig, run_id: str) -> Path:
         state = (
             read_record(state_path, ExperimentState)
             if state_path.exists()
-            else ExperimentState(run_id, digest)
+            else ExperimentState(run_id, digest, evaluation_split=evaluation_split)
         )
         if state.config_sha256 != digest:
             raise ValueError("Experiment configuration was changed")
+        if state.evaluation_split != evaluation_split:
+            raise ValueError("Resume evaluation split differs from the frozen experiment")
         evaluator = EvaluationService(jobs, LocalTrajectoryStore(directory / "trajectories"))
-        dev = Path(config.dataset_directory) / "dev.jsonl"
+        dev = Path(config.dataset_directory) / f"{evaluation_split or 'dev'}.jsonl"
         dev_digest = file_ref(dev).digest
         task_ids = tuple(json.loads(line)["question_id"] for line in dev.read_text().splitlines())
         backend = AReaLBackend(config.runtime, jobs)
@@ -437,7 +469,7 @@ async def run(config: SearchConfig, run_id: str) -> Path:
                 raise RuntimeError(
                     "Incomplete previous stage retained; inspect it and use a new run ID"
                 )
-            split = "train" if mode == "train" else "dev"
+            split = "train" if mode == "train" else (evaluation_split or "dev")
             with socket.socket() as listener:
                 listener.bind(("127.0.0.1", 0))
                 port = listener.getsockname()[1]
@@ -490,12 +522,29 @@ async def run(config: SearchConfig, run_id: str) -> Path:
                     if mode == "train":
                         return await backend.train(run_id, name, spec)
                     return await evaluator.evaluate(
-                        run_id, name, spec, task_ids=task_ids, solution_id=f"{run_id}-{name}"
+                        run_id,
+                        name,
+                        spec,
+                        task_ids=task_ids,
+                        solution_id=f"{run_id}-{name}",
+                        split=BenchmarkSplit.TEST if split == "test" else BenchmarkSplit.VALIDATE,
                     )
                 finally:
                     await JobExecutor._terminate(dense)
 
         try:
+            if evaluation_split:
+                state.phase = "evaluation"
+                write_record(state_path, state)
+                result = await stage("eval", evaluation_split, config.model)
+                if not isinstance(result, EvaluationResult):
+                    raise TypeError("Independent evaluation returned a training receipt")
+                state.candidate = result
+                state.selected_model = config.model
+                state.phase = "completed"
+                state.error = ""
+                write_record(state_path, state)
+                return directory
             state.phase = "baseline"
             write_record(state_path, state)
             baseline = await stage("eval", "baseline", config.model)
@@ -584,6 +633,7 @@ def main() -> None:
     parser.add_argument("--image", type=Path)
     parser.add_argument("--budget", type=Path)
     parser.add_argument("--time-limit", type=int, default=7200)
+    parser.add_argument("--evaluate-only", choices=("dev", "test"))
     arguments = parser.parse_args()
     config = read_record(arguments.config, SearchConfig)
     if arguments.submit:
@@ -596,11 +646,15 @@ def main() -> None:
                 arguments.image,
                 arguments.budget,
                 arguments.time_limit,
+                evaluation_split=arguments.evaluate_only,
             ),
             flush=True,
         )
     else:
-        print(asyncio.run(run(config, arguments.run_id)), flush=True)
+        print(
+            asyncio.run(run(config, arguments.run_id, evaluation_split=arguments.evaluate_only)),
+            flush=True,
+        )
 
 
 if __name__ == "__main__":

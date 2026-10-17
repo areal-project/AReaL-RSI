@@ -48,6 +48,15 @@ python -m examples.search.pipeline --submit \
 
 候选仅在相同 dev 和 harness 条件下严格提高成绩时替换 incumbent。最终候选须在完整830题评测前冻结；原 H0、相同推理预算、官方索引和官方评分的 Accuracy 至少125/830，并补充其他种子、配对统计、Evidence Recall、搜索次数、真实 token、延迟和全部 GPU 成本。修改 harness 时另做归因对照。256 GPU·小时耗尽不能标记 Goal 完成。
 
+冻结最佳模型后，使用同一份数据/索引配置单独评测外部 test。配置的 `model` 指向待评测权重，`project` 指向包含此入口的冻结源码；分别提交初始模型和最佳模型。该模式申请2张 GPU，复用已有独立重载与评测阶段，完整记录 test split，且不会训练或修改 incumbent。测试结果用于最终泛化报告。开发集的独立复测可使用 `--evaluate-only dev`。
+
+```bash
+python -m examples.search.pipeline --submit --evaluate-only test \
+  --config /path/to/frozen-heldout-config.json --run-id heldout-best-seed42 \
+  --image /path/to/areal-sglang.sif --budget /path/to/budget.json \
+  --time-limit 7200
+```
+
 全量评测使用 `FinalEvalConfig` JSON，分别指定模型、原始 tokenizer/generation-config、模型文件 manifest 及其 SHA256、`asset_lock` 及其 SHA256、原检索环境 Python 和 vLLM Python。asset lock 引用并校验原模型、embedding、judge、官方索引、语料、题目/标签、snippet tokenizer、Qwen-Agent 和冻结评测源码的文件清单。题目和标签仅用于全量评测，不能成为训练输入。官方索引文件另按公开 LFS SHA256 校验来源。提交脚本传入 host 核验的 `rsi` allocation，使用3张 GPU，并在同一个预算账本中登记整个 allocation。
 
 训练镜像使用 HF5，最终 vLLM 镜像使用 Transformers4.57。HF5 将 `rope_theta` 移入 `rope_parameters`；直接使用该 checkpoint 时，旧环境会采用错误的默认 theta。先在项目环境中生成兼容导出，补齐对应的 legacy RoPE/dtype 字段，并检查每个权重文件的 SHA256 未变。原始 checkpoint 保留，导出 manifest 与来源记录位于新目录旁。最终配置的 `model` 和 `checkpoint_manifest` 指向导出目录及其 manifest；评测仍使用原冻结 H0 运行时和 asset lock。

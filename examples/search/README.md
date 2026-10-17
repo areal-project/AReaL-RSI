@@ -48,6 +48,8 @@ python -m examples.search.pipeline --submit \
 
 ## 产物、恢复与验收
 
+官方 H0 可在已计费的三 GPU Slurm 作业内由 `python -m examples.search.official_output --config <冻结配置> --runtime <冻结H0源码> --image <固定镜像>` 执行。外层只把该配置的输出目录绑定到节点 `/tmp`，模型、索引、源码和所有推理及评分参数仍使用原冻结值；不改动 H0 文件。已完成的 solver JSON 周期复制回共享目录；共享写入异常会延后复制，不打断本地推理。只有冻结 H0 子进程成功结束、全部产物逐字节校验后，才最后发布 `result.json`。配置、完整本地产物和状态保留在 `/tmp/search-rsi-official-<jobid>/`。若推理已完成而复制失败，可在同一节点的 CPU 作业中运行 `python -m examples.search.official_output --publish-only <本地state.json>`，不重新生成答案。本地 scratch 不防节点丢失，正式产物以校验后的共享副本为准。
+
 每轮先评测 baseline，再进行真实训练，最后启动独立推理进程重载 checkpoint 并评测 dev。结果、配置、请求、完整交互与张量审计、训练日志、checkpoint manifest、参数变化和 incumbent 选择保存在配置的 `output_root`。相同 run ID 不重复提交 allocation；已有阶段结果需通过内容哈希校验。发现仍存活的旧进程时拒绝重启，失败阶段保留证据并使用新 run ID。
 
 候选仅在相同 dev 和 harness 条件下严格提高成绩时替换 incumbent。最终候选须在完整830题评测前冻结；原 H0、相同推理预算、官方索引和官方评分的 Accuracy 至少125/830，并补充其他种子、配对统计、Evidence Recall、搜索次数、真实 token、延迟和全部 GPU 成本。修改 harness 时另做归因对照。256 GPU·小时耗尽不能标记 Goal 完成。

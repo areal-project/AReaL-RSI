@@ -1,0 +1,17 @@
+"""Exact integer reward for this example's generated math problems."""
+
+from __future__ import annotations
+
+import re
+
+
+def integer_reward(
+    prompt: str,
+    completions: str,
+    prompt_ids: object,
+    completion_ids: object,
+    answer: str,
+    **kwargs: object,
+) -> float:
+    matches = re.findall(r"\\boxed\s*\{\s*([+-]?\d[\d,]*)\s*\}", completions)
+    return float(bool(matches) and int(matches[-1].replace(",", "")) == int(answer))

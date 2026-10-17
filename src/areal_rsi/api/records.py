@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TypeAlias
+from typing import Literal, TypeAlias
 
 JsonPrimitive: TypeAlias = str | int | float | bool | None
 JsonValue: TypeAlias = JsonPrimitive | list["JsonValue"] | dict[str, "JsonValue"]
@@ -379,6 +379,64 @@ class EvaluationReport:
     score: float
     metrics: dict[str, float]
     created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class TraceEvent:
+    """One generated segment or tool interaction, in execution order."""
+
+    kind: Literal["prompt", "generation", "tool_call", "tool_result"]
+    content: str
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluationSample:
+    """A task-specific worker's scored output; execution failures fail the job."""
+
+    task_id: str
+    output: str
+    score: float
+    passed: bool
+    events: tuple[TraceEvent, ...]
+    metrics: dict[str, float] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.task_id or not math.isfinite(self.score):
+            raise ValueError("Evaluation samples require a task ID and finite score")
+        if not self.events or any(not math.isfinite(v) for v in self.metrics.values()):
+            raise ValueError("Evaluation samples require a trace and finite metrics")
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluationResult:
+    job_id: str
+    report: EvaluationReport
+    samples: ContentRef
+    trajectories: tuple[TrajectoryRef, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactFile:
+    path: str
+    size: int
+    sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class DirectorySnapshot:
+    """Content identity of a model, harness or other directory artifact."""
+
+    root: str
+    files: tuple[ArtifactFile, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SourceSnapshot:
+    root: str
+    commit: str
+    dirty: bool
+    content: ContentRef
+    archive: ContentRef
 
 
 @dataclass(slots=True)

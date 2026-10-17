@@ -15,8 +15,11 @@ infra/research.py · ResearchSystem
 ```
 
 `api/` 定义具名数据契约和协议，不依赖实现；`infra/` 不依赖 UI。
-没有 Researcher、独立 verifier、版本管理、memory、训练或 legacy 内核。
-API 中对应的未来契约保留，当前运行不会实例化它们。
+主会话没有 Researcher、独立 verifier、版本管理、memory、训练或 legacy 内核。
+独立 `examples/tir` 使用 `infra/execution.py` 的子任务执行、`infra/training.py` 的 AReaL 接入、
+`infra/coordination/evaluation/` 的评测与 `infra/trajectories.py` 的轨迹索引；
+数据、流程和 TIR 策略保留在 example，尚未注册到会话控制工具。
+API 中其余未来契约保留，当前会话运行不会实例化它们。
 
 ## 一次会话
 

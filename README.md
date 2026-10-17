@@ -3,8 +3,11 @@
 基于原生 Codex app-server 的单 Agent 工作框架。默认普通对话；中途 `/rsi` 进入需求讨论，
 Interaction 整理目标，Leader 亲自执行，由宿主维持 Goal 的持续运行。
 
-本版仅支持 Codex；终端直接复用 DSH 原版组件。研究团队、版本管理、独立评测、memory、训练和
-legacy pass@k 的实现已移除；未来 API 契约保留。经验先沉淀为本地文档，云文档同步后续接入。
+本版仅支持 Codex；终端直接复用 DSH 原版组件。主会话保持单 Agent 流程，研究团队、memory 和
+legacy pass@k 尚未接入。经验先沉淀为本地文档，云文档同步后续接入。
+独立的 [TIR 训练示例](examples/tir/README.md) 通过公共 infra 对接 AReaL，执行数据合成、
+训练前后评测与 checkpoint 收集；目前不接入 `/rsi`。
+真实 GPU 闭环及开发检查结果见 [TIR 验证记录](docs/tir-validation.md)。
 
 ## 本地启动
 

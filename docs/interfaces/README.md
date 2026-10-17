@@ -10,8 +10,8 @@
 | `api/research.py`：ExperienceRef、LearningRecord | 主题文档路径与总结状态 |
 | `api/control.py`：LessonDraft、TerminalInput | 总结输出和终端 JSON 输入边界 |
 | `api/control.py`：decode_record、encode_record、record_schema | JSON 边界统一校验/转换 |
-| `api/interfaces.py` | 保留未来协议；本版没有对应注册/实现 |
-| `api/records.py`、`execution.py` 及其余 research 契约 | 保留未来研究、版本、评测与任务执行约定 |
+| `api/interfaces.py` | 大部分为保留协议；独立 TIR 示例使用具体 infra，尚未注册会话工具 |
+| `api/records.py`、`execution.py` | 独立示例使用模型/harness 版本、评测轨迹、子任务及训练产物契约；其余约定保留 |
 
 `ResearchSystem` 的用户控制：
 
@@ -35,3 +35,4 @@
 Interaction 不能完成 Goal，普通模式不能调用 RSI 控制工具。
 
 保留契约不表示能力已经实现。本版不为未来协议添加占位类、转发器或兼容运行路径。
+独立训练示例及公共能力见 [TIR README](../../examples/tir/README.md)；它们不改变上述会话控制方法。

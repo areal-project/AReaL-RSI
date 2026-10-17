@@ -110,6 +110,68 @@ async def test_cached_export_audit_accepts_zero_and_rejects_corruption(
         assert audit["reward"] == audit["rollout_reward"] == 0.0
         assert audit["input_tokens"] == audit["output_tokens"] == 2
         assert audit["mask_validated"] and audit["hf_template_validated"]
+        for key, values in audit["tensor_data"].items():
+            assert values == tensor[key].squeeze(0).tolist()
+
+
+@pytest.mark.asyncio
+async def test_multiturn_export_persists_exact_cached_tensors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Round-trip every token value, including masked prior turns and tool input."""
+    torch = importlib.import_module("torch")
+    ModelResponse = importlib.import_module("areal.api").ModelResponse
+    proxy = importlib.import_module("areal.experimental.openai.proxy.server")
+    Interaction = importlib.import_module(
+        "areal.experimental.openai.types"
+    ).InteractionWithTokenLogpReward
+    prompts = ([11, 12], [11, 12, 13, 14, 91, 92])
+    interactions = {}
+    for index, prompt in enumerate(prompts):
+        interaction = Interaction(
+            reward=1.0,
+            model_response=ModelResponse(
+                input_tokens=prompt,
+                output_tokens=[13 + 2 * index, 14 + 2 * index],
+                output_logprobs=[-0.1 - index, -0.2 - index],
+                output_versions=[7, 8] if index == 0 else [9, 9],
+            ),
+            output_message_list=[],
+        )
+        interaction.interaction_id = f"completion-{index}"
+        interaction.rollout_reward = 1.0 if index == 1 else None
+        interaction.to_tensor_dict()
+        interactions[interaction.interaction_id] = interaction
+    exported = proxy.deserialize_interactions(proxy.serialize_interactions(interactions))
+    episode = agent_module.Episode(
+        "q1",
+        0,
+        1.0,
+        "Exact Answer: correct",
+        1,
+        (),
+        1.0,
+        (),
+        tuple(agent_module.ModelCall(len(p), agent_module.token_digest(p), ()) for p in prompts),
+    )
+    trace = tmp_path / "episode.json"
+    trace.write_text(json.dumps(asdict(episode)))
+    agent = agent_module.BrowseCompTrainAgent("unused", "unused", str(tmp_path), "unused")
+    monkeypatch.setattr(agent, "_path", lambda data: trace)
+    await agent.audit_interactions({"question_id": "q1"}, exported)
+    record = json.loads(trace.with_suffix(".audit.json").read_text())
+    assert record["schema_version"] == 2
+    assert len(record["interactions"]) == 2
+    for saved in record["interactions"]:
+        cached = exported[saved["completion_id"]].to_tensor_dict()
+        for key, values in saved["tensor_data"].items():
+            dtype = getattr(torch, saved["tensor_dtypes"][key].removeprefix("torch."))
+            restored = torch.tensor(values, dtype=dtype).reshape(saved["tensor_shape"])
+            assert torch.equal(restored, cached[key])
+    first, second = record["interactions"]
+    assert first["tensor_data"]["versions"][-2:] == [7, 8]
+    assert second["tensor_data"]["loss_mask"] == [0] * 6 + [1, 1]
+    assert second["tensor_data"]["versions"] == [-1] * 6 + [9, 9]
 
 
 @pytest.mark.asyncio

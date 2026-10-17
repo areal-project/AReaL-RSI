@@ -44,6 +44,8 @@ python -m examples.search.pipeline --submit \
 
 训练接口只返回 terminal float，由 AReaL 回传奖励并保留逻辑 rollout 分组。`audit_interactions` 在导出后检查 HF 提示词 token、prompt/tool loss mask、生成 logprob、策略版本、缓存奖励和最终 outcome；结构错误抛出不可重试的 `WorkflowContractError`。同题训练采样不固定相同 seed，评测固定 seed。初始设置为 B8/G4、lr=1e-6、group reward normalization、KL=0，后续由开发集和训练奖励分布决定。
 
+审计 schema2 在每条 `.audit.json` 中完整保存缓存的 token ID、loss mask、逐 token logprob、权重版本及 attention mask，并记录原张量形状与 dtype。prompt、先前生成和工具观察作为本轮输入时，其 loss mask 为0、logprob为0、版本为-1。早期 schema1 记录仅包含哈希、长度、版本集合和 logprob 范围；它验证了当时实际缓存，但无法从摘要恢复旧的逐 token logprob。
+
 ## 产物、恢复与验收
 
 每轮先评测 baseline，再进行真实训练，最后启动独立推理进程重载 checkpoint 并评测 dev。结果、配置、请求、完整交互与张量审计、训练日志、checkpoint manifest、参数变化和 incumbent 选择保存在配置的 `output_root`。相同 run ID 不重复提交 allocation；已有阶段结果需通过内容哈希校验。发现仍存活的旧进程时拒绝重启，失败阶段保留证据并使用新 run ID。

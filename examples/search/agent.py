@@ -384,6 +384,15 @@ class BrowseCompTrainAgent:
                     "logprob_max": max(logprobs[input_len:]),
                     "mask_validated": True,
                     "hf_template_validated": True,
+                    "tensor_shape": list(tensor["input_ids"].shape),
+                    "tensor_dtypes": {key: str(tensor[key].dtype) for key in keys},
+                    "tensor_data": {
+                        "input_ids": ids,
+                        "loss_mask": mask,
+                        "logprobs": logprobs,
+                        "versions": versions,
+                        "attention_mask": tensor["attention_mask"].squeeze(0).tolist(),
+                    },
                 }
             )
         references = {
@@ -395,4 +404,6 @@ class BrowseCompTrainAgent:
             raise WorkflowContractError("Captured model requests are missing from the proxy export")
         path = self._path(data).with_suffix(".audit.json")
         async with aiofiles.open(path, "x") as output:
-            await output.write(json.dumps({"interactions": audits}, indent=2) + "\n")
+            await output.write(
+                json.dumps({"schema_version": 2, "interactions": audits}, indent=2) + "\n"
+            )

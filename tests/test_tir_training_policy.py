@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -20,6 +22,7 @@ from areal_rsi.api.records import (
 )
 from areal_rsi.infra.artifacts import file_ref, local_path, read_record, write_record
 from areal_rsi.infra.training import read_training_samples
+from examples.tir import distillation
 from examples.tir.benchmark import Example, identity, read_examples, write_examples
 from examples.tir.compositional import (
     CompositionalManifest,
@@ -31,7 +34,16 @@ from examples.tir.compositional import (
     read_tasks,
     verify_task,
 )
-from examples.tir.distillation import tokenize_trajectory
+from examples.tir.distillation import (
+    DistillationAttempt,
+    DistillationConfig,
+    PendingTeacher,
+    TeacherConfig,
+    TeacherDraft,
+    TeacherMessage,
+    boxed_answer,
+    tokenize_trajectory,
+)
 from examples.tir.experiment import RoundRecipe
 from examples.tir.synthesis import (
     DataRecipe,
@@ -259,3 +271,92 @@ def test_sft_and_grpo_recipes_have_distinct_data_inputs() -> None:
         RoundRecipe("Ambiguous inputs", algorithm="sft", distillation=manifest)
     with pytest.raises(ValueError, match="SFT requires"):
         RoundRecipe("Missing demonstrations", algorithm="sft", data=None)
+
+
+def test_teacher_rejects_service_exit_and_ambiguous_or_incomplete_answers() -> None:
+    for code in ("print(2); exit()", "import sys; sys.exit(0)"):
+        with pytest.raises(ValueError, match="execution service"):
+            TeacherDraft("Compute a sum.", code)
+    for answer in (r"\boxed{\frac{1}{2}", r"\boxed{1} or \boxed{2}"):
+        with pytest.raises(ValueError, match="boxed"):
+            boxed_answer(answer)
+    assert boxed_answer(r"Thus $\boxed{\frac{1}{2}}$.") == r"\boxed{\frac{1}{2}}"
+
+
+def test_teacher_collector_bounds_pending_work_and_persists_write_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Exercise the collector's real disk failure path; no training success is mocked.
+    pool = tuple(real_example(index) for index in range(12))
+    pool_ref = write_examples(tmp_path / "pool.jsonl", pool)
+    tokenizer_dir = tmp_path / "tokenizer"
+    tokenizer_dir.mkdir()
+    (tokenizer_dir / "tokenizer.json").write_text("{}")
+    monkeypatch.setitem(
+        sys.modules,
+        "transformers",
+        SimpleNamespace(
+            AutoTokenizer=SimpleNamespace(
+                from_pretrained=lambda *args, **kwargs: CharacterTokenizer()
+            )
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "prompts", SimpleNamespace(TORL_PROMPT="Question: {prompt}"))
+    monkeypatch.setenv("TEST_TEACHER_KEY", "private-value")
+    requests: list[tuple[TeacherMessage, ...]] = []
+
+    def completion(
+        config: TeacherConfig, messages: tuple[TeacherMessage, ...], *, json_output: bool = False
+    ) -> str:
+        requests.append(messages)
+        return "draft" if json_output else r"\boxed{2}"
+
+    def execution(context: PendingTeacher, response: str) -> tuple[TeacherMessage, ...]:
+        context.events[:] = tool_trace()
+        return (TeacherMessage("user", "observed 2"),)
+
+    def admission(
+        config: DistillationConfig,
+        context: PendingTeacher,
+        answer: str,
+        tokenizer: CharacterTokenizer,
+    ) -> DistillationAttempt:
+        sample = tokenize_trajectory(
+            context.example.task_id,
+            tuple(context.events),
+            tokenizer,
+            max_length=1000,
+            max_segment_tokens=100,
+        )
+        return DistillationAttempt(
+            context.example, "teacher", tuple(context.events), True, "", sample
+        )
+
+    actual_write = write_record
+
+    def fail_attempt_write(path: Path, value: object) -> ContentRef:
+        if path.parent.name == "attempts":
+            raise OSError("private-value write failed")
+        return actual_write(path, value)
+
+    monkeypatch.setattr(distillation, "teacher_completion", completion)
+    monkeypatch.setattr(distillation, "execute_draft", execution)
+    monkeypatch.setattr(distillation, "admit_answer", admission)
+    monkeypatch.setattr(distillation, "write_record", fail_attempt_write)
+    config = DistillationConfig(
+        TeacherConfig("https://teacher.example/v1", "teacher", api_key_env="TEST_TEACHER_KEY"),
+        pool_ref,
+        (),
+        str(tokenizer_dir),
+        str(tmp_path / "output"),
+        count=12,
+        concurrency=2,
+    )
+    with pytest.raises(OSError, match="write failed"):
+        distillation.generate(config)
+    state = read_record(tmp_path / "output/state.json", distillation.CollectionState)
+    assert state.status == "failed"
+    assert "private-value" not in state.error
+    assert "private-value" not in (tmp_path / "output/failure.log").read_text()
+    assert len(requests) <= 4  # Two trajectories in flight, at most draft + final for each.
+    assert not (tmp_path / "output/manifest.json").exists()

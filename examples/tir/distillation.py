@@ -12,10 +12,13 @@ import ast
 import json
 import os
 import random
+import re
 import ssl
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import traceback
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
+from http.client import HTTPException
 from pathlib import Path
 from typing import Any, Literal
 from urllib.error import HTTPError, URLError
@@ -64,7 +67,13 @@ class TeacherDraft:
             raise ValueError("Teacher must supply reasoning and executable code")
         if any(marker in self.reasoning + self.code for marker in ("\\boxed", "```")):
             raise ValueError("Draft cannot answer before observing the tool result")
-        ast.parse(self.code)
+        tree = ast.parse(self.code)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and (
+                (isinstance(node.func, ast.Name) and node.func.id in {"exit", "quit", "breakpoint"})
+                or (isinstance(node.func, ast.Attribute) and node.func.attr in {"exit", "_exit"})
+            ):
+                raise ValueError("Teacher code cannot terminate its execution service")
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,7 +161,7 @@ def teacher_completion(
         except HTTPError as exc:
             if exc.code not in (429, 500, 502, 503, 504) or attempt == 2:
                 raise RuntimeError(f"Teacher HTTP {exc.code}") from None
-        except (URLError, TimeoutError):
+        except (URLError, TimeoutError, HTTPException):
             if attempt == 2:
                 raise RuntimeError("Teacher transport failed after three attempts") from None
         time.sleep(2**attempt)
@@ -182,6 +191,7 @@ def tokenize_trajectory(
         "\n```\n"
     ):
         raise ValueError("Tool observation must use the actual backend formatter")
+    boxed_answer(events[-1].content)
     ids: list[int] = []
     mask: list[int] = []
     for index, event in enumerate(events):
@@ -218,73 +228,110 @@ If the output reveals a mistake, explain it rather than inventing successful out
 """
 
 
-def distill_one(
-    config: DistillationConfig, example: Example, tokenizer: Any
-) -> DistillationAttempt:
-    from areal.reward import get_math_verify_worker  # type: ignore[import-not-found]
-    from prompts import TORL_PROMPT  # type: ignore[import-not-found]
+@dataclass(slots=True)
+class PendingTeacher:
+    example: Example
+    stage: Literal["draft", "answer"]
+    events: list[TraceEvent]
+    draft_response: str = ""
+
+
+@dataclass(slots=True)
+class CollectionState:
+    status: Literal["running", "completed", "failed"] = "running"
+    completed: int = 0
+    accepted: int = 0
+    error: str = ""
+
+
+def boxed_answer(text: str) -> str:
+    starts = list(re.finditer(r"\\boxed\s*\{", text))
+    if len(starts) != 1:
+        raise ValueError("Teacher final answer must contain exactly one boxed expression")
+    start = starts[0]
+    depth = 1
+    for index in range(start.end(), len(text)):
+        depth += (text[index] == "{") - (text[index] == "}")
+        if depth == 0:
+            if not text[start.end() : index].strip():
+                break
+            return text[start.start() : index + 1]
+    raise ValueError("Teacher boxed answer is empty or incomplete")
+
+
+def execute_draft(pending: PendingTeacher, response: str) -> tuple[TeacherMessage, ...]:
     from tir_workflow import TIRWorkflow  # type: ignore[import-not-found]
     from tool_manager import ToolManager  # type: ignore[import-not-found]
     from tools import ToolCallStatus  # type: ignore[import-not-found]
 
-    events: list[TraceEvent] = [TraceEvent("prompt", TORL_PROMPT.format(prompt=example.prompt))]
-    response = ""
+    pending.draft_response = response
+    draft = decode_record(TeacherDraft, json.loads(response))
+    pending.events.extend(
+        (
+            TraceEvent("generation", draft.reasoning.strip() + "\n```python"),
+            TraceEvent("generation", "\n" + draft.code.strip() + "\n```"),
+            TraceEvent("tool_call", "```python\n" + draft.code.strip() + "\n```"),
+        )
+    )
+    manager = ToolManager(timeout=30, enabled_tools="python;calculator", debug_mode=False)
     try:
-        response = teacher_completion(
-            config.teacher,
-            (TeacherMessage("system", _DRAFT_INSTRUCTION), TeacherMessage("user", example.prompt)),
-            json_output=True,
-        )
-        draft = decode_record(TeacherDraft, json.loads(response))
-        events.extend(
-            (
-                TraceEvent("generation", draft.reasoning.strip() + "\n```python"),
-                TraceEvent("generation", "\n" + draft.code.strip() + "\n```"),
-                TraceEvent("tool_call", "```python\n" + draft.code.strip() + "\n```"),
-            )
-        )
-        manager = ToolManager(timeout=30, enabled_tools="python;calculator", debug_mode=False)
-        try:
-            result, status = manager.execute_tool_call(events[-1].content)
-        finally:
-            manager.cleanup()
-        if status != ToolCallStatus.SUCCESS or not result.strip():
-            raise ValueError("Teacher program failed or printed no result")
-        observation = TIRWorkflow._process_tool_result(result)
-        events.append(TraceEvent("tool_result", observation))
-        answer = teacher_completion(
-            config.teacher,
-            (
-                TeacherMessage("system", _ANSWER_INSTRUCTION),
-                TeacherMessage("user", example.prompt),
-                TeacherMessage("assistant", draft.reasoning + "\n" + events[3].content),
-                TeacherMessage("user", observation),
-            ),
-        )
-        events.append(TraceEvent("generation", "\n" + answer.strip()))
-        sample = tokenize_trajectory(
-            example.task_id,
-            tuple(events),
-            tokenizer,
-            max_length=config.max_length,
-            max_segment_tokens=config.max_segment_tokens,
-        )
-        # Verify assistant text alone; tool stdout cannot earn admission credit.
-        gold = normalize_gold(example.answer, "math_delimited")
-        if get_math_verify_worker().verify(answer, gold) != 1:
-            raise ValueError("Post-execution teacher answer failed independent gold verification")
-        return DistillationAttempt(
-            example, config.teacher.model, tuple(events), True, "", sample, response
-        )
-    except Exception as exc:
-        error = str(exc).replace(os.environ[config.teacher.api_key_env], "[REDACTED]")
-        return DistillationAttempt(
-            example, config.teacher.model, tuple(events), False, error, draft_response=response
-        )
+        result, status = manager.execute_tool_call(pending.events[-1].content)
+    finally:
+        manager.cleanup()
+    observation = TIRWorkflow._process_tool_result(result)
+    pending.events.append(TraceEvent("tool_result", observation))
+    if (
+        status != ToolCallStatus.SUCCESS
+        or not result.strip()
+        or observation.startswith("\n```output\nError:")
+    ):
+        raise ValueError("Teacher program failed or produced an invalid observation")
+    return (
+        TeacherMessage("system", _ANSWER_INSTRUCTION),
+        TeacherMessage("user", pending.example.prompt),
+        TeacherMessage("assistant", draft.reasoning + "\n" + pending.events[3].content),
+        TeacherMessage("user", observation),
+    )
+
+
+def admit_answer(
+    config: DistillationConfig, pending: PendingTeacher, answer: str, tokenizer: Any
+) -> DistillationAttempt:
+    from math_verify import parse, verify  # type: ignore[import-not-found]
+    from math_verify.parser import (  # type: ignore[import-not-found]
+        ExprExtractionConfig,
+        LatexExtractionConfig,
+    )
+
+    pending.events.append(TraceEvent("generation", "\n" + answer.strip()))
+    sample = tokenize_trajectory(
+        pending.example.task_id,
+        tuple(pending.events),
+        tokenizer,
+        max_length=config.max_length,
+        max_segment_tokens=config.max_segment_tokens,
+    )
+    targets = (ExprExtractionConfig(), LatexExtractionConfig())
+    gold = parse(
+        normalize_gold(pending.example.answer, "math_delimited"),
+        extraction_config=targets,
+        parsing_timeout=3,
+    )
+    prediction = parse(boxed_answer(answer), extraction_config=targets, parsing_timeout=3)
+    if not gold or not prediction or not verify(gold, prediction, timeout_seconds=3):
+        raise ValueError("Post-execution teacher answer failed independent gold verification")
+    return DistillationAttempt(
+        pending.example,
+        config.teacher.model,
+        tuple(pending.events),
+        True,
+        "",
+        sample,
+        pending.draft_response,
+    )
 
 
 def generate(config: DistillationConfig) -> DistillationManifest:
-    from areal.reward import get_math_verify_worker
     from transformers import AutoTokenizer  # type: ignore[import-not-found]
 
     pool = read_examples(local_path(config.training_pool))
@@ -311,24 +358,99 @@ def generate(config: DistillationConfig) -> DistillationManifest:
     )
     if not tokenizer_refs or tokenizer.eos_token_id is None:
         raise ValueError("A pinned local tokenizer with an EOS token is required")
-    get_math_verify_worker()  # Initialize optional parser dependencies before concurrent work.
+    # Only HTTP requests run in threads. The backend Python executor itself
+    # creates processes; execute it in the coordinator, never in HTTP threads.
+    # Admit/parse in the main thread so MathVerify's signal timeouts actually work.
+    from prompts import TORL_PROMPT  # type: ignore[import-not-found]
+
     attempts: dict[str, DistillationAttempt] = {}
     refs: dict[str, ContentRef] = {}
-    with ThreadPoolExecutor(max_workers=config.concurrency) as executor:
-        futures = {executor.submit(distill_one, config, item, tokenizer): item for item in selected}
-        for future in as_completed(futures):
-            attempt = future.result()
-            attempts[attempt.example.task_id] = attempt
-            refs[attempt.example.task_id] = write_record(
-                output / "attempts" / f"{attempt.example.task_id}.json", attempt
-            )
-            accepted = sum(item.accepted for item in attempts.values())
-            print(f"teacher {len(attempts)}/{len(selected)} accepted={accepted}", flush=True)
+    state = CollectionState()
+    write_record(output / "state.json", state)
+    executor = ThreadPoolExecutor(max_workers=config.concurrency)
+    pending: dict[Future[str], PendingTeacher] = {}
+    remaining = iter(selected)
+
+    def submit_question() -> None:
+        example = next(remaining, None)
+        if example is None:
+            return
+        context = PendingTeacher(
+            example, "draft", [TraceEvent("prompt", TORL_PROMPT.format(prompt=example.prompt))]
+        )
+        future = executor.submit(
+            teacher_completion,
+            config.teacher,
+            (
+                TeacherMessage("system", _DRAFT_INSTRUCTION),
+                TeacherMessage("user", example.prompt),
+            ),
+            json_output=True,
+        )
+        pending[future] = context
+
+    try:
+        for _ in range(min(len(selected), config.concurrency)):
+            submit_question()
+        while pending:
+            completed, _ = wait(pending, return_when=FIRST_COMPLETED)
+            for future in completed:
+                context = pending.pop(future)
+                try:
+                    response = future.result()
+                    if context.stage == "draft":
+                        messages = execute_draft(context, response)
+                        context.stage = "answer"
+                        pending[executor.submit(teacher_completion, config.teacher, messages)] = (
+                            context
+                        )
+                        continue
+                    attempt = admit_answer(config, context, response, tokenizer)
+                except (Exception, SystemExit) as exc:
+                    error = str(exc).replace(os.environ[config.teacher.api_key_env], "[REDACTED]")
+                    attempt = DistillationAttempt(
+                        context.example,
+                        config.teacher.model,
+                        tuple(context.events),
+                        False,
+                        type(exc).__name__ + ": " + error,
+                        draft_response=context.draft_response,
+                    )
+                refs[attempt.example.task_id] = write_record(
+                    output / "attempts" / f"{attempt.example.task_id}.json", attempt
+                )
+                attempts[attempt.example.task_id] = attempt
+                state.completed += 1
+                state.accepted += attempt.accepted
+                write_record(output / "state.json", state)
+                print(
+                    f"teacher {state.completed}/{len(selected)} accepted={state.accepted}",
+                    flush=True,
+                )
+                submit_question()
+    except BaseException as exc:
+        state.status = "failed"
+        state.error = type(exc).__name__ + ": " + str(exc)
+        state.error = state.error.replace(os.environ[config.teacher.api_key_env], "[REDACTED]")
+        write_record(output / "state.json", state)
+        diagnostic = traceback.format_exc().replace(
+            os.environ[config.teacher.api_key_env], "[REDACTED]"
+        )
+        (output / "failure.log").write_text(diagnostic)
+        print(diagnostic, flush=True)
+        raise
+    finally:
+        # At most concurrency requests can remain; no hidden queue of hundreds
+        # of paid requests continues after the collector has already failed.
+        executor.shutdown(wait=True, cancel_futures=True)
     accepted_samples = [
         attempts[item.task_id].sample for item in selected if attempts[item.task_id].accepted
     ]
     if not accepted_samples or any(sample is None for sample in accepted_samples):
-        raise ValueError("Teacher produced no verified, executable training trajectories")
+        state.status = "failed"
+        state.error = "Teacher produced no verified, executable training trajectories"
+        write_record(output / "state.json", state)
+        raise ValueError(state.error)
     path = output / "train.jsonl"
     with path.open("x") as stream:
         for sample in accepted_samples:
@@ -343,6 +465,8 @@ def generate(config: DistillationConfig) -> DistillationManifest:
         len(accepted_samples),
     )
     write_record(output / "manifest.json", manifest)
+    state.status = "completed"
+    write_record(output / "state.json", state)
     return manifest
 
 

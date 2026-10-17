@@ -264,7 +264,7 @@ def build_dataset(
     excluded_ids: tuple[str, ...],
     output: Path,
 ) -> SynthesisManifest:
-    if any(item.source != "gsm8k-train" for item in pool):
+    if any(item.source not in {"gsm8k-train", "torl-train"} for item in pool):
         raise ValueError("Only official training examples may enter synthesis")
     excluded = set(excluded_ids)
     if excluded.intersection(item.task_id for item in pool):

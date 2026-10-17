@@ -9,13 +9,13 @@ import re
 import signal
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from areal_rsi.api.control import encode_record
 from areal_rsi.api.execution import TrainingReceipt
 from areal_rsi.api.records import EvaluationSample
 from areal_rsi.infra.artifacts import read_record, write_record
-from examples.tir.benchmark import read_examples
+from examples.tir.benchmark import evaluation_cases, read_examples
 from examples.tir.data import read_problems
 from examples.tir.pipeline import WorkerRequest
 
@@ -118,9 +118,17 @@ def prepare_config(request: WorkerRequest) -> Any:
     return resolved
 
 
-def workflow_kwargs(config: Any, trace_directory: Path | None = None) -> dict[str, Any]:
+def workflow_kwargs(
+    config: Any,
+    reward: Literal["integer", "math_verify"],
+    trace_directory: Path | None = None,
+) -> dict[str, Any]:
     return {
-        "reward_fn": "examples.tir.reward.integer_reward",
+        "reward_fn": (
+            "examples.tir.reward.math_reward"
+            if reward == "math_verify"
+            else "examples.tir.reward.integer_reward"
+        ),
         "gconfig": config.gconfig,
         "tokenizer": config.tokenizer_path,
         "tir_config": config.tir,
@@ -132,6 +140,11 @@ def workflow_kwargs(config: Any, trace_directory: Path | None = None) -> dict[st
 def dataset(path: str, request: WorkerRequest) -> Any:
     from datasets import Dataset
 
+    if request.dataset_format == "benchmark":
+        examples = read_examples(Path(path))
+        items = evaluation_cases(examples) if request.mode == "eval" else examples
+    else:
+        items = read_problems(Path(path))
     return Dataset.from_list(
         [
             {
@@ -139,11 +152,7 @@ def dataset(path: str, request: WorkerRequest) -> Any:
                 "messages": [{"role": "user", "content": item.prompt}],
                 "answer": item.answer,
             }
-            for item in (
-                read_examples(Path(path))
-                if request.dataset_format == "benchmark"
-                else read_problems(Path(path))
-            )
+            for item in items
         ]
     )
 
@@ -177,7 +186,7 @@ def train(request: WorkerRequest, config: Any) -> None:
     with PPOTrainer(config, training_data, dataset(request.dev_dataset, request)) as trainer:
         trainer.train(
             workflow="examples.tir.workflow.RecordedTIRWorkflow",
-            workflow_kwargs=workflow_kwargs(config),
+            workflow_kwargs=workflow_kwargs(config, request.config.reward),
         )
     root = Path(
         Saver.get_model_save_root(
@@ -232,7 +241,7 @@ def evaluate(request: WorkerRequest, config: Any) -> None:
             rollout.submit(
                 item,
                 workflow="examples.tir.workflow.RecordedTIRWorkflow",
-                workflow_kwargs=workflow_kwargs(config, trace_directory),
+                workflow_kwargs=workflow_kwargs(config, request.config.reward, trace_directory),
                 group_size=1,
                 is_eval=True,
                 reward_normalization=False,

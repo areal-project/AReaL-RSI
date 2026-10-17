@@ -44,7 +44,7 @@ from areal_rsi.infra.coordination.evaluation import EvaluationService
 from areal_rsi.infra.execution import JobExecutor
 from areal_rsi.infra.training import AReaLBackend
 from areal_rsi.infra.trajectories import LocalTrajectoryStore
-from examples.tir.benchmark import Benchmark, read_examples
+from examples.tir.benchmark import Benchmark, evaluation_cases, read_examples
 from examples.tir.pipeline import ExperimentConfig, HarnessConfig, WorkerRequest, local_path
 from examples.tir.synthesis import DataRecipe, SynthesisManifest, build_dataset
 
@@ -95,6 +95,7 @@ class Protocol:
 class StudyHarness:
     config: HarnessConfig
     files: tuple[ContentRef, ...]
+    reward: Literal["integer", "math_verify"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,7 +148,14 @@ class PairedComparison:
     delta: float
     ci95_low: float
     ci95_high: float
-    mcnemar_exact_p: float
+    mcnemar_exact_p: float | None
+    independent_questions: int
+
+
+@dataclass(frozen=True, slots=True)
+class PairedBlock:
+    difference: int
+    count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,6 +204,11 @@ def prepare(config: StudyConfig, root: Path) -> None:
         raise ValueError("Training, dev and final data overlap")
     if ids[0] & set(benchmark.excluded_ids):
         raise ValueError("Training pool includes a held-out identity")
+    if (
+        any(item.source.startswith("torl-") for split in splits for item in split)
+        and config.experiment.reward != "math_verify"
+    ):
+        raise ValueError("ToRL requires the native mathematical equivalence reward")
     repository = Path(config.experiment.runtime.repository).resolve(strict=True)
     project = _source(PROJECT, root / "source-project.json")
     backend = _source(repository, root / "source-backend.json", backend=True)
@@ -223,7 +236,8 @@ def prepare(config: StudyConfig, root: Path) -> None:
     locked_paths.extend(repository / entry.path for entry in backend_manifest.files)
     locked = tuple(file_ref(path) for path in locked_paths)
     harness_ref = write_record(
-        root / "harness.json", StudyHarness(config.experiment.harness, locked)
+        root / "harness.json",
+        StudyHarness(config.experiment.harness, locked, config.experiment.reward),
     )
     created = datetime.now(UTC).isoformat()
     baseline = SolutionVersion(
@@ -252,7 +266,12 @@ def protocol(root: Path) -> Protocol:
     return record
 
 
-def paired(baseline: EvaluationResult, candidate: EvaluationResult) -> PairedComparison:
+def paired(
+    baseline: EvaluationResult,
+    candidate: EvaluationResult,
+    *,
+    clusters: dict[str, str] | None = None,
+) -> PairedComparison:
     def samples(result: EvaluationResult) -> dict[str, EvaluationSample]:
         with local_path(result.samples).open() as stream:
             items = [decode_record(EvaluationSample, json.loads(line)) for line in stream]
@@ -263,12 +282,23 @@ def paired(baseline: EvaluationResult, candidate: EvaluationResult) -> PairedCom
     left, right = samples(baseline), samples(candidate)
     if not left or left.keys() != right.keys():
         raise ValueError("Paired comparison requires exactly the same tasks")
+    if clusters is not None and clusters.keys() != left.keys():
+        raise ValueError("Question clusters must cover exactly the paired tasks")
     differences = [int(right[key].passed) - int(left[key].passed) for key in sorted(left)]
     wins, losses = differences.count(1), differences.count(-1)
     both_correct = sum(left[key].passed and right[key].passed for key in left)
     n = len(left)
+    grouped: dict[str, list[int]] = {}
+    for key, difference in zip(sorted(left), differences, strict=True):
+        group = clusters[key] if clusters is not None else key
+        grouped.setdefault(group, []).append(difference)
+    blocks = tuple(PairedBlock(sum(values), len(values)) for values in grouped.values())
     rng = random.Random(20261017)
-    bootstrap = sorted(sum(rng.choices(differences, k=n)) / n for _ in range(10000))
+    bootstrap = []
+    for _ in range(10000):
+        draw = rng.choices(blocks, k=len(blocks))
+        bootstrap.append(sum(item.difference for item in draw) / sum(item.count for item in draw))
+    bootstrap.sort()
     discordant = wins + losses
     p = (
         min(
@@ -289,7 +319,8 @@ def paired(baseline: EvaluationResult, candidate: EvaluationResult) -> PairedCom
         (wins - losses) / n,
         bootstrap[249],
         bootstrap[9749],
-        p,
+        p if len(blocks) == n else None,
+        len(blocks),
     )
 
 
@@ -394,7 +425,8 @@ class Study:
             local_path(result.samples)
             return result
         data = self.protocol.benchmark.final if final else self.protocol.benchmark.dev
-        task_ids = tuple(item.task_id for item in read_examples(local_path(data)))
+        cases = evaluation_cases(read_examples(local_path(data)))
+        task_ids = tuple(item.task_id for item in cases)
         stem = f"{name}-{'final' if final else 'dev'}"
         attempt = 1
         while self.jobs.directory(self.root.name, f"{stem}-{attempt}").exists():
@@ -417,7 +449,11 @@ class Study:
             write_record(self.root / "rounds" / name / "candidate.json", candidate)
             write_record(
                 self.root / "dev" / f"{name}-comparison.json",
-                paired(read_record(self.root / "dev/base.json", EvaluationResult), result),
+                paired(
+                    read_record(self.root / "dev/base.json", EvaluationResult),
+                    result,
+                    clusters={item.task_id: item.question_id for item in cases},
+                ),
             )
         print(f"{stem} accuracy={result.report.metrics['accuracy']:.4f}", flush=True)
         return result
@@ -542,7 +578,16 @@ class Study:
         self.select(name)
         baseline = await self.evaluate("base", final=True)
         candidate = await self.evaluate(name, final=True)
-        comparison = paired(baseline, candidate)
+        comparison = paired(
+            baseline,
+            candidate,
+            clusters={
+                item.task_id: item.question_id
+                for item in evaluation_cases(
+                    read_examples(local_path(self.protocol.benchmark.final))
+                )
+            },
+        )
         result = FinalResult(
             file_ref(self.root / "selection.json"),
             baseline,
@@ -551,15 +596,22 @@ class Study:
             comparison.delta >= self.protocol.config.target_delta,
         )
         write_record(self.root / "final/result.json", result)
+        p_text = (
+            f"exact McNemar p={comparison.mcnemar_exact_p:.4g}"
+            if comparison.mcnemar_exact_p is not None
+            else "McNemar omitted because repeated samples are clustered by question"
+        )
         (self.root / "report.md").write_text(
             f"# TIR study: {self.root.name}\n\nSelected: {name}. "
             f"Completed rounds: {', '.join(self.select(name).completed_rounds)}.\n\n"
-            f"Final ({comparison.count} tasks): base {comparison.baseline_accuracy:.2%}, "
+            f"Final ({comparison.count} samples, {comparison.independent_questions} questions): "
+            f"base {comparison.baseline_accuracy:.2%}, "
             f"candidate {comparison.candidate_accuracy:.2%}; "
             f"delta {comparison.delta:+.2%}.\n\n"
-            f"Paired bootstrap 95% CI [{comparison.ci95_low:+.2%}, {comparison.ci95_high:+.2%}]; "
+            f"Question-clustered paired bootstrap 95% CI "
+            f"[{comparison.ci95_low:+.2%}, {comparison.ci95_high:+.2%}]; "
             f"wins/losses {comparison.wins}/{comparison.losses}; "
-            f"exact McNemar p={comparison.mcnemar_exact_p:.4g}.\n\n"
+            f"{p_text}.\n\n"
             f"Target met: {result.target_met}. "
             "See protocol.json, selection.json, final/result.json and rounds/ "
             "for complete evidence.\n"

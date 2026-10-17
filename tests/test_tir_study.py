@@ -23,7 +23,19 @@ from areal_rsi.api.records import (
     TraceEvent,
 )
 from areal_rsi.infra.artifacts import file_ref, write_record
-from examples.tir.benchmark import Benchmark, Example, identity, read_examples, write_examples
+from examples.tir.benchmark import (
+    Benchmark,
+    Example,
+    ToRLInfo,
+    ToRLMessage,
+    ToRLReward,
+    ToRLRow,
+    evaluation_cases,
+    identity,
+    read_examples,
+    torl_examples,
+    write_examples,
+)
 from examples.tir.pipeline import ExperimentConfig
 from examples.tir.study import Candidate, Study, StudyConfig, paired, prepare, protocol
 from examples.tir.synthesis import (
@@ -141,6 +153,50 @@ def test_paired_statistics_align_tasks_and_refuse_tampering(tmp_path: Path) -> N
         paired(baseline, candidate)
 
 
+def test_native_torl_preserves_repeated_evaluations_and_symbolic_answers() -> None:
+    row = ToRLRow(
+        "math500",
+        (ToRLMessage("native instructions", "system"), ToRLMessage("Find x", "user")),
+        "MATH",
+        ToRLReward(r"\frac{1}{2}", "rule"),
+        ToRLInfo("original-id", "test"),
+    )
+    items = torl_examples((row,) * 4, training=False)
+    assert len(items) == 1 and items[0].repetitions == 4
+    cases = evaluation_cases(items)
+    assert len({case.task_id for case in cases}) == 4
+    assert {case.question_id for case in cases} == {identity("Find x")}
+    assert all(case.answer == r"\frac{1}{2}" for case in cases)
+    training = torl_examples((row,) * 4, training=True)
+    assert len(training) == 1 and training[0].repetitions == 1
+    with pytest.raises(ValueError, match="conflicting"):
+        torl_examples((row, replace(row, reward_model=ToRLReward("2", "rule"))), training=False)
+
+
+def test_repeated_samples_do_not_inflate_independent_question_evidence(tmp_path: Path) -> None:
+    base = evaluation(tmp_path / "base.jsonl", (False,) * 10)
+    trained = evaluation(tmp_path / "trained.jsonl", (True,) * 8 + (False,) * 2)
+    clusters = {str(index): "repeated" if index < 8 else str(index) for index in range(10)}
+    clustered = paired(base, trained, clusters=clusters)
+    assert clustered.count == 10 and clustered.independent_questions == 3
+    assert clustered.delta == 0.8 and clustered.mcnemar_exact_p is None
+    assert clustered.ci95_low == 0
+    assert paired(base, trained).ci95_low > 0
+    with pytest.raises(ValueError, match="clusters must cover"):
+        paired(base, trained, clusters={"0": "only-one"})
+
+
+def test_native_training_mixture_keeps_fractional_gold_and_excludes_test(tmp_path: Path) -> None:
+    item = replace(example("A native training problem"), source="torl-train", answer=r"\frac{1}{2}")
+    pool = (item,)
+    ref = write_examples(tmp_path / "pool.jsonl", pool)
+    recipe = DataRecipe(real_count=1, synthetic_count=0)
+    build_dataset(recipe, pool, ref, (), tmp_path / "native")
+    assert read_examples(tmp_path / "native/train.jsonl") == pool
+    with pytest.raises(ValueError, match="Only official training"):
+        build_dataset(recipe, (replace(item, source="torl-test"),), ref, (), tmp_path / "leaked")
+
+
 @pytest.fixture
 def study(tmp_path: Path) -> Study:
     backend = tmp_path / "backend"
@@ -166,6 +222,30 @@ def study(tmp_path: Path) -> Study:
     root = tmp_path / "study"
     prepare(config, root)
     return Study(root)
+
+
+def test_native_protocol_refuses_integer_only_reward(study: Study, tmp_path: Path) -> None:
+    items = (
+        replace(example("Native train"), source="torl-train", answer=r"\frac{1}{2}"),
+        replace(example("Native dev"), source="torl-train", answer=r"\frac{1}{2}"),
+        replace(example("Native test"), source="torl-test", answer=r"\frac{1}{2}"),
+    )
+    refs = tuple(
+        write_examples(tmp_path / f"native-{index}.jsonl", (item,))
+        for index, item in enumerate(items)
+    )
+    benchmark = replace(
+        study.protocol.benchmark,
+        train=refs[0],
+        dev=refs[1],
+        final=refs[2],
+        excluded_ids=(items[1].task_id, items[2].task_id),
+    )
+    path = tmp_path / "native-benchmark.json"
+    write_record(path, benchmark)
+    config = replace(study.protocol.config, benchmark=str(path))
+    with pytest.raises(ValueError, match="native mathematical equivalence"):
+        prepare(config, tmp_path / "invalid-native-study")
 
 
 def test_selection_requires_multiple_rounds_best_dev_and_is_immutable(study: Study) -> None:

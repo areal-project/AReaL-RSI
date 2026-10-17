@@ -75,6 +75,7 @@ class ExperimentConfig:
     backend_config: str = "examples/tir/tir_math_config.yaml"
     backend_overrides: tuple[str, ...] = ()
     timeout_seconds: float = 3600
+    reward: Literal["integer", "math_verify"] = "integer"
 
     def __post_init__(self) -> None:
         if min(self.training.epochs, self.training.batch_size, self.training.max_steps) <= 0:
@@ -126,6 +127,7 @@ class HarnessManifest:
     config: HarnessConfig
     project: ContentRef
     backend_tir: ContentRef
+    reward: Literal["integer", "math_verify"]
 
 
 @dataclass(slots=True)
@@ -206,6 +208,7 @@ async def run(config: ExperimentConfig, *, prepare_only: bool = False) -> Path:
                 config.harness,
                 project_source.content,
                 backend_harness,
+                config.reward,
             ),
         )
         created_at = datetime.now(UTC).isoformat()

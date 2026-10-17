@@ -3,15 +3,28 @@
     "runtime": {
       "repository": "/storage/openpsi/users/fenghui/projects/AReaL",
       "python": "/opt/.venv/bin/python",
-      "environment": {"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"}
+      "environment": {
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1"
+      }
     },
     "model": "/storage/openpsi/models/Qwen__Qwen2.5-Math-1.5B",
-    "harness": {"max_turns": 2, "max_length": 4080, "tool_timeout": 15,
-      "enable_tools": "python;calculator", "is_chat_model": false},
-    "evaluation": {"seed": 42, "max_new_tokens": 1024, "temperature": 0.0},
-    "timeout_seconds": 11000
+    "harness": {
+      "max_turns": 2,
+      "max_length": 3000,
+      "tool_timeout": 30,
+      "enable_tools": "python;calculator",
+      "is_chat_model": false
+    },
+    "evaluation": {
+      "seed": 42,
+      "max_new_tokens": 512,
+      "temperature": 0.6
+    },
+    "timeout_seconds": 11000,
+    "reward": "math_verify"
   },
-  "benchmark": "/storage/openpsi/users/fenghui/experiments/tir-rsi-20261017/benchmark/benchmark.json",
+  "benchmark": "/storage/openpsi/users/fenghui/experiments/tir-rsi-20261017/benchmark-torl/benchmark.json",
   "min_rounds": 2,
   "target_delta": 0.03
 }

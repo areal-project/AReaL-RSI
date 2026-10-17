@@ -47,7 +47,7 @@ def prepare_config(request: WorkerRequest) -> Any:
             "cluster": {
                 "fileroot": str(output / "areal"),
                 "n_nodes": 1,
-                "n_gpus_per_node": 1 if request.mode == "sft" else 2,
+                "n_gpus_per_node": 2 if request.mode == "train" else 1,
                 "name_resolve": {"type": "nfs", "nfs_record_root": str(output / "names")},
             },
             "scheduler": {"type": "local"},
@@ -262,6 +262,7 @@ def main() -> None:
             training_path,
             max_length=request.config.harness.max_length,
             max_segment_tokens=request.config.training.max_new_tokens,
+            style=request.config.training.sft_style,
         )
         probe = parameter_probe(Path(request.model))
         train_sft(config, training_path)

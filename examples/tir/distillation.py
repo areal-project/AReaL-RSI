@@ -17,7 +17,7 @@ import ssl
 import time
 import traceback
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from http.client import HTTPException
 from pathlib import Path
 from typing import Any, Literal
@@ -31,6 +31,7 @@ from areal_rsi.api.execution import TokenizedTrainingSample
 from areal_rsi.api.records import ContentRef, TraceEvent
 from areal_rsi.infra.artifacts import file_ref, local_path, read_record, write_record
 from examples.tir.benchmark import Example, read_examples
+from examples.tir.pipeline import SFTStyle
 from examples.tir.synthesis import normalize_gold
 
 
@@ -126,6 +127,30 @@ class CohortPublication:
     collection_config: ContentRef
     prefix_task_ids: tuple[str, ...]
     manifest: ContentRef
+
+
+@dataclass(frozen=True, slots=True)
+class StudentTrainingView:
+    teacher_manifest: ContentRef
+    style: SFTStyle
+    examples: int
+    dataset: ContentRef
+
+
+def training_events(events: tuple[TraceEvent, ...], style: SFTStyle) -> tuple[TraceEvent, ...]:
+    if style == "teacher":
+        return events
+    if style != "tool_first":
+        raise ValueError("Unknown SFT trajectory view")
+    # Keep the executed program, actual observation and verified answer. A small
+    # student need not reproduce the teacher's mental solution before computing.
+    if len(events) != 6 or events[1].kind != "generation":
+        raise ValueError("Tool-first SFT requires a complete single-tool teacher trajectory")
+    return (
+        events[0],
+        replace(events[1], content="I will compute the answer with Python.\n```python"),
+        *events[2:],
+    )
 
 
 def _questions(config: DistillationConfig) -> tuple[Example, ...]:
@@ -551,6 +576,7 @@ def materialize_for_student(
     *,
     max_length: int,
     max_segment_tokens: int,
+    style: SFTStyle = "teacher",
 ) -> ContentRef:
     """Replay verified traces with the actual warm-start checkpoint tokenizer.
 
@@ -576,7 +602,7 @@ def materialize_for_student(
         samples.append(
             tokenize_trajectory(
                 attempt.example.task_id,
-                attempt.events,
+                training_events(attempt.events, style),
                 tokenizer,
                 max_length=max_length,
                 max_segment_tokens=max_segment_tokens,
@@ -587,7 +613,12 @@ def materialize_for_student(
     with output.open("x") as stream:
         for sample in samples:
             stream.write(json.dumps(encode_record(sample), ensure_ascii=False) + "\n")
-    return file_ref(output)
+    result = file_ref(output)
+    write_record(
+        output.with_name("student-training-view.json"),
+        StudentTrainingView(file_ref(manifest_path), style, len(samples), result),
+    )
+    return result
 
 
 def main() -> None:

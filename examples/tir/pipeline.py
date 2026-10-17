@@ -39,6 +39,7 @@ from examples.tir.data import DatasetManifest, SynthesisConfig, read_problems, s
 PROJECT = Path(__file__).resolve().parents[2]
 PROJECT_PATHS = ("src", "examples/tir", "examples/__init__.py", "pyproject.toml", "uv.lock")
 BACKEND_PATHS = ("areal", "examples/tir", "pyproject.toml", "uv.lock")
+SFTStyle = Literal["teacher", "tool_first"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +60,7 @@ class TrainingConfig:
     max_new_tokens: int = 512
     temperature: float = 1.0
     learning_rate: float = 0.00001
+    sft_style: SFTStyle = "teacher"
 
 
 @dataclass(frozen=True, slots=True)

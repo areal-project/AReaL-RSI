@@ -20,9 +20,14 @@
 
 `RoundRecipe.algorithm` 为 `sft` 时，`data` 为 `null`，`distillation` 引用已验证的教师 manifest；
 为 `grpo` 时使用 `DataRecipe`，可通过 `curriculum` 和 `synthetic_admission` 引用上述筛选记录。
+SFT 可用 `sft_style: "tool_first"` 把教师调用工具前的完整推导替换成简短计算计划，
+保留原程序、真实观察和已核验答案；原始教师轨迹保持不变，训练视图单独记录。
 SFT 在训练节点用实际 parent 的 tokenizer 重建 token 和 mask；题目及真实工具观察不参与 loss，
 仅学习教师生成内容。通用的 token 契约、SFT 执行、权重变化检查和 checkpoint 校验位于
 `api/execution.py` 与 `infra/training.py`；任务选题、合成和训练阶段编排保留在本例。
+后端保存时会检查共享 embedding 的声明：不一致的两组权重会拒绝发布；
+完全重复的输出权重会去重，保证下一轮 HF 加载仍保持参数共享，与推理服务一致。
+独立评测只需一张 GPU，GRPO 的 actor 与 rollout 各使用一张。
 
 教师批次较大时，可先发布已完整处理的题目前缀，提前启动小批 SFT：
 

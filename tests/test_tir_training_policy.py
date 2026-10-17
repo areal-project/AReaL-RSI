@@ -44,6 +44,7 @@ from examples.tir.distillation import (
     boxed_answer,
     publish_prefix,
     tokenize_trajectory,
+    training_events,
 )
 from examples.tir.experiment import RoundRecipe
 from examples.tir.synthesis import (
@@ -114,6 +115,27 @@ def test_sft_rejects_overflow_mismatched_execution_and_tool_answer_leakage() -> 
         tokenize_trajectory("task", leaked, tokenizer, max_length=1000, max_segment_tokens=100)
     with pytest.raises(ValueError, match="conditioning prefix"):
         TokenizedTrainingSample("task", (1, 2), (1, 1))
+
+
+def test_tool_first_training_view_preserves_execution_and_masks_observations() -> None:
+    original = tool_trace()
+    original = (
+        original[0],
+        replace(original[1], content="I already know it is 2.\n```python"),
+        *original[2:],
+    )
+    view = training_events(original, "tool_first")
+    assert view[0] == original[0] and view[2:] == original[2:]
+    assert "already know" not in view[1].content
+    assert "already know" in original[1].content
+    sample = tokenize_trajectory(
+        "task", view, CharacterTokenizer(), max_length=1000, max_segment_tokens=100
+    )
+    conditioned = "".join(
+        chr(t) for t, m in zip(sample.input_ids, sample.loss_mask, strict=True) if not m
+    )
+    assert conditioned == original[0].content + original[4].content
+    assert training_events(original, "teacher") is original
 
 
 def student_probe(

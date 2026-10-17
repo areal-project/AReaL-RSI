@@ -55,6 +55,7 @@ from examples.tir.pipeline import (
     PROJECT,
     PROJECT_PATHS,
     HarnessManifest,
+    SFTStyle,
     TIRConfig,
     WorkerRequest,
 )
@@ -124,6 +125,7 @@ class RoundRecipe:
     temperature: float = 1.0
     algorithm: Literal["grpo", "sft"] = "grpo"
     distillation: ContentRef | None = None
+    sft_style: SFTStyle = "teacher"
 
     def __post_init__(self) -> None:
         if not self.hypothesis.strip():
@@ -144,6 +146,8 @@ class RoundRecipe:
             raise ValueError(
                 "SFT requires a verified distillation manifest; GRPO uses question data"
             )
+        if self.algorithm != "sft" and self.sft_style != "teacher":
+            raise ValueError("A distillation training view only applies to SFT")
 
 
 @dataclass(frozen=True, slots=True)
@@ -337,7 +341,7 @@ class Experiment:
             f"--partition={resources.partition}",
             "--nodes=1",
             "--ntasks=1",
-            "--gres=gpu:1" if request.mode == "sft" else "--gres=gpu:2",
+            "--gres=gpu:2" if request.mode == "train" else "--gres=gpu:1",
             f"--cpus-per-task={resources.cpus}",
             f"--mem={resources.memory_gb}G",
             f"--time={resources.minutes}",
@@ -561,6 +565,7 @@ class Experiment:
             learning_rate=recipe.learning_rate,
             max_new_tokens=recipe.max_new_tokens,
             temperature=recipe.temperature,
+            sft_style=recipe.sft_style,
         )
         config = replace(
             self.config,
@@ -623,10 +628,8 @@ class Experiment:
         completed = [item for item in candidates if item.status == "completed" and item.valid]
         if len(completed) < self.protocol.config.min_rounds:
             raise ValueError("Complete the preregistered minimum number of research rounds")
-        task_ids = tuple(
-            case.task_id
-            for case in evaluation_cases(read_examples(local_path(self.protocol.benchmark.valid)))
-        )
+        cases = evaluation_cases(read_examples(local_path(self.protocol.benchmark.valid)))
+        task_ids = tuple(case.task_id for case in cases)
         baseline = read_record(self.root / "valid/base.json", EvaluationResult)
         read_evaluation_samples(
             baseline,
@@ -651,7 +654,11 @@ class Experiment:
             or selected.valid.report.score < (best.valid.report.score if best.valid else 0)
         ):
             raise ValueError("Select a candidate with the best valid score")
-        comparison = paired(baseline, selected.valid)
+        comparison = paired(
+            baseline,
+            selected.valid,
+            clusters={case.task_id: case.question_id for case in cases},
+        )
         if comparison.delta <= 0:
             raise ValueError("Continue research: no valid improvement yet")
         selection = Selection(

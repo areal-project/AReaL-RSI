@@ -509,6 +509,54 @@ def test_selection_requires_multiple_rounds_best_valid_and_is_immutable(
     assert "Test / official test" in (root / "report.md").read_text()
 
 
+def test_selection_clusters_repeated_validation_by_original_question(
+    experiment: Experiment, tmp_path: Path
+) -> None:
+    questions = read_examples(local_path(experiment.protocol.benchmark.valid))
+    repeated = write_examples(
+        tmp_path / "repeated-valid.jsonl", tuple(replace(x, repetitions=3) for x in questions)
+    )
+    benchmark_path = tmp_path / "repeated-benchmark.json"
+    write_record(benchmark_path, replace(experiment.protocol.benchmark, valid=repeated))
+    root = tmp_path / "repeated-experiment"
+    prepare(replace(experiment.protocol.config, benchmark=str(benchmark_path)), root)
+    current = Experiment(root)
+    frozen = current.protocol
+    task_ids = tuple(x.task_id for x in evaluation_cases(read_examples(local_path(repeated))))
+    baseline = evaluation(
+        root / "baseline.jsonl", (False,) * 12, task_ids=task_ids, solution_id="base"
+    )
+    write_record(root / "valid/base.json", baseline)
+    recipe = write_record(root / "recipe.json", DataRecipe())
+    data = SynthesisManifest(DataRecipe(), frozen.benchmark.train, frozen.benchmark.train, 1, 0)
+    for name in ("a", "b"):
+        result = evaluation(
+            root / f"{name}.jsonl", (True,) * 12, task_ids=task_ids, solution_id=name
+        )
+        solution = replace(frozen.baseline, solution_id=name)
+        training = TrainingResult(
+            "selection-fixture", solution.model.content, frozen.base_model, 1, {}
+        )
+        write_record(
+            root / f"rounds/{name}/candidate.json",
+            Candidate(
+                name,
+                recipe,
+                data,
+                frozen.project,
+                frozen.baseline,
+                "completed",
+                training,
+                solution,
+                result,
+            ),
+        )
+    selected = current.select("a")
+    assert selected.valid_comparison.count == 12
+    assert selected.valid_comparison.independent_questions == 4
+    assert selected.valid_comparison.mcnemar_exact_p is None
+
+
 def test_frozen_protocol_rejects_data_and_source_changes(experiment: Experiment) -> None:
     source = Path(experiment.config.runtime.repository) / "examples/tir/tir_math_config.yaml"
     source.write_text("changed: true\n")

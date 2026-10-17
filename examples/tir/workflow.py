@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import time
 import uuid
 from contextvars import ContextVar
 from pathlib import Path
@@ -26,6 +27,7 @@ class RecordedTIRWorkflow(TIRWorkflow):
     async def arun_episode(self, engine: Any, data: dict[str, Any]) -> dict[str, Any]:
         events: list[TraceEvent] = []
         token = _events.set(events)
+        started = time.monotonic()
         try:
             result = await super().arun_episode(engine, copy.deepcopy(data))
             if self.trace_directory is not None:
@@ -38,7 +40,12 @@ class RecordedTIRWorkflow(TIRWorkflow):
                     score,
                     score == 1.0,
                     tuple(events),
-                    {"tool_calls": float(calls)},
+                    {
+                        "tool_calls": float(calls),
+                        "generated_tokens": float(result["loss_mask"].sum().item()),
+                        "context_tokens": float(result["input_ids"].numel()),
+                        "seconds": time.monotonic() - started,
+                    },
                 )
                 sample_index = workflow_context.get().sample_idx or 0
                 write_record(self.trace_directory / f"{sample.task_id}-{sample_index}.json", sample)

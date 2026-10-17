@@ -18,13 +18,13 @@ from areal_rsi.infra.artifacts import file_ref, write_record
 class SynthesisConfig:
     seed: int = 17
     train_size: int = 32
-    dev_size: int = 8
-    eval_size: int = 8
+    valid_size: int = 8
+    test_size: int = 8
 
     def __post_init__(self) -> None:
-        if min(self.train_size, self.dev_size, self.eval_size) < 1:
+        if min(self.train_size, self.valid_size, self.test_size) < 1:
             raise ValueError("All dataset splits must be nonempty")
-        if self.train_size + self.dev_size + self.eval_size > 100_000:
+        if self.train_size + self.valid_size + self.test_size > 100_000:
             raise ValueError("This example supports at most 100000 synthetic problems")
 
 
@@ -43,8 +43,8 @@ class MathProblem:
 class DatasetManifest:
     synthesis: SynthesisConfig
     train: ContentRef
-    dev: ContentRef
-    evaluation: ContentRef
+    valid: ContentRef
+    test: ContentRef
 
 
 def problem(
@@ -80,9 +80,8 @@ def validate_problem(item: MathProblem) -> None:
 
 
 def read_problems(path: Path) -> tuple[MathProblem, ...]:
-    items = tuple(
-        decode_record(MathProblem, json.loads(line)) for line in path.read_text().splitlines()
-    )
+    with path.open() as stream:
+        items = tuple(decode_record(MathProblem, json.loads(line)) for line in stream)
     for item in items:
         validate_problem(item)
     if not items or len({item.task_id for item in items}) != len(items):
@@ -112,14 +111,15 @@ def synthesize(config: SynthesisConfig, output: Path) -> DatasetManifest:
                 split.append(item)
         return split
 
-    # Freeze evaluation before synthesizing training examples: increasing the
+    # Freeze test before synthesizing training examples: increasing the
     # training budget must not silently change the comparison benchmark.
-    evaluation = generate("eval", config.eval_size)
-    dev = generate("dev", config.dev_size)
+    # Retain seed-stream keys so split renaming preserves generated questions.
+    test = generate("eval", config.test_size)
+    valid = generate("dev", config.valid_size)
     train = generate("train", config.train_size)
-    splits = (train, dev, evaluation)
+    splits = (train, valid, test)
     refs = []
-    for name, split in zip(("train", "dev", "eval"), splits, strict=True):
+    for name, split in zip(("train", "valid", "test"), splits, strict=True):
         path = output / f"{name}.jsonl"
         with path.open("x") as stream:
             for item in split:

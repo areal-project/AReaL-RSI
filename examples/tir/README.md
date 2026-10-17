@@ -4,6 +4,8 @@
 不启动 Codex、TUI 或 `/rsi`，也不修改现有会话流程。默认是验证接入的两步训练，
 不代表充分训练或质量收益实验。
 
+原生 ToRL 的多轮训练、冻结评测和 `/rsi` 驱动研究见 [RESEARCH.md](RESEARCH.md)。
+
 ## 环境与运行
 
 提交端按仓库 README 准备 `uv` 环境。训练使用独立的 AReaL Python 环境，需能导入
@@ -66,10 +68,10 @@ uv run --locked python -m examples.tir.pipeline \
 ## 实验与配置
 
 `data.py` 使用种子生成整数算术、多项式求和与模运算计数题。
-答案经独立计算方法验证，题目按内容 ID 去重，再拆成互不重叠的 train/dev/eval。
-默认规模 32/8/8；dev 供训练使用，eval 只供固定的训练前后评测使用。
-各 split 使用独立随机流，增加训练题目数不会改变已固定的 eval/dev 集。
-合成过程不读取 eval 的回答或轨迹。
+答案经独立计算方法验证，题目按内容 ID 去重，再拆成互不重叠的 train/valid/test。
+默认规模 32/8/8；valid 用于训练阶段的验证，test 用于固定的训练前后评测。
+各 split 使用独立随机流，增加训练题目数不会改变已固定的 test/valid 集。
+合成过程不读取 test 的回答或轨迹。
 
 `workflow.py` 复用后端 `examples/tir/tir_workflow.py` 的多轮生成与工具执行，
 额外记录实际 prompt、生成片段、工具调用及工具返回。`reward.py` 只对本例
@@ -95,7 +97,7 @@ uv run --locked python -m examples.tir.pipeline \
 例子中的固定运行设置（独立输出路径、本地调度、模型、harness、数据路径、保存周期等）
 会覆盖模板及 overrides；每个 job 的 `areal-config.yaml` 保存最终配置。
 增加 `max_steps` 时还需保证 `epochs × 每轮 batch 数` 足够。
-基线和复评共享 eval 数据、harness、生成参数和种子，只有模型路径不同。
+基线和复评共享 test 数据、harness、生成参数和种子，只有模型路径不同。
 随机种子不承诺跨硬件／库版本逐 token 完全一致。
 
 ## 产物与故障
@@ -114,11 +116,11 @@ uv run --locked python -m examples.tir.pipeline \
 | `trajectories/` | 按 task/solution 可查询的轨迹索引 |
 | `jobs/train/areal/` | AReaL 的训练日志、指标与 HF checkpoint |
 | `jobs/train/training.json`、`checkpoint.json`、`result.json` | 实际保存步数、参数变化探针、checkpoint 文件清单及引用 |
-| `comparison.json`、`report.md` | 前后指标、差值、候选选择、全部证据关联 |
+| `comparison.json`、`report.md` | 前后指标、配对统计、全部证据关联 |
 
 只有所有题目均返回、训练至少完成一步、新 checkpoint 校验通过并可重载评测、源码在
-实验期间未变化时，状态才是 `completed`。分数没有上升也可完成闭环；只有分数严格上升
-才选择训练候选。源码发生变化会拒绝发布对比结果，应保留该失败记录并用新运行重试。
+实验期间未变化时，状态才是 `completed`。分数没有上升也可完成闭环；报告训练前后的配对准确率变化，不根据 test 分数选择模型。
+多轮候选选择由 `experiment.py` 使用 valid 完成。源码发生变化会拒绝发布对比结果，应保留该失败记录并用新运行重试。
 
 每个阶段失败会立即停止 pipeline，先查看 `experiment.json` 和相应 `stdout.log`，
 再看 `areal/logs/` 下的 actor／rollout 日志。评测缺题、重复题、推理异常、缺失分片和

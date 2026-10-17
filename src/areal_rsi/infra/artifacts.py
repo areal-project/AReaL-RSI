@@ -10,6 +10,7 @@ import tarfile
 import tempfile
 from pathlib import Path
 from typing import Any, TypeVar
+from urllib.parse import unquote, urlparse
 
 from areal_rsi.api.control import decode_record, encode_record
 from areal_rsi.api.records import ArtifactFile, ContentRef, DirectorySnapshot, SourceSnapshot
@@ -91,3 +92,13 @@ def snapshot_source(root: Path, manifest: Path, *, paths: tuple[str, ...]) -> So
         content,
         file_ref(archive),
     )
+
+
+def local_path(ref: ContentRef) -> Path:
+    parsed = urlparse(ref.uri)
+    if parsed.scheme != "file" or parsed.netloc not in {"", "localhost"}:
+        raise ValueError("A local file artifact reference is required")
+    path = Path(unquote(parsed.path)).resolve(strict=True)
+    if file_ref(path).digest != ref.digest:
+        raise ValueError(f"Artifact content changed: {path}")
+    return path

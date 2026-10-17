@@ -24,6 +24,7 @@ class EvolutionTarget(StrEnum):
 class BenchmarkSplit(StrEnum):
     TRAIN = "train"
     VALIDATE = "validate"
+    TEST = "test"
 
 
 class RunState(StrEnum):
@@ -405,6 +406,22 @@ class EvaluationSample:
             raise ValueError("Evaluation samples require a task ID and finite score")
         if not self.events or any(not math.isfinite(v) for v in self.metrics.values()):
             raise ValueError("Evaluation samples require a trace and finite metrics")
+
+
+@dataclass(frozen=True, slots=True)
+class PairedComparison:
+    count: int
+    baseline_accuracy: float
+    candidate_accuracy: float
+    wins: int
+    losses: int
+    both_correct: int
+    both_wrong: int
+    delta: float
+    ci95_low: float
+    ci95_high: float
+    mcnemar_exact_p: float | None
+    independent_questions: int
 
 
 @dataclass(frozen=True, slots=True)

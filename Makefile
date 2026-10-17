@@ -13,7 +13,7 @@ lint:
 	$(UV) run --locked ruff check src tests examples
 
 typecheck:
-	$(UV) run --locked mypy src tests examples/tir/pipeline.py examples/tir/data.py examples/tir/reward.py
+	$(UV) run --locked mypy src tests examples/tir/pipeline.py examples/tir/data.py examples/tir/reward.py examples/tir/benchmark.py examples/tir/synthesis.py examples/tir/experiment.py examples/tir/rsi.py
 
 architecture:
 	$(UV) run --locked pytest tests/test_architecture.py

@@ -1,0 +1,37 @@
+{
+  "hypothesis": "r1 improved sequence and fraction transfer but regressed optimization, while native bare LaTeX labels still give weak MathVerify training rewards. Warm-start r1 with a 60% official ToRL and 40% independently verified curriculum: normalize newly materialized mathematical gold with delimiters, then emphasize exact fractions, radicals, linear constraints, counting, and arithmetic sequences at difficulties 2..5. A fresh 64-step GRPO pass should improve both native correctness and the fixed boxed canonical diagnostic without changing the frozen evaluator.",
+  "parent": "r1",
+  "data": {
+    "seed": 2027,
+    "real_count": 768,
+    "synthetic_count": 512,
+    "gold_format": "math_delimited",
+    "synthesis": {
+      "families": [
+        {"family": "inventory", "weight": 1},
+        {"family": "rates", "weight": 1},
+        {"family": "ratio", "weight": 2},
+        {"family": "growth", "weight": 1},
+        {"family": "percent", "weight": 1},
+        {"family": "average", "weight": 1},
+        {"family": "units", "weight": 1},
+        {"family": "work", "weight": 1},
+        {"family": "decimal", "weight": 1},
+        {"family": "fraction", "weight": 4},
+        {"family": "radical", "weight": 4},
+        {"family": "linear", "weight": 3},
+        {"family": "counting", "weight": 3},
+        {"family": "sequence", "weight": 4}
+      ],
+      "min_difficulty": 2,
+      "max_difficulty": 5,
+      "difficulty_weights": [1, 2, 3, 2]
+    }
+  },
+  "training_steps": 64,
+  "batch_size": 16,
+  "n_samples": 4,
+  "learning_rate": 0.00001,
+  "max_new_tokens": 768,
+  "temperature": 1.0
+}

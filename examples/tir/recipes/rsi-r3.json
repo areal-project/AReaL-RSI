@@ -1,0 +1,32 @@
+{
+  "hypothesis": "The first candidate reduced the targeted whole-number failures but left decimal, fraction, and sequence arithmetic errors. Warm-starting from rsi-r2 with more real multi-step examples and a distinct exact-decimal earnings family should improve numerical transfer while reducing reliance on the synthetic templates.",
+  "parent": "rsi-r2",
+  "data": {
+    "seed": 739,
+    "real_count": 896,
+    "synthetic_count": 640,
+    "real_min_steps": 1,
+    "synthesis": {
+      "families": [
+        {"family": "inventory", "weight": 1},
+        {"family": "rates", "weight": 1},
+        {"family": "budget", "weight": 1},
+        {"family": "ratio", "weight": 3},
+        {"family": "growth", "weight": 2},
+        {"family": "percent", "weight": 3},
+        {"family": "average", "weight": 2},
+        {"family": "units", "weight": 2},
+        {"family": "work", "weight": 3},
+        {"family": "decimal", "weight": 4}
+      ],
+      "min_difficulty": 2,
+      "max_difficulty": 5
+    }
+  },
+  "training_steps": 32,
+  "batch_size": 16,
+  "n_samples": 4,
+  "learning_rate": 0.00001,
+  "max_new_tokens": 768,
+  "temperature": 1.0
+}

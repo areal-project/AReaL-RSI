@@ -1,0 +1,31 @@
+{
+  "hypothesis": "Target the dev failure modes that survived bootstrap formatting gains: train on real multi-step GSM8K solutions plus independently verified synthetic percentage, average, unit-conversion, and work-earnings chains; integer-preserving constructions should improve numerical correctness rather than only boxed formatting.",
+  "parent": "base",
+  "data": {
+    "seed": 271,
+    "real_count": 768,
+    "synthetic_count": 512,
+    "real_min_steps": 2,
+    "synthesis": {
+      "families": [
+        {"family": "inventory", "weight": 1},
+        {"family": "rates", "weight": 1},
+        {"family": "budget", "weight": 1},
+        {"family": "ratio", "weight": 2},
+        {"family": "growth", "weight": 2},
+        {"family": "percent", "weight": 3},
+        {"family": "average", "weight": 3},
+        {"family": "units", "weight": 3},
+        {"family": "work", "weight": 3}
+      ],
+      "min_difficulty": 2,
+      "max_difficulty": 4
+    }
+  },
+  "training_steps": 32,
+  "batch_size": 16,
+  "n_samples": 4,
+  "learning_rate": 0.00001,
+  "max_new_tokens": 768,
+  "temperature": 1.0
+}

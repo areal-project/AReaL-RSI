@@ -1,0 +1,27 @@
+{
+  "hypothesis": "Bootstrap-r1 was the only study result with numeric accuracy above base. Keep its successful 75% real and 25% synthetic mixture, original five verified families, real_min_steps=0, and difficulty 1..3, but train the bootstrap weights for a full 64-step pass over 1024 prompts. This isolates training dose from the r2/r3 data-policy changes and uses a fresh optimizer.",
+  "parent": "bootstrap-r1",
+  "data": {
+    "seed": 17,
+    "real_count": 768,
+    "synthetic_count": 256,
+    "real_min_steps": 0,
+    "synthesis": {
+      "families": [
+        {"family": "inventory", "weight": 1},
+        {"family": "rates", "weight": 1},
+        {"family": "budget", "weight": 1},
+        {"family": "ratio", "weight": 1},
+        {"family": "growth", "weight": 1}
+      ],
+      "min_difficulty": 1,
+      "max_difficulty": 3
+    }
+  },
+  "training_steps": 64,
+  "batch_size": 16,
+  "n_samples": 4,
+  "learning_rate": 0.00001,
+  "max_new_tokens": 768,
+  "temperature": 1.0
+}

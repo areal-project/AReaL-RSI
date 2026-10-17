@@ -16,7 +16,18 @@ from areal_rsi.api.records import ContentRef
 from areal_rsi.infra.artifacts import write_record
 from examples.tir.benchmark import Example, identity, write_examples
 
-Family = Literal["inventory", "rates", "budget", "ratio", "growth"]
+Family = Literal[
+    "inventory",
+    "rates",
+    "budget",
+    "ratio",
+    "growth",
+    "percent",
+    "average",
+    "units",
+    "work",
+    "decimal",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,13 +40,27 @@ class FamilyWeight:
             raise ValueError("Family weights must be positive")
 
 
+def _default_family_weights() -> tuple[FamilyWeight, ...]:
+    families: tuple[tuple[Family, int], ...] = (
+        ("inventory", 1),
+        ("rates", 1),
+        ("budget", 1),
+        ("ratio", 1),
+        ("growth", 1),
+        # These families target the arithmetic chains seen in dev failures
+        # while remaining independent of held-out wording.
+        ("percent", 2),
+        ("average", 2),
+        ("units", 2),
+        ("work", 2),
+        ("decimal", 2),
+    )
+    return tuple(FamilyWeight(family, weight) for family, weight in families)
+
+
 @dataclass(frozen=True, slots=True)
 class SynthesisPolicy:
-    families: tuple[FamilyWeight, ...] = field(
-        default_factory=lambda: tuple(
-            FamilyWeight(family) for family in ("inventory", "rates", "budget", "ratio", "growth")
-        )
-    )
+    families: tuple[FamilyWeight, ...] = field(default_factory=_default_family_weights)
     min_difficulty: int = 1
     max_difficulty: int = 3
 
@@ -72,6 +97,7 @@ class SynthesisManifest:
 
 def generate(rng: random.Random, family: Family, difficulty: int) -> Example:
     """Construct constrained questions; cross-check formulas using a separate oracle."""
+    oracle: int
     name = rng.choice(("Maya", "Noah", "Lena", "Sam", "Aria", "Ben"))
     a, b = rng.randint(3, 12 + difficulty * 9), rng.randint(2, 6 + difficulty * 3)
     c, d = rng.randint(2, 5 + difficulty * 4), rng.randint(2, 5 + difficulty)
@@ -119,7 +145,7 @@ def generate(rng: random.Random, family: Family, difficulty: int) -> Example:
         if red < a:
             raise ValueError("Invalid ratio construction")
         oracle = int(red + d * b - a)
-    else:
+    elif family == "growth":
         days = min(difficulty + 1, 5)
         initial = a * b
         prompt = (
@@ -132,6 +158,93 @@ def generate(rng: random.Random, family: Family, difficulty: int) -> Example:
         for _ in range(days):
             oracle = oracle * 2 + c
         oracle -= d
+    elif family == "percent":
+        # Use prices that are multiples of 100 and whole-number rates so the
+        # target remains an integer while exercising chained percentages.
+        price = rng.randint(1, 3 + difficulty * 4) * 400
+        increase = rng.choice((10, 20, 25, 30, 40))
+        discount = rng.choice((10, 20, 25, 30))
+        prompt = (
+            f"A machine costs ${price}. Its price increases by {increase}% and then a "
+            f"promotion discounts the increased price by {discount}%. "
+            "What is the final price in dollars?"
+        )
+        answer = price * (100 + increase) * (100 - discount) // 10000
+        exact_price = Fraction(price) * (100 + increase) / 100
+        exact_price *= Fraction(100 - discount, 100)
+        if exact_price.denominator != 1:
+            raise ValueError("Percentage construction must have an exact integer result")
+        oracle = exact_price.numerator
+    elif family == "average":
+        # Construct a list with an exact integer mean.  The final value is
+        # derived from the target sum rather than rounded after generation.
+        count = rng.randint(3, 4 + difficulty)
+        mean = rng.randint(8, 25 + difficulty * 10)
+        spread = min(3, (mean - 1) // max(1, count - 1))
+        values = [mean + rng.randint(-spread, spread) for _ in range(count - 1)]
+        values.append(mean * count - sum(values))
+        if values[-1] < 1:
+            raise ValueError("Invalid average construction")
+        joined = ", ".join(str(value) for value in values)
+        prompt = f"The average of these {count} scores is requested: {joined}. What is the average?"
+        answer = mean
+        exact_average = Fraction(sum(values), count)
+        if exact_average.denominator != 1:
+            raise ValueError("Average construction must have an exact integer result")
+        oracle = exact_average.numerator
+    elif family == "units":
+        batches = rng.randint(4, 12 + difficulty * 8)
+        # Keep the conversion exact and ask for the total after a multi-step
+        # quantity calculation rather than teaching decimal formatting.
+        units_per_batch = rng.choice((4, 6, 8, 10, 12))
+        units_per_larger = rng.choice(
+            tuple(divisor for divisor in (2, 4, 5) if units_per_batch % divisor == 0)
+        )
+        prompt = (
+            f"A workshop uses {units_per_batch} cups of material for each batch and makes "
+            f"{batches} batches. If one container holds {units_per_larger} cups, "
+            "how many full containers of material are used?"
+        )
+        total = units_per_batch * batches
+        if total % units_per_larger:
+            raise ValueError("Invalid unit construction")
+        answer = total // units_per_larger
+        exact_containers = Fraction(units_per_batch * batches, units_per_larger)
+        if exact_containers.denominator != 1:
+            raise ValueError("Unit construction must divide into full containers")
+        oracle = exact_containers.numerator
+    elif family == "work":
+        days = rng.randint(3, 5 + difficulty)
+        hours = rng.randint(3, 8)
+        hourly = rng.randint(8, 20 + difficulty * 5)
+        expense = rng.choice((10, 20, 30, 40))
+        prompt = (
+            f"A worker earns ${hourly} per hour, works {hours} hours each day for {days} days, "
+            f"and spends ${expense} on supplies. How many dollars remain from the earnings?"
+        )
+        answer = hourly * hours * days - expense
+        earned = sum(hourly for _ in range(hours * days))
+        oracle = earned - expense
+    else:
+        # Represent decimal rates as tenths and make the quantity a multiple
+        # of ten so the intended answer is exact without binary float math.
+        rate_tenths = rng.randint(5, 30 + difficulty * 10)
+        quantity = rng.randint(2, 8 + difficulty * 4) * 10
+        bonus = rng.choice((10, 20, 30, 40))
+        rate = Fraction(rate_tenths, 10)
+        prompt = (
+            f"A courier earns ${rate_tenths // 10}.{rate_tenths % 10} per package and "
+            f"delivers {quantity} packages. A customer adds a ${bonus} tip. "
+            "How many dollars does the courier receive altogether?"
+        )
+        exact_total = rate * quantity + Fraction(bonus)
+        if exact_total.denominator != 1:
+            raise ValueError("Decimal construction must have an exact integer result")
+        answer = rate_tenths * quantity // 10 + bonus
+        exact_oracle = sum((rate for _ in range(quantity)), Fraction(bonus))
+        if exact_oracle.denominator != 1:
+            raise ValueError("Decimal oracle must be an exact integer")
+        oracle = exact_oracle.numerator
     if answer != oracle or answer < 0:
         raise ValueError("Synthetic answer failed independent verification")
     return Example(

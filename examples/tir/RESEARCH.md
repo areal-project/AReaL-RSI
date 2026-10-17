@@ -21,6 +21,14 @@ GSM8K 官方 train 确定性抽出 256 题 dev，其余作为训练池。官方 
 DataRecipe 控制真实/合成数量、真实题最少推理步数、题型权重、合成难度和随机种子。
 不把目前这份初始策略当作最终研究结果：Leader 需要根据 dev 失败模式修改/验证它。
 
+当前研究策略还提供 `percent`、`average`、`units`、`work` 和 `decimal` 五类合成题。
+它们只生成非负整数目标：百分比、单位和平均值使用 `Fraction` 检查精确整除，工作收入使用
+逐项累加 oracle，decimal 使用十分位整数与 Fraction oracle；平均值先固定目标均值再反推最后
+一个正数。所有生成题的 identity 由规范化题面计算，数据集确定性抽样、去重并只允许来自
+`benchmark.train` 的真实题。复现实验时使用 `DataRecipe` 的 seed、计数、family weight 和
+难度范围，并在提交 GPU 前运行 `pytest tests/test_tir_study.py`、`uv run --locked mypy`
+和生成器的多 seed 边界验证。
+
 prepare 冻结数据哈希、harness、reward、worker、数据读入和后端代码、基模型、推理预算。
 源码快照包含未提交文件和完整归档；每个 GPU 阶段前后校验源码，运行阶段不能同时改代码。
 数据策略与训练 recipe 可在阶段之间迭代，每轮保存假设、配方、源码、生成数据与父模型。

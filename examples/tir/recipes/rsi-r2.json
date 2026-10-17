@@ -1,0 +1,31 @@
+{
+  "hypothesis": "After fixing the synthesis oracle, a base warm start trained on real multi-step GSM8K examples plus exact synthetic percentage, average, unit, and work chains should improve numerical correctness on the dev error patterns; the expanded synthetic share tests whether these arithmetic skills transfer beyond boxed formatting.",
+  "parent": "base",
+  "data": {
+    "seed": 271,
+    "real_count": 768,
+    "synthetic_count": 512,
+    "real_min_steps": 2,
+    "synthesis": {
+      "families": [
+        {"family": "inventory", "weight": 1},
+        {"family": "rates", "weight": 1},
+        {"family": "budget", "weight": 1},
+        {"family": "ratio", "weight": 2},
+        {"family": "growth", "weight": 2},
+        {"family": "percent", "weight": 3},
+        {"family": "average", "weight": 3},
+        {"family": "units", "weight": 3},
+        {"family": "work", "weight": 3}
+      ],
+      "min_difficulty": 2,
+      "max_difficulty": 4
+    }
+  },
+  "training_steps": 32,
+  "batch_size": 16,
+  "n_samples": 4,
+  "learning_rate": 0.00001,
+  "max_new_tokens": 768,
+  "temperature": 1.0
+}

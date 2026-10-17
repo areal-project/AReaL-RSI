@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
+import re
 from dataclasses import replace
+from fractions import Fraction
 from pathlib import Path
 
 import pytest
@@ -25,10 +28,12 @@ from examples.tir.pipeline import ExperimentConfig
 from examples.tir.study import Candidate, Study, StudyConfig, paired, prepare, protocol
 from examples.tir.synthesis import (
     DataRecipe,
+    Family,
     FamilyWeight,
     SynthesisManifest,
     SynthesisPolicy,
     build_dataset,
+    generate,
 )
 
 
@@ -80,6 +85,45 @@ def test_word_problem_mixture_reproducible_verified_and_train_only(tmp_path: Pat
         build_dataset(recipe, (replace(pool[0], source="gsm8k-test"),), ref, (), tmp_path / "test")
     with pytest.raises(ValueError, match="eligible"):
         build_dataset(replace(recipe, real_count=6), pool, ref, (), tmp_path / "excess")
+
+
+@pytest.mark.parametrize(
+    ("family", "required_terms"),
+    [
+        ("percent", ("costs $", "%", "discounts")),
+        ("average", ("average", "scores")),
+        ("units", ("cups", "container")),
+        ("work", ("earns $", "hours", "supplies")),
+        ("decimal", ("earns $", "per package", "tip")),
+    ],
+)
+def test_new_synthetic_families_have_semantic_prompts_and_exact_targets(
+    family: Family, required_terms: tuple[str, ...]
+) -> None:
+    for seed in range(40):
+        item = generate(random.Random(seed), family, 5)
+        prompt = item.prompt.casefold()
+        assert all(term in prompt for term in required_terms)
+        assert item.task_id == identity(item.prompt)
+        assert item.answer.isdigit() and int(item.answer) >= 0
+        if family == "average":
+            values = [int(value) for value in re.findall(r"\d+", item.prompt.split(":", 1)[1])]
+            assert len(values) >= 3 and sum(values) % len(values) == 0
+            assert sum(values) // len(values) == int(item.answer)
+        elif family == "units":
+            numbers = [int(value) for value in re.findall(r"\d+", item.prompt)]
+            assert numbers[0] * numbers[1] % numbers[2] == 0
+        elif family == "decimal":
+            rate_match = re.search(r"\$(\d+\.\d+)", item.prompt)
+            quantity_match = re.search(r"delivers (\d+)", item.prompt)
+            bonus_match = re.search(r"\$(\d+) tip", item.prompt)
+            assert rate_match is not None
+            assert quantity_match is not None
+            assert bonus_match is not None
+            rate = Fraction(rate_match.group(1))
+            quantity = int(quantity_match.group(1))
+            bonus = int(bonus_match.group(1))
+            assert rate * quantity + bonus == int(item.answer)
 
 
 def test_paired_statistics_align_tasks_and_refuse_tampering(tmp_path: Path) -> None:

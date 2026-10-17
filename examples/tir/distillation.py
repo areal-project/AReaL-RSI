@@ -121,6 +121,107 @@ class DistillationManifest:
     accepted_count: int
 
 
+@dataclass(frozen=True, slots=True)
+class CohortPublication:
+    collection_config: ContentRef
+    prefix_task_ids: tuple[str, ...]
+    manifest: ContentRef
+
+
+def _questions(config: DistillationConfig) -> tuple[Example, ...]:
+    pool = read_examples(local_path(config.training_pool))
+    if any(item.source != "torl-train" or item.repetitions != 1 for item in pool):
+        raise ValueError("Teacher questions must come from the official, unique training pool")
+    if set(config.excluded_ids).intersection(item.task_id for item in pool):
+        raise ValueError("Teacher training pool overlaps held-out identities")
+    by_id = {item.task_id: item for item in pool}
+    if config.task_ids:
+        if not set(config.task_ids) <= by_id.keys():
+            raise ValueError("Teacher curriculum contains a non-training identity")
+        return tuple(by_id[task_id] for task_id in config.task_ids)
+    return tuple(random.Random(config.seed).sample(pool, config.count))
+
+
+def _tokenizer_files(config: DistillationConfig) -> tuple[ContentRef, ...]:
+    refs = tuple(
+        file_ref(path)
+        for path in sorted(Path(config.tokenizer).iterdir())
+        if path.name in {"tokenizer.json", "tokenizer_config.json", "vocab.json", "merges.txt"}
+    )
+    if not refs:
+        raise ValueError("A pinned local tokenizer is required")
+    return refs
+
+
+def _publish(
+    config_ref: ContentRef,
+    questions: tuple[Example, ...],
+    tokenizer_refs: tuple[ContentRef, ...],
+    attempt_refs: tuple[ContentRef, ...],
+    output: Path,
+) -> DistillationManifest:
+    config = read_record(local_path(config_ref), DistillationConfig)
+    attempts = tuple(read_record(local_path(ref), DistillationAttempt) for ref in attempt_refs)
+    if tuple(attempt.example for attempt in attempts) != questions:
+        raise ValueError("Teacher publication does not match the planned question identities")
+    accepted = []
+    for attempt in attempts:
+        if attempt.teacher != config.teacher.model:
+            raise ValueError("Teacher publication mixes unplanned teacher models")
+        if attempt.accepted:
+            if (
+                attempt.error
+                or attempt.sample is None
+                or attempt.sample.task_id != attempt.example.task_id
+            ):
+                raise ValueError("Accepted teacher record has inconsistent training targets")
+            accepted.append(attempt.sample)
+    if not accepted:
+        raise ValueError("Teacher produced no verified, executable training trajectories")
+    path = output / "train.jsonl"
+    with path.open("x") as stream:
+        for sample in accepted:
+            stream.write(json.dumps(encode_record(sample), ensure_ascii=False) + "\n")
+    manifest = DistillationManifest(
+        config_ref,
+        config.training_pool,
+        tokenizer_refs,
+        attempt_refs,
+        file_ref(path),
+        len(attempts),
+        len(accepted),
+    )
+    write_record(output / "manifest.json", manifest)
+    return manifest
+
+
+def publish_prefix(config_path: Path, count: int, output: Path) -> DistillationManifest:
+    """Publish an immutable predeclared question prefix from an active collection.
+
+    Every question in the prefix must have a closed attempt, including failures.
+    This never chooses the first completed or first successful trajectories.
+    Original producer records and its full collection configuration stay intact.
+    """
+    config = read_record(config_path, DistillationConfig)
+    if not 1 <= count <= config.count:
+        raise ValueError("Teacher cohort must be a positive prefix of its collection")
+    selected = _questions(config)[:count]
+    paths = tuple(Path(config.output) / "attempts" / f"{item.task_id}.json" for item in selected)
+    if any(not path.is_file() for path in paths):
+        raise ValueError("The planned teacher prefix is not completely processed")
+    refs = tuple(file_ref(path) for path in paths)
+    output.mkdir(parents=True, exist_ok=False)
+    config_ref = file_ref(config_path)
+    manifest = _publish(config_ref, selected, _tokenizer_files(config), refs, output)
+    write_record(
+        output / "cohort.json",
+        CohortPublication(
+            config_ref, tuple(item.task_id for item in selected), file_ref(output / "manifest.json")
+        ),
+    )
+    return manifest
+
+
 def teacher_completion(
     config: TeacherConfig, messages: tuple[TeacherMessage, ...], *, json_output: bool = False
 ) -> str:
@@ -334,36 +435,19 @@ def admit_answer(
 def generate(config: DistillationConfig) -> DistillationManifest:
     from transformers import AutoTokenizer  # type: ignore[import-not-found]
 
-    pool = read_examples(local_path(config.training_pool))
-    if any(item.source != "torl-train" or item.repetitions != 1 for item in pool):
-        raise ValueError("Teacher questions must come from the official, unique training pool")
-    excluded = set(config.excluded_ids)
-    if excluded.intersection(item.task_id for item in pool):
-        raise ValueError("Teacher training pool overlaps held-out identities")
-    by_id = {item.task_id: item for item in pool}
-    if config.task_ids:
-        if not set(config.task_ids) <= by_id.keys():
-            raise ValueError("Teacher curriculum contains a non-training identity")
-        selected = tuple(by_id[task_id] for task_id in config.task_ids)
-    else:
-        selected = tuple(random.Random(config.seed).sample(pool, config.count))
+    selected = _questions(config)
     output = Path(config.output)
     output.mkdir(parents=True, exist_ok=False)
     config_ref = write_record(output / "config.json", config)
     tokenizer = AutoTokenizer.from_pretrained(config.tokenizer, local_files_only=True)
-    tokenizer_refs = tuple(
-        file_ref(path)
-        for path in sorted(Path(config.tokenizer).iterdir())
-        if path.name in {"tokenizer.json", "tokenizer_config.json", "vocab.json", "merges.txt"}
-    )
-    if not tokenizer_refs or tokenizer.eos_token_id is None:
-        raise ValueError("A pinned local tokenizer with an EOS token is required")
+    tokenizer_refs = _tokenizer_files(config)
+    if tokenizer.eos_token_id is None:
+        raise ValueError("A local tokenizer with an EOS token is required")
     # Only HTTP requests run in threads. The backend Python executor itself
     # creates processes; execute it in the coordinator, never in HTTP threads.
     # Admit/parse in the main thread so MathVerify's signal timeouts actually work.
     from prompts import TORL_PROMPT  # type: ignore[import-not-found]
 
-    attempts: dict[str, DistillationAttempt] = {}
     refs: dict[str, ContentRef] = {}
     state = CollectionState()
     write_record(output / "state.json", state)
@@ -419,7 +503,6 @@ def generate(config: DistillationConfig) -> DistillationManifest:
                 refs[attempt.example.task_id] = write_record(
                     output / "attempts" / f"{attempt.example.task_id}.json", attempt
                 )
-                attempts[attempt.example.task_id] = attempt
                 state.completed += 1
                 state.accepted += attempt.accepted
                 write_record(output / "state.json", state)
@@ -443,28 +526,19 @@ def generate(config: DistillationConfig) -> DistillationManifest:
         # At most concurrency requests can remain; no hidden queue of hundreds
         # of paid requests continues after the collector has already failed.
         executor.shutdown(wait=True, cancel_futures=True)
-    accepted_samples = [
-        attempts[item.task_id].sample for item in selected if attempts[item.task_id].accepted
-    ]
-    if not accepted_samples or any(sample is None for sample in accepted_samples):
+    try:
+        manifest = _publish(
+            config_ref,
+            selected,
+            tokenizer_refs,
+            tuple(refs[item.task_id] for item in selected),
+            output,
+        )
+    except Exception as exc:
         state.status = "failed"
-        state.error = "Teacher produced no verified, executable training trajectories"
+        state.error = str(exc).replace(os.environ[config.teacher.api_key_env], "[REDACTED]")
         write_record(output / "state.json", state)
-        raise ValueError(state.error)
-    path = output / "train.jsonl"
-    with path.open("x") as stream:
-        for sample in accepted_samples:
-            stream.write(json.dumps(encode_record(sample), ensure_ascii=False) + "\n")
-    manifest = DistillationManifest(
-        config_ref,
-        config.training_pool,
-        tokenizer_refs,
-        tuple(refs[item.task_id] for item in selected),
-        file_ref(path),
-        len(selected),
-        len(accepted_samples),
-    )
-    write_record(output / "manifest.json", manifest)
+        raise
     state.status = "completed"
     write_record(output / "state.json", state)
     return manifest
@@ -520,10 +594,20 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--env-file", type=Path)
+    parser.add_argument(
+        "--prefix-count", type=int, help="Publish a completely processed question prefix"
+    )
+    parser.add_argument("--publish-output", type=Path)
     args = parser.parse_args()
     if args.env_file:
         load_dotenv(args.env_file, override=False)
-    manifest = generate(read_record(args.config, DistillationConfig))
+    if (args.prefix_count is None) != (args.publish_output is None):
+        parser.error("--prefix-count and --publish-output must be supplied together")
+    manifest = (
+        publish_prefix(args.config, args.prefix_count, args.publish_output)
+        if args.prefix_count is not None
+        else generate(read_record(args.config, DistillationConfig))
+    )
     print(f"verified_teacher_trajectories={manifest.accepted_count}", flush=True)
 
 

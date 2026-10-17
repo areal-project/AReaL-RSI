@@ -24,6 +24,17 @@ SFT 在训练节点用实际 parent 的 tokenizer 重建 token 和 mask；题目
 仅学习教师生成内容。通用的 token 契约、SFT 执行、权重变化检查和 checkpoint 校验位于
 `api/execution.py` 与 `infra/training.py`；任务选题、合成和训练阶段编排保留在本例。
 
+教师批次较大时，可先发布已完整处理的题目前缀，提前启动小批 SFT：
+
+```bash
+uv run --locked python -m examples.tir.distillation \
+  --config /absolute/teacher-collection/config.json \
+  --prefix-count 256 --publish-output /absolute/teacher-prefix-256
+```
+
+前缀按生成前确定的题目顺序选择，必须包含这些题目的全部成功或失败记录；
+不会按完成速度或正确率挑选题目。新 manifest 引用原配置及不可变轨迹，原批次继续生成。
+
 `ExperimentConfig.target_accuracy` 可额外指定 test 的绝对准确率目标，例如 `0.37` 表示必须
 严格超过 37%，并且仍要满足 `target_delta` 的相对提升要求。模型选择继续只使用 valid。
 

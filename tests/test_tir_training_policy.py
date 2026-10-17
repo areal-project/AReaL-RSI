@@ -42,6 +42,7 @@ from examples.tir.distillation import (
     TeacherDraft,
     TeacherMessage,
     boxed_answer,
+    publish_prefix,
     tokenize_trajectory,
 )
 from examples.tir.experiment import RoundRecipe
@@ -360,3 +361,58 @@ def test_teacher_collector_bounds_pending_work_and_persists_write_failure(
     assert "private-value" not in (tmp_path / "output/failure.log").read_text()
     assert len(requests) <= 4  # Two trajectories in flight, at most draft + final for each.
     assert not (tmp_path / "output/manifest.json").exists()
+
+
+def test_teacher_cohort_uses_planned_prefix_and_preserves_closed_producer_records(
+    tmp_path: Path,
+) -> None:
+    questions = tuple(real_example(index) for index in range(4))
+    pool_ref = write_examples(tmp_path / "pool.jsonl", questions)
+    producer = tmp_path / "producer"
+    producer.mkdir()
+    tokenizer = tmp_path / "tokenizer"
+    tokenizer.mkdir()
+    (tokenizer / "tokenizer.json").write_text("{}")
+    config = DistillationConfig(
+        TeacherConfig("https://teacher.example/v1", "teacher"),
+        pool_ref,
+        (),
+        str(tokenizer),
+        str(producer),
+        count=4,
+        task_ids=tuple(item.task_id for item in questions),
+    )
+    config_path = producer / "config.json"
+    write_record(config_path, config)
+
+    def save(index: int, *, accepted: bool) -> ContentRef:
+        item = questions[index]
+        sample = TokenizedTrainingSample(item.task_id, (1, 2, 3), (0, 1, 1))
+        return write_record(
+            producer / "attempts" / f"{item.task_id}.json",
+            DistillationAttempt(
+                item,
+                "teacher",
+                tool_trace(),
+                accepted,
+                "" if accepted else "incorrect",
+                sample if accepted else None,
+            ),
+        )
+
+    save(0, accepted=True)
+    save(
+        2, accepted=True
+    )  # Two completed successes do not complete the first two planned questions.
+    with pytest.raises(ValueError, match="not completely processed"):
+        publish_prefix(config_path, 2, tmp_path / "too-early")
+    assert not (tmp_path / "too-early").exists()
+    rejected = save(1, accepted=False)
+    before = local_path(rejected).read_bytes()
+    manifest = publish_prefix(config_path, 2, tmp_path / "cohort")
+    assert manifest.attempted_count == 2 and manifest.accepted_count == 1
+    assert manifest.config == file_ref(config_path)
+    assert read_training_samples(local_path(manifest.dataset))[0].task_id == questions[0].task_id
+    assert local_path(rejected).read_bytes() == before
+    with pytest.raises(FileExistsError):
+        publish_prefix(config_path, 2, tmp_path / "cohort")

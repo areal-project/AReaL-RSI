@@ -12,7 +12,14 @@ import pytest
 from areal_rsi.api.records import DirectorySnapshot
 from areal_rsi.infra.artifacts import read_record, snapshot_directory
 from examples.search.analysis import paired_statistics, read_official_results, wilson_interval
-from examples.search.final_evaluation import counters, export_checkpoint
+from examples.search.final_evaluation import (
+    FinalEvalConfig,
+    context_budget_exhaustion,
+    counters,
+    digest,
+    export_checkpoint,
+    recover_summary,
+)
 
 
 def test_hf5_export_preserves_weights_and_restores_legacy_position_metadata(tmp_path: Path) -> None:
@@ -146,3 +153,183 @@ vllm:generation_tokens_total{engine="1"} 11
         finally:
             server.shutdown()
             thread.join()
+
+
+def context_failure(directory: Path, query_id: str) -> Path:
+    error = "qwen_agent.llm.base.ModelServiceError: Error code: 400 - " + repr(
+        {
+            "error": {
+                "message": "You passed 121073 input tokens and requested 10000 output tokens. "
+                "However, the model's context length is only 131072 tokens, resulting in "
+                "a maximum input length of 121072 tokens. Please reduce the length of the "
+                "input prompt. (parameter=input_tokens, value=121073)",
+                "type": "BadRequestError",
+                "param": "input_tokens",
+                "code": 400,
+            }
+        }
+    )
+    record = {
+        "query_id": query_id,
+        "status": "error",
+        "error": error,
+        "metadata": {"max_output_tokens": 10000, "elapsed_seconds": 1.5},
+        "tool_call_counts": {"search": 2},
+        "retrieved_docids": ["external-doc"],
+        "result": [{"type": "tool_call", "output": "external evidence"}],
+    }
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"run_{query_id}.json"
+    path.write_text(json.dumps(record))
+    raw = directory.parent / (directory.name + "-raw") / query_id
+    raw.mkdir(parents=True)
+    original = {key: value for key, value in record.items() if key != "error"}
+    original["status"] = "incomplete"
+    (raw / "run_original.json").write_text(json.dumps(original))
+    (raw / "messages.json").write_text(
+        json.dumps(
+            {
+                "error": error,
+                "request_config": {"max_tokens": 10000},
+                "response": [{"role": "function", "content": "external evidence"}],
+            }
+        )
+    )
+    return path
+
+
+def test_context_budget_requires_exact_refusal_and_original_incomplete_evidence(
+    tmp_path: Path,
+) -> None:
+    path = context_failure(tmp_path / "runs" / "example", "external")
+    original = json.loads(path.read_text())
+    failure = context_budget_exhaustion(path, original)
+    assert (failure.input_tokens, failure.requested_output_tokens, failure.context_tokens) == (
+        121073,
+        10000,
+        131072,
+    )
+    for message in [
+        "TimeoutError: retrieval timed out",
+        "qwen_agent.llm.base.ModelServiceError: Error code: 500 - service unavailable",
+        original["error"].replace("121073", "120000"),
+    ]:
+        with pytest.raises(ValueError, match="Unrecoverable"):
+            context_budget_exhaustion(path, {**original, "error": message})
+    with pytest.raises(ValueError, match="Unrecoverable"):
+        context_budget_exhaustion(
+            path, {**original, "result": [{"type": "output_text", "output": "an actual answer"}]}
+        )
+    Path(failure.original_record.path).unlink()
+    with pytest.raises(ValueError, match="Unrecoverable"):
+        context_budget_exhaustion(path, original)
+
+
+def test_summary_recovery_preserves_full_official_denominator_and_rejects_other_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import asdict
+
+    source = tmp_path / "original"
+    runs = source / "runs/qwen3-embedding-8b" / source.name
+    judged = source / "evals/qwen3-embedding-8b" / source.name
+    judged.mkdir(parents=True)
+    special = context_failure(runs, "0")
+    for index in range(830):
+        if index:
+            (runs / f"run_{index}.json").write_text(
+                json.dumps(
+                    {
+                        "query_id": str(index),
+                        "status": "completed",
+                        "tool_call_counts": {"search": 2},
+                        "metadata": {"elapsed_seconds": 1.5},
+                    }
+                )
+            )
+        (judged / f"run_{index}_eval.json").write_text(
+            json.dumps(
+                {
+                    "query_id": str(index),
+                    "is_completed": index != 0,
+                    "judge_response": "correct: yes" if index else None,
+                    "judge_result": {"correct": 1 <= index <= 12, "parse_error": False},
+                }
+            )
+        )
+    (judged / "evaluation_summary.json").write_text(json.dumps({"Recall (%)": 1.0}))
+    (tmp_path / "datasets").mkdir()
+    (tmp_path / "datasets/queries.tsv").write_text(
+        "".join(f"{index}\texternal question {index}\n" for index in range(830))
+    )
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text("{}")
+    lock = tmp_path / "lock.json"
+    lock.write_text("{}")
+    config = FinalEvalConfig(
+        benchmark_repository="unused",
+        historical_environment="unused",
+        data_root=str(tmp_path),
+        model="unchanged-model",
+        base_model="unchanged-base",
+        embedding_model="unchanged-dense",
+        judge_model="unchanged-judge",
+        checkpoint_manifest=str(manifest),
+        checkpoint_manifest_sha256=digest(manifest),
+        asset_lock=str(lock),
+        asset_lock_sha256=digest(lock),
+        data_python="unused",
+        vllm_python="unused",
+        qwen_overlay="unused",
+        output=str(source),
+        seed=43,
+    )
+    config_path = source / "config.json"
+    config_path.write_text(json.dumps(asdict(config)))
+    (source / "environment.json").write_text(
+        json.dumps(
+            {
+                "slurm_job_id": "123",
+                "asset_hashes_verified": True,
+                "historical_source_hashes_verified": True,
+                "asset_lock_sha256": digest(lock),
+            }
+        )
+    )
+    (source / "solver-cost.json").write_text(
+        json.dumps(
+            {
+                "input_tokens": 123456,
+                "output_tokens": 23456,
+                "inference_wall_seconds": 30,
+            }
+        )
+    )
+    monkeypatch.setattr(
+        "examples.search.final_evaluation.subprocess.check_output",
+        lambda *a, **k: "123|RUNNING|40|\n",
+    )
+    with pytest.raises(ValueError, match="must be terminal"):
+        recover_summary(config_path, tmp_path / "live.json")
+    before = {str(path): digest(path) for path in source.rglob("*") if path.is_file()}
+    monkeypatch.setattr(
+        "examples.search.final_evaluation.subprocess.check_output",
+        lambda *a, **k: "123|FAILED|42|\n",
+    )
+    recovered = recover_summary(config_path, tmp_path / "recovered.json")
+    summary = json.loads(recovered.read_text())
+    assert summary["questions"] == 830 and summary["correct"] == 12
+    assert summary["accuracy"] == 12 / 830 and summary["context_budget_exhaustions"] == 1
+    assert summary["mean_search_calls"] == 2 and summary["mean_query_seconds"] == 1.5
+    receipt = json.loads(Path(summary["recovery_receipt"]).read_text())
+    assert receipt["source_job_elapsed_seconds"] == 42
+    assert len(receipt["context_budget_exhaustions"]) == 1
+    assert {str(path): digest(path) for path in source.rglob("*") if path.is_file()} == before
+    assert json.loads(special.read_text())["status"] == "error"
+    bad = runs / "run_1.json"
+    record = json.loads(bad.read_text())
+    record.update(status="error", error="TimeoutError: a real service failure")
+    bad.write_text(json.dumps(record))
+    with pytest.raises(ValueError, match="Unrecoverable"):
+        recover_summary(config_path, tmp_path / "must-reject.json")
+    assert not (tmp_path / "must-reject.json").exists()

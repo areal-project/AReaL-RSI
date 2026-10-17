@@ -1,7 +1,7 @@
 """Editable TIR research policy: verified math tasks mixed with training-only ToRL.
 
 The Leader may change these generators and recipes between rounds. Each generated
-dataset is immutable and its source archive is recorded by the study pipeline.
+dataset is immutable and its source archive is recorded by the experiment pipeline.
 There are fifteen families.  Synthetic difficulty currently changes parameter
 ranges; it is a controllable curriculum proxy, not a calibrated reasoning scale.
 Family weights are proposal weights: deduplication and retry limits mean that
@@ -24,9 +24,8 @@ from typing import Literal
 
 from areal_rsi.api.control import decode_record
 from areal_rsi.api.records import ContentRef
-from areal_rsi.infra.artifacts import file_ref, write_record
+from areal_rsi.infra.artifacts import file_ref, local_path, write_record
 from examples.tir.benchmark import Example, identity, read_examples, write_examples
-from examples.tir.pipeline import local_path
 
 Family = Literal[
     "inventory",

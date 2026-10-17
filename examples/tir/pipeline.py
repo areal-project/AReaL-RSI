@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import os
 import signal
 import uuid
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -15,25 +14,31 @@ from urllib.parse import unquote, urlparse
 
 from areal_rsi.api.execution import AReaLRuntime, JobSpec, TrainingResult
 from areal_rsi.api.records import (
+    BenchmarkSplit,
     ContentRef,
     EvaluationResult,
     HarnessVersion,
     ModelVersion,
+    PairedComparison,
     SolutionVersion,
     SourceSnapshot,
 )
 from areal_rsi.infra.artifacts import (
-    file_ref,
+    local_path,
     read_record,
     snapshot_directory,
     snapshot_source,
     write_record,
 )
-from areal_rsi.infra.coordination.evaluation import EvaluationService
+from areal_rsi.infra.coordination.evaluation import EvaluationService, paired
 from areal_rsi.infra.execution import JobExecutor
 from areal_rsi.infra.training import AReaLBackend
 from areal_rsi.infra.trajectories import LocalTrajectoryStore
 from examples.tir.data import DatasetManifest, SynthesisConfig, read_problems, synthesize
+
+PROJECT = Path(__file__).resolve().parents[2]
+PROJECT_PATHS = ("src", "examples/tir", "examples/__init__.py", "pyproject.toml", "uv.lock")
+BACKEND_PATHS = ("areal", "examples/tir", "pyproject.toml", "uv.lock")
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,7 +69,7 @@ class EvaluationConfig:
 
 
 @dataclass(frozen=True, slots=True)
-class ExperimentConfig:
+class TIRConfig:
     runtime: AReaLRuntime
     model: str
     output_root: str = "runs/tir"
@@ -82,8 +87,6 @@ class ExperimentConfig:
             raise ValueError("Epochs, batch size and max_steps must be positive")
         if self.training.n_samples < 2 or self.training.temperature <= 0:
             raise ValueError("GRPO requires multiple samples and positive training temperature")
-        if self.synthesis.train_size < self.training.batch_size:
-            raise ValueError("Training split must contain at least one full batch")
         if (
             min(
                 self.harness.max_turns,
@@ -102,7 +105,7 @@ class ExperimentConfig:
 @dataclass(frozen=True, slots=True)
 class WorkerRequest:
     mode: Literal["train", "eval"]
-    config: ExperimentConfig
+    config: TIRConfig
     model: str
     dataset: str
     valid_dataset: str
@@ -125,8 +128,7 @@ class Provenance:
 @dataclass(frozen=True, slots=True)
 class HarnessManifest:
     config: HarnessConfig
-    project: ContentRef
-    backend_tir: ContentRef
+    files: tuple[ContentRef, ...]
     reward: Literal["integer", "math_verify"]
 
 
@@ -158,22 +160,11 @@ class Comparison:
     training: TrainingResult
     provenance: Provenance
     score_delta: float
-    accuracy_delta: float
-    selected: Literal["baseline", "candidate"]
+    accuracy_comparison: PairedComparison
     candidate_solution: SolutionVersion
 
 
-def local_path(ref: ContentRef) -> Path:
-    parsed = urlparse(ref.uri)
-    if parsed.scheme != "file":
-        raise ValueError("This local example requires file artifact references")
-    path = Path(unquote(parsed.path))
-    if file_ref(path).digest != ref.digest:
-        raise ValueError(f"Artifact content changed: {path}")
-    return path
-
-
-async def run(config: ExperimentConfig, *, prepare_only: bool = False) -> Path:
+async def run(config: TIRConfig, *, prepare_only: bool = False) -> Path:
     run_id = f"tir-{datetime.now(UTC):%Y%m%dT%H%M%S}-{uuid.uuid4().hex[:8]}"
     root = Path(config.output_root).resolve()
     directory = root / run_id
@@ -186,17 +177,17 @@ async def run(config: ExperimentConfig, *, prepare_only: bool = False) -> Path:
     save()
     print(f"run={run_id} output={directory}", flush=True)
     try:
+        if config.synthesis.train_size < config.training.batch_size:
+            raise ValueError("Training split must contain at least one full batch")
         config_ref = write_record(directory / "config.json", config)
         datasets = synthesize(config.synthesis, directory / "data")
         repository = Path(config.runtime.repository).resolve(strict=True)
-        project = Path(__file__).resolve().parents[2]
-        project_paths = ("src", "examples/tir", "examples/__init__.py", "pyproject.toml", "uv.lock")
-        backend_paths = ("areal", "examples/tir", "pyproject.toml", "uv.lock")
+        project = PROJECT
         project_source = snapshot_source(
-            project, directory / "source-project.json", paths=project_paths
+            project, directory / "source-project.json", paths=PROJECT_PATHS
         )
         backend_source = snapshot_source(
-            repository, directory / "source-backend.json", paths=backend_paths
+            repository, directory / "source-backend.json", paths=BACKEND_PATHS
         )
         model = snapshot_directory(Path(config.model), directory / "base-model.json")
         backend_harness = snapshot_directory(
@@ -206,8 +197,7 @@ async def run(config: ExperimentConfig, *, prepare_only: bool = False) -> Path:
             directory / "harness-version.json",
             HarnessManifest(
                 config.harness,
-                project_source.content,
-                backend_harness,
+                (project_source.content, backend_harness),
                 config.reward,
             ),
         )
@@ -238,18 +228,7 @@ async def run(config: ExperimentConfig, *, prepare_only: bool = False) -> Path:
         if prepare_only:
             return directory
         jobs = JobExecutor(root)
-        inherited = config.runtime.environment.get("PYTHONPATH", os.environ.get("PYTHONPATH", ""))
-        tir_paths = [str(repository / "examples" / "tir")]
-        if inherited:
-            tir_paths.append(inherited)
-        runtime = replace(
-            config.runtime,
-            environment={
-                **config.runtime.environment,
-                "PYTHONPATH": os.pathsep.join(tir_paths),
-            },
-        )
-        backend = AReaLBackend(runtime, jobs)
+        backend = AReaLBackend(config.runtime, jobs)
         evaluator = EvaluationService(jobs, LocalTrajectoryStore(directory / "trajectories"))
         worker = Path(__file__).with_name("worker.py")
         test_data = local_path(datasets.test)
@@ -268,7 +247,10 @@ async def run(config: ExperimentConfig, *, prepare_only: bool = False) -> Path:
             request_path = directory / f"request-{name}.json"
             write_record(request_path, request)
             return backend.spec(
-                worker, ("--request", str(request_path)), timeout=config.timeout_seconds
+                worker,
+                ("--request", str(request_path)),
+                timeout=config.timeout_seconds,
+                python_paths=(repository / "examples/tir",),
             )
 
         state.status = "baseline"
@@ -279,6 +261,7 @@ async def run(config: ExperimentConfig, *, prepare_only: bool = False) -> Path:
             spec("eval", "baseline", config.model),
             task_ids=task_ids,
             solution_id=baseline_solution.solution_id,
+            split=BenchmarkSplit.TEST,
         )
         state.status = "training"
         save()
@@ -306,12 +289,13 @@ async def run(config: ExperimentConfig, *, prepare_only: bool = False) -> Path:
             spec("eval", "candidate", trained_model),
             task_ids=task_ids,
             solution_id=state.candidate.solution_id,
+            split=BenchmarkSplit.TEST,
         )
         project_after = snapshot_source(
-            project, directory / "source-project-after.json", paths=project_paths
+            project, directory / "source-project-after.json", paths=PROJECT_PATHS
         )
         backend_after = snapshot_source(
-            repository, directory / "source-backend-after.json", paths=backend_paths
+            repository, directory / "source-backend-after.json", paths=BACKEND_PATHS
         )
         if (
             project_after.content.digest != state.provenance.project.content.digest
@@ -326,8 +310,7 @@ async def run(config: ExperimentConfig, *, prepare_only: bool = False) -> Path:
             state.training,
             state.provenance,
             candidate.score - baseline.score,
-            candidate.metrics["accuracy"] - baseline.metrics["accuracy"],
-            "candidate" if candidate.score > baseline.score else "baseline",
+            paired(state.baseline, state.evaluation),
             state.candidate,
         )
         write_record(directory / "comparison.json", comparison)
@@ -337,7 +320,8 @@ async def run(config: ExperimentConfig, *, prepare_only: bool = False) -> Path:
             f"| Score | {baseline.score:.4f} | {candidate.score:.4f} |\n"
             f"| Accuracy | {baseline.metrics['accuracy']:.4f} | "
             f"{candidate.metrics['accuracy']:.4f} |\n\n"
-            f"Steps: {state.training.global_step}; selected: {comparison.selected}.\n\n"
+            f"Steps: {state.training.global_step}; "
+            f"paired accuracy delta: {comparison.accuracy_comparison.delta:+.2%}.\n\n"
             "Full provenance and evidence references: [comparison.json](comparison.json).\n"
         )
         state.status = "completed"
@@ -356,7 +340,7 @@ async def run(config: ExperimentConfig, *, prepare_only: bool = False) -> Path:
         raise
 
 
-async def _main(config: ExperimentConfig, prepare_only: bool) -> None:
+async def _main(config: TIRConfig, prepare_only: bool) -> None:
     task = asyncio.create_task(run(config, prepare_only=prepare_only))
     loop = asyncio.get_running_loop()
     for signum in (signal.SIGTERM, signal.SIGINT):
@@ -373,7 +357,7 @@ def main() -> None:
         help="Generate data and provenance only; no evaluation or training",
     )
     args = parser.parse_args()
-    config = read_record(args.config, ExperimentConfig)
+    config = read_record(args.config, TIRConfig)
     try:
         asyncio.run(_main(config, args.prepare_only))
     except asyncio.CancelledError:

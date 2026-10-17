@@ -409,6 +409,22 @@ class EvaluationSample:
 
 
 @dataclass(frozen=True, slots=True)
+class PairedComparison:
+    count: int
+    baseline_accuracy: float
+    candidate_accuracy: float
+    wins: int
+    losses: int
+    both_correct: int
+    both_wrong: int
+    delta: float
+    ci95_low: float
+    ci95_high: float
+    mcnemar_exact_p: float | None
+    independent_questions: int
+
+
+@dataclass(frozen=True, slots=True)
 class EvaluationResult:
     job_id: str
     report: EvaluationReport

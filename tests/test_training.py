@@ -15,14 +15,25 @@ import pytest
 
 from areal_rsi.api.control import encode_record
 from areal_rsi.api.execution import AReaLRuntime, JobSpec, TrainingReceipt
-from areal_rsi.api.records import EvaluationSample, TraceEvent, TrajectoryQuery
-from areal_rsi.infra.artifacts import read_record, snapshot_source
-from areal_rsi.infra.coordination.evaluation import EvaluationService
+from areal_rsi.api.records import (
+    BenchmarkSplit,
+    EvaluationReport,
+    EvaluationResult,
+    EvaluationSample,
+    TraceEvent,
+    TrajectoryQuery,
+)
+from areal_rsi.infra.artifacts import file_ref, local_path, read_record, snapshot_source
+from areal_rsi.infra.coordination.evaluation import (
+    EvaluationService,
+    paired,
+    read_evaluation_samples,
+)
 from areal_rsi.infra.execution import JobExecutionError, JobExecutor
 from areal_rsi.infra.training import AReaLBackend
 from areal_rsi.infra.trajectories import LocalTrajectoryStore
 from examples.tir.data import SynthesisConfig, read_problems, synthesize, validate_problem
-from examples.tir.pipeline import ExperimentConfig, ExperimentState, local_path, run
+from examples.tir.pipeline import ExperimentState, TIRConfig, run
 from examples.tir.reward import integer_reward
 
 
@@ -50,6 +61,33 @@ def git_repository(root: Path) -> None:
     )
 
 
+def evaluation(
+    path: Path,
+    passed: tuple[bool, ...],
+    *,
+    task_ids: tuple[str, ...] | None = None,
+    solution_id: str | None = None,
+) -> EvaluationResult:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if task_ids is None:
+        task_ids = tuple(str(index) for index in range(len(passed)))
+    with path.open("x") as output:
+        for task_id, success in zip(task_ids, passed, strict=True):
+            sample = EvaluationSample(
+                task_id, "test", float(success), success, (TraceEvent("generation", "test"),)
+            )
+            output.write(json.dumps(encode_record(sample)) + "\n")
+    report = EvaluationReport(
+        (solution_id or path.stem),
+        BenchmarkSplit.VALIDATE,
+        all(passed),
+        sum(passed) / len(passed),
+        {"accuracy": sum(passed) / len(passed), "num_tasks": float(len(passed))},
+        "fixture",
+    )
+    return EvaluationResult("test", report, file_ref(path), ())
+
+
 def test_prepare_isolated_runs_and_archives_dirty_source(tmp_path: Path) -> None:
     repository = tmp_path / "backend"
     (repository / "areal").mkdir(parents=True)
@@ -61,7 +99,7 @@ def test_prepare_isolated_runs_and_archives_dirty_source(tmp_path: Path) -> None
     model = tmp_path / "model"
     model.mkdir()
     (model / "config.json").write_text("{}")
-    config = ExperimentConfig(
+    config = TIRConfig(
         AReaLRuntime(str(repository), sys.executable),
         str(model),
         output_root=str(tmp_path / "runs"),
@@ -230,3 +268,58 @@ def test_training_rejects_stale_or_incomplete_checkpoint(
         with pytest.raises(ValueError):
             asyncio.run(operation)
         assert not (output / "result.json").exists()
+
+
+def test_paired_statistics_align_tasks_and_refuse_tampering(tmp_path: Path) -> None:
+    baseline = evaluation(tmp_path / "base.jsonl", (False, False, False, False, True, True))
+    candidate = evaluation(tmp_path / "candidate.jsonl", (True, True, True, True, False, True))
+    result = paired(baseline, candidate)
+    assert (result.wins, result.losses, result.both_correct, result.both_wrong) == (4, 1, 1, 0)
+    assert result.delta == 0.5 and result.mcnemar_exact_p == 0.375
+    assert result.ci95_low <= result.delta <= result.ci95_high
+    shorter = evaluation(tmp_path / "shorter.jsonl", (True, False))
+    with pytest.raises(ValueError, match="same tasks"):
+        paired(baseline, shorter)
+    Path(tmp_path / "candidate.jsonl").write_text("tampered")
+    with pytest.raises(ValueError, match="changed"):
+        paired(baseline, candidate)
+
+
+@pytest.mark.parametrize("mismatch", ["score", "metrics", "solution", "split", "tasks"])
+def test_cached_evaluation_rejects_inconsistent_evidence(tmp_path: Path, mismatch: str) -> None:
+    result = evaluation(
+        tmp_path / "samples.jsonl", (False, True), task_ids=("a", "b"), solution_id="model"
+    )
+    assert len(read_evaluation_samples(result)) == 2
+    expected_tasks = ("a", "b")
+    report = result.report
+    if mismatch == "score":
+        report = replace(report, score=1)
+    elif mismatch == "metrics":
+        report = replace(report, metrics={**report.metrics, "accuracy": 1})
+    elif mismatch == "solution":
+        report = replace(report, solution_id="another-model")
+    elif mismatch == "split":
+        report = replace(report, split=BenchmarkSplit.TEST)
+    else:
+        expected_tasks = ("a", "c")
+    with pytest.raises(ValueError):
+        read_evaluation_samples(
+            replace(result, report=report),
+            task_ids=expected_tasks,
+            solution_id="model",
+            split=BenchmarkSplit.VALIDATE,
+        )
+
+
+def test_repeated_samples_do_not_inflate_independent_question_evidence(tmp_path: Path) -> None:
+    base = evaluation(tmp_path / "base.jsonl", (False,) * 10)
+    trained = evaluation(tmp_path / "trained.jsonl", (True,) * 8 + (False,) * 2)
+    clusters = {str(index): "repeated" if index < 8 else str(index) for index in range(10)}
+    clustered = paired(base, trained, clusters=clusters)
+    assert clustered.count == 10 and clustered.independent_questions == 3
+    assert clustered.delta == 0.8 and clustered.mcnemar_exact_p is None
+    assert clustered.ci95_low == 0
+    assert paired(base, trained).ci95_low > 0
+    with pytest.raises(ValueError, match="clusters must cover"):
+        paired(base, trained, clusters={"0": "only-one"})

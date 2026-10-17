@@ -116,11 +116,11 @@ uv run --locked python -m examples.tir.pipeline \
 | `trajectories/` | 按 task/solution 可查询的轨迹索引 |
 | `jobs/train/areal/` | AReaL 的训练日志、指标与 HF checkpoint |
 | `jobs/train/training.json`、`checkpoint.json`、`result.json` | 实际保存步数、参数变化探针、checkpoint 文件清单及引用 |
-| `comparison.json`、`report.md` | 前后指标、差值、候选选择、全部证据关联 |
+| `comparison.json`、`report.md` | 前后指标、配对统计、全部证据关联 |
 
 只有所有题目均返回、训练至少完成一步、新 checkpoint 校验通过并可重载评测、源码在
-实验期间未变化时，状态才是 `completed`。分数没有上升也可完成闭环；只有分数严格上升
-才选择训练候选。源码发生变化会拒绝发布对比结果，应保留该失败记录并用新运行重试。
+实验期间未变化时，状态才是 `completed`。分数没有上升也可完成闭环；报告训练前后的配对准确率变化，不根据 test 分数选择模型。
+多轮候选选择由 `experiment.py` 使用 valid 完成。源码发生变化会拒绝发布对比结果，应保留该失败记录并用新运行重试。
 
 每个阶段失败会立即停止 pipeline，先查看 `experiment.json` 和相应 `stdout.log`，
 再看 `areal/logs/` 下的 actor／rollout 日志。评测缺题、重复题、推理异常、缺失分片和

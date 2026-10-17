@@ -28,7 +28,6 @@ class Example:
     source: Literal["torl-train", "torl-test", "verified-synthetic"]
     family: str = "math"
     difficulty: int = 0
-    parent_ids: tuple[str, ...] = ()
     repetitions: int = 1
 
     def __post_init__(self) -> None:

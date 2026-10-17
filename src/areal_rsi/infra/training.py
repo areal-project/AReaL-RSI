@@ -21,9 +21,17 @@ class AReaLBackend:
         if not (self.repository / "areal" / "__init__.py").is_file():
             raise ValueError(f"Not an AReaL repository: {self.repository}")
 
-    def spec(self, entrypoint: Path, arguments: tuple[str, ...], *, timeout: float) -> JobSpec:
+    def spec(
+        self,
+        entrypoint: Path,
+        arguments: tuple[str, ...],
+        *,
+        timeout: float,
+        python_paths: tuple[Path, ...] = (),
+    ) -> JobSpec:
         project = Path(__file__).resolve().parents[3]
         search = [
+            *(str(path.resolve()) for path in python_paths),
             str(entrypoint.resolve().parent),
             str(project / "src"),
             str(project),

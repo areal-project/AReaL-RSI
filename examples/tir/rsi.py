@@ -1,4 +1,4 @@
-"""Run a real /rsi Interaction -> Leader session for a prepared TIR study."""
+"""Run a real /rsi Interaction -> Leader session for a prepared TIR experiment."""
 
 from __future__ import annotations
 
@@ -16,14 +16,15 @@ from areal_rsi.api.research import SessionPhase, SessionStatus
 from areal_rsi.infra.artifacts import read_record, write_record
 from areal_rsi.infra.config import executable, from_environment
 from areal_rsi.infra.research import ResearchSystem
-from examples.tir.study import PROJECT, Study
+from examples.tir.experiment import Experiment
+from examples.tir.pipeline import PROJECT
 
 
 @dataclass(slots=True)
 class DriverReceipt:
     run_id: str
     system_root: str
-    study: str
+    experiment: str
     entered_leader: bool = False
 
 
@@ -33,21 +34,23 @@ class ResearchDecision:
     rationale: str
 
 
-def brief(study: Path) -> str:
+def brief(current: Experiment) -> str:
+    experiment = current.root
     python = PROJECT / ".venv/bin/python"
-    command = f"{python} -m examples.tir.study --study {study}"
+    command = f"{python} -m examples.tir.experiment --experiment {experiment}"
     return f"""用户明确授权现在开始执行真实 TIR 多轮研究与训练。先保存任务，然后交接 Leader。
 目标：在冻结的 train/valid/test 协议下，改进数据合成代码、数据配比/难度课程和 GRPO 训练配方，
 让模型经过多轮迭代后有提升。公共执行/训练/评测服务已在 infra，研究策略在 examples/tir。
 
-工作区：{PROJECT}。冻结实验：{study}。先读取 examples/tir/RESEARCH.md、protocol.json、
+工作区：{PROJECT}。冻结实验：{experiment}。先读取 examples/tir/RESEARCH.md、protocol.json、
 valid/base.json 和 valid 基线轨迹，检查冻结条件。用户要求数据合成代码和 pipeline 认真设计。
-模型为 Qwen2.5-Math-1.5B；后端使用 /storage/openpsi/users/fenghui/projects/AReaL；
-GPU 使用 rsi reservation，避免改动任何其他用户的作业。已有阶段会持久化记录；不要重复提交。
+模型为 {Path(current.config.model).name}；后端使用 {current.config.runtime.repository}；
+GPU 使用 {current.protocol.config.slurm.reservation} reservation，避免改动其他用户的作业。
+已有阶段会持久化记录；不要重复提交。
 
 研发权限：可修改 examples/tir/synthesis.py 和对应生成器测试，
 可新增/修改训练 recipe JSON 与分析/研究报告。
-examples/tir/study.py、benchmark.py、worker.py、workflow.py、reward.py、pipeline.py、
+examples/tir/experiment.py、benchmark.py、worker.py、workflow.py、reward.py、pipeline.py、
 src/、AReaL 后端、protocol/freeze/harness/benchmark 数据与已有结果已冻结，禁止修改。
 test 对应 official test，只供宿主独立验收。禁止读取 official test、heldout/ 数据、test/ 结果。
 只能根据 valid 反馈调整策略；
@@ -59,7 +62,7 @@ test 对应 official test，只供宿主独立验收。禁止读取 official tes
   {command} status
   {command} round --name r1 --recipe /absolute/path/to/recipe.json
   {command} evaluate --candidate r1  # 仅用于已训练但 valid 阶段中断的候选
-recipe 按 examples.tir.study.RoundRecipe 解码，写明 hypothesis、parent、data 和训练参数；
+recipe 按 examples.tir.experiment.RoundRecipe 解码，写明 hypothesis、parent、data 和训练参数；
 本次 ToRL 数据参考 examples/tir/recipes/r1.json。每轮新建名字，
 使用上轮 checkpoint warm start 或明确分支；
 优化器每轮重新初始化，不能声称恢复了优化器状态。每轮只有最后一步保存 checkpoint。
@@ -74,25 +77,25 @@ ToRL 训练数据没有完整参考推导；可以依据实际 rollout 研发训
 记录每轮假设、代码/配方变化、valid 效果、增益与退化案例、成本，并解释下一轮选择依据。
 争取 valid 相对基线至少 +5 个百分点以获得独立 test 集上的稳定收益；如未改善则继续研发。
 可先做训练数据中小规模 rollout 分析筛选，禁止使用 test。运行有意义的合成验证测试。
-比较全 study 已完成候选，包括宿主 smoke/bootstrap；这些不计作你的至少两轮真实研发。
+比较全 experiment 已完成候选，包括宿主 smoke/bootstrap；这些不计作你的至少两轮真实研发。
 如果最佳仍是宿主候选，应继续研发。不能只在两个退化候选中选一个并宣称改进。
-选择 valid 最好的已训练候选，写 {study}/decision.json，格式为
-{{"candidate": "候选名", "rationale": "选择依据"}}，并写 {study}/research-report.md。
+选择 valid 最好的已训练候选，写 {experiment}/decision.json，格式为
+{{"candidate": "候选名", "rationale": "选择依据"}}，并写 {experiment}/research-report.md。
 然后通过 rsi_update_goal 完成这个 valid 研发子目标。宿主会冻结选择，再独立做最终评测；
 test 目标约 +3 个百分点，不能提前声称已达到，也不要自行运行 test。
 """
 
 
-async def run(study: Path, env_file: Path | None, *, resume: bool) -> None:
+async def run(experiment: Path, env_file: Path | None, *, resume: bool) -> None:
     if env_file is not None:
         load_dotenv(env_file, override=False)
     config = from_environment(PROJECT)
     config.auto_learn = False
     executable(config)  # Fail before creating a misleading empty research session.
-    current = Study(study)
-    if not (study / "valid/base.json").exists():
+    current = Experiment(experiment)
+    if not (experiment / "valid/base.json").exists():
         raise ValueError("Run the frozen valid baseline before handing research to RSI")
-    root = study / "rsi"
+    root = experiment / "rsi"
     receipt_path = root / "driver.json"
     system = ResearchSystem(root)
     if receipt_path.exists():
@@ -102,7 +105,7 @@ async def run(study: Path, env_file: Path | None, *, resume: bool) -> None:
     else:
         if resume:
             raise ValueError("No existing research session to resume")
-        receipt = DriverReceipt(await system.create(config), str(root), str(study))
+        receipt = DriverReceipt(await system.create(config), str(root), str(experiment))
         write_record(receipt_path, receipt)
 
     async def log_events() -> None:
@@ -119,7 +122,7 @@ async def run(study: Path, env_file: Path | None, *, resume: bool) -> None:
         if resume:
             await system.resume(receipt.run_id)
         else:
-            await system.enter_rsi(receipt.run_id, brief(study))
+            await system.enter_rsi(receipt.run_id, brief(current))
         while True:
             record = system.detail(receipt.run_id)
             if record.phase == SessionPhase.LEADER and not receipt.entered_leader:
@@ -152,7 +155,7 @@ async def run(study: Path, env_file: Path | None, *, resume: bool) -> None:
                 f"RSI requires attention: {record.status}; {record.last_error}; "
                 f"{record.progress.question}"
             )
-        decision = read_record(study / "decision.json", ResearchDecision)
+        decision = read_record(experiment / "decision.json", ResearchDecision)
         candidate = current.candidate(decision.candidate)
         if candidate.status != "completed" or candidate.valid is None:
             raise ValueError("Research decision requires a completed, evaluated candidate")
@@ -167,11 +170,11 @@ async def run(study: Path, env_file: Path | None, *, resume: bool) -> None:
 
 async def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--study", type=Path, required=True)
+    parser.add_argument("--experiment", type=Path, required=True)
     parser.add_argument("--env-file", type=Path)
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
-    task = asyncio.create_task(run(args.study.resolve(), args.env_file, resume=args.resume))
+    task = asyncio.create_task(run(args.experiment.resolve(), args.env_file, resume=args.resume))
     for signum in (signal.SIGTERM, signal.SIGINT):
         asyncio.get_running_loop().add_signal_handler(signum, task.cancel)
     await task

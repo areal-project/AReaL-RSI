@@ -1,13 +1,20 @@
 # TIR 多轮训练研究
 
-`pipeline.py` 保留最小独立端到端例子；`study.py` 管理真实数据上的分阶段研究，
+`pipeline.py` 保留最小独立端到端例子；`experiment.py` 管理真实数据上的分阶段研究，
 `rsi.py` 才是实际 `/rsi` 的例子入口。训练并不是 `/rsi` 的必选步骤。
 其他任务可以只优化 harness，或调用同一套 infra 服务组织自己的训练过程。
 
 公共 `JobExecutor` 执行进程并处理失败/取消，`EvaluationService` 检查完整覆盖并保存轨迹，
 `AReaLBackend` 校验真实训练步数和 checkpoint，`LocalTrajectoryStore` 保存轨迹索引。
-数据切分、题目合成、配比、课程、轮次、选择与统计检验属于 TIR example。
+带哈希校验的文件读取、评测证据校验与配对统计也由公共 infra 提供。
+数据切分、题目合成、配比、课程、轮次、选择和统计协议属于 TIR example。
 Slurm 在本例中装配到公共 JobSpec 命令，AReaL worker 在 allocation 内使用 local scheduler。
+
+`experiment` 表示一次包含多个训练轮次的实验；`pipeline` 是单次接入检查，`rsi` 是研究驱动入口。
+三个入口共用执行、训练、轨迹和评测能力；不为两种使用方式建立重复的基础服务。
+缓存评测与候选选择都会核对样本内容哈希、任务覆盖、模型/分区以及汇总指标，不能只相信
+候选 JSON 中的分数。最小 pipeline 只报告 test 上的训练前后对比，不用 test 决定候选。
+历史实验使用其归档源码、协议和数据恢复；入口与字段改名不会迁移或覆盖原始证据。
 
 ## 数据与实验协议
 
@@ -19,7 +26,7 @@ https://github.com/GAIR-NLP/ToRL/tree/1db091d9cbd37df493d7bd836fc3cc4c6f0c9a7e/d
 本例统一使用 `train / valid / test`：train 用于训练，valid 用于多轮研发和候选选择，
 test 仅供冻结选择后的独立验收。**test 对应 ToRL 官方 test**，保留全部题目和采样次数，
 在公共评测契约中仍使用 `BenchmarkSplit.TEST`；它不参与调参。新 benchmark 保存
-`heldout/test.jsonl`，结果保存 `study/test/`，验收入口为 `study test`。
+`heldout/test.jsonl`，结果保存 `experiment/test/`，验收入口为 `experiment test`。
 
 该版本 train 有 28,740 行、28,738 道规范化去重题。先排除全部 test 身份，再从剩余
 训练题中确定性抽出 256 道 valid，其余作为训练池。test 原样保留 374 行的采样次数：
@@ -37,7 +44,7 @@ MATH500 子集 134 道各一次、AIME24/25 各 30 道各四次，总计 194 道
 本次固定 harness：Python/calculator、max_turns=2、max_length=3000、tool_timeout=30，
 基模型为 Qwen2.5-Math-1.5B。评测 seed=42、每段最多512个新 token、temperature=0.6，
 每个官方评测行执行一次，所以 AIME 每题有四次采样。训练每题的 n_samples 单独配置。
-这些设置在新 study prepare 时冻结；所有模型候选使用同一预算，不迭代 harness。
+这些设置在新 experiment prepare 时冻结；所有模型候选使用同一预算，不迭代 harness。
 
 合成代码 `synthesis.py` 当前提供 15 个题族：库存、速率、预算、比例、递推、百分比、
 平均值、单位、工作收入、小数收入，以及分数、根式、线性约束、组合计数和等差数列。
@@ -56,7 +63,7 @@ MATH500 子集 134 道各一次、AIME24/25 各 30 道各四次，总计 194 道
 分数和根式目标，线性约束用代入验算，组合题用枚举，数列用逐项递推。所有生成题的 identity
 由规范化题面计算，数据集确定性抽样、去重并只允许来自 `benchmark.train` 的真实题。复现实验
 时使用 `DataRecipe` 的 seed、计数、family weight、difficulty weights 和范围，并在提交 GPU
-前运行 `pytest tests/test_tir_study.py`、`uv run --locked mypy` 和生成器的多 seed 语义验证。
+前运行 `pytest tests/test_tir_experiment.py`、`uv run --locked mypy` 和生成器的多 seed 语义验证。
 
 prepare 冻结数据哈希、harness、reward、worker、数据读入和后端代码、基模型、推理预算。
 源码快照包含未提交文件和完整归档；每个 GPU 阶段前后校验源码，运行阶段不能同时改代码。
@@ -67,7 +74,7 @@ prepare 冻结数据哈希、harness、reward、worker、数据读入和后端�
 取消或失败也必须保留 recipe、生成数据、源码快照、job/allocation/stdout；取消清理针对
 该作业的进程树，不能删除实验记录。恢复记录需标明原始哈希可验证的部分和未恢复的部分。
 
-至少完成两轮真实 Leader 训练，通过 valid 选全 study 最好的候选，selection 一经保存不再调参。
+至少完成两轮真实 Leader 训练，通过 valid 选全 experiment 最好的候选，selection 一经保存不再调参。
 最终阶段独立运行基模型和选定模型，对齐逐题/逐次结果，报告净增益、wins/losses、固定种子
 按题目聚类的 paired bootstrap 95% 区间。目标 +3pp，是否显著另行报告，不能把区间含零说成
 显著提升。194道独立题目的区间可能较宽；目标没有达成时如实报告，不能用 test 继续调参。
@@ -89,13 +96,12 @@ prepare 冻结数据哈希、harness、reward、worker、数据读入和后端�
 
 ```python
 from pathlib import Path
-from areal_rsi.infra.artifacts import read_record, write_record
+from areal_rsi.infra.artifacts import local_path, read_record, write_record
 from examples.tir.benchmark import read_examples
-from examples.tir.pipeline import local_path
-from examples.tir.study import Candidate, protocol
+from examples.tir.experiment import Candidate, protocol
 from examples.tir.synthesis import select_mixed_rollout_curriculum
 
-root = Path("/absolute/study")
+root = Path("/absolute/experiment")
 frozen = protocol(root)
 observed = read_record(root / "rounds/r3/candidate.json", Candidate)
 logs = root / "execution" / root.name / "jobs/r3-train/areal/logs"
@@ -119,7 +125,7 @@ write_record(root / "data-audits/new-curriculum-selection.json", selection)
 
 本次四轮真实 RSI 及独立最终评测的结果、复现产物入口见 [RESULTS.md](RESULTS.md)。
 recipe 统一为 `recipes/r1.json` 到 `r4.json`，全部面向 ToRL；文件名表示实验轮次，
-权重父候选由 `parent` 指定。新 study 的 `r1.json` 显式使用 `math_delimited`；本次历史 r1
+权重父候选由 `parent` 指定。新 experiment 的 `r1.json` 显式使用 `math_delimited`；本次历史 r1
 使用 `preserve`。历史实验应使用归档源码、协议和 `rounds/r1/recipe.json` 复现，不能用
 更新后的模板代替。命名与配置清理只影响新实验，不迁移或重写已有冻结协议和数据。
 
@@ -131,7 +137,7 @@ recipe 统一为 `recipes/r1.json` 到 `r4.json`，全部面向 ToRL；文件名
 官方评测数据和主结果没有在研究中修补。相关冻结脚本、运行环境与执行限制见结果报告。
 
 宿主 smoke/bootstrap 只验证 pipeline，不能当作由 RSI Leader 执行的轮次。Leader 至少
-研究和训练两轮，保存研发依据，且选择时需与全 study 的最佳已完成候选比较。
+研究和训练两轮，保存研发依据，且选择时需与全 experiment 的最佳已完成候选比较。
 
 ## 合成数据复盘与下一步
 
@@ -149,7 +155,7 @@ r1 从 78/256 降到 69/256；r3 主评分为79/256，但 boxed 数学诊断从8
 | r3 合成 | 120 | 109 | 0 | 11 | 9.17% |
 | r3 官方 | 361 | 35 | 134 | 192 | 53.19% |
 
-数据来自历史 study 的 `training-coverage-native-v2/r2.json`、`r3.json`。logger 会跳过
+数据来自历史 experiment 的 `training-coverage-native-v2/r2.json`、`r3.json`。logger 会跳过
 部分样本，因此这些比例只描述完整日志组，不是完整训练分布或有效梯度的无偏估计。
 本次 AReaL 配置按题目组归一化奖励；同组全对或全错时，二值正确性奖励的相对信号为零。
 合成题占用了20%或40%的题目预算，记录到的可区分组却很少，是目前最直接的问题证据。
@@ -178,10 +184,10 @@ linear 仍是一步方程，counting 仍是基础选人组合；没有覆盖足�
    这需要新增示范训练路径，当前 pipeline 尚未实现；不能把“只合成题面与答案”称为
    轨迹蒸馏。参考 [STaR](https://arxiv.org/abs/2203.14465) 的生成、筛选、训练循环及
    [DeepSeek-R1](https://arxiv.org/abs/2501.12948) 的冷启动与蒸馏设计。
-4. **奖励与训练预算。** 新 study 先校准分数、根式、等价表达式和未完成回答的奖励；
+4. **奖励与训练预算。** 新 experiment 先校准分数、根式、等价表达式和未完成回答的奖励；
    排查截断后再单独比较训练生成长度、每题采样数和更新剂量。先固定评测预算，只改变
    训练设置；更长训练生成并不自动改善固定预算下的回答完成率。本次r2缺少完整boxed的
-   dev回答为66条，r1为31条，但多变量变化不能证明由生成长度单独造成。
+   valid 回答为66条，r1为31条，但多变量变化不能证明由生成长度单独造成。
 
 建议先从同一父checkpoint做“均匀官方题 / 动态真实题课程 / 课程加少量准入合成题”三组
 对照，固定优化器配置、更新次数、生成预算和 harness，并同时记录实际token及GPU成本。
@@ -195,18 +201,29 @@ linear 仍是一步方程，counting 仍是基础选人组合；没有覆盖足�
 
 ```bash
 python -m examples.tir.benchmark --source /absolute/torl_data --output /absolute/benchmark
-python -m examples.tir.study --study /absolute/study prepare --config examples/tir/study.json
-python -m examples.tir.study --study /absolute/study evaluate --candidate base
-python -m examples.tir.rsi --study /absolute/study --env-file /absolute/private.env
+python -m examples.tir.experiment --experiment /absolute/experiment prepare --config examples/tir/experiment.json
+python -m examples.tir.experiment --experiment /absolute/experiment evaluate --candidate base
+python -m examples.tir.rsi --experiment /absolute/experiment --env-file /absolute/private.env
 ```
 
-study.json 中的 benchmark 路径指向第一步产物。study 自动申请 rsi reservation 的 2 GPU、
-16 CPU、128G，阶段结束即释放，不会在 Leader 分析时占住 GPU。
+experiment.json 中的 benchmark 路径指向第一步产物，`tir` 中填写实际后端与模型配置。
+默认申请 rsi reservation 的 2 GPU、16 CPU、128G；阶段结束即释放，不会在 Leader 分析时占住 GPU。
 最后一个命令使用真实 ResearchSystem 和模型 API：Interaction 整理目标并交接 Leader，
 Leader 修改合成代码/数据配方、多轮训练与分析，然后提交 decision.json。该命令完成 valid
-研发后返回；宿主核对证据后独立执行 `study --study /absolute/study test --candidate NAME`，
-冻结选择并运行 test。会话、角色迁移、工具和原生历史保存在 study/rsi，凭据由环境读取。
-原生 Codex CLI 需要 >=0.162.1。已有中断会话使用同一 study 加 `--resume`，不要另建会话。
+研发后返回；宿主核对证据后独立执行：
 
-无需启动 RSI 也可手动执行 `study round --name r1 --recipe examples/tir/recipes/r1.json`。
+```bash
+python -m examples.tir.experiment --experiment /absolute/experiment test --candidate NAME
+```
+
+此命令冻结选择并运行 test。会话、角色迁移、工具和原生历史保存在 experiment/rsi，凭据由环境读取。
+原生 Codex CLI 需要 >=0.162.1。已有中断会话使用同一 experiment 加 `--resume`，不要另建会话。
+
+无需启动 RSI 也可手动执行：
+
+```bash
+python -m examples.tir.experiment --experiment /absolute/experiment round \
+  --name r1 --recipe examples/tir/recipes/r1.json
+```
+
 这用于开发阶段检查，不能作为“真实 RSI 驱动研究”的证据。

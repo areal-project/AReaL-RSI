@@ -1,148 +1,235 @@
-# AReaL RSI
+<div align="center">
 
-基于原生 Codex app-server 的单 Agent 工作框架。默认普通对话；中途 `/rsi` 进入需求讨论，
-Interaction 整理目标，Leader 亲自执行，由宿主维持 Goal 的持续运行。
+# AReaL-RSI
 
-本版仅支持 Codex；终端直接复用 DSH 原版组件。主会话保持单 Agent 流程，研究团队、memory 和
-legacy pass@k 尚未接入。经验先沉淀为本地文档，云文档同步后续接入。
-独立的 [TIR 训练示例](examples/tir/README.md) 通过公共 infra 对接 AReaL，执行数据合成、
-训练前后评测与 checkpoint 收集；通过 `python -m examples.tir.rsi` 可启动真实 RSI 多轮研究。
-真实 GPU 闭环及开发检查结果见 [TIR 验证记录](docs/tir-validation.md)。
+**从持续执行目标，到积累可复用的研究经验。**
 
-## 本地启动
+[论文](https://arxiv.org/abs/2610.18083) · [快速开始](#快速开始) · [使用指南](docs/usage.md) · [研究示例](#研究示例) · [AReaL](https://github.com/areal-project/AReaL)
 
-需要 Python >= 3.11、uv、Node.js >= 22、npm、系统 `patch`，以及 Codex CLI >= 0.162.1（本版验证版本）。
+</div>
+
+AReaL-RSI 是面向持续研究与迭代改进的 Agent 框架。你可以先讨论问题，再将对话中的目标、
+约束和完成标准交给 Agent 持续执行；任务结束后，将有依据的方法沉淀为后续工作可读取的经验。
+
+我们关注的是：**在相同时间内取得更好的结果，或用更少时间达到同一目标。**
+目标续行、经验复用和实验记录服务于这个目标；任务是否完成，应由交付结果和验证证据说明。
+
+当前实现以原生 Codex app-server 为执行内核，提供单 Agent 工作流、终端交互与可复用的研究基础设施。
+[AReaL](https://github.com/areal-project/AReaL) 提供模型训练能力；AReaL-RSI 组织研究过程，
+具体任务通过独立 example 调用这些能力。
+
+> **关于论文与当前版本**：论文
+> [AReaL-RSI: Adaptive Scaling and Coordination of Recursive Self-Improvement](https://arxiv.org/abs/2610.18083)
+> 研究持久研究团队、条件化经验共享与跨轮次演化。当前代码采用精简的单 Agent 内核，
+> 尚未接入论文中的多研究员协同机制；本文档描述当前实现，论文实验结果请以论文中的版本和设置为准。
+
+## 核心能力
+
+- **围绕目标持续执行。** 从普通对话切入需求讨论，明确目标后交接执行；回合结束而目标仍未完成时，宿主继续推进。支持补充指令、暂停、恢复与预算控制。
+- **沿用原生上下文。** 讨论阶段使用同一会话，执行阶段通过原生 fork 继承历史，包括消息、工具结果与压缩记录。
+- **积累可编辑的经验。** 独立总结会话提炼方法，每个主题保存为一份 Markdown；后续工作按需读取。支持自动总结与人工复盘反馈。
+- **记录可核查的实验过程。** 公共基础设施提供子进程生命周期、评测完整性检查、轨迹存储、源码与产物摘要，以及 AReaL checkpoint 校验。
+- **任务策略独立于内核。** 数据合成、候选选择、训练课程和验收协议由 example 定义；通用 API、基础设施和 CLI 不依赖 examples。
+
+## 快速开始
+
+### 1. 安装
+
+需要 Python **3.11+**、[uv](https://docs.astral.sh/uv/)、Node.js **22+**、npm、系统 `patch`，
+以及 Codex CLI **0.162.1+**。当前原生协议测试使用 Codex CLI 0.162.1。
+普通对话和目标执行不需要本地 GPU。
 
 ```bash
+git clone https://github.com/areal-project/AReaL-RSI.git
+cd AReaL-RSI
+
 npm install -g @openai/codex@0.162.1
 uv tool install --editable .
-cp .env.example .env  # 已有 .env 时保留原文件
 ```
 
-在 `.env` 中填写 `RSI_API_KEY`、`RSI_BASE_URL` 和 `RSI_MODEL`。
-供应商须支持 Responses API、工具调用；视觉任务还需要图片输入支持。
+安装后可直接使用 `areal-rsi`。若终端找不到命令，执行 `uv tool update-shell` 后重新打开终端。
+可编辑安装会使用当前 checkout 中的 Python 源码，修改代码后无需重新安装。
 
-安装后若找不到命令，执行 `uv tool update-shell` 并重新打开终端。
+### 2. 配置模型
 
-之后一行启动：
+复制配置模板；已有 `.env` 时保留原文件：
+
+```bash
+cp -n .env.example .env
+```
+
+在 `.env` 中设置模型连接：
+
+```dotenv
+RSI_BASE_URL=https://api.openai.com/v1
+RSI_API_KEY=your-api-key
+RSI_MODEL=your-model-name
+```
+
+模型服务须支持 Responses API 和工具调用；图片任务还需要图片输入支持。
+运行时加载**启动目录**中的 `.env`，也可通过 `--env-file` 指定。
+RSI 使用独立的 Codex 配置和会话目录，不改写日常 Codex 的登录或配置。
+
+> 默认权限为 `danger-full-access` / `never`：执行不弹审批，工作目录不是文件访问边界。
+> 如需限制，在 `.env` 中调整 `RSI_SANDBOX` 和 `RSI_APPROVAL_POLICY`；恢复旧会话时沿用其已保存权限。
+
+### 3. 开始工作
 
 ```bash
 areal-rsi
 ```
 
-首次启动自动按锁文件安装 TUI 依赖并应用上游编辑器补丁，需要联网；之后可直接启动。
-启动时自动加载当前目录的 `.env`。在另一个项目中工作：
+首次启动会安装锁定的 TUI 依赖并应用编辑器补丁，需要联网。
+随后可以直接对话，或指定一个工作区：
 
 ```bash
 areal-rsi --workspace /absolute/path/to/project
 ```
 
-也可指定 `--env-file /path/to/.env`、`--data-root /path/to/data`。
-API 连接参数、历史和 Codex 设置在 RSI 独立的数据目录中使用；不会改写正常 Codex 的
-登录或 `~/.codex/config.toml`。API key 只由子进程环境读取，不写进会话 JSON 或命令参数。
-工作目录内的项目指令及工具配置仍按原生 Codex 规则生效。
+在终端中输入目标，例如：
 
-新会话默认使用 `RSI_SANDBOX=danger-full-access`、`RSI_APPROVAL_POLICY=never`：
-可访问当前系统用户有权限访问的任意目录，执行时不弹审批。workspace 是起始目录，不是权限边界。
-普通模式、Interaction、Leader 和经验总结沿用同一权限配置；总结提示词仍要求只提炼经验。
-需要限制时可在 `.env` 显式设置 `workspace-write` 或 `read-only`。旧会话沿用已保存的权限；
-切换默认值后，退出并重新启动 TUI 创建新会话即可，不使用 `--resume` 恢复旧配置。
-
-## 使用
-
-1. 先普通对话：讨论需求、理解业务、修改小问题；Enter 发送，Shift+Enter 换行。
-2. 输入 `/rsi`，或 `/rsi 基于刚才讨论的内容优化页面`。
-3. Interaction 沿用之前的会话讨论目标、约束和完成标准。明确要求开始后自动交接，
-   也可在任务已保存后输入 `/start`。
-4. Leader 执行；回合结束而目标未完成时，宿主自动继续。
-5. `/chat` 回到普通对话，继续使用最新工作上下文。
-
-| 操作 | 命令 |
-| --- | --- |
-| 执行中补充要求 | 直接发送消息，使用原生 steer |
-| 附加参考图 | `/image /path/reference.png`，然后发送描述；或在路径后直接写描述 |
-| 暂停 / 继续 / 停止 | Esc 或 `/pause`；`/resume`；`/stop` |
-| 回答问题 / 显式启用审批后的权限请求 | 原版 DSH 弹窗选择或输入；审批选项默认拒绝 |
-| 展开工具 | Ctrl+O |
-| 总结经验 / 查看文档 | `/learn [复盘反馈]`；`/docs` |
-| 查看 / 切换总结模式 | `/learn-mode`；`/learn-mode auto`；`/learn-mode guided` |
-| 查看当前目标 | `/status` |
-| 查看 / 取消 / 设置预算 | `/budget`；`/budget off`；`/budget <tokens\|off> <秒\|off>` |
-| 查看 API 模型列表 / 切换模型 | `/model`；`/model 模型名` |
-| 查看 / 设置推理强度 | `/effort`；`/effort low\|medium\|high\|xhigh` |
-| 历史会话 | `/sessions`、`/open run-ID`，或启动时 `--resume run-ID` |
-| 新会话 / 保存退出 | `/new`；Ctrl+Q 或 `/quit` |
-
-退出会暂停未完成工作，重新打开不会自动执行，使用 `/resume` 显式继续。
-新目标默认不限制 token 和执行时间，Interaction 不设置预算。需要限额时，在目标保存后由用户
-输入 `/budget 100000 3600`（总 token 上限和活跃执行秒数，包含已用量），任一项用 `off` 表示不限。
-预算耗尽后用 `/budget off` 取消限制，或提高上限，再 `/resume` 继续原目标和上下文；已用量不会清零。
-
-`/model` 使用当前会话的 Base URL 和 API key 查询 `/models`，显示接口实际返回的模型列表。
-查询期间仍可操作 TUI；若接口不支持查询或连接失败，会说明原因，也可继续手动设置模型。
-列表可能包含图片等非 Agent 模型，不代表每个模型都支持 Codex 所需的工具调用。
-
-`/model 模型名` 与 `/effort high` 保留当前上下文，从下一回合生效；已经开始的执行或经验总结使用原设置。
-设置保存在当前会话中，随后 `/new` 创建的会话也沿用，不修改 `.env` 或正常 Codex 的配置。
-本版提供 low、medium、high、xhigh 四档 effort，具体支持情况取决于所选模型和 API 服务。
-
-普通对话 → Interaction 使用同一个原生 thread；Interaction → Leader 使用原生 fork，
-继承此前文字、工具结果、图片和压缩历史。任务配置用于明确目标，不替代完整会话。
-长会话仍受模型窗口和 Codex 压缩机制影响，不能保证所有原始细节永久驻留。
-
-本版界面支持流式输出、常用工具事件、图片路径输入、权限确认和恢复，尚未复刻 Codex TUI
-的全部交互。独立配置目录也不会自动继承正常 Codex 的插件和 MCP 配置；前端任务所需的
-浏览器工具需要在该独立环境配置。本版没有单独实现浏览器或视觉验证器。
-
-## 持续运行与经验
-
-Leader 回合结束后，目标仍未完成时继续执行；预算耗尽、需要用户信息、故障或显式暂停时停止。
-执行和经验整理期间默认抑制系统闲置休眠，没有活动任务后释放。macOS 使用 `caffeinate`，Linux 使用可用的
-`systemd-inhibit`。这不是后台守护进程：关闭终端会暂停；合盖、关机或网络故障仍会中断。
-
-默认 `/learn-mode auto`：RSI 目标完成后自动启动独立总结会话。
-`/learn-mode guided`：完成后先等待你的复盘意见，不启动总结模型；输入 `/learn 你的意见` 后，
-整理者结合原生任务历史和反馈总结。直接 `/learn` 可跳过补充，按历史总结。
-等待复盘的状态和模式随会话保存，重新打开仍会提醒；`/new` 沿用当前模式。
-等待时切回 `auto` 会立即开始总结；已经开始总结时需等它结束后再切换。
-普通工作结束或任务暂停后也可 `/learn`，可附上测试结果等反馈。
-整理者按角色指令从来源历史提炼通用方法，不继续修改工作区；它继承会话权限，不另加只读沙箱。
-总结时对照最新目录及本任务上次总结的最新正文，由模型判断归属：同主题合并并保留文件名，
-只有适用场景或方法独立时才新增。更新会去重、纠正旧结论，不逐轮追加复盘日志；
-没有新增结论时原样返回已有文档，宿主不重复写入。正文建议不超过 1500 字符，
-硬上限 4000 字符（标题 80、描述 200）；超长内容不发布，需压缩后重试。
-经验库中每个主题只有一个普通 Markdown 文件：`RSI_DATA_ROOT/experience/<主题>.md`，
-例如 `browser-game-validation.md`。Agent、`/docs` 和总结通知使用同一路径，更新直接覆盖，
-不保留历史版本、哈希目录、编号文件或软链接；文件名使用有实际意义的小写英文词组。
-普通工作/Leader 每个新回合刷新文档目录，按适用范围读取最新原文；
-不复制之前任务的对话、代码或答案。已进入对话的旧内容不会被自动抹去。
-Interaction 专注整理需求，不把经验建议升级为任务约束。
-总结失败会显示错误，`/learn` 可重试；同一任务重复触发默认复用已发布结果。
-附上新反馈会重新总结；若上一轮仍在运行，会提示等待完成后再提交，不会静默丢弃反馈。
-
-`RSI_AUTO_LEARN=0` 让新会话默认使用 guided 模式，`RSI_USE_EXPERIENCE=0` 关闭新会话参考文档，
-`RSI_KEEP_AWAKE=0` 关闭休眠抑制。总结是额外 API 调用，其回合最多等待 240 秒（连接请求另有超时）；
-普通任务不会逐回合自动总结。
-文档仍需结合当前任务验证，单次经验不保证正确。
-
-TIR 是独立 example，由它调用 RSI 公共能力，不属于 `areal-rsi` CLI。
-配置与独立启动方式见 [TIR 研究说明](examples/tir/RESEARCH.md#运行)。
-
-## 命令行与开发
-
-开发检查前执行 `uv sync --locked`。
-
-```bash
-areal-rsi doctor                         # 只检查原生协议，不调用模型
-areal-rsi run '检查项目并总结结构'          # 单次普通工作，输出 JSON 事件
-areal-rsi run --resume run-ID '继续检查'   # 延续原生会话
-areal-rsi learn --resume run-ID '复盘反馈'  # 独立总结
-make check                                        # Python/原版 UI 测试、Ruff、Mypy
+```text
+/rsi 优化这个项目的数据加载性能。先测量基线，保持输出一致，
+只修改数据加载模块，完成后报告测试结果与耗时对比。
 ```
 
-`run` 在完成时返回 0，失败返回 1，需要交互、暂停或预算停止时返回 2。
+Agent 会先讨论目标与约束。明确要求开始后，执行角色接手工作；任务保存后也可输入 `/start`。
 
-代码入口：`infra/research.py` 的 `ResearchSystem`。详细说明见
-[结构与上下文管理](docs/architecture.md)、[当前 API 与未来契约](docs/interfaces/README.md)、
-[测试说明](tests/README.md)、[半小时代码导读](docs/walkthrough.md)、
-[TUI 选择与来源](docs/tui-comparison.md)、[真实 API 经验实验](docs/experience-study.md)。
+## 工作流程
+
+```mermaid
+flowchart LR
+    C[普通对话] -->|/rsi| I[Interaction：明确目标与约束]
+    I -->|确认开始 / 原生 fork| L[Leader：执行与验证]
+    L --> G{目标状态}
+    G -->|未完成| L
+    G -->|等待输入 / 预算耗尽| P[暂停或等待]
+    P -->|补充信息 / 恢复| L
+    G -->|完成| E[独立总结：经验文档]
+    E --> N[后续工作按需读取]
+```
+
+Interaction 与 Leader 是同一执行内核中的不同角色阶段。当前 Leader 是唯一执行者，
+完成证据由它提交、宿主检查结构；通用会话尚无独立验证器替代实际的质量验收。
+任务也可以只改进代码或 harness，训练并非必选步骤。
+
+| 操作 | TUI 命令 |
+| --- | --- |
+| 进入目标讨论 / 开始执行 | `/rsi [目标]` / `/start` |
+| 执行中补充要求 | 直接发送消息 |
+| 暂停 / 恢复 / 停止 | `/pause` / `/resume` / `/stop` |
+| 查看目标与预算 | `/status` / `/budget` |
+| 设置 token 与活跃执行秒数上限 | `/budget 100000 3600` |
+| 关闭预算限制 | `/budget off` |
+| 总结经验 / 查看经验文档 | `/learn [复盘反馈]` / `/docs` |
+| 等待人工复盘后再总结 | `/learn-mode guided` |
+| 历史会话 / 恢复会话 | `/sessions` / `/open run-ID` |
+| 回到普通对话 / 保存退出 | `/chat` / Ctrl+Q |
+
+新目标默认不设置 token 或时间上限。退出会暂停未完成工作，重新打开后需显式恢复。
+宿主运行于当前进程，关闭终端、关机等仍会中断执行；长会话遵循 Codex 的上下文压缩机制。
+图片、模型切换、权限、经验更新和恢复语义见 [完整使用指南](docs/usage.md)。
+
+非交互使用：
+
+```bash
+areal-rsi doctor                         # 检查原生协议，不调用模型
+areal-rsi run '检查项目并总结结构'         # 执行并输出 JSON 事件
+areal-rsi run --resume run-ID '继续检查'
+areal-rsi learn --resume run-ID '复盘这次工作的验证方法'
+```
+
+`run` 的退出码：`0` 完成，`1` 失败，`2` 需要交互、暂停或预算停止。
+
+## 研究示例
+
+Example 拥有自己的入口和实验协议，通过公共 API / infra 组织研究。
+**`areal-rsi` 只提供通用会话命令，不注册任务专用子命令。**
+
+| 示例 | 研究内容 | 运行与结果 |
+| --- | --- | --- |
+| TIR 最小训练闭环 | 合成数据 → 基线 → GRPO → checkpoint → 复评 | [运行说明](examples/tir/README.md) · [GPU 闭环记录](docs/tir-validation.md) |
+| ToRL 多轮研究 | 基于 train/valid 研发数据策略与训练配方，冻结选择后独立 test | [研究协议与启动](examples/tir/RESEARCH.md) · [实验结果](examples/tir/RESULTS.md) |
+
+TIR 多轮研究需要 Slurm、Apptainer、AReaL 源码与训练环境，以及可访问的模型和数据。
+在集群上配置 `examples/tir/experiment.json` 和 `.env` 后，从仓库根目录启动：
+
+```bash
+uv sync --locked
+source .venv/bin/activate
+python -m examples.tir.rsi
+```
+
+该入口准备实验、执行 valid 基线并启动多轮研究。首次准备 ToRL parquet、恢复中断及最终 test
+验收的方法见 [研究说明](examples/tir/RESEARCH.md#运行)。GPU 依赖保留在独立 AReaL 环境中。
+
+仓库记录了一次 Qwen2.5-Math-1.5B 四轮研究：选定候选在 ToRL 官方 test 的原生 MathVerify
+逐行准确率由 **20.86% 提升至 28.07%**。这是单训练种子、固定 harness 下的实验记录，
+覆盖 194 道独立题、374 个采样行；不是当前入口的通用收益保证。完整设置、区间、失败轮次及
+证据存放位置见 [结果报告](examples/tir/RESULTS.md)。实验大文件未包含在 Git 仓库中。
+
+## 架构与扩展
+
+```text
+src/areal_rsi/
+├── api/       数据契约、协议与控制请求
+├── infra/     ResearchSystem、目标调度、经验、执行、训练与评测
+└── ui/        CLI 与终端交互
+examples/
+└── tir/       TIR 数据、研究策略、实验协议与独立入口
+```
+
+依赖方向：**UI / examples → infra → api**。API 不导入实现，infra 不导入 UI，
+整个通用包不导入 examples。系统入口是
+[`ResearchSystem`](src/areal_rsi/infra/research.py)。
+
+新增任务时，在独立 example 中定义数据、可修改范围、实验流程与验收方式，复用公共执行、
+评测和训练服务。只有出现真实复用需求时，才将任务无关能力提炼到 infra。
+详细接口与当前实现范围见 [API 文档](docs/interfaces/README.md)。
+
+## 文档
+
+| 文档 | 内容 |
+| --- | --- |
+| [使用指南](docs/usage.md) | TUI 操作、模型配置、预算、权限与经验管理 |
+| [架构与上下文](docs/architecture.md) | 角色交接、目标调度、持久化与恢复 |
+| [API 与契约](docs/interfaces/README.md) | 公共接口及已实现 / 预留能力 |
+| [代码导读](docs/walkthrough.md) | 从入口到执行内核的阅读路线 |
+| [测试说明](tests/README.md) | 离线测试、原生协议测试与真实 API 实验 |
+| [经验实验](docs/experience-study.md) | 经验提炼与复用的实验方法和记录 |
+| [TUI 来源](docs/tui-comparison.md) | DSH 组件选型、复用与补丁 |
+
+## 开发与贡献
+
+欢迎通过 issue 或 PR 贡献故障复现、测试、任务示例和公共能力改进。
+开始前请阅读 [开发约束](AGENTS.md)，保持任务策略与通用内核的边界。
+
+```bash
+uv sync --locked
+make check
+```
+
+`make check` 包含 Python 测试、原生 TUI 测试、Ruff 和严格 Mypy。
+原生集成测试需要 Node.js 与支持版本的 Codex，模型端使用本地 fixture；真实模型 API 和 GPU
+训练不属于默认测试集。提交实验结果时，请同时说明配置、预算、基线及可核查证据。
+
+## 论文引用
+
+如果 AReaL-RSI 的研究思路对你的工作有帮助，请引用：
+
+```bibtex
+@article{zhou2026arealrsi,
+  title   = {{AReaL-RSI}: Adaptive Scaling and Coordination of Recursive Self-Improvement},
+  author  = {Zhou, Wenhao and Song, Jiajun and Wang, Haitao and Qiu, Zipeng and
+             Peng, Yingqi and Xu, Ruida and Li, Jiale and Li, Wenshuang and
+             Xu, Shusheng and Dong, Wei and Dai, Hao and Yang, Tongkai and
+             Gao, Yi and Yuan, Binhang},
+  journal = {arXiv preprint arXiv:2610.18083},
+  year    = {2026},
+  url     = {https://arxiv.org/abs/2610.18083}
+}
+```
+
+感谢 [AReaL](https://github.com/areal-project/AReaL) 的训练基础设施、
+[Codex](https://github.com/openai/codex) 的执行内核，以及
+[DSH 组件](docs/tui-comparison.md) 提供的终端交互能力。

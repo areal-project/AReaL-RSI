@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shlex
 import subprocess
 import sys
 from dataclasses import replace
@@ -189,6 +190,9 @@ def search_config(tmp_path: Path) -> SearchConfig:
     repository = tmp_path / "backend"
     (repository / "areal").mkdir(parents=True)
     (repository / "areal" / "__init__.py").touch()
+    entrypoint = tmp_path / "examples/search/pipeline.py"
+    entrypoint.parent.mkdir(parents=True)
+    entrypoint.write_text("# Frozen submission fixture.\n")
     return SearchConfig(
         AReaLRuntime(str(repository), sys.executable),
         str(tmp_path / "frozen-best-model"),
@@ -300,3 +304,39 @@ def test_heldout_submission_accounts_two_gpus_and_refuses_changed_resume_mode(
         pipeline.submit(path, "heldout", image, budget_path, 120, evaluation_split="dev")
     with pytest.raises(ValueError, match="different configuration or mode"):
         pipeline.submit(path, "heldout", image, budget_path, 120)
+
+
+def test_submitted_script_uses_frozen_source_when_calling_directory_shadows_module(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = search_config(tmp_path)
+    marker = tmp_path / "frozen-entry-ran"
+    entrypoint = tmp_path / "examples/search/pipeline.py"
+    entrypoint.write_text(f"from pathlib import Path\nPath({str(marker)!r}).write_text('frozen')\n")
+    # The test environment lacks CUDA; intercept only the CUDA-library lookup.
+    interpreter = tmp_path / "image-python"
+    interpreter.write_text(
+        '#!/bin/sh\nif [ "$1" = "-c" ]; then printf "/tmp\\n"; exit 0; fi\nexec '
+        + shlex.quote(sys.executable)
+        + ' "$@"\n'
+    )
+    interpreter.chmod(0o700)
+    config = replace(config, runtime=replace(config.runtime, python=str(interpreter)))
+    config_path = tmp_path / "config.json"
+    write_record(config_path, config)
+    image = tmp_path / "image.sif"
+    image.touch()
+    budget_path = tmp_path / "budget.json"
+    write_record(budget_path, ComputeBudget(256, 0, 0, ()))
+    monkeypatch.setattr(pipeline, "refresh_budget", lambda path: read_record(path, ComputeBudget))
+    monkeypatch.setattr(subprocess, "check_output", lambda *args, **kwargs: "123\n")
+    pipeline.submit(config_path, "pinned-source", image, budget_path, 120, evaluation_split="dev")
+    shadow = tmp_path / "mutable-workspace"
+    package = shadow / "examples/search"
+    package.mkdir(parents=True)
+    (shadow / "examples/__init__.py").touch()
+    (package / "__init__.py").touch()
+    (package / "pipeline.py").write_text("raise RuntimeError('mutable source was imported')\n")
+    script = Path(config.output_root) / "submissions/pinned-source/inside.sh"
+    subprocess.run(["bash", str(script)], cwd=shadow, check=True, capture_output=True, text=True)
+    assert marker.read_text() == "frozen"

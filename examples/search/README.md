@@ -34,6 +34,8 @@ python -m examples.search.pipeline --submit \
 
 配置使用 `SearchConfig`，指向独立的 `project` 冻结源码、`runtime.repository` AReaL 源码、GPU Python、Qwen-Agent overlay、数据与索引目录。`dense_python` 指向带原 MCP/FAISS 工具依赖的检索环境。每个候选使用 actor+rollout+1检索 GPU，合计不超过8；同时只允许一个训练候选 allocation。规划器 key 不传到 GPU 作业。
 
+提交入口直接执行 `project` 下的冻结脚本，检索子进程也在相同源码目录运行。仅设置 `PYTHONPATH` 再使用 `python -m`，可能被调用目录里的同名模块覆盖，不能作为源码冻结的保证。
+
 ## 数据与奖励
 
 `data.py` 从固定版本外部 HotpotQA 构建问题、答案、证据及配套语料，按来源标题/文档分组拆分，过滤与基准问题近似重复的内容。`dense.py` 使用固定 Qwen3-Embedding-8B 建索引，验证答案确实存在于512-token工具片段。外部 test 用于最终泛化，候选选择使用 dev。训练、SFT 和合成数据提示词不得包含 BrowseComp-Plus830题、答案或历史轨迹。

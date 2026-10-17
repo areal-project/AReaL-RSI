@@ -230,6 +230,10 @@ def submit(
     time_limit = ((time_limit + 59) // 60) * 60
     if not 0 < time_limit <= 24 * 3600 or not config.project:
         raise ValueError("Submission requires a frozen project path and a positive time limit")
+    project = Path(config.project).resolve(strict=True)
+    entrypoint = project / "examples/search/pipeline.py"
+    if not entrypoint.is_file():
+        raise ValueError("Frozen project has no search pipeline entrypoint")
     root = Path(config.output_root).resolve()
     JobExecutor(root).directory(run_id, "train")  # Validate the caller-owned identifier.
     directory = root / "submissions" / run_id
@@ -255,15 +259,13 @@ def submit(
         directory.mkdir(parents=True, exist_ok=False)
         frozen_config = directory / "config.json"
         write_record(frozen_config, config)
-        project = Path(config.project).resolve(strict=True)
         overlay = config.runtime.environment.get("PYTHONPATH", "")
         search_path = os.pathsep.join(
             [str(project / "src"), str(project), config.runtime.repository, overlay]
         )
         command = [
             config.runtime.python,
-            "-m",
-            "examples.search.pipeline",
+            str(entrypoint),
             "--config",
             str(frozen_config),
             "--run-id",
@@ -281,6 +283,7 @@ def submit(
                 "export PYTHONDONTWRITEBYTECODE=1",
                 "export OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 TOKENIZERS_PARALLELISM=false",
                 "export PYTHONPATH=" + shlex.quote(search_path),
+                "cd " + shlex.quote(str(project)),
                 "cudnn_lib=$("
                 + shlex.quote(config.runtime.python)
                 + " -c "
@@ -513,6 +516,7 @@ async def run(
                     "--port",
                     str(port),
                     env={**os.environ, **spec.env, "CUDA_VISIBLE_DEVICES": GPUs[-1]},
+                    cwd=str(Path(__file__).resolve().parents[2]),
                     stdout=log,
                     stderr=asyncio.subprocess.STDOUT,
                     start_new_session=True,

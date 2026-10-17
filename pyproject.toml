@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
-rsi = "areal_rsi.ui.cli:main"
+areal-rsi = "areal_rsi.ui.cli:main"
 
 [dependency-groups]
 dev = [

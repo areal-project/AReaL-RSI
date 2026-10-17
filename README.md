@@ -6,7 +6,7 @@ Interaction 整理目标，Leader 亲自执行，由宿主维持 Goal 的持续�
 本版仅支持 Codex；终端直接复用 DSH 原版组件。主会话保持单 Agent 流程，研究团队、memory 和
 legacy pass@k 尚未接入。经验先沉淀为本地文档，云文档同步后续接入。
 独立的 [TIR 训练示例](examples/tir/README.md) 通过公共 infra 对接 AReaL，执行数据合成、
-训练前后评测与 checkpoint 收集；目前不接入 `/rsi`。
+训练前后评测与 checkpoint 收集；通过 `python -m examples.tir.rsi` 可启动真实 RSI 多轮研究。
 真实 GPU 闭环及开发检查结果见 [TIR 验证记录](docs/tir-validation.md)。
 
 ## 本地启动
@@ -15,24 +15,26 @@ legacy pass@k 尚未接入。经验先沉淀为本地文档，云文档同步后
 
 ```bash
 npm install -g @openai/codex@0.162.1
-uv sync --locked
+uv tool install --editable .
 cp .env.example .env  # 已有 .env 时保留原文件
 ```
 
 在 `.env` 中填写 `RSI_API_KEY`、`RSI_BASE_URL` 和 `RSI_MODEL`。
 供应商须支持 Responses API、工具调用；视觉任务还需要图片输入支持。
 
+安装后若找不到命令，执行 `uv tool update-shell` 并重新打开终端。
+
 之后一行启动：
 
 ```bash
-uv run --locked rsi tui
+areal-rsi
 ```
 
 首次启动自动按锁文件安装 TUI 依赖并应用上游编辑器补丁，需要联网；之后可直接启动。
 启动时自动加载当前目录的 `.env`。在另一个项目中工作：
 
 ```bash
-uv run --locked rsi tui --workspace /absolute/path/to/project
+areal-rsi --workspace /absolute/path/to/project
 ```
 
 也可指定 `--env-file /path/to/.env`、`--data-root /path/to/data`。
@@ -123,13 +125,18 @@ Interaction 专注整理需求，不把经验建议升级为任务约束。
 普通任务不会逐回合自动总结。
 文档仍需结合当前任务验证，单次经验不保证正确。
 
+TIR 是独立 example，由它调用 RSI 公共能力，不属于 `areal-rsi` CLI。
+配置与独立启动方式见 [TIR 研究说明](examples/tir/RESEARCH.md#运行)。
+
 ## 命令行与开发
 
+开发检查前执行 `uv sync --locked`。
+
 ```bash
-uv run --locked rsi doctor                         # 只检查原生协议，不调用模型
-uv run --locked rsi run '检查项目并总结结构'          # 单次普通工作，输出 JSON 事件
-uv run --locked rsi run --resume run-ID '继续检查'   # 延续原生会话
-uv run --locked rsi learn --resume run-ID '复盘反馈'  # 独立总结
+areal-rsi doctor                         # 只检查原生协议，不调用模型
+areal-rsi run '检查项目并总结结构'          # 单次普通工作，输出 JSON 事件
+areal-rsi run --resume run-ID '继续检查'   # 延续原生会话
+areal-rsi learn --resume run-ID '复盘反馈'  # 独立总结
 make check                                        # Python/原版 UI 测试、Ruff、Mypy
 ```
 

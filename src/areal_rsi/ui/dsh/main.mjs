@@ -166,7 +166,7 @@ export function createView(terminal, send, quit) {
 }
 
 async function main() {
-  if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('TUI requires a terminal; use rsi run for pipes.');
+  if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('TUI requires a terminal; use areal-rsi run for pipes.');
   const backend = spawn(process.env.RSI_PYTHON, ['-m', 'areal_rsi', '_ui', ...process.argv.slice(2)], {
     stdio: ['pipe', 'pipe', 'pipe'],
   });

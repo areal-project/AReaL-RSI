@@ -36,7 +36,7 @@ async def run(args: argparse.Namespace) -> int:
         elif args.image:
             await system.send_message(run_id, "", images=args.image)
         elif not args.resume:
-            raise ValueError("rsi run requires a prompt or --resume")
+            raise ValueError("areal-rsi run requires a prompt or --resume")
         record = system.detail(run_id)
         if record.status == SessionStatus.COMPLETED or (
             record.phase != SessionPhase.LEADER
@@ -106,7 +106,7 @@ def main() -> None:
     load_dotenv(args.env_file, override=False)
     try:
         if args.command == "learn" and not args.resume:
-            raise ValueError("rsi learn requires --resume run-ID")
+            raise ValueError("areal-rsi learn requires --resume run-ID")
         if args.resume and args.workspace:
             raise ValueError("恢复会话时沿用原工作目录，不能同时指定 --workspace")
         if args.command == "tui":

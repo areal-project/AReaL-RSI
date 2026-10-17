@@ -4,6 +4,7 @@
 不启动 Codex、TUI 或 `/rsi`，也不修改现有会话流程。默认是验证接入的两步训练，
 不代表充分训练或质量收益实验。
 
+要直接启动多轮研究，配置 `experiment.json` 后运行 `python -m examples.tir.rsi`。
 原生 ToRL 的多轮训练、冻结评测和 `/rsi` 驱动研究见 [RESEARCH.md](RESEARCH.md)。
 
 ## 环境与运行

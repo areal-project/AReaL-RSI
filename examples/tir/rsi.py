@@ -4,19 +4,26 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import fcntl
 import json
+import shlex
 import signal
+import sys
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 from dotenv import load_dotenv
 
 from areal_rsi.api.control import encode_record
+from areal_rsi.api.execution import JobSpec
 from areal_rsi.api.research import SessionPhase, SessionStatus
 from areal_rsi.infra.artifacts import read_record, write_record
 from areal_rsi.infra.config import executable, from_environment
+from areal_rsi.infra.execution import JobExecutor
 from areal_rsi.infra.research import ResearchSystem
-from examples.tir.experiment import Experiment
+from examples.tir.experiment import Experiment, ExperimentConfig, prepare
 from examples.tir.pipeline import PROJECT
 
 
@@ -36,8 +43,9 @@ class ResearchDecision:
 
 def brief(current: Experiment) -> str:
     experiment = current.root
-    python = PROJECT / ".venv/bin/python"
-    command = f"{python} -m examples.tir.experiment --experiment {experiment}"
+    command = shlex.join(
+        [sys.executable, "-m", "examples.tir.experiment", "--experiment", str(experiment)]
+    )
     return f"""用户明确授权现在开始执行真实 TIR 多轮研究与训练。先保存任务，然后交接 Leader。
 目标：在冻结的 train/valid/test 协议下，改进数据合成代码、数据配比/难度课程和 GRPO 训练配方，
 让模型经过多轮迭代后有提升。公共执行/训练/评测服务已在 infra，研究策略在 examples/tir。
@@ -168,17 +176,147 @@ async def run(experiment: Path, env_file: Path | None, *, resume: bool) -> None:
         await system.close()
 
 
-async def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--experiment", type=Path, required=True)
-    parser.add_argument("--env-file", type=Path)
+async def launch(args: argparse.Namespace) -> None:
+    if not (PROJECT / "src/areal_rsi").is_dir():
+        raise ValueError(
+            "Run the TIR example from a source checkout with uv sync --locked"
+        )
+    root = args.experiment
+    if root is None:
+        if args.resume or args.action != "research":
+            raise ValueError("--experiment is required for resume, status and test")
+        root = (
+            PROJECT
+            / "runs/tir-research"
+            / (datetime.now(UTC).strftime("tir-%Y%m%dT%H%M%S-") + uuid4().hex[:8])
+        )
+    root = root.resolve()
+    if args.action == "test" and not args.candidate:
+        raise ValueError("test requires --candidate NAME; review decision.json first")
+    if args.action != "test" and args.candidate:
+        raise ValueError("--candidate is only supported with test")
+    if args.action != "research" and (args.resume or args.source):
+        raise ValueError("--resume and --source are only supported with research")
+    if (args.action != "research" or args.resume) and not (root / "protocol.json").exists():
+        raise ValueError("No frozen experiment at --experiment; start a new research run")
+    if args.env_file is not None:
+        load_dotenv(args.env_file, override=False)
+    if args.action == "research":
+        executable(from_environment(PROJECT))
+    root.mkdir(parents=True, exist_ok=True)
+    print(f"Experiment: {root}", flush=True)
+    if args.action == "status":
+        for path in sorted((root / "valid").glob("*.json")):
+            print(path)
+        receipt_path = root / "rsi/driver.json"
+        if receipt_path.exists():
+            receipt = read_record(receipt_path, DriverReceipt)
+            session = root / "rsi/sessions" / receipt.run_id / "session.json"
+            if session.exists():
+                print(session.read_text())
+        return
+    # Prevent concurrent drivers, but release the stage lock before Leader invokes stages.
+    with (root / ".driver.lock").open("a") as driver:
+        fcntl.flock(driver, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with (root / ".experiment.lock").open("a") as stage:
+            fcntl.flock(stage, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            frozen = (root / "protocol.json").exists()
+            if args.action == "research":
+                receipt = root / "rsi/driver.json"
+                if receipt.exists() and not args.resume:
+                    raise ValueError("A research session already exists; use --resume")
+                if frozen and args.source:
+                    raise ValueError("Cannot replace benchmark in a frozen experiment")
+                if not frozen:
+                    config = read_record(args.config, ExperimentConfig)
+                    if args.source:
+                        await prepare_benchmark(config, args.source.resolve(), root)
+                    prepare(config, root)
+            current = Experiment(root)
+            if args.action == "test":
+                await current.test(args.candidate)
+                print(f"Report: {root / 'report.md'}", flush=True)
+                return
+            print("Checking/running valid baseline…", flush=True)
+            await current.evaluate("base")
+        print("Starting RSI multi-round research…", flush=True)
+        await run(root, args.env_file, resume=(root / "rsi/driver.json").exists())
+        print(f"Review {root / 'decision.json'} before python -m examples.tir.rsi test", flush=True)
+
+
+async def prepare_benchmark(config: ExperimentConfig, source: Path, root: Path) -> None:
+    output = Path(config.benchmark).resolve()
+    if output.name != "benchmark.json":
+        raise ValueError("config.benchmark must end in benchmark.json")
+    if output.parent.exists():
+        raise ValueError("Benchmark output directory already exists; omit --source to reuse it")
+    for name in ("train.parquet", "test.parquet"):
+        if not (source / name).is_file():
+            raise ValueError(f"Missing ToRL input: {source / name}")
+    resources = config.slurm
+    await JobExecutor(root / "execution").run(
+        root.name,
+        "benchmark-" + uuid4().hex[:8],
+        JobSpec(
+            command=(
+                "srun",
+                f"--reservation={resources.reservation}",
+                f"--partition={resources.partition}",
+                "--nodes=1",
+                "--ntasks=1",
+                "--cpus-per-task=2",
+                "--mem=8G",
+                f"--time={resources.minutes}",
+                "--mpi=none",
+                "apptainer",
+                "exec",
+                "--bind",
+                "/storage:/storage",
+                resources.image,
+                config.tir.runtime.python,
+                "-m",
+                "examples.tir.benchmark",
+                "--source",
+                str(source),
+                "--output",
+                str(output.parent),
+            ),
+            cwd=str(PROJECT),
+            env={"PYTHONPATH": f"{PROJECT / 'src'}:{PROJECT}"},
+            timeout_seconds=config.tir.timeout_seconds,
+        ),
+    )
+
+
+async def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(prog="python -m examples.tir.rsi", description=__doc__)
+    parser.add_argument(
+        "action", nargs="?", choices=("research", "status", "test"), default="research"
+    )
+    parser.add_argument("--experiment", type=Path, help="实验目录；新实验默认生成唯一目录")
+    parser.add_argument("--config", type=Path, default=PROJECT / "examples/tir/experiment.json")
+    parser.add_argument(
+        "--source", type=Path, help="ToRL parquet 目录；通过 CPU Slurm 准备 benchmark"
+    )
+    parser.add_argument("--env-file", type=Path, default=Path(".env"))
     parser.add_argument("--resume", action="store_true")
-    args = parser.parse_args()
-    task = asyncio.create_task(run(args.experiment.resolve(), args.env_file, resume=args.resume))
+    parser.add_argument("--candidate", help="独立 test 验收的候选名")
+    args = parser.parse_args(argv)
+    task = asyncio.create_task(launch(args))
     for signum in (signal.SIGTERM, signal.SIGINT):
         asyncio.get_running_loop().add_signal_handler(signum, task.cancel)
     await task
 
 
+def cli(argv: list[str] | None = None) -> None:
+    try:
+        asyncio.run(main(argv))
+    except (OSError, ValueError, RuntimeError) as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(1) from None
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        raise SystemExit(130) from None
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    cli()

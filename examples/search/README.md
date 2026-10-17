@@ -52,6 +52,8 @@ python -m examples.search.pipeline --submit \
 
 若整轮推理和未修改的官方 judge 已完成，旧包装器却因为上下文预算耗尽而拒绝汇总，可在源作业确认终态后执行 `python -m examples.search.final_evaluation --recover-summary <原config.json> --output <原目录之外的新summary.json>`。这是单独版本化的 CPU 汇总恢复：只接受精确的 HTTP400 输入加预留输出超过 131072、输出预算仍为10000，且原始 Qwen 客户端记录为 incomplete、没有最终答案、官方判错、原始与规范轨迹一致的情况。它保留全部830题与官方评分，不重生成、不截断输入、不改原始文件；其他服务错误、超时、缺失原始证据或 judge 解析失败仍拒绝。恢复 summary 的 sidecar receipt 保存输入文件哈希、原作业终态及预算耗尽记录，费用使用原 solver 计数和实际 Slurm allocation 耗时。使用恢复 summary 时，最终配对报告必须明确引用该文件和 receipt，不能把它写回旧 `result.json` 或声称旧包装器成功退出。
 
+`--verify-runs <原config.json> --output <新receipt.json>` 独立检查完整830份已生成结果的 query/seed/协议哈希、检索 docid 并集、原始记录和已知预算耗尽。仅对能从原始参数与客户端堆栈证明发生在派发前的非法模型参数（损坏JSON、JSON字符串而非对象）接受 Qwen-Agent 的文本错误观察，模型后续恢复与最终答案原样保留；未知错误、服务故障和不一致证据仍拒绝。原始文件只读，校验不调用模型。新版本主入口在批处理返回非零后先保存真实服务计数，再做此校验并决定是否进入未修改的官方 judge，避免末尾校验错误丢失计数；历史冻结入口继续保留旧行为，须独立记录仅评分续跑。若历史终态计数确已丢失，记录已观测下界及缺口，禁止补造精确数值或宣称已通过全部最终验收。
+
 每轮先评测 baseline，再进行真实训练，最后启动独立推理进程重载 checkpoint 并评测 dev。结果、配置、请求、完整交互与张量审计、训练日志、checkpoint manifest、参数变化和 incumbent 选择保存在配置的 `output_root`。相同 run ID 不重复提交 allocation；已有阶段结果需通过内容哈希校验。发现仍存活的旧进程时拒绝重启，失败阶段保留证据并使用新 run ID。
 
 候选仅在相同 dev 和 harness 条件下严格提高成绩时替换 incumbent。最终候选须在完整830题评测前冻结；原 H0、相同推理预算、官方索引和官方评分的 Accuracy 至少125/830，并补充其他种子、配对统计、Evidence Recall、搜索次数、真实 token、延迟和全部 GPU 成本。修改 harness 时另做归因对照。256 GPU·小时耗尽不能标记 Goal 完成。

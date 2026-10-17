@@ -87,6 +87,28 @@ class EvaluationRun:
 
 
 @dataclass(frozen=True, slots=True)
+class ToolArgumentFailure:
+    query_id: str
+    result_index: int
+    kind: str
+    arguments_sha256: str
+    observation_sha256: str
+    original_record: EvaluationArtifact
+    raw_messages: EvaluationArtifact
+
+
+@dataclass(frozen=True, slots=True)
+class SolverVerification:
+    source_directory: str
+    questions: int
+    completed: int
+    incomplete: int
+    context_budget_exhaustions: tuple[ContextBudgetExhaustion, ...]
+    tool_argument_failures: tuple[ToolArgumentFailure, ...]
+    artifacts: tuple[EvaluationArtifact, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class FinalEvaluationSummary:
     questions: int
     correct: int
@@ -207,6 +229,144 @@ def context_budget_exhaustion(path: Path, record: dict[str, Any]) -> ContextBudg
         raise ValueError(failure)
     return ContextBudgetExhaustion(
         query_id, inputs, outputs, context, artifact(originals[0]), artifact(messages_path)
+    )
+
+
+def tool_argument_failure(
+    config: FinalEvalConfig, path: Path, record: dict[str, Any], result_index: int
+) -> ToolArgumentFailure:
+    """Prove a local malformed model action, rejecting unknown service error text."""
+    failure = "Unverified tool error; retain infrastructure failure status"
+    item = record["result"][result_index]
+    arguments, observation = item.get("arguments"), item.get("output")
+    if (
+        item.get("tool_name") != "search"
+        or not isinstance(arguments, str)
+        or not isinstance(observation, str)
+    ):
+        raise ValueError(failure)
+    header = "An error occurred when calling tool `search-server-search`:\n"
+    manager = str(Path(config.qwen_overlay) / "qwen_agent/tools/mcp_manager.py")
+    if not observation.startswith(header) or manager not in observation:
+        raise ValueError(failure)
+    try:
+        parsed = json.loads(arguments)
+    except json.JSONDecodeError as error:
+        if (
+            not observation.startswith(header + f"JSONDecodeError: {error}\nTraceback:\n")
+            or "tool_args = json.loads(params)" not in observation
+        ):
+            raise ValueError(failure) from None
+        kind = "model-arguments-invalid-json-before-dispatch"
+    else:
+        if (
+            not isinstance(parsed, str)
+            or not observation.startswith(
+                header
+                + "ValidationError: 1 validation error for CallToolRequestParams\narguments\n"
+            )
+            or "type=dict_type" not in observation
+            or "input_type=str]" not in observation
+            or "/mcp/client/session.py" not in observation
+        ):
+            raise ValueError(failure)
+        kind = "model-arguments-string-instead-of-object-before-dispatch"
+    query_id = str(record["query_id"])
+    if not query_id or Path(query_id).name != query_id or query_id in {".", ".."}:
+        raise ValueError(failure)
+    raw = path.parent.parent / (path.parent.name + "-raw") / query_id
+    originals = list(raw.glob("run_*.json"))
+    if len(originals) != 1:
+        raise ValueError(failure)
+    original = json.loads(originals[0].read_text())
+    messages = raw / "messages.json"
+    raw_messages = json.loads(messages.read_text())
+    if (
+        any(
+            original.get(key) != record.get(key)
+            for key in ("query_id", "status", "result", "retrieved_docids", "tool_call_counts")
+        )
+        or raw_messages.get("error") is not None
+        or not any(
+            m.get("role") == "function" and m.get("content") == observation
+            for m in raw_messages.get("response", [])
+        )
+    ):
+        raise ValueError(failure)
+    return ToolArgumentFailure(
+        query_id,
+        result_index,
+        kind,
+        hashlib.sha256(arguments.encode()).hexdigest(),
+        hashlib.sha256(observation.encode()).hexdigest(),
+        artifact(originals[0]),
+        artifact(messages),
+    )
+
+
+def verify_solver_outputs(config: FinalEvalConfig) -> SolverVerification:
+    """Check all original runs before judge-only continuation; never regenerate."""
+    with (Path(config.data_root) / "datasets/queries.tsv").open() as query_source:
+        rows = list(csv.reader(query_source, delimiter="\t"))
+    expected = {row[0]: hashlib.sha256(row[1].encode()).hexdigest() for row in rows}
+    if len(expected) != 830 or len(rows) != 830:
+        raise ValueError("Solver verification requires all830 unique original queries")
+    source = Path(config.output)
+    directory = source / "runs/qwen3-embedding-8b" / source.name
+    identifiers = []
+    completed = incomplete = 0
+    budgets = []
+    tool_failures = []
+    artifacts = []
+    protocol = digest(Path(config.benchmark_repository) / "local/react_reproduction.json")
+    for path in sorted(directory.glob("run_*.json")):
+        record = json.loads(path.read_text())
+        query_id = str(record["query_id"])
+        metadata = record["metadata"]
+        if (
+            query_id not in expected
+            or metadata.get("query_sha256") != expected[query_id]
+            or metadata.get("protocol_sha256") != protocol
+            or metadata.get("seed") != config.seed
+        ):
+            raise ValueError("Solver query/seed/protocol differs from frozen source")
+        identifiers.append(query_id)
+        if record["status"] == "error":
+            budgets.append(context_budget_exhaustion(path, record))
+        elif record["status"] == "completed":
+            completed += 1
+        elif record["status"] == "incomplete":
+            incomplete += 1
+        else:
+            raise ValueError("Unknown solver status")
+        docids: set[str] = set()
+        for index, item in enumerate(record["result"]):
+            if item.get("type") != "tool_call" or not item.get("output"):
+                continue
+            value = item["output"]
+            try:
+                decoded = json.loads(value) if isinstance(value, str) else value
+            except json.JSONDecodeError:
+                tool_failures.append(tool_argument_failure(config, path, record, index))
+                continue
+            if not isinstance(decoded, list) or any(
+                not isinstance(d, dict) or "docid" not in d for d in decoded
+            ):
+                raise ValueError("Unverified tool result schema; reject service failures")
+            docids.update(str(d["docid"]) for d in decoded)
+        if set(record["retrieved_docids"]) != docids:
+            raise ValueError("Original retrieved document IDs differ from successful tool returns")
+        artifacts.append(artifact(path))
+    if len(identifiers) != 830 or set(identifiers) != set(expected):
+        raise ValueError("Solver coverage missing or duplicated")
+    return SolverVerification(
+        str(source),
+        830,
+        completed,
+        incomplete,
+        tuple(budgets),
+        tuple(tool_failures),
+        tuple(artifacts),
     )
 
 
@@ -735,7 +895,7 @@ def run(config: FinalEvalConfig) -> None:
         before = [counters(port) for port in solver_ports]
         inference_started = time.monotonic()
         with (output / "agent.log").open("wb") as log:
-            subprocess.run(
+            batch_result = subprocess.run(
                 [
                     config.data_python,
                     str(repository / "local/run_react_batch.py"),
@@ -758,7 +918,7 @@ def run(config: FinalEvalConfig) -> None:
                 cwd=repository,
                 stdout=log,
                 stderr=subprocess.STDOUT,
-                check=True,
+                check=False,
             )
         after = [counters(port) for port in solver_ports]
         if any(
@@ -777,6 +937,7 @@ def run(config: FinalEvalConfig) -> None:
             ),
             "inference_wall_seconds": time.monotonic() - inference_started,
             "token_source": "vLLM0.17 Prometheus: full prompt including cache; generation tokens",
+            "source_batch_exit_code": batch_result.returncode,
             "before": [asdict(value) for value in before],
             "after": [asdict(value) for value in after],
         }
@@ -784,6 +945,11 @@ def run(config: FinalEvalConfig) -> None:
     finally:
         for process in processes:
             stop(process)
+    # Preserve counters even when the legacy batch's JSON-only observation
+    # check exits nonzero. Only proven local model-action errors may continue.
+    from areal_rsi.infra.artifacts import write_record
+
+    write_record(output / "solver-verification.json", verify_solver_outputs(config))
     judge_environment = {
         **environment,
         "CUDA_VISIBLE_DEVICES": gpus[1],
@@ -815,7 +981,9 @@ def run(config: FinalEvalConfig) -> None:
             stderr=subprocess.STDOUT,
             check=True,
         )
-    summary, _ = summarize_evaluation(config, elapsed_seconds=time.monotonic() - started)
+    summary, _ = summarize_evaluation(
+        config, elapsed_seconds=time.monotonic() - started, allow_context_budget_exhaustion=True
+    )
     (output / "result.json").write_text(json.dumps(asdict(summary), indent=2) + "\n")
     print(json.dumps(asdict(summary), indent=2), flush=True)
 
@@ -824,6 +992,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--config", type=Path)
+    mode.add_argument(
+        "--verify-runs", type=Path, help="Original config for read-only solver verification"
+    )
     mode.add_argument("--export-checkpoint", type=Path, help="Original checkpoint manifest")
     mode.add_argument(
         "--recover-summary", type=Path, help="Original config of a terminal evaluation"
@@ -837,6 +1008,18 @@ def main() -> None:
         if arguments.output or arguments.source_sha256:
             parser.error("--output and --source-sha256 are only for checkpoint export")
         run(FinalEvalConfig(**json.loads(arguments.config.read_text())))
+    elif arguments.verify_runs:
+        if arguments.output is None or arguments.source_sha256:
+            parser.error("--verify-runs requires --output and does not accept --source-sha256")
+        from areal_rsi.infra.artifacts import read_record, write_record
+
+        config = read_record(arguments.verify_runs, FinalEvalConfig)
+        if arguments.output.exists() or arguments.output.resolve().is_relative_to(
+            Path(config.output).resolve()
+        ):
+            parser.error("Use a new verification receipt outside the source directory")
+        write_record(arguments.output, verify_solver_outputs(config))
+        print(arguments.output, flush=True)
     elif arguments.recover_summary:
         if arguments.output is None or arguments.source_sha256:
             parser.error("--recover-summary requires --output and does not accept --source-sha256")

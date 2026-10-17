@@ -19,6 +19,7 @@ from examples.search.final_evaluation import (
     digest,
     export_checkpoint,
     recover_summary,
+    tool_argument_failure,
 )
 
 
@@ -333,3 +334,72 @@ def test_summary_recovery_preserves_full_official_denominator_and_rejects_other_
     with pytest.raises(ValueError, match="Unrecoverable"):
         recover_summary(config_path, tmp_path / "must-reject.json")
     assert not (tmp_path / "must-reject.json").exists()
+
+
+@pytest.mark.parametrize("kind", ["invalid-json", "non-object"])
+def test_model_argument_observations_cannot_hide_service_errors_or_changed_evidence(
+    tmp_path: Path, kind: str
+) -> None:
+    config = FinalEvalConfig(
+        benchmark_repository="unused",
+        historical_environment="unused",
+        data_root="unused",
+        model="unused",
+        base_model="unused",
+        embedding_model="unused",
+        judge_model="unused",
+        checkpoint_manifest="unused",
+        checkpoint_manifest_sha256="unused",
+        asset_lock="unused",
+        asset_lock_sha256="unused",
+        data_python="unused",
+        vllm_python="unused",
+        qwen_overlay=str(tmp_path / "overlay"),
+        output="unused",
+    )
+    path = context_failure(tmp_path / "runs/example", "external")
+    record = json.loads(path.read_text())
+    record.pop("error")
+    record["status"] = "completed"
+    header = "An error occurred when calling tool `search-server-search`:\n"
+    manager = str(Path(config.qwen_overlay) / "qwen_agent/tools/mcp_manager.py")
+    if kind == "invalid-json":
+        arguments = '{"query": "'
+        detail = (
+            "JSONDecodeError: Unterminated string starting at: "
+            "line 1 column 11 (char 10)\nTraceback:\n"
+        )
+        trace = f'  File "{manager}", line 273, in call\n    tool_args = json.loads(params)\n'
+    else:
+        arguments = json.dumps("external query")
+        detail = (
+            "ValidationError: 1 validation error for CallToolRequestParams\narguments\n"
+            "  Input should be a valid dictionary [type=dict_type, input_type=str]\nTraceback:\n"
+        )
+        trace = (
+            f'  File "{manager}", line 451, in execute_function\n'
+            '  File "/venv/mcp/client/session.py", line 268, in call_tool\n'
+        )
+    observation = header + detail + trace
+    record["result"] = [
+        {"type": "tool_call", "tool_name": "search", "arguments": arguments, "output": observation}
+    ]
+    path.write_text(json.dumps(record))
+    raw = path.parent.parent / (path.parent.name + "-raw") / "external"
+    original = raw / "run_original.json"
+    original.write_text(json.dumps(record))
+    (raw / "messages.json").write_text(
+        json.dumps({"error": None, "response": [{"role": "function", "content": observation}]})
+    )
+    result = tool_argument_failure(config, path, record, 0)
+    assert result.kind.startswith("model-arguments-") and result.query_id == "external"
+    for changes in [
+        {"arguments": json.dumps({"query": "valid arguments"})},
+        {"output": header + "TimeoutError: a real transport failure\n" + trace},
+    ]:
+        changed = {**record, "result": [{**record["result"][0], **changes}]}
+        with pytest.raises(ValueError, match="Unverified tool error"):
+            tool_argument_failure(config, path, changed, 0)
+    original.write_text(json.dumps({**record, "status": "error"}))
+    with pytest.raises(ValueError, match="Unverified tool error"):
+        tool_argument_failure(config, path, record, 0)

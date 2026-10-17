@@ -41,15 +41,18 @@ class ProcessIdentity:
         except FileNotFoundError:
             if not Path("/proc").exists():
                 result = subprocess.run(
-                    ["ps", "-p", str(pid), "-o", "lstart="],
+                    ["ps", "-p", str(pid), "-o", "lstart=", "-o", "stat="],
                     capture_output=True,
                     text=True,
                     check=False,
                 )
-                started = result.stdout.strip()
-                return cls(pid, started) if started else None
+                fields = result.stdout.strip().rsplit(None, 1)
+                if len(fields) != 2 or fields[1].startswith(("Z", "X")):
+                    return None
+                return cls(pid, fields[0])
             return None
-        return cls(pid, stat.rsplit(")", 1)[1].split()[19])
+        fields = stat.rsplit(")", 1)[1].split()
+        return None if fields[0] in {"Z", "X"} else cls(pid, fields[19])
 
 
 class JobExecutor:
@@ -130,11 +133,21 @@ class JobExecutor:
         except OSError as exc:
             record = replace(record, state="failed", error=str(exc))
         finally:
+            released = True
             if process is not None:
-                await self._terminate(process)
+                released = await self._terminate(process)
                 record = replace(record, exit_code=process.returncode)
+                if not released:
+                    record = replace(
+                        record,
+                        state="failed" if record.state == "succeeded" else record.state,
+                        error=(
+                            f"{record.error or 'Execution ended'}; "
+                            "process tree cleanup incomplete"
+                        ),
+                    )
             record = replace(
-                record, updated_at=time.time(), finished_at=time.time(), resources_released=True
+                record, updated_at=time.time(), finished_at=time.time(), resources_released=released
             )
             save()
         if record.state != "succeeded":
@@ -142,7 +155,7 @@ class JobExecutor:
         return record
 
     @staticmethod
-    async def _terminate(process: asyncio.subprocess.Process) -> None:
+    async def _terminate(process: asyncio.subprocess.Process) -> bool:
         # AReaL workers may start their own sessions; retain descendants before
         # terminating their parent so detached RPC/inference servers are reaped.
         descendants: list[ProcessIdentity] = []
@@ -165,4 +178,19 @@ class JobExecutor:
             if ProcessIdentity.read(identity.pid) == identity:
                 with suppress(ProcessLookupError):
                     os.kill(identity.pid, signal.SIGKILL)
-        await process.wait()
+        # SIGKILL can remain pending while a child waits for kernel I/O. A
+        # delivered signal alone does not prove that the resources are free.
+        deadline = time.monotonic() + 5
+        with suppress(TimeoutError):
+            await asyncio.wait_for(process.wait(), 5)
+        while True:
+            remaining = [
+                identity
+                for identity in descendants
+                if ProcessIdentity.read(identity.pid) == identity
+            ]
+            if process.returncode is not None and not remaining:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(0.02)

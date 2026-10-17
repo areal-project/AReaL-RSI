@@ -4,6 +4,8 @@
 不启动 Codex、TUI 或 `/rsi`，也不修改现有会话流程。默认是验证接入的两步训练，
 不代表充分训练或质量收益实验。
 
+原生 ToRL 的多轮训练、冻结评测和 `/rsi` 驱动研究见 [RESEARCH.md](RESEARCH.md)。
+
 ## 环境与运行
 
 提交端按仓库 README 准备 `uv` 环境。训练使用独立的 AReaL Python 环境，需能导入

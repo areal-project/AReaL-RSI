@@ -46,6 +46,8 @@ from examples.tir.synthesis import (
     SynthesisPolicy,
     build_dataset,
     generate,
+    normalize_gold,
+    select_mixed_rollout_curriculum,
 )
 
 
@@ -99,6 +101,144 @@ def test_word_problem_mixture_reproducible_verified_and_train_only(tmp_path: Pat
         build_dataset(replace(recipe, real_count=6), pool, ref, (), tmp_path / "excess")
 
 
+def test_real_task_id_curriculum_is_exact_and_rejects_invalid_ids(tmp_path: Path) -> None:
+    pool = tuple(example(f"Focused training question {i}", steps=2) for i in range(4))
+    ref = write_examples(tmp_path / "focused-pool.jsonl", pool)
+    selected = (pool[1].task_id, pool[3].task_id)
+    recipe = DataRecipe(real_count=2, synthetic_count=0, real_task_ids=selected)
+    build_dataset(recipe, pool, ref, (), tmp_path / "focused")
+    result = read_examples(tmp_path / "focused/train.jsonl")
+    assert {item.task_id for item in result} == set(selected)
+    with pytest.raises(ValueError, match="unique"):
+        DataRecipe(real_count=2, synthetic_count=0, real_task_ids=(selected[0], selected[0]))
+    unknown = replace(recipe, real_task_ids=(selected[0], "missing-task-id"))
+    with pytest.raises(ValueError, match="absent"):
+        build_dataset(unknown, pool, ref, (), tmp_path / "unknown")
+    heldout = replace(recipe, real_task_ids=(selected[0], pool[0].task_id))
+    with pytest.raises(ValueError, match="Held-out"):
+        build_dataset(heldout, pool, ref, (pool[0].task_id,), tmp_path / "heldout")
+
+
+def _rollout(path: Path, prompt: str, rewards: tuple[int, ...], indices: tuple[int, ...]) -> Path:
+    rows = [
+        {"prompt": f"System\nUser:\n{prompt}\nAssistant:", "sample_idx": index, "reward": reward}
+        for index, reward in zip(indices, rewards, strict=True)
+    ]
+    path.write_text("\n".join(json.dumps(row) for row in rows) + ("\n" if rows else ""))
+    return path
+
+
+def test_rollout_curriculum_uses_within_file_mixed_rewards(tmp_path: Path) -> None:
+    pool = tuple(example(f"Curriculum question {i}") for i in range(3))
+    pool = tuple(replace(item, source="torl-train") for item in pool)
+    train_ref = write_examples(tmp_path / "official.jsonl", pool)
+    trained_ref = write_examples(tmp_path / "trained.jsonl", pool)
+    all_zero = _rollout(tmp_path / "zero.jsonl", pool[0].prompt, (0, 0), (0, 1))
+    all_one = _rollout(tmp_path / "one.jsonl", pool[0].prompt, (1, 1), (0, 1))
+    partial = _rollout(tmp_path / "partial.jsonl", pool[1].prompt, (0, 1), (0, 1))
+    complete = _rollout(tmp_path / "complete.jsonl", pool[2].prompt, (0, 1, 0, 1), (0, 1, 2, 3))
+    selection = select_mixed_rollout_curriculum(
+        pool,
+        pool,
+        (all_zero, all_one, partial, complete),
+        frozen_pool_source=train_ref,
+        trained_dataset_source=trained_ref,
+        n_samples=4,
+    )
+    assert selection.selected_task_ids == (pool[1].task_id, pool[2].task_id)
+    assert selection.complete_mixed_group_count == 1
+    assert selection.partial_mixed_group_count == 1
+    duplicate = _rollout(tmp_path / "duplicate.jsonl", pool[2].prompt, (0, 1), (0, 0))
+    with pytest.raises(ValueError, match="duplicate"):
+        select_mixed_rollout_curriculum(
+            pool,
+            pool,
+            (duplicate,),
+            frozen_pool_source=train_ref,
+            trained_dataset_source=trained_ref,
+            n_samples=4,
+        )
+    unknown = _rollout(tmp_path / "unknown.jsonl", "Unknown curriculum question", (0, 1), (0, 1))
+    with pytest.raises(ValueError, match="absent"):
+        select_mixed_rollout_curriculum(
+            pool,
+            pool,
+            (unknown,),
+            frozen_pool_source=train_ref,
+            trained_dataset_source=trained_ref,
+            n_samples=4,
+        )
+    with pytest.raises(ValueError, match="absent"):
+        select_mixed_rollout_curriculum(
+            pool,
+            pool,
+            (partial,),
+            frozen_pool_source=train_ref,
+            trained_dataset_source=trained_ref,
+            n_samples=4,
+            excluded_ids=(pool[1].task_id,),
+        )
+
+
+def test_rollout_curriculum_validates_mixed_trained_data_and_skips_synthetic(
+    tmp_path: Path,
+) -> None:
+    official = tuple(
+        replace(example(f"Official curriculum question {i}"), source="torl-train")
+        for i in range(2)
+    )
+    synthetic = replace(example("Synthetic curriculum question"), source="verified-synthetic")
+    trained = (*official, synthetic)
+    pool_ref = write_examples(tmp_path / "official.jsonl", official)
+    trained_ref = write_examples(tmp_path / "trained.jsonl", trained)
+    mixed_official = _rollout(tmp_path / "official-mixed.jsonl", official[0].prompt, (0, 1), (0, 1))
+    synthetic_mixed = _rollout(tmp_path / "synthetic-mixed.jsonl", synthetic.prompt, (0, 1), (0, 1))
+    selection = select_mixed_rollout_curriculum(
+        official,
+        trained,
+        (mixed_official, synthetic_mixed),
+        frozen_pool_source=pool_ref,
+        trained_dataset_source=trained_ref,
+        n_samples=2,
+    )
+    assert selection.selected_task_ids == (official[0].task_id,)
+    assert selection.complete_mixed_group_count == 1
+
+
+@pytest.mark.parametrize(
+    "bad_row",
+    [
+        {"sample_idx": True, "reward": 0.0},
+        {"sample_idx": -1, "reward": 0.0},
+        {"sample_idx": 2, "reward": 0.0},
+        {"sample_idx": 0, "reward": 0.5},
+        {"sample_idx": 0, "reward": float("nan")},
+    ],
+)
+def test_rollout_curriculum_rejects_invalid_typed_logger_fields(
+    tmp_path: Path, bad_row: dict[str, object]
+) -> None:
+    pool = (replace(example("Typed curriculum question"), source="torl-train"),)
+    pool_ref = write_examples(tmp_path / "official.jsonl", pool)
+    trained_ref = write_examples(tmp_path / "trained.jsonl", pool)
+    row = {
+        "task_id": 1,
+        "prompt": f"System\nUser:\n{pool[0].prompt}\nAssistant:",
+        **bad_row,
+    }
+    path = tmp_path / "bad.jsonl"
+    path.write_text(json.dumps(row, allow_nan=True) + "\n")
+    with pytest.raises(ValueError, match="invalid"):
+        select_mixed_rollout_curriculum(
+            pool,
+            pool,
+            (path,),
+            frozen_pool_source=pool_ref,
+            trained_dataset_source=trained_ref,
+            n_samples=2,
+        )
+
+
 @pytest.mark.parametrize(
     ("family", "required_terms"),
     [
@@ -125,6 +265,25 @@ def test_new_synthetic_families_have_semantic_prompts_and_exact_targets(
         elif family == "units":
             numbers = [int(value) for value in re.findall(r"\d+", item.prompt)]
             assert numbers[0] * numbers[1] % numbers[2] == 0
+            assert Fraction(numbers[0] * numbers[1], numbers[2]) == int(item.answer)
+        elif family == "percent":
+            match = re.search(r"costs \$(\d+).*?by (\d+)%.*?by (\d+)%", item.prompt)
+            assert match is not None
+            price, increase, discount = map(int, match.groups())
+            expected = Fraction(price) * Fraction(100 + increase, 100) * Fraction(
+                100 - discount, 100
+            )
+            assert expected.denominator == 1
+            assert int(item.answer) == expected.numerator
+        elif family == "work":
+            match = re.search(
+                r"earns \$(\d+) per hour, works (\d+) hours each day for (\d+) days, .*?"
+                r"and spends \$(\d+)",
+                item.prompt,
+            )
+            assert match is not None
+            hourly, hours, days, expense = map(int, match.groups())
+            assert int(item.answer) == hourly * hours * days - expense
         elif family == "decimal":
             rate_match = re.search(r"\$(\d+\.\d+)", item.prompt)
             quantity_match = re.search(r"delivers (\d+)", item.prompt)
@@ -136,6 +295,76 @@ def test_new_synthetic_families_have_semantic_prompts_and_exact_targets(
             quantity = int(quantity_match.group(1))
             bonus = int(bonus_match.group(1))
             assert rate * quantity + bonus == int(item.answer)
+
+
+@pytest.mark.parametrize("family", ["fraction", "radical", "linear", "counting", "sequence"])
+def test_extended_synthetic_families_are_reproducible_and_exact(family: Family) -> None:
+    first = [
+        generate(random.Random(seed), family, difficulty)
+        for difficulty in range(1, 6)
+        for seed in range(20)
+    ]
+    second = [
+        generate(random.Random(seed), family, difficulty)
+        for difficulty in range(1, 6)
+        for seed in range(20)
+    ]
+    assert first == second
+    for item in first:
+        if family == "fraction":
+            match = re.search(r"needs (\d+) and (\d+)/(\d+) cups", item.prompt)
+            assert match is not None
+            whole, numerator, denominator = map(int, match.groups())
+            assert Fraction(item.answer) == Fraction(whole) + Fraction(numerator, denominator)
+        elif family == "radical":
+            sides = re.search(r"lengths (\d+) and (\d+)", item.prompt)
+            assert sides is not None
+            left, right = map(int, sides.groups())
+            answer = item.answer
+            simple = re.fullmatch(r"(\d+)", answer)
+            factored = re.fullmatch(r"(?:(\d+)\\sqrt\{(\d+)\}|\\sqrt\{(\d+)\})", answer)
+            if simple:
+                rendered_square = int(simple.group(1)) ** 2
+            else:
+                assert factored is not None
+                rendered_square = int(factored.group(1) or 1) ** 2 * int(
+                    factored.group(2) or factored.group(3)
+                )
+            assert rendered_square == left * left + right * right
+        elif family == "linear":
+            match = re.search(r"(\d+)x \+ (\d+) = (\d+)", item.prompt)
+            assert match is not None
+            coefficient, offset, total = map(int, match.groups())
+            assert coefficient * int(item.answer) + offset == total
+        elif family == "counting":
+            match = re.search(
+                r"of (\d+) different people is chosen from (\d+) volunteers", item.prompt
+            )
+            assert match is not None
+            choose, people = map(int, match.groups())
+            selected = 1
+            for value in range(people - choose + 1, people + 1):
+                selected *= value
+            for value in range(2, choose + 1):
+                selected //= value
+            assert int(item.answer) == selected
+        else:
+            match = re.search(
+                r"starts with (\d+) and has common difference (\d+).*?(\d+)th term",
+                item.prompt,
+            )
+            assert match is not None
+            first_term, difference, term = map(int, match.groups())
+            assert int(item.answer) == first_term + (term - 1) * difference
+        assert item.task_id == identity(item.prompt)
+
+
+def test_training_gold_normalization_only_delimits_math_answers() -> None:
+    assert normalize_gold(r"\sqrt{2}", "math_delimited") == r"$\sqrt{2}$"
+    assert normalize_gold(r"\frac{1}{2}", "math_delimited") == r"$\frac{1}{2}$"
+    assert normalize_gold("42", "math_delimited") == "42"
+    assert normalize_gold(r"$\sqrt{2}$", "math_delimited") == r"$\sqrt{2}$"
+    assert normalize_gold(r"\sqrt{2}", "preserve") == r"\sqrt{2}"
 
 
 def test_paired_statistics_align_tasks_and_refuse_tampering(tmp_path: Path) -> None:

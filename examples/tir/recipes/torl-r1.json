@@ -5,7 +5,8 @@
     "seed": 17,
     "real_count": 1024,
     "synthetic_count": 0,
-    "real_min_steps": 0
+    "real_min_steps": 0,
+    "gold_format": "math_delimited"
   },
   "training_steps": 32,
   "batch_size": 16,

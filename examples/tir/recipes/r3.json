@@ -1,0 +1,33 @@
+{
+  "hypothesis": "r2's 40% synthetic mixture, 768-token training budget, and 64 steps changed several variables and coincided with lower native and canonical accuracy; its rollout audit also found only 13 of 356 complete synthetic groups with within-group reward differences. Starting from r1, keep 80% official ToRL examples and newly delimited gold. Give most synthetic proposals to inventory, fraction, radical, rates, ratio, average, and work, the families with at least some observed mixed complete groups; retain only small growth and decimal coverage weights because their r2 complete groups had no mixed rewards. Restore 512 generated tokens and spend 48 GRPO steps (768 consumed prompts). This tests whether a smaller mixture centered on observed reward variance helps while avoiding the r2 length and distribution changes; the 1..4 parameter range and its 1/2 emphasis are uncalibrated, so rollout difficulty and any transfer remain empirical.",
+  "parent": "r1",
+  "data": {
+    "seed": 3031,
+    "real_count": 1024,
+    "synthetic_count": 256,
+    "real_min_steps": 0,
+    "gold_format": "math_delimited",
+    "synthesis": {
+      "families": [
+        {"family": "inventory", "weight": 1},
+        {"family": "rates", "weight": 1},
+        {"family": "ratio", "weight": 1},
+        {"family": "growth", "weight": 1},
+        {"family": "average", "weight": 2},
+        {"family": "work", "weight": 1},
+        {"family": "decimal", "weight": 1},
+        {"family": "fraction", "weight": 3},
+        {"family": "radical", "weight": 3}
+      ],
+      "min_difficulty": 1,
+    "max_difficulty": 4,
+    "difficulty_weights": [3, 3, 2, 1]
+    }
+  },
+  "training_steps": 48,
+  "batch_size": 16,
+  "n_samples": 4,
+  "learning_rate": 0.0000075,
+  "max_new_tokens": 512,
+  "temperature": 1.0
+}

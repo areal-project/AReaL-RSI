@@ -1,20 +1,32 @@
-"""Editable TIR research policy: verified word problems mixed with training-only GSM8K.
+"""Editable TIR research policy: verified math tasks mixed with training-only ToRL.
 
 The Leader may change these generators and recipes between rounds. Each generated
 dataset is immutable and its source archive is recorded by the study pipeline.
+There are fifteen families.  Synthetic difficulty currently changes parameter
+ranges; it is a controllable curriculum proxy, not a calibrated reasoning scale.
+Family weights are proposal weights: deduplication and retry limits mean that
+the final family counts need not match them.  New training material may put
+bare mathematical gold inside delimiters for MathVerify without changing the
+question or its mathematical value.
 """
 
 from __future__ import annotations
 
+import json
+import math
 import random
-from dataclasses import dataclass, field
+import re
+from dataclasses import dataclass, field, replace
 from fractions import Fraction
+from itertools import combinations
 from pathlib import Path
 from typing import Literal
 
+from areal_rsi.api.control import decode_record
 from areal_rsi.api.records import ContentRef
-from areal_rsi.infra.artifacts import write_record
-from examples.tir.benchmark import Example, identity, write_examples
+from areal_rsi.infra.artifacts import file_ref, write_record
+from examples.tir.benchmark import Example, identity, read_examples, write_examples
+from examples.tir.pipeline import local_path
 
 Family = Literal[
     "inventory",
@@ -27,7 +39,13 @@ Family = Literal[
     "units",
     "work",
     "decimal",
+    "fraction",
+    "radical",
+    "linear",
+    "counting",
+    "sequence",
 ]
+GoldFormat = Literal["preserve", "math_delimited"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +72,11 @@ def _default_family_weights() -> tuple[FamilyWeight, ...]:
         ("units", 2),
         ("work", 2),
         ("decimal", 2),
+        ("fraction", 2),
+        ("radical", 2),
+        ("linear", 2),
+        ("counting", 2),
+        ("sequence", 2),
     )
     return tuple(FamilyWeight(family, weight) for family, weight in families)
 
@@ -63,12 +86,19 @@ class SynthesisPolicy:
     families: tuple[FamilyWeight, ...] = field(default_factory=_default_family_weights)
     min_difficulty: int = 1
     max_difficulty: int = 3
+    difficulty_weights: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.families or len({item.family for item in self.families}) != len(self.families):
             raise ValueError("Supply distinct nonempty synthesis families")
         if not 1 <= self.min_difficulty <= self.max_difficulty <= 5:
             raise ValueError("Synthetic difficulty must be between 1 and 5")
+        if self.difficulty_weights and len(self.difficulty_weights) != (
+            self.max_difficulty - self.min_difficulty + 1
+        ):
+            raise ValueError("Difficulty weights must cover the configured difficulty range")
+        if any(weight < 1 for weight in self.difficulty_weights):
+            raise ValueError("Difficulty weights must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,12 +108,27 @@ class DataRecipe:
     synthetic_count: int = 256
     real_min_steps: int = 0
     synthesis: SynthesisPolicy = field(default_factory=SynthesisPolicy)
+    # The native MathVerify worker parses mathematical expressions reliably
+    # when bare LaTeX is delimited.  This is a data-boundary policy: it only
+    # affects newly materialized training JSONL, never the official pool.
+    # Preserve legacy recipe behavior; rounds opt into normalization explicitly.
+    gold_format: GoldFormat = "preserve"
+    # An optional exact curriculum. IDs are resolved against the frozen official
+    # training pool at materialization time; an empty tuple preserves legacy
+    # random sampling behavior.
+    real_task_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if min(self.real_count, self.synthetic_count, self.real_min_steps) < 0:
             raise ValueError("Dataset counts and minimum steps must be nonnegative")
         if not 1 <= self.real_count + self.synthetic_count <= 20000:
             raise ValueError("A research round requires 1..20000 distinct training examples")
+        if self.gold_format not in {"preserve", "math_delimited"}:
+            raise ValueError("Unknown training gold format")
+        if len(set(self.real_task_ids)) != len(self.real_task_ids):
+            raise ValueError("Focused training task IDs must be unique")
+        if self.real_task_ids and len(self.real_task_ids) != self.real_count:
+            raise ValueError("Focused training task IDs must match real_count")
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,9 +140,194 @@ class SynthesisManifest:
     synthetic_count: int
 
 
+@dataclass(frozen=True, slots=True)
+class MixedRolloutEvidence:
+    task_id: str
+    rollout_file: ContentRef
+    logged_samples: int
+    rewards: tuple[float, ...]
+    complete: bool
+
+
+@dataclass(frozen=True, slots=True)
+class LoggedSample:
+    """The logger fields needed by the rollout curriculum selector."""
+
+    sample_idx: int
+    reward: float
+    prompt: str
+
+
+@dataclass(frozen=True, slots=True)
+class RolloutCurriculumSelection:
+    rule: str
+    frozen_pool: ContentRef
+    trained_dataset: ContentRef
+    rollout_files: tuple[ContentRef, ...]
+    extractor_source: ContentRef
+    rollout_file_count: int
+    nonempty_group_count: int
+    empty_file_count: int
+    complete_mixed_group_count: int
+    partial_mixed_group_count: int
+    selected_task_ids: tuple[str, ...]
+    evidence: tuple[MixedRolloutEvidence, ...]
+
+
+def select_mixed_rollout_curriculum(
+    frozen_pool: tuple[Example, ...],
+    trained_data: tuple[Example, ...],
+    rollout_files: tuple[Path, ...],
+    *,
+    frozen_pool_source: ContentRef,
+    trained_dataset_source: ContentRef,
+    n_samples: int,
+    excluded_ids: tuple[str, ...] = (),
+) -> RolloutCurriculumSelection:
+    """Select official questions with 0/1 variance in one actual rollout group."""
+    if n_samples < 2:
+        raise ValueError("Rollout curriculum requires at least two samples")
+    if len(set(path.resolve() for path in rollout_files)) != len(rollout_files):
+        raise ValueError("Rollout files must be unique")
+    if not rollout_files:
+        raise ValueError("Rollout curriculum requires actual rollout files")
+    if not isinstance(n_samples, int) or isinstance(n_samples, bool):
+        raise ValueError("Rollout sample count must be an integer")
+    pool_from_source = read_examples(local_path(frozen_pool_source))
+    if pool_from_source != frozen_pool:
+        raise ValueError("Frozen pool source does not match the supplied pool")
+    trained_from_source = read_examples(local_path(trained_dataset_source))
+    if trained_from_source != trained_data:
+        raise ValueError("Trained dataset source does not match the supplied data")
+    pool_by_id = {item.task_id: item for item in frozen_pool}
+    if len(pool_by_id) != len(frozen_pool) or any(
+        item.source != "torl-train" for item in frozen_pool
+    ):
+        raise ValueError("Focused curriculum requires a unique official ToRL training pool")
+    excluded = set(excluded_ids)
+    trained_by_id = {item.task_id: item for item in trained_data}
+    if len(trained_by_id) != len(trained_data):
+        raise ValueError("Trained data contains duplicate task IDs")
+    if any(item.source not in {"torl-train", "verified-synthetic"} for item in trained_data):
+        raise ValueError("Trained data contains a non-training example")
+    if any(
+        item.source == "torl-train"
+        and (
+            item.task_id not in pool_by_id
+            or pool_by_id[item.task_id].prompt != item.prompt
+            or item.answer
+            not in {
+                pool_by_id[item.task_id].answer,
+                normalize_gold(pool_by_id[item.task_id].answer, "math_delimited"),
+            }
+        )
+        for item in trained_data
+    ):
+        raise ValueError("Official trained data must match the frozen pool")
+    evidence: list[MixedRolloutEvidence] = []
+    nonempty = empty = complete_mixed = partial_mixed = 0
+    source_refs = tuple(file_ref(path) for path in rollout_files)
+    for path, source in zip(rollout_files, source_refs, strict=True):
+        samples: list[LoggedSample] = []
+        with path.open() as stream:
+            for line_number, line in enumerate(stream, 1):
+                try:
+                    raw = json.loads(line)
+                except json.JSONDecodeError as error:
+                    raise ValueError(f"Invalid rollout JSON at {path}:{line_number}") from error
+                if not isinstance(raw, dict):
+                    raise ValueError(f"Rollout row is not an object at {path}:{line_number}")
+                required = ("sample_idx", "reward", "prompt")
+                if any(name not in raw for name in required):
+                    raise ValueError(
+                        f"Rollout row is missing a required field at {path}:{line_number}"
+                    )
+                try:
+                    logged = decode_record(
+                        LoggedSample,
+                        {name: raw[name] for name in required},
+                    )
+                except ValueError as error:
+                    raise ValueError(f"Rollout group has invalid logger fields: {path}") from error
+                if isinstance(logged.sample_idx, bool) or not 0 <= logged.sample_idx < n_samples:
+                    raise ValueError(f"Rollout group has invalid sample index: {path}")
+                if isinstance(logged.reward, bool) or not isinstance(logged.reward, (int, float)):
+                    raise ValueError(f"Rollout group has invalid reward: {path}")
+                if not math.isfinite(logged.reward) or logged.reward not in (0.0, 1.0):
+                    raise ValueError(f"Rollout group has invalid reward: {path}")
+                samples.append(logged)
+        if not samples:
+            empty += 1
+            continue
+        nonempty += 1
+        if len(samples) > n_samples or len({sample.sample_idx for sample in samples}) != len(
+            samples
+        ):
+            raise ValueError(f"Rollout group has duplicate or excess samples: {path}")
+        if len({sample.prompt for sample in samples}) != 1:
+            raise ValueError(f"Rollout group has inconsistent prompt: {path}")
+        prompt = samples[0].prompt
+        question = prompt
+        if "\nUser:" in prompt:
+            question = prompt.partition("\nUser:")[2].partition("\n")[2]
+            question = question.removesuffix("\nAssistant:")
+        task_id = identity(question)
+        item = trained_by_id.get(task_id)
+        if item is None or item.prompt != question:
+            raise ValueError(f"Rollout question is absent from official trained data: {path}")
+        if item.source == "verified-synthetic":
+            continue
+        if item.source != "torl-train" or task_id not in pool_by_id or task_id in excluded:
+            raise ValueError(f"Rollout question is absent from official trained data: {path}")
+        rewards = tuple(float(sample.reward) for sample in samples)
+        if not {0.0, 1.0}.issubset(rewards):
+            continue
+        complete = len(samples) == n_samples
+        if complete:
+            complete_mixed += 1
+        else:
+            partial_mixed += 1
+        evidence.append(MixedRolloutEvidence(task_id, source, len(samples), rewards, complete))
+    selected = tuple(sorted({item.task_id for item in evidence}))
+    if not selected:
+        raise ValueError("No within-group 0/1 mixed rollout questions were found")
+    return RolloutCurriculumSelection(
+        "Select a task iff one actual rollout JSONL group contains both reward 0 and reward 1; "
+        "never pool rows across files.",
+        frozen_pool_source,
+        trained_dataset_source,
+        source_refs,
+        file_ref(Path(__file__)),
+        len(rollout_files),
+        nonempty,
+        empty,
+        complete_mixed,
+        partial_mixed,
+        selected,
+        tuple(sorted(evidence, key=lambda item: (item.task_id, item.rollout_file.uri))),
+    )
+
+
+def normalize_gold(answer: str, gold_format: GoldFormat) -> str:
+    """Make a newly written training answer parseable without changing its value."""
+    answer = answer.strip()
+    if gold_format == "preserve":
+        return answer
+    if re.fullmatch(r"[-+]?\d+(?:\.\d+)?", answer):
+        return answer
+    if (
+        (answer.startswith("$") and answer.endswith("$"))
+        or (answer.startswith(r"\(") and answer.endswith(r"\)"))
+        or (answer.startswith(r"\[") and answer.endswith(r"\]"))
+    ):
+        return answer
+    return f"${answer}$"
+
+
 def generate(rng: random.Random, family: Family, difficulty: int) -> Example:
     """Construct constrained questions; cross-check formulas using a separate oracle."""
-    oracle: int
+    oracle: int | Fraction | str
+    answer: int | str
     name = rng.choice(("Maya", "Noah", "Lena", "Sam", "Aria", "Ben"))
     a, b = rng.randint(3, 12 + difficulty * 9), rng.randint(2, 6 + difficulty * 3)
     c, d = rng.randint(2, 5 + difficulty * 4), rng.randint(2, 5 + difficulty)
@@ -225,7 +455,7 @@ def generate(rng: random.Random, family: Family, difficulty: int) -> Example:
         answer = hourly * hours * days - expense
         earned = sum(hourly for _ in range(hours * days))
         oracle = earned - expense
-    else:
+    elif family == "decimal":
         # Represent decimal rates as tenths and make the quantity a multiple
         # of ten so the intended answer is exact without binary float math.
         rate_tenths = rng.randint(5, 30 + difficulty * 10)
@@ -245,7 +475,110 @@ def generate(rng: random.Random, family: Family, difficulty: int) -> Example:
         if exact_oracle.denominator != 1:
             raise ValueError("Decimal oracle must be an exact integer")
         oracle = exact_oracle.numerator
-    if answer != oracle or answer < 0:
+    elif family == "fraction":
+        denominator = rng.randint(3, 7 + difficulty)
+        numerator = rng.randint(1, denominator - 1)
+        whole = rng.randint(1, 5 + difficulty)
+        fraction_value = Fraction(whole * denominator + numerator, denominator)
+        prompt = (
+            f"A recipe needs {whole} and {numerator}/{denominator} cups of flour. "
+            f"How many cups of flour are needed in total? Give the exact answer."
+        )
+        answer = rf"{fraction_value.numerator}/{fraction_value.denominator}"
+        # Recompute the target from the two quantities in the prompt.  This
+        # deliberately does not reuse ``value`` or the answer formatter.
+        oracle = Fraction(whole) + Fraction(numerator, denominator)
+    elif family == "radical":
+        leg = rng.randint(2, 5 + difficulty)
+        other = rng.randint(2, 5 + difficulty)
+        square_sum = leg * leg + other * other
+        square_factor = 1
+        squarefree = 1
+        remainder = square_sum
+        divisor = 2
+        while divisor * divisor <= remainder:
+            power = 0
+            while remainder % divisor == 0:
+                remainder //= divisor
+                power += 1
+            square_factor *= divisor ** (power // 2)
+            if power % 2:
+                squarefree *= divisor
+            divisor += 1
+        if remainder > 1:
+            squarefree *= remainder
+        if squarefree == 1:
+            radical = str(square_factor)
+        elif square_factor == 1:
+            radical = rf"\sqrt{{{squarefree}}}"
+        else:
+            radical = rf"{square_factor}\sqrt{{{squarefree}}}"
+        prompt = (
+            f"A right triangle has perpendicular sides of lengths {leg} and {other}. "
+            "What is the exact length of its hypotenuse?"
+        )
+        answer = radical
+        # Verify the rendered answer against the two side lengths in the
+        # prompt; comparing it with ``radical`` would only test formatting.
+        oracle = square_sum
+    elif family == "linear":
+        x = rng.randint(2, 12 + difficulty * 3)
+        coefficient = rng.randint(2, 6 + difficulty)
+        offset = rng.randint(1, 12)
+        total = coefficient * x + offset
+        prompt = (
+            f"A number x satisfies {coefficient}x + {offset} = {total}. "
+            "What is the value of x?"
+        )
+        answer = str(x)
+        oracle = Fraction(total - offset, coefficient)
+    elif family == "counting":
+        people = rng.randint(5, 8 + difficulty)
+        choose = rng.randint(2, min(4, people - 1))
+        count = 1
+        for factor in range(people - choose + 1, people + 1):
+            count *= factor
+        for factor in range(2, choose + 1):
+            count //= factor
+        prompt = (
+            f"A committee of {choose} different people is chosen from {people} volunteers. "
+            "How many different committees are possible?"
+        )
+        answer = str(count)
+        oracle = sum(1 for _ in combinations(range(people), choose))
+    elif family == "sequence":
+        first = rng.randint(2, 12 + difficulty)
+        difference = rng.randint(2, 5 + difficulty)
+        term = rng.randint(4, 8 + difficulty)
+        term_value = first + (term - 1) * difference
+        prompt = (
+            f"An arithmetic sequence starts with {first} and has common difference "
+            f"{difference}. What is its {term}th term?"
+        )
+        answer = str(term_value)
+        oracle = first
+        for _ in range(term - 1):
+            oracle += difference
+    answer_text = str(answer)
+    if family == "fraction":
+        valid = Fraction(answer_text) == oracle
+    elif family == "radical":
+        complete = re.fullmatch(r"(\d+)", answer_text)
+        radical_match = re.fullmatch(
+            r"(?:(\d+)\\sqrt\{(\d+)\}|\\sqrt\{(\d+)\})", answer_text
+        )
+        if complete:
+            rendered_square = int(complete.group(1)) ** 2
+        elif radical_match:
+            coefficient = int(radical_match.group(1) or 1)
+            radicand = int(radical_match.group(2) or radical_match.group(3))
+            rendered_square = coefficient * coefficient * radicand
+        else:
+            rendered_square = -1
+        valid = rendered_square == oracle
+    else:
+        valid = Fraction(answer_text) == oracle and Fraction(answer_text) >= 0
+    if not valid:
         raise ValueError("Synthetic answer failed independent verification")
     return Example(
         identity(prompt),
@@ -269,13 +602,27 @@ def build_dataset(
     excluded = set(excluded_ids)
     if excluded.intersection(item.task_id for item in pool):
         raise ValueError("Held-out example in the training pool")
+    focused = set(recipe.real_task_ids)
+    if focused.intersection(excluded):
+        raise ValueError("Focused training task is held out")
     available = tuple(
         item for item in pool if item.reference_solution.count("<<") >= recipe.real_min_steps
     )
+    if focused:
+        pool_ids = {item.task_id for item in pool}
+        unknown = focused - pool_ids
+        if unknown:
+            raise ValueError("Focused training task ID is absent from the official pool")
+        available = tuple(item for item in available if item.task_id in focused)
+        if len(available) != len(focused):
+            raise ValueError("Focused training task is below real_min_steps")
     if recipe.real_count > len(available):
         raise ValueError("Requested real examples exceed the eligible training pool")
     rng = random.Random(recipe.seed)
-    items = rng.sample(available, recipe.real_count)
+    items = [
+        replace(item, answer=normalize_gold(item.answer, recipe.gold_format))
+        for item in rng.sample(available, recipe.real_count)
+    ]
     seen = {item.task_id for item in (*pool,)} | excluded
     # Bound retries so a broken/degenerate research generator cannot hang a stage.
     for _ in range(max(1000, recipe.synthetic_count * 20)):
@@ -285,11 +632,13 @@ def build_dataset(
             [item.family for item in recipe.synthesis.families],
             [item.weight for item in recipe.synthesis.families],
         )[0]
-        difficulty = rng.randint(recipe.synthesis.min_difficulty, recipe.synthesis.max_difficulty)
+        difficulties = range(recipe.synthesis.min_difficulty, recipe.synthesis.max_difficulty + 1)
+        weights = recipe.synthesis.difficulty_weights or (1,) * len(difficulties)
+        difficulty = rng.choices(tuple(difficulties), weights)[0]
         item = generate(rng, family, difficulty)
         if item.task_id not in seen:
             seen.add(item.task_id)
-            items.append(item)
+            items.append(replace(item, answer=normalize_gold(item.answer, recipe.gold_format)))
     if len(items) != recipe.real_count + recipe.synthetic_count:
         raise ValueError("Synthesis exhausted its unique-question retry limit")
     rng.shuffle(items)

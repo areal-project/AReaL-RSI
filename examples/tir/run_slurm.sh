@@ -23,6 +23,6 @@ run_root=${TIR_SUBMIT_ROOT:-$project/runs/tir-slurm}
 mkdir -p "$run_root"
 sbatch --parsable --reservation="${TIR_RESERVATION:-rsi}" --partition=all \
   --nodes=1 --ntasks=1 --gres=gpu:2 --cpus-per-task=16 --mem=128G \
-  --time="${TIR_TIME_LIMIT:-01:30:00}" --job-name=fh-rsi-tir \
+  --time="${TIR_TIME_LIMIT:-01:30:00}" --job-name=rsi-tir \
   --output="$run_root/slurm-%j.log" --chdir="$project" \
   "$project/examples/tir/run_slurm.sh" --inside "$project" "$config" "$image"

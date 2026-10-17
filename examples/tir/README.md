@@ -10,9 +10,9 @@
 所选 AReaL 源码及其 TIR 依赖（PyTorch、SGLang、datasets、Qwen-Agent 等）。
 无需把这些 GPU 依赖装入 RSI 的 `.venv`。
 
-本环境已经提供的配置在 `config.json`：
+`config.json` 提供集群运行配置示例；启动前必须将 `runtime.repository` 改为实际的 AReaL 源码目录，并核对模型、Python 和镜像路径：
 
-- 后端：`/storage/openpsi/users/fenghui/projects/AReaL`。
+- 后端：`/path/to/AReaL`（占位路径，运行前替换）。
 - 模型：`/storage/openpsi/models/Qwen__Qwen2.5-Math-1.5B`。
 - GPU Python：容器内 `/opt/.venv/bin/python`。
 - 镜像：`/storage/openpsi/images/areal-dev-sglang-0821.sif`。

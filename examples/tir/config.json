@@ -1,6 +1,6 @@
 {
   "runtime": {
-    "repository": "/storage/openpsi/users/fenghui/projects/AReaL",
+    "repository": "/path/to/AReaL",
     "python": "/opt/.venv/bin/python",
     "environment": {
       "HF_HUB_OFFLINE": "1",

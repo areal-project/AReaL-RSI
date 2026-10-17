@@ -5,16 +5,15 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import signal
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Literal
 
 from areal_rsi.api.control import encode_record
-from areal_rsi.api.execution import TrainingReceipt
 from areal_rsi.api.records import EvaluationSample
 from areal_rsi.infra.artifacts import read_record, write_record
+from areal_rsi.infra.training import parameter_probe, save_training_receipt, train_sft
 from examples.tir.benchmark import evaluation_cases, read_examples
 from examples.tir.data import read_problems
 from examples.tir.pipeline import WorkerRequest
@@ -44,11 +43,11 @@ def prepare_config(request: WorkerRequest) -> Any:
         {
             "experiment_name": "rsi-tir",
             "trial_name": request.trial,
-            "seed": config.synthesis.seed if request.mode == "train" else config.evaluation.seed,
+            "seed": config.evaluation.seed if request.mode == "eval" else config.synthesis.seed,
             "cluster": {
                 "fileroot": str(output / "areal"),
                 "n_nodes": 1,
-                "n_gpus_per_node": 2,
+                "n_gpus_per_node": 1 if request.mode == "sft" else 2,
                 "name_resolve": {"type": "nfs", "nfs_record_root": str(output / "names")},
             },
             "scheduler": {"type": "local"},
@@ -112,9 +111,24 @@ def prepare_config(request: WorkerRequest) -> Any:
         effective.gconfig.temperature = config.evaluation.temperature
         effective.gconfig.greedy = config.evaluation.temperature == 0
         effective.gconfig.max_new_tokens = config.evaluation.max_new_tokens
+    record_type = TIRGRPOConfig
+    if request.mode == "sft":
+        from areal.api.cli_args import SFTConfig, TrainEngineConfig
+
+        # PPO-only fields are not part of the backend SFT contract.
+        resolved = OmegaConf.to_container(effective, resolve=True)
+        actor_fields = {item.name for item in fields(TrainEngineConfig)}
+        common_fields = {item.name for item in fields(SFTConfig)}
+        sft = {name: value for name, value in resolved.items() if name in common_fields}
+        sft["actor"] = {name: value for name, value in sft["actor"].items() if name in actor_fields}
+        sft["actor"]["backend"] = "fsdp:d1p1t1"
+        sft["train_dataset"]["type"] = "sft"
+        sft["valid_dataset"] = None
+        effective = OmegaConf.create(sft)
+        record_type = SFTConfig
     path = output / "areal-config.yaml"
     OmegaConf.save(effective, path)
-    resolved, _ = load_expr_config(["--config", str(path)], TIRGRPOConfig)
+    resolved, _ = load_expr_config(["--config", str(path)], record_type)
     return resolved
 
 
@@ -157,26 +171,10 @@ def dataset(path: str, request: WorkerRequest) -> Any:
     )
 
 
-def parameter_probe(model: Path, key: str | None = None) -> tuple[str, Any]:
-    from safetensors import safe_open
-
-    paths = sorted(model.glob("*.safetensors"))
-    for path in paths:
-        with safe_open(path, framework="pt", device="cpu") as reader:
-            keys = list(reader.keys())
-            selected = key if key in keys else None
-            if key is None:
-                selected = next((name for name in keys if name.endswith("q_proj.weight")), None)
-            if selected is not None:
-                return selected, reader.get_tensor(selected).flatten()[:2048].float().clone()
-    raise ValueError(f"No matching parameter probe in {model}; this example uses safetensors")
-
-
 def train(request: WorkerRequest, config: Any) -> None:
     from areal import PPOTrainer
-    from areal.utils.saver import Saver
 
-    key, initial = parameter_probe(Path(request.model))
+    probe = parameter_probe(Path(request.model))
     training_data = dataset(request.dataset, request)
     possible_steps = (
         len(training_data) // config.train_dataset.batch_size * config.total_train_epochs
@@ -188,34 +186,7 @@ def train(request: WorkerRequest, config: Any) -> None:
             workflow="examples.tir.workflow.RecordedTIRWorkflow",
             workflow_kwargs=workflow_kwargs(config, request.config.reward),
         )
-    root = Path(
-        Saver.get_model_save_root(
-            config.experiment_name, config.trial_name, config.cluster.fileroot
-        )
-    )
-    checkpoints = [
-        (int(match.group(1)), path)
-        for path in root.iterdir()
-        if path.is_dir()
-        and (match := re.fullmatch(r"epoch\d+epochstep\d+globalstep(\d+)", path.name))
-    ]
-    if not checkpoints:
-        raise ValueError(f"AReaL completed without a saved checkpoint in {root}")
-    step, checkpoint = max(checkpoints)
-    if step + 1 != request.config.training.max_steps:
-        raise ValueError("AReaL did not save the requested final training step")
-    _, final = parameter_probe(checkpoint, key)
-    delta = float((final - initial).abs().max())
-    if delta <= 0:
-        raise ValueError("Training did not change the probed model parameters")
-    write_record(
-        Path(request.output) / "training.json",
-        TrainingReceipt(
-            str(checkpoint),
-            step + 1,
-            {"parameter_change_linf": delta},
-        ),
-    )
+    save_training_receipt(config, Path(request.output), request.config.training.max_steps, probe)
 
 
 def evaluate(request: WorkerRequest, config: Any) -> None:
@@ -277,6 +248,26 @@ def main() -> None:
     config = prepare_config(request)
     if request.mode == "train":
         train(request, config)
+    elif request.mode == "sft":
+        from transformers import AutoTokenizer
+
+        from examples.tir.distillation import materialize_for_student
+
+        if request.dataset_format != "distillation":
+            raise ValueError("TIR SFT requires verified tool trajectories")
+        training_path = Path(request.output) / "student-targets.jsonl"
+        materialize_for_student(
+            Path(request.dataset),
+            AutoTokenizer.from_pretrained(request.model),
+            training_path,
+            max_length=request.config.harness.max_length,
+            max_segment_tokens=request.config.training.max_new_tokens,
+        )
+        probe = parameter_probe(Path(request.model))
+        train_sft(config, training_path)
+        save_training_receipt(
+            config, Path(request.output), request.config.training.max_steps, probe
+        )
     else:
         evaluate(request, config)
 

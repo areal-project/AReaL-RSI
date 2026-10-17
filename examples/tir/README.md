@@ -6,6 +6,27 @@
 
 原生 ToRL 的多轮训练、冻结评测和 `/rsi` 驱动研究见 [RESEARCH.md](RESEARCH.md)。
 
+多轮研究现在支持三种互相衔接的数据阶段：
+
+- `experiment probe` 用当前 checkpoint 对训练池每题重复采样；`dynamic_curriculum`
+  根据同题的正确与错误回答选题，同时保留随机真实题。训练前会核对 probe 对应的模型，
+  warm start 模型变化后需要重新试答。
+- `distillation.py` 让教师先生成推理和 Python 程序，使用后端真实工具执行后，再请求最终答案。
+  教师请求不包含 gold；只有最终回答通过数学答案校验、工具成功且长度合规的轨迹能进入 SFT。
+  教师生成可在 CPU 的 AReaL 环境运行；凭证从环境读取，不写入配置与轨迹。
+- `compositional.py` 生成不同数字约束、带必经点和障碍的路径、条件抽样概率题，每题通过
+  两种独立的精确算法验算。`admit_compositional` 再筛选当前学生有对有错的题，
+  混入比例受限于至少十道真实题配一道合成题。
+
+`RoundRecipe.algorithm` 为 `sft` 时，`data` 为 `null`，`distillation` 引用已验证的教师 manifest；
+为 `grpo` 时使用 `DataRecipe`，可通过 `curriculum` 和 `synthetic_admission` 引用上述筛选记录。
+SFT 在训练节点用实际 parent 的 tokenizer 重建 token 和 mask；题目及真实工具观察不参与 loss，
+仅学习教师生成内容。通用的 token 契约、SFT 执行、权重变化检查和 checkpoint 校验位于
+`api/execution.py` 与 `infra/training.py`；任务选题、合成和训练阶段编排保留在本例。
+
+`ExperimentConfig.target_accuracy` 可额外指定 test 的绝对准确率目标，例如 `0.37` 表示必须
+严格超过 37%，并且仍要满足 `target_delta` 的相对提升要求。模型选择继续只使用 valid。
+
 ## 环境与运行
 
 提交端按仓库 README 准备 `uv` 环境。训练使用独立的 AReaL Python 环境，需能导入

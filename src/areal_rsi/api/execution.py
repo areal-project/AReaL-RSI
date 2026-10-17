@@ -94,6 +94,27 @@ class TrainingReceipt:
 
 
 @dataclass(frozen=True, slots=True)
+class TokenizedTrainingSample:
+    """Unshifted SFT targets; prompt and external observations have mask zero."""
+
+    task_id: str
+    input_ids: tuple[int, ...]
+    loss_mask: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        if not self.task_id or len(self.input_ids) < 2:
+            raise ValueError("SFT samples require an identity and at least two tokens")
+        if len(self.input_ids) != len(self.loss_mask):
+            raise ValueError("SFT tokens and loss mask have different lengths")
+        if any(token < 0 for token in self.input_ids):
+            raise ValueError("Token IDs must be nonnegative")
+        if any(mask not in (0, 1) for mask in self.loss_mask):
+            raise ValueError("SFT loss masks must be binary")
+        if self.loss_mask[0] or not any(self.loss_mask):
+            raise ValueError("SFT needs a conditioning prefix and trainable response tokens")
+
+
+@dataclass(frozen=True, slots=True)
 class TrainingResult:
     job_id: str
     checkpoint: ContentRef

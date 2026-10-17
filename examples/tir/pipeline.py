@@ -104,14 +104,14 @@ class TIRConfig:
 
 @dataclass(frozen=True, slots=True)
 class WorkerRequest:
-    mode: Literal["train", "eval"]
+    mode: Literal["train", "sft", "eval"]
     config: TIRConfig
     model: str
     dataset: str
     valid_dataset: str
     output: str
     trial: str
-    dataset_format: Literal["procedural", "benchmark"] = "procedural"
+    dataset_format: Literal["procedural", "benchmark", "distillation"] = "procedural"
 
 
 @dataclass(frozen=True, slots=True)

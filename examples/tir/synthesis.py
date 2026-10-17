@@ -23,8 +23,9 @@ from pathlib import Path
 from typing import Literal
 
 from areal_rsi.api.control import decode_record
-from areal_rsi.api.records import ContentRef
-from areal_rsi.infra.artifacts import file_ref, local_path, write_record
+from areal_rsi.api.records import BenchmarkSplit, ContentRef, EvaluationResult
+from areal_rsi.infra.artifacts import file_ref, local_path, read_record, write_record
+from areal_rsi.infra.coordination.evaluation import read_evaluation_samples
 from examples.tir.benchmark import Example, identity, read_examples, write_examples
 
 Family = Literal[
@@ -115,6 +116,8 @@ class DataRecipe:
     # training pool at materialization time; an empty tuple preserves legacy
     # random sampling behavior.
     real_task_ids: tuple[str, ...] = ()
+    curriculum: ContentRef | None = None
+    synthetic_admission: ContentRef | None = None
 
     def __post_init__(self) -> None:
         if min(self.real_count, self.synthetic_count) < 0:
@@ -127,6 +130,153 @@ class DataRecipe:
             raise ValueError("Focused training task IDs must be unique")
         if self.real_task_ids and len(self.real_task_ids) != self.real_count:
             raise ValueError("Focused training task IDs must match real_count")
+        if self.curriculum is not None and self.real_task_ids:
+            raise ValueError("Use the recorded dynamic curriculum or explicit IDs, not both")
+        if self.synthetic_admission is not None and (
+            self.synthetic_count <= 0 or self.synthetic_count * 10 > self.real_count
+        ):
+            raise ValueError(
+                "Student-admitted synthetic data must be a small, at most 1:10 mixture"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class StudentProbe:
+    model: ContentRef
+    examples: ContentRef
+    evaluation: EvaluationResult
+
+
+@dataclass(frozen=True, slots=True)
+class ProbeGroup:
+    task_id: str
+    successes: int
+    samples: int
+
+    @property
+    def mixed(self) -> bool:
+        return 0 < self.successes < self.samples
+
+
+@dataclass(frozen=True, slots=True)
+class DynamicCurriculum:
+    training_pool: ContentRef
+    probe: ContentRef
+    seed: int
+    mixed_task_ids: tuple[str, ...]
+    random_task_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SyntheticAdmission:
+    proposals: ContentRef
+    probe: ContentRef
+    dataset: ContentRef
+    selected_ids: tuple[str, ...]
+
+
+def probe_groups(probe: StudentProbe) -> tuple[ProbeGroup, ...]:
+    items = read_examples(local_path(probe.examples))
+    if any(item.repetitions < 2 for item in items):
+        raise ValueError("Student admission requires repeated samples for every question")
+    from examples.tir.benchmark import evaluation_cases
+
+    cases = evaluation_cases(items)
+    samples = read_evaluation_samples(
+        probe.evaluation,
+        task_ids=tuple(item.task_id for item in cases),
+        split=BenchmarkSplit.TRAIN,
+    )
+    by_id = {item.task_id: item for item in samples}
+    groups = []
+    for item in items:
+        scores = tuple(by_id[f"{item.task_id}-rep{i}"].score for i in range(item.repetitions))
+        if any(score not in (0, 1) for score in scores) or any(
+            by_id[f"{item.task_id}-rep{i}"].passed != bool(scores[i])
+            for i in range(item.repetitions)
+        ):
+            raise ValueError("Student admission requires binary correctness evidence")
+        groups.append(ProbeGroup(item.task_id, int(sum(scores)), len(scores)))
+    return tuple(groups)
+
+
+def dynamic_curriculum(
+    pool_ref: ContentRef,
+    probe_ref: ContentRef,
+    *,
+    mixed_count: int,
+    random_count: int,
+    seed: int,
+    excluded_ids: tuple[str, ...],
+) -> DynamicCurriculum:
+    if min(mixed_count, random_count) < 1:
+        raise ValueError("A dynamic curriculum requires both mixed and random real questions")
+    pool = read_examples(local_path(pool_ref))
+    excluded = set(excluded_ids)
+    if any(item.source != "torl-train" or item.task_id in excluded for item in pool):
+        raise ValueError("Dynamic curricula may only use the official independent training pool")
+    probe = read_record(local_path(probe_ref), StudentProbe)
+    by_id = {item.task_id: item for item in pool}
+    for item in read_examples(local_path(probe.examples)):
+        original = by_id.get(item.task_id)
+        if original is None or item.prompt != original.prompt or item.source != "torl-train":
+            raise ValueError("Student probe includes a question outside the frozen training pool")
+        if item.answer not in {original.answer, normalize_gold(original.answer, "math_delimited")}:
+            raise ValueError("Student probe has modified official mathematical gold")
+    mixed = [group.task_id for group in probe_groups(probe) if group.mixed]
+    if len(mixed) < mixed_count:
+        raise ValueError("Probe has insufficient mixed questions; sample more or reduce the budget")
+    rng = random.Random(seed)
+    focused = tuple(rng.sample(mixed, mixed_count))
+    remaining = [item.task_id for item in pool if item.task_id not in set(focused)]
+    return DynamicCurriculum(
+        pool_ref, probe_ref, seed, focused, tuple(rng.sample(remaining, random_count))
+    )
+
+
+def admit_compositional(
+    proposals: ContentRef,
+    probe_ref: ContentRef,
+    *,
+    count: int,
+    seed: int,
+    excluded_ids: tuple[str, ...],
+    output: Path,
+) -> SyntheticAdmission:
+    from examples.tir.compositional import CompositionalManifest, read_tasks
+
+    if count < 1:
+        raise ValueError("Synthetic admission must request a positive count")
+    manifest = read_record(local_path(proposals), CompositionalManifest)
+    tasks = read_tasks(local_path(manifest.definitions))
+    examples = read_examples(local_path(manifest.examples))
+    if tuple(task.example for task in tasks) != examples or len(tasks) != manifest.count:
+        raise ValueError("Proposal definitions and questions differ")
+    probe = read_record(local_path(probe_ref), StudentProbe)
+    probed = read_examples(local_path(probe.examples))
+    by_id = {item.task_id: item for item in examples}
+    for item in probed:
+        original = by_id.get(item.task_id)
+        if (
+            original is None
+            or replace(item, repetitions=1, answer=original.answer) != original
+            or item.answer
+            not in {original.answer, normalize_gold(original.answer, "math_delimited")}
+        ):
+            raise ValueError("Student probe does not match independently verified proposals")
+    eligible = [group.task_id for group in probe_groups(probe) if group.mixed]
+    if len(eligible) < count:
+        raise ValueError("Insufficient independently verified, student-mixed synthetic tasks")
+    if set(by_id) & set(excluded_ids):
+        raise ValueError("Synthetic proposals overlap protected benchmark identities")
+    selected = tuple(random.Random(seed).sample(eligible, count))
+    output.mkdir(parents=True, exist_ok=False)
+    dataset = write_examples(
+        output / "admitted.jsonl", tuple(by_id[task_id] for task_id in selected)
+    )
+    admission = SyntheticAdmission(proposals, probe_ref, dataset, selected)
+    write_record(output / "admission.json", admission)
+    return admission
 
 
 @dataclass(frozen=True, slots=True)
@@ -598,6 +748,26 @@ def build_dataset(
     if excluded.intersection(item.task_id for item in pool):
         raise ValueError("Held-out example in the training pool")
     focused = set(recipe.real_task_ids)
+    if recipe.curriculum is not None:
+        curriculum = read_record(local_path(recipe.curriculum), DynamicCurriculum)
+        if curriculum.training_pool != pool_ref:
+            raise ValueError("Dynamic curriculum belongs to a different frozen training pool")
+        # Revalidate the actual model samples, including their aggregate report.
+        groups = probe_groups(read_record(local_path(curriculum.probe), StudentProbe))
+        mixed = set(curriculum.mixed_task_ids)
+        random_ids = set(curriculum.random_task_ids)
+        if (
+            not mixed
+            or not random_ids
+            or mixed & random_ids
+            or len(mixed) != len(curriculum.mixed_task_ids)
+            or len(random_ids) != len(curriculum.random_task_ids)
+            or not mixed <= {group.task_id for group in groups if group.mixed}
+        ):
+            raise ValueError("Dynamic curriculum must retain mixed evidence and random coverage")
+        focused = set((*curriculum.mixed_task_ids, *curriculum.random_task_ids))
+        if len(focused) != recipe.real_count:
+            raise ValueError("Dynamic curriculum size differs from real_count")
     if focused.intersection(excluded):
         raise ValueError("Focused training task is held out")
     available = pool
@@ -615,6 +785,30 @@ def build_dataset(
         for item in rng.sample(available, recipe.real_count)
     ]
     seen = {item.task_id for item in (*pool,)} | excluded
+    if recipe.synthetic_admission is not None:
+        admission = read_record(local_path(recipe.synthetic_admission), SyntheticAdmission)
+        groups = probe_groups(read_record(local_path(admission.probe), StudentProbe))
+        if not set(admission.selected_ids) <= {group.task_id for group in groups if group.mixed}:
+            raise ValueError("Admitted synthetic tasks must have mixed student correctness")
+        from examples.tir.compositional import CompositionalManifest, read_tasks
+
+        proposal = read_record(local_path(admission.proposals), CompositionalManifest)
+        definitions = {
+            task.example.task_id: task.example
+            for task in read_tasks(local_path(proposal.definitions))
+        }
+        admitted = read_examples(local_path(admission.dataset))
+        if (
+            len(admitted) != recipe.synthetic_count
+            or tuple(item.task_id for item in admitted) != admission.selected_ids
+            or any(item.source != "verified-synthetic" or item.task_id in seen for item in admitted)
+            or any(definitions.get(item.task_id) != item for item in admitted)
+        ):
+            raise ValueError("Admitted synthetic dataset is inconsistent or overlaps real data")
+        items.extend(
+            replace(item, answer=normalize_gold(item.answer, recipe.gold_format))
+            for item in admitted
+        )
     # Bound retries so a broken/degenerate research generator cannot hang a stage.
     for _ in range(max(1000, recipe.synthetic_count * 20)):
         if len(items) == recipe.real_count + recipe.synthetic_count:

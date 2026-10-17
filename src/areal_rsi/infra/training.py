@@ -5,9 +5,18 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 from pathlib import Path
+from typing import Any
 
-from areal_rsi.api.execution import AReaLRuntime, JobSpec, TrainingReceipt, TrainingResult
+from areal_rsi.api.control import decode_record
+from areal_rsi.api.execution import (
+    AReaLRuntime,
+    JobSpec,
+    TokenizedTrainingSample,
+    TrainingReceipt,
+    TrainingResult,
+)
 from areal_rsi.api.records import ContentRef
 from areal_rsi.infra.artifacts import read_record, snapshot_directory, write_record
 from areal_rsi.infra.execution import JobExecutor
@@ -90,3 +99,78 @@ class AReaLBackend:
         )
         write_record(directory / "result.json", result)
         return result
+
+
+def read_training_samples(path: Path) -> tuple[TokenizedTrainingSample, ...]:
+    with path.open() as stream:
+        samples = tuple(decode_record(TokenizedTrainingSample, json.loads(line)) for line in stream)
+    if not samples or len({item.task_id for item in samples}) != len(samples):
+        raise ValueError("SFT dataset must contain distinct nonempty training samples")
+    return samples
+
+
+def train_sft(config: Any, path: Path) -> None:
+    """Backend-side SFT execution shared by tasks supplying tokenized examples.
+
+    ``config`` is AReaL's decoded SFTConfig, an optional dependency present only
+    in the training runtime. No task prompt, teacher, or data-selection policy
+    belongs here. AReaL shifts the unshifted target mask inside LMEngine.
+    """
+    from areal.trainer.sft_trainer import SFTTrainer  # type: ignore[import-not-found]
+    from datasets import Dataset  # type: ignore[import-not-found]
+
+    samples = read_training_samples(path)
+    possible_steps = len(samples) // config.train_dataset.batch_size * config.total_train_epochs
+    if possible_steps < config.total_train_steps:
+        raise ValueError("SFT dataset and epochs cannot supply the requested updates")
+    data = Dataset.from_list(
+        [{"input_ids": list(item.input_ids), "loss_mask": list(item.loss_mask)} for item in samples]
+    )
+    with SFTTrainer(config, data) as trainer:
+        trainer.train()
+
+
+def parameter_probe(model: Path, key: str | None = None) -> tuple[str, Any]:
+    from safetensors import safe_open  # type: ignore[import-not-found]
+
+    for path in sorted(model.glob("*.safetensors")):
+        with safe_open(path, framework="pt", device="cpu") as reader:
+            keys = list(reader.keys())
+            selected = key if key in keys else None
+            if key is None:
+                selected = next((name for name in keys if name.endswith("q_proj.weight")), None)
+            if selected is not None:
+                return selected, reader.get_tensor(selected).flatten()[:2048].float().clone()
+    raise ValueError(f"No matching parameter probe in {model}; this worker uses safetensors")
+
+
+def save_training_receipt(
+    config: Any, output: Path, expected_steps: int, probe: tuple[str, Any]
+) -> None:
+    """Publish completion only after a real final checkpoint and changed weights."""
+    from areal.utils.saver import Saver  # type: ignore[import-not-found]
+
+    root = Path(
+        Saver.get_model_save_root(
+            config.experiment_name, config.trial_name, config.cluster.fileroot
+        )
+    )
+    checkpoints = [
+        (int(match.group(1)), path)
+        for path in root.iterdir()
+        if path.is_dir()
+        and (match := re.fullmatch(r"epoch\d+epochstep\d+globalstep(\d+)", path.name))
+    ]
+    if not checkpoints:
+        raise ValueError(f"AReaL completed without a saved checkpoint in {root}")
+    step, checkpoint = max(checkpoints)
+    if step + 1 != expected_steps:
+        raise ValueError("AReaL did not save the requested final training step")
+    _, final = parameter_probe(checkpoint, probe[0])
+    delta = float((final - probe[1]).abs().max())
+    if not math.isfinite(delta) or delta <= 0:
+        raise ValueError("Training did not change the probed model parameters")
+    write_record(
+        output / "training.json",
+        TrainingReceipt(str(checkpoint), step + 1, {"parameter_change_linf": delta}),
+    )

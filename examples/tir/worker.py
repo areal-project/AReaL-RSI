@@ -85,7 +85,7 @@ def prepare_config(request: WorkerRequest) -> Any:
                 "num_workers": 0,
             },
             "valid_dataset": {
-                "path": request.dev_dataset,
+                "path": request.valid_dataset,
                 "batch_size": config.training.batch_size,
                 "num_workers": 0,
             },
@@ -183,7 +183,7 @@ def train(request: WorkerRequest, config: Any) -> None:
     )
     if possible_steps < request.config.training.max_steps:
         raise ValueError("Training epochs and dataset cannot supply the requested update count")
-    with PPOTrainer(config, training_data, dataset(request.dev_dataset, request)) as trainer:
+    with PPOTrainer(config, training_data, dataset(request.valid_dataset, request)) as trainer:
         trainer.train(
             workflow="examples.tir.workflow.RecordedTIRWorkflow",
             workflow_kwargs=workflow_kwargs(config, request.config.reward),

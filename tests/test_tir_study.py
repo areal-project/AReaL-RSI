@@ -36,7 +36,7 @@ from examples.tir.benchmark import (
     torl_examples,
     write_examples,
 )
-from examples.tir.pipeline import ExperimentConfig
+from examples.tir.pipeline import ExperimentConfig, local_path
 from examples.tir.study import Candidate, Study, StudyConfig, paired, prepare, protocol
 from examples.tir.synthesis import (
     DataRecipe,
@@ -51,8 +51,8 @@ from examples.tir.synthesis import (
 )
 
 
-def example(prompt: str, *, steps: int = 2) -> Example:
-    return Example(identity(prompt), prompt, "4", "gsm8k-train", "<<2+2=4>>" * steps)
+def example(prompt: str) -> Example:
+    return Example(identity(prompt), prompt, "4", "torl-train")
 
 
 def test_dataset_preserves_unicode_separators_inside_json_strings(tmp_path: Path) -> None:
@@ -62,12 +62,16 @@ def test_dataset_preserves_unicode_separators_inside_json_strings(tmp_path: Path
     assert read_examples(path) == (item,)
 
 
-def evaluation(path: Path, passed: tuple[bool, ...]) -> EvaluationResult:
+def evaluation(
+    path: Path, passed: tuple[bool, ...], *, task_ids: tuple[str, ...] | None = None
+) -> EvaluationResult:
     path.parent.mkdir(parents=True, exist_ok=True)
+    if task_ids is None:
+        task_ids = tuple(str(index) for index in range(len(passed)))
     with path.open("x") as output:
-        for index, success in enumerate(passed):
+        for task_id, success in zip(task_ids, passed, strict=True):
             sample = EvaluationSample(
-                str(index), "test", float(success), success, (TraceEvent("generation", "test"),)
+                task_id, "test", float(success), success, (TraceEvent("generation", "test"),)
             )
             output.write(json.dumps(encode_record(sample)) + "\n")
     report = EvaluationReport(
@@ -77,12 +81,11 @@ def evaluation(path: Path, passed: tuple[bool, ...]) -> EvaluationResult:
 
 
 def test_word_problem_mixture_reproducible_verified_and_train_only(tmp_path: Path) -> None:
-    pool = tuple(example(f"Training question {i}", steps=i) for i in range(6))
+    pool = tuple(example(f"Training question {i}") for i in range(6))
     ref = write_examples(tmp_path / "pool.jsonl", pool)
     recipe = DataRecipe(
         real_count=2,
         synthetic_count=80,
-        real_min_steps=3,
         synthesis=SynthesisPolicy((FamilyWeight("ratio"),), 2, 4),
     )
     first = build_dataset(recipe, pool, ref, (), tmp_path / "first")
@@ -92,17 +95,16 @@ def test_word_problem_mixture_reproducible_verified_and_train_only(tmp_path: Pat
     generated = [item for item in items if item.source == "verified-synthetic"]
     assert len(items) == 82 and len(generated) == 80
     assert all(item.family == "ratio" and 2 <= item.difficulty <= 4 for item in generated)
-    assert all(item.reference_solution.count("<<") >= 3 for item in items if item not in generated)
     with pytest.raises(ValueError, match="Held-out"):
         build_dataset(recipe, pool, ref, (pool[0].task_id,), tmp_path / "leaked")
     with pytest.raises(ValueError, match="Only official training"):
-        build_dataset(recipe, (replace(pool[0], source="gsm8k-test"),), ref, (), tmp_path / "test")
+        build_dataset(recipe, (replace(pool[0], source="torl-test"),), ref, (), tmp_path / "test")
     with pytest.raises(ValueError, match="eligible"):
-        build_dataset(replace(recipe, real_count=6), pool, ref, (), tmp_path / "excess")
+        build_dataset(replace(recipe, real_count=7), pool, ref, (), tmp_path / "excess")
 
 
 def test_real_task_id_curriculum_is_exact_and_rejects_invalid_ids(tmp_path: Path) -> None:
-    pool = tuple(example(f"Focused training question {i}", steps=2) for i in range(4))
+    pool = tuple(example(f"Focused training question {i}") for i in range(4))
     ref = write_examples(tmp_path / "focused-pool.jsonl", pool)
     selected = (pool[1].task_id, pool[3].task_id)
     recipe = DataRecipe(real_count=2, synthetic_count=0, real_task_ids=selected)
@@ -184,8 +186,7 @@ def test_rollout_curriculum_validates_mixed_trained_data_and_skips_synthetic(
     tmp_path: Path,
 ) -> None:
     official = tuple(
-        replace(example(f"Official curriculum question {i}"), source="torl-train")
-        for i in range(2)
+        replace(example(f"Official curriculum question {i}"), source="torl-train") for i in range(2)
     )
     synthetic = replace(example("Synthetic curriculum question"), source="verified-synthetic")
     trained = (*official, synthetic)
@@ -270,8 +271,8 @@ def test_new_synthetic_families_have_semantic_prompts_and_exact_targets(
             match = re.search(r"costs \$(\d+).*?by (\d+)%.*?by (\d+)%", item.prompt)
             assert match is not None
             price, increase, discount = map(int, match.groups())
-            expected = Fraction(price) * Fraction(100 + increase, 100) * Fraction(
-                100 - discount, 100
+            expected = (
+                Fraction(price) * Fraction(100 + increase, 100) * Fraction(100 - discount, 100)
             )
             assert expected.denominator == 1
             assert int(item.answer) == expected.numerator
@@ -438,14 +439,16 @@ def study(tmp_path: Path) -> Study:
     model.mkdir()
     (model / "config.json").write_text("{}")
     train = write_examples(tmp_path / "train.jsonl", (example("train"),))
-    dev = write_examples(tmp_path / "dev.jsonl", (example("dev"),))
-    final = write_examples(
-        tmp_path / "final.jsonl", (replace(example("test"), source="gsm8k-test"),)
+    valid = write_examples(tmp_path / "valid.jsonl", (example("valid"),))
+    test = write_examples(
+        tmp_path / "test.jsonl", (replace(example("test"), source="torl-test", repetitions=4),)
     )
-    manifest = Benchmark(17, train, final, train, dev, final, (identity("dev"), identity("test")))
+    manifest = Benchmark(17, train, test, train, valid, test, (identity("valid"), identity("test")))
     write_record(tmp_path / "benchmark.json", manifest)
     config = StudyConfig(
-        ExperimentConfig(AReaLRuntime(str(backend), "/unused/python"), str(model)),
+        ExperimentConfig(
+            AReaLRuntime(str(backend), "/unused/python"), str(model), reward="math_verify"
+        ),
         str(tmp_path / "benchmark.json"),
     )
     root = tmp_path / "study"
@@ -456,7 +459,7 @@ def study(tmp_path: Path) -> Study:
 def test_native_protocol_refuses_integer_only_reward(study: Study, tmp_path: Path) -> None:
     items = (
         replace(example("Native train"), source="torl-train", answer=r"\frac{1}{2}"),
-        replace(example("Native dev"), source="torl-train", answer=r"\frac{1}{2}"),
+        replace(example("Native valid"), source="torl-train", answer=r"\frac{1}{2}"),
         replace(example("Native test"), source="torl-test", answer=r"\frac{1}{2}"),
     )
     refs = tuple(
@@ -466,26 +469,30 @@ def test_native_protocol_refuses_integer_only_reward(study: Study, tmp_path: Pat
     benchmark = replace(
         study.protocol.benchmark,
         train=refs[0],
-        dev=refs[1],
-        final=refs[2],
+        valid=refs[1],
+        test=refs[2],
         excluded_ids=(items[1].task_id, items[2].task_id),
     )
     path = tmp_path / "native-benchmark.json"
     write_record(path, benchmark)
-    config = replace(study.protocol.config, benchmark=str(path))
+    config = replace(
+        study.protocol.config,
+        experiment=replace(study.protocol.config.experiment, reward="integer"),
+        benchmark=str(path),
+    )
     with pytest.raises(ValueError, match="native mathematical equivalence"):
         prepare(config, tmp_path / "invalid-native-study")
 
 
-def test_selection_requires_multiple_rounds_best_dev_and_is_immutable(study: Study) -> None:
+def test_selection_requires_multiple_rounds_best_valid_and_is_immutable(study: Study) -> None:
     root, frozen = study.root, study.protocol
     base = evaluation(root / "base-samples.jsonl", (True, False, False, False))
-    write_record(root / "dev/base.json", base)
+    write_record(root / "valid/base.json", base)
     recipe_ref = write_record(root / "recipe.json", DataRecipe())
     data = SynthesisManifest(DataRecipe(), frozen.benchmark.train, frozen.benchmark.train, 1, 0)
 
     def candidate(name: str, passed: tuple[bool, ...]) -> None:
-        dev = evaluation(root / f"{name}-samples.jsonl", passed)
+        valid = evaluation(root / f"{name}-samples.jsonl", passed)
         solution = replace(frozen.baseline, solution_id=name)
         # This fixture tests selection only; it does not represent real training.
         training = TrainingResult("fixture", solution.model.content, frozen.base_model, 1, {})
@@ -498,7 +505,7 @@ def test_selection_requires_multiple_rounds_best_dev_and_is_immutable(study: Stu
             "completed",
             training,
             solution,
-            dev,
+            valid,
         )
         write_record(root / f"rounds/{name}/candidate.json", record)
 
@@ -506,16 +513,29 @@ def test_selection_requires_multiple_rounds_best_dev_and_is_immutable(study: Stu
     with pytest.raises(ValueError, match="minimum number"):
         study.select("r1")
     candidate("r2", (True, True, True, False))
-    with pytest.raises(ValueError, match="best dev"):
+    with pytest.raises(ValueError, match="best valid"):
         study.select("r1")
     selected = study.select("r2")
-    assert selected.dev_comparison.delta == 0.5 and selected.completed_rounds == ("r1", "r2")
+    assert selected.valid_comparison.delta == 0.5 and selected.completed_rounds == ("r1", "r2")
     with pytest.raises(ValueError, match="immutable"):
         study.select("r1")
     with pytest.raises(ValueError, match="Selection is frozen"):
         asyncio.run(study.evaluate("r1"))
     with pytest.raises(ValueError, match="restricted"):
-        asyncio.run(study.evaluate("r1", final=True))
+        asyncio.run(study.evaluate("r1", test=True))
+    # Independent acceptance reuses persisted samples, preserving the official
+    # repeated cases as one question rather than four independent observations.
+    cases = evaluation_cases(read_examples(local_path(frozen.benchmark.test)))
+    task_ids = tuple(case.task_id for case in cases)
+    for name, passed in (("base", False), ("r2", True)):
+        saved = evaluation(root / f"test-{name}-samples.jsonl", (passed,) * 4, task_ids=task_ids)
+        saved = replace(saved, report=replace(saved.report, split=BenchmarkSplit.TEST))
+        write_record(root / f"test/{name}.json", saved)
+    result = asyncio.run(study.test("r2"))
+    assert result.target_met and result.comparison.delta == 1
+    assert result.comparison.count == 4 and result.comparison.independent_questions == 1
+    assert (root / "test/result.json").exists()
+    assert "Test / official test" in (root / "report.md").read_text()
 
 
 def test_frozen_protocol_rejects_data_and_source_changes(study: Study) -> None:

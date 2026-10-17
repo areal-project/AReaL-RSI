@@ -5,7 +5,6 @@
     "seed": 4041,
     "real_count": 263,
     "synthetic_count": 0,
-    "real_min_steps": 0,
     "synthesis": {
       "families": [
         {

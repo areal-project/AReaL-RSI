@@ -1,4 +1,4 @@
-"""Frozen ToRL/GSM8K splits and the data boundary shared by TIR study workers."""
+"""Frozen ToRL splits: train, tuning valid, and independent test (official test)."""
 
 from __future__ import annotations
 
@@ -25,9 +25,8 @@ class Example:
     task_id: str
     prompt: str
     answer: str
-    source: Literal["gsm8k-train", "gsm8k-test", "torl-train", "torl-test", "verified-synthetic"]
-    reference_solution: str = ""
-    family: str = "gsm8k"
+    source: Literal["torl-train", "torl-test", "verified-synthetic"]
+    family: str = "math"
     difficulty: int = 0
     parent_ids: tuple[str, ...] = ()
     repetitions: int = 1
@@ -125,8 +124,8 @@ class Benchmark:
     official_train: ContentRef
     official_test: ContentRef
     train: ContentRef
-    dev: ContentRef
-    final: ContentRef
+    valid: ContentRef
+    test: ContentRef
     # Store identities only; synthesis never needs held-out questions/solutions.
     excluded_ids: tuple[str, ...]
 
@@ -149,68 +148,11 @@ def write_examples(path: Path, items: tuple[Example, ...]) -> ContentRef:
     return file_ref(path)
 
 
-def prepare_benchmark(
-    source: Path, output: Path, *, seed: int = 20261017, dev_size: int = 256, final_size: int = 512
-) -> Benchmark:
-    # Optional dependency belongs to dataset preparation in the AReaL environment.
-    import pyarrow.parquet as parquet  # type: ignore[import-not-found]
-
-    if dev_size < 1 or final_size < 1:
-        raise ValueError("Held-out split sizes must be positive")
-    output.mkdir(parents=True, exist_ok=False)
-
-    def load(split: Literal["train", "test"]) -> tuple[Path, tuple[Example, ...]]:
-        path = source / f"{split}-00000-of-00001.parquet"
-        rows = parquet.read_table(path, columns=["question", "answer"]).to_pylist()
-        items = []
-        for row in rows:
-            solution, separator, answer = row["answer"].rpartition("####")
-            if not separator:
-                raise ValueError("GSM8K answer is missing the official final-answer separator")
-            prompt = row["question"].strip()
-            items.append(
-                Example(
-                    identity(prompt),
-                    prompt,
-                    answer.strip().replace(",", ""),
-                    "gsm8k-train" if split == "train" else "gsm8k-test",
-                    solution.strip(),
-                )
-            )
-        if len({item.task_id for item in items}) != len(items):
-            raise ValueError("Duplicate normalized questions in official data")
-        return path, tuple(items)
-
-    train_path, train = load("train")
-    test_path, test = load("test")
-    if dev_size >= len(train) or final_size > len(test):
-        raise ValueError("Requested held-out data exceeds the official split")
-    train_order = list(train)
-    test_order = list(test)
-    random.Random(f"{seed}:dev").shuffle(train_order)
-    random.Random(f"{seed}:final").shuffle(test_order)
-    dev = tuple(train_order[:dev_size])
-    final = tuple(test_order[:final_size])
-    # Exclude *all* official test questions, including unused ones, from training.
-    excluded = {item.task_id for item in (*dev, *test)}
-    training = tuple(item for item in train_order[dev_size:] if item.task_id not in excluded)
-    benchmark = Benchmark(
-        seed,
-        file_ref(train_path),
-        file_ref(test_path),
-        write_examples(output / "train.jsonl", training),
-        write_examples(output / "dev.jsonl", dev),
-        write_examples(output / "heldout" / "final.jsonl", final),
-        tuple(sorted(excluded)),
-    )
-    write_record(output / "benchmark.json", benchmark)
-    return benchmark
-
-
 def prepare_torl_benchmark(
-    source: Path, output: Path, *, seed: int = 20261017, dev_size: int = 256
+    source: Path, output: Path, *, seed: int = 20261017, valid_size: int = 256
 ) -> Benchmark:
-    import pyarrow.parquet as parquet
+    # Dataset preparation runs in the AReaL environment, which supplies pyarrow.
+    import pyarrow.parquet as parquet  # type: ignore[import-not-found]
 
     def load(split: str) -> tuple[Example, ...]:
         rows = parquet.read_table(source / f"{split}.parquet").to_pylist()
@@ -221,19 +163,20 @@ def prepare_torl_benchmark(
     train, test = load("train"), load("test")
     test_ids = {item.task_id for item in test}
     eligible = [item for item in train if item.task_id not in test_ids]
-    if not 1 <= dev_size < len(eligible):
-        raise ValueError("Dev split must leave a nonempty independent training pool")
+    if not 1 <= valid_size < len(eligible):
+        raise ValueError("Validation split must leave a nonempty independent training pool")
+    # Keep the original RNG stream key: renaming the split must not change its questions.
     random.Random(f"{seed}:dev").shuffle(eligible)
-    dev, training = tuple(eligible[:dev_size]), tuple(eligible[dev_size:])
+    valid, training = tuple(eligible[:valid_size]), tuple(eligible[valid_size:])
     output.mkdir(parents=True, exist_ok=False)
     result = Benchmark(
         seed,
         file_ref(source / "train.parquet"),
         file_ref(source / "test.parquet"),
         write_examples(output / "train.jsonl", training),
-        write_examples(output / "dev.jsonl", dev),
-        write_examples(output / "heldout/final.jsonl", test),
-        tuple(sorted(test_ids | {item.task_id for item in dev})),
+        write_examples(output / "valid.jsonl", valid),
+        write_examples(output / "heldout/test.jsonl", test),
+        tuple(sorted(test_ids | {item.task_id for item in valid})),
     )
     write_record(output / "benchmark.json", result)
     return result
@@ -242,23 +185,12 @@ def prepare_torl_benchmark(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True)
-    parser.add_argument("--format", choices=("torl", "gsm8k"), default="torl")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--seed", type=int, default=20261017)
-    parser.add_argument("--dev-size", type=int, default=256)
-    parser.add_argument("--final-size", type=int, default=512)
+    parser.add_argument("--valid-size", type=int, default=256)
     args = parser.parse_args()
-    if args.format == "torl":
-        result = prepare_torl_benchmark(
-            args.source, args.output.resolve(), seed=args.seed, dev_size=args.dev_size
-        )
-    else:
-        result = prepare_benchmark(
-            args.source,
-            args.output.resolve(),
-            seed=args.seed,
-            dev_size=args.dev_size,
-            final_size=args.final_size,
-        )
+    result = prepare_torl_benchmark(
+        args.source, args.output.resolve(), seed=args.seed, valid_size=args.valid_size
+    )
     print(f"benchmark={args.output.resolve() / 'benchmark.json'}")
-    print(f"train_sha256={result.train.digest} dev_sha256={result.dev.digest}")
+    print(f"train_sha256={result.train.digest} valid_sha256={result.valid.digest}")

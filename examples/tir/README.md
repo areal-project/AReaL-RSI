@@ -68,10 +68,10 @@ uv run --locked python -m examples.tir.pipeline \
 ## 实验与配置
 
 `data.py` 使用种子生成整数算术、多项式求和与模运算计数题。
-答案经独立计算方法验证，题目按内容 ID 去重，再拆成互不重叠的 train/dev/eval。
-默认规模 32/8/8；dev 供训练使用，eval 只供固定的训练前后评测使用。
-各 split 使用独立随机流，增加训练题目数不会改变已固定的 eval/dev 集。
-合成过程不读取 eval 的回答或轨迹。
+答案经独立计算方法验证，题目按内容 ID 去重，再拆成互不重叠的 train/valid/test。
+默认规模 32/8/8；valid 用于训练阶段的验证，test 用于固定的训练前后评测。
+各 split 使用独立随机流，增加训练题目数不会改变已固定的 test/valid 集。
+合成过程不读取 test 的回答或轨迹。
 
 `workflow.py` 复用后端 `examples/tir/tir_workflow.py` 的多轮生成与工具执行，
 额外记录实际 prompt、生成片段、工具调用及工具返回。`reward.py` 只对本例
@@ -97,7 +97,7 @@ uv run --locked python -m examples.tir.pipeline \
 例子中的固定运行设置（独立输出路径、本地调度、模型、harness、数据路径、保存周期等）
 会覆盖模板及 overrides；每个 job 的 `areal-config.yaml` 保存最终配置。
 增加 `max_steps` 时还需保证 `epochs × 每轮 batch 数` 足够。
-基线和复评共享 eval 数据、harness、生成参数和种子，只有模型路径不同。
+基线和复评共享 test 数据、harness、生成参数和种子，只有模型路径不同。
 随机种子不承诺跨硬件／库版本逐 token 完全一致。
 
 ## 产物与故障

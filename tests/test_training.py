@@ -89,12 +89,12 @@ def test_synthesis_reproducible_verified_and_disjoint(tmp_path: Path) -> None:
     first = synthesize(SynthesisConfig(), tmp_path / "first")
     second = synthesize(SynthesisConfig(), tmp_path / "second")
     assert first.train.digest == second.train.digest
-    assert first.evaluation.digest == second.evaluation.digest
+    assert first.test.digest == second.test.digest
     larger = synthesize(SynthesisConfig(train_size=64), tmp_path / "larger")
-    assert first.evaluation.digest == larger.evaluation.digest
-    assert first.dev.digest == larger.dev.digest
+    assert first.test.digest == larger.test.digest
+    assert first.valid.digest == larger.valid.digest
     splits = [
-        read_problems(tmp_path / "first" / f"{name}.jsonl") for name in ("train", "dev", "eval")
+        read_problems(tmp_path / "first" / f"{name}.jsonl") for name in ("train", "valid", "test")
     ]
     identities = [{problem.task_id for problem in split} for split in splits]
     assert len(set.union(*identities)) == sum(len(split) for split in splits)

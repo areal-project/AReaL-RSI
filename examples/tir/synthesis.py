@@ -65,7 +65,7 @@ def _default_family_weights() -> tuple[FamilyWeight, ...]:
         ("budget", 1),
         ("ratio", 1),
         ("growth", 1),
-        # These families target the arithmetic chains seen in dev failures
+        # These families target the arithmetic chains seen in valid failures
         # while remaining independent of held-out wording.
         ("percent", 2),
         ("average", 2),
@@ -104,9 +104,8 @@ class SynthesisPolicy:
 @dataclass(frozen=True, slots=True)
 class DataRecipe:
     seed: int = 17
-    real_count: int = 768
-    synthetic_count: int = 256
-    real_min_steps: int = 0
+    real_count: int = 1024
+    synthetic_count: int = 0
     synthesis: SynthesisPolicy = field(default_factory=SynthesisPolicy)
     # The native MathVerify worker parses mathematical expressions reliably
     # when bare LaTeX is delimited.  This is a data-boundary policy: it only
@@ -119,8 +118,8 @@ class DataRecipe:
     real_task_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if min(self.real_count, self.synthetic_count, self.real_min_steps) < 0:
-            raise ValueError("Dataset counts and minimum steps must be nonnegative")
+        if min(self.real_count, self.synthetic_count) < 0:
+            raise ValueError("Dataset counts must be nonnegative")
         if not 1 <= self.real_count + self.synthetic_count <= 20000:
             raise ValueError("A research round requires 1..20000 distinct training examples")
         if self.gold_format not in {"preserve", "math_delimited"}:
@@ -527,8 +526,7 @@ def generate(rng: random.Random, family: Family, difficulty: int) -> Example:
         offset = rng.randint(1, 12)
         total = coefficient * x + offset
         prompt = (
-            f"A number x satisfies {coefficient}x + {offset} = {total}. "
-            "What is the value of x?"
+            f"A number x satisfies {coefficient}x + {offset} = {total}. What is the value of x?"
         )
         answer = str(x)
         oracle = Fraction(total - offset, coefficient)
@@ -564,9 +562,7 @@ def generate(rng: random.Random, family: Family, difficulty: int) -> Example:
         valid = Fraction(answer_text) == oracle
     elif family == "radical":
         complete = re.fullmatch(r"(\d+)", answer_text)
-        radical_match = re.fullmatch(
-            r"(?:(\d+)\\sqrt\{(\d+)\}|\\sqrt\{(\d+)\})", answer_text
-        )
+        radical_match = re.fullmatch(r"(?:(\d+)\\sqrt\{(\d+)\}|\\sqrt\{(\d+)\})", answer_text)
         if complete:
             rendered_square = int(complete.group(1)) ** 2
         elif radical_match:
@@ -597,7 +593,7 @@ def build_dataset(
     excluded_ids: tuple[str, ...],
     output: Path,
 ) -> SynthesisManifest:
-    if any(item.source not in {"gsm8k-train", "torl-train"} for item in pool):
+    if any(item.source != "torl-train" for item in pool):
         raise ValueError("Only official training examples may enter synthesis")
     excluded = set(excluded_ids)
     if excluded.intersection(item.task_id for item in pool):
@@ -605,17 +601,13 @@ def build_dataset(
     focused = set(recipe.real_task_ids)
     if focused.intersection(excluded):
         raise ValueError("Focused training task is held out")
-    available = tuple(
-        item for item in pool if item.reference_solution.count("<<") >= recipe.real_min_steps
-    )
+    available = pool
     if focused:
         pool_ids = {item.task_id for item in pool}
         unknown = focused - pool_ids
         if unknown:
             raise ValueError("Focused training task ID is absent from the official pool")
         available = tuple(item for item in available if item.task_id in focused)
-        if len(available) != len(focused):
-            raise ValueError("Focused training task is below real_min_steps")
     if recipe.real_count > len(available):
         raise ValueError("Requested real examples exceed the eligible training pool")
     rng = random.Random(recipe.seed)

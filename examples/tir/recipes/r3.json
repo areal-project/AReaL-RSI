@@ -5,7 +5,6 @@
     "seed": 3031,
     "real_count": 1024,
     "synthetic_count": 256,
-    "real_min_steps": 0,
     "gold_format": "math_delimited",
     "synthesis": {
       "families": [

@@ -18,7 +18,7 @@ bash examples/tir/run_slurm.sh
 | 资源 | 2 GPU、16 CPU、128 GiB |
 | AReaL | `96b557f3a5bc3859d61ff19c3c7d931d75f8c955`，v1 FSDP + SGLang |
 | 基模型 | 本地 `Qwen__Qwen2.5-Math-1.5B` |
-| 数据 | 程序合成 train/dev/eval = 32/8/8，种子 17；评测种子 42 |
+| 数据 | 程序合成 train/valid/test = 32/8/8，种子 17；评测种子 42 |
 | 优化 | 2 个真实 GRPO step，每 batch 4 题，每题 4 次采样 |
 | 参数变化探针 | 最大绝对变化 `3.0517578125e-05` |
 | 固定 8 题正确率 | 基线 `1.0`，训练后 `1.0` |

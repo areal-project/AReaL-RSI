@@ -105,7 +105,7 @@ class WorkerRequest:
     config: ExperimentConfig
     model: str
     dataset: str
-    dev_dataset: str
+    valid_dataset: str
     output: str
     trial: str
     dataset_format: Literal["procedural", "benchmark"] = "procedural"
@@ -252,16 +252,16 @@ async def run(config: ExperimentConfig, *, prepare_only: bool = False) -> Path:
         backend = AReaLBackend(runtime, jobs)
         evaluator = EvaluationService(jobs, LocalTrajectoryStore(directory / "trajectories"))
         worker = Path(__file__).with_name("worker.py")
-        evaluation_data = local_path(datasets.evaluation)
-        task_ids = tuple(item.task_id for item in read_problems(evaluation_data))
+        test_data = local_path(datasets.test)
+        task_ids = tuple(item.task_id for item in read_problems(test_data))
 
         def spec(mode: Literal["train", "eval"], name: str, model: str) -> JobSpec:
             request = WorkerRequest(
                 mode,
                 config,
                 model,
-                str(local_path(datasets.train) if mode == "train" else evaluation_data),
-                str(local_path(datasets.dev)),
+                str(local_path(datasets.train) if mode == "train" else test_data),
+                str(local_path(datasets.valid)),
                 str(jobs.directory(run_id, name)),
                 f"{run_id}-{name}",
             )

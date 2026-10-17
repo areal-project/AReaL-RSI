@@ -1,4 +1,4 @@
-"""Phased TIR research: freeze, baseline, train/dev iterations, select, final audit.
+"""Phased TIR research: freeze, baseline, train/valid iterations, select, test.
 
 This is task policy. Execution, trajectory storage, evaluation and checkpoint
 validation use the public infrastructure services unchanged.
@@ -132,7 +132,7 @@ class Candidate:
     status: Literal["prepared", "training", "evaluating", "completed", "failed"] = "prepared"
     training: TrainingResult | None = None
     solution: SolutionVersion | None = None
-    dev: EvaluationResult | None = None
+    valid: EvaluationResult | None = None
     error: str = ""
 
 
@@ -162,13 +162,13 @@ class PairedBlock:
 class Selection:
     candidate: str
     solution: SolutionVersion
-    dev_comparison: PairedComparison
+    valid_comparison: PairedComparison
     completed_rounds: tuple[str, ...]
     selected_at: str
 
 
 @dataclass(frozen=True, slots=True)
-class FinalResult:
+class TestResult:
     selection: ContentRef
     baseline: EvaluationResult
     candidate: EvaluationResult
@@ -197,11 +197,11 @@ def prepare(config: StudyConfig, root: Path) -> None:
     root.mkdir(parents=True, exist_ok=True)
     benchmark = read_record(Path(config.benchmark), Benchmark)
     splits = [
-        read_examples(local_path(ref)) for ref in (benchmark.train, benchmark.dev, benchmark.final)
+        read_examples(local_path(ref)) for ref in (benchmark.train, benchmark.valid, benchmark.test)
     ]
     ids = [{item.task_id for item in split} for split in splits]
     if any(ids[i] & ids[j] for i in range(3) for j in range(i)):
-        raise ValueError("Training, dev and final data overlap")
+        raise ValueError("Training, valid and test data overlap")
     if ids[0] & set(benchmark.excluded_ids):
         raise ValueError("Training pool includes a held-out identity")
     if (
@@ -261,7 +261,7 @@ def prepare(config: StudyConfig, root: Path) -> None:
 def protocol(root: Path) -> Protocol:
     path = local_path(read_record(root / "freeze.json", ContentRef))
     record = read_record(path, Protocol)
-    for ref in (*record.locked_files, record.benchmark.train, record.benchmark.dev):
+    for ref in (*record.locked_files, record.benchmark.train, record.benchmark.valid):
         local_path(ref)
     return record
 
@@ -405,29 +405,29 @@ class Study:
             config or self.config,
             _model_path(solution),
             str(local_path(data)),
-            str(local_path(self.protocol.benchmark.dev)),
+            str(local_path(self.protocol.benchmark.valid)),
             str(self.jobs.directory(self.root.name, name)),
             f"{self.root.name}-{name}",
             "benchmark",
         )
 
-    async def evaluate(self, name: str, *, final: bool = False) -> EvaluationResult:
-        if final:
+    async def evaluate(self, name: str, *, test: bool = False) -> EvaluationResult:
+        if test:
             selection = read_record(self.root / "selection.json", Selection)
             if name not in {"base", selection.candidate}:
-                raise ValueError("Final evaluation is restricted to the frozen selection")
-        if not final and (self.root / "selection.json").exists():
-            raise ValueError("Selection is frozen; further dev tuning belongs to a new study")
+                raise ValueError("Test evaluation is restricted to the frozen selection")
+        if not test and (self.root / "selection.json").exists():
+            raise ValueError("Selection is frozen; further valid tuning belongs to a new study")
         solution = self.solution(name)
-        saved = self.root / ("final" if final else "dev") / f"{_name(name)}.json"
+        saved = self.root / ("test" if test else "valid") / f"{_name(name)}.json"
         if saved.exists():
             result = read_record(saved, EvaluationResult)
             local_path(result.samples)
             return result
-        data = self.protocol.benchmark.final if final else self.protocol.benchmark.dev
+        data = self.protocol.benchmark.test if test else self.protocol.benchmark.valid
         cases = evaluation_cases(read_examples(local_path(data)))
         task_ids = tuple(item.task_id for item in cases)
-        stem = f"{name}-{'final' if final else 'dev'}"
+        stem = f"{name}-{'test' if test else 'valid'}"
         attempt = 1
         while self.jobs.directory(self.root.name, f"{stem}-{attempt}").exists():
             attempt += 1
@@ -439,18 +439,18 @@ class Study:
             self.spec(self.request("eval", job_name, solution, data), job_name),
             task_ids=task_ids,
             solution_id=solution.solution_id,
-            split=BenchmarkSplit.TEST if final else BenchmarkSplit.VALIDATE,
+            split=BenchmarkSplit.TEST if test else BenchmarkSplit.VALIDATE,
         )
         self.verify_source(before, job_name)
         write_record(saved, result)
-        if not final and name != "base":
+        if not test and name != "base":
             candidate = self.candidate(name)
-            candidate.dev, candidate.status, candidate.error = result, "completed", ""
+            candidate.valid, candidate.status, candidate.error = result, "completed", ""
             write_record(self.root / "rounds" / name / "candidate.json", candidate)
             write_record(
-                self.root / "dev" / f"{name}-comparison.json",
+                self.root / "valid" / f"{name}-comparison.json",
                 paired(
-                    read_record(self.root / "dev/base.json", EvaluationResult),
+                    read_record(self.root / "valid/base.json", EvaluationResult),
                     result,
                     clusters={item.task_id: item.question_id for item in cases},
                 ),
@@ -468,8 +468,8 @@ class Study:
         _name(name)
         if name == "base" or (self.root / "selection.json").exists():
             raise ValueError("Invalid candidate name or study already selected")
-        if not (self.root / "dev/base.json").exists():
-            raise ValueError("Measure the frozen base model on dev before training")
+        if not (self.root / "valid/base.json").exists():
+            raise ValueError("Measure the frozen base model on valid before training")
         directory = self.root / "rounds" / name
         directory.mkdir(parents=True, exist_ok=False)
         recipe = read_record(recipe_path, RoundRecipe)
@@ -542,28 +542,28 @@ class Study:
         if path.exists():
             selection = read_record(path, Selection)
             if selection.candidate != name:
-                raise ValueError("Final selection is immutable")
+                raise ValueError("Candidate selection is immutable")
             return selection
         candidates = [
             read_record(path, Candidate)
             for path in sorted((self.root / "rounds").glob("*/candidate.json"))
         ]
-        completed = [item for item in candidates if item.status == "completed" and item.dev]
+        completed = [item for item in candidates if item.status == "completed" and item.valid]
         if len(completed) < self.protocol.config.min_rounds:
             raise ValueError("Complete the preregistered minimum number of research rounds")
-        best = max(completed, key=lambda item: item.dev.report.score if item.dev else -1)
+        best = max(completed, key=lambda item: item.valid.report.score if item.valid else -1)
         selected = self.candidate(name)
         if (
             selected.status != "completed"
-            or selected.dev is None
-            or selected.dev.report.score < (best.dev.report.score if best.dev else 0)
+            or selected.valid is None
+            or selected.valid.report.score < (best.valid.report.score if best.valid else 0)
         ):
-            raise ValueError("Select a candidate with the best dev score")
+            raise ValueError("Select a candidate with the best valid score")
         comparison = paired(
-            read_record(self.root / "dev/base.json", EvaluationResult), selected.dev
+            read_record(self.root / "valid/base.json", EvaluationResult), selected.valid
         )
         if comparison.delta <= 0:
-            raise ValueError("Continue research: no dev improvement yet")
+            raise ValueError("Continue research: no valid improvement yet")
         selection = Selection(
             name,
             self.solution(name),
@@ -574,28 +574,28 @@ class Study:
         write_record(path, selection)
         return selection
 
-    async def finalize(self, name: str) -> FinalResult:
+    async def test(self, name: str) -> TestResult:
         self.select(name)
-        baseline = await self.evaluate("base", final=True)
-        candidate = await self.evaluate(name, final=True)
+        baseline = await self.evaluate("base", test=True)
+        candidate = await self.evaluate(name, test=True)
         comparison = paired(
             baseline,
             candidate,
             clusters={
                 item.task_id: item.question_id
                 for item in evaluation_cases(
-                    read_examples(local_path(self.protocol.benchmark.final))
+                    read_examples(local_path(self.protocol.benchmark.test))
                 )
             },
         )
-        result = FinalResult(
+        result = TestResult(
             file_ref(self.root / "selection.json"),
             baseline,
             candidate,
             comparison,
             comparison.delta >= self.protocol.config.target_delta,
         )
-        write_record(self.root / "final/result.json", result)
+        write_record(self.root / "test/result.json", result)
         p_text = (
             f"exact McNemar p={comparison.mcnemar_exact_p:.4g}"
             if comparison.mcnemar_exact_p is not None
@@ -604,7 +604,8 @@ class Study:
         (self.root / "report.md").write_text(
             f"# TIR study: {self.root.name}\n\nSelected: {name}. "
             f"Completed rounds: {', '.join(self.select(name).completed_rounds)}.\n\n"
-            f"Final ({comparison.count} samples, {comparison.independent_questions} questions): "
+            f"Test / official test ({comparison.count} samples, "
+            f"{comparison.independent_questions} questions): "
             f"base {comparison.baseline_accuracy:.2%}, "
             f"candidate {comparison.candidate_accuracy:.2%}; "
             f"delta {comparison.delta:+.2%}.\n\n"
@@ -613,7 +614,7 @@ class Study:
             f"wins/losses {comparison.wins}/{comparison.losses}; "
             f"{p_text}.\n\n"
             f"Target met: {result.target_met}. "
-            "See protocol.json, selection.json, final/result.json and rounds/ "
+            "See protocol.json, selection.json, test/result.json and rounds/ "
             "for complete evidence.\n"
         )
         return result
@@ -630,8 +631,8 @@ async def main() -> None:
     train_parser = commands.add_parser("round")
     train_parser.add_argument("--name", required=True)
     train_parser.add_argument("--recipe", type=Path, required=True)
-    final_parser = commands.add_parser("finalize")
-    final_parser.add_argument("--candidate", required=True)
+    test_parser = commands.add_parser("test")
+    test_parser.add_argument("--candidate", required=True)
     commands.add_parser("status")
     args = parser.parse_args()
     root = args.study.resolve()
@@ -647,10 +648,10 @@ async def main() -> None:
             await study.evaluate(args.candidate)
         elif args.command == "round":
             await study.train(args.name, args.recipe)
-        elif args.command == "finalize":
-            await study.finalize(args.candidate)
+        elif args.command == "test":
+            await study.test(args.candidate)
         else:
-            for path in sorted((root / "dev").glob("*.json")):
+            for path in sorted((root / "valid").glob("*.json")):
                 if path.name.endswith("-comparison.json"):
                     print(path.name, read_record(path, PairedComparison))
                 else:

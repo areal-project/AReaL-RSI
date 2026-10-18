@@ -10,16 +10,15 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from areal_rsi.infra.artifacts import read_record
-from examples.search.agent import Episode
 from examples.search.pipeline import WorkerRequest
+from examples.search.rollouts import Episode
 from examples.search.worker import dataset, prepare_config, workflow_kwargs
 
 
 @dataclass(frozen=True, slots=True)
 class PilotSample:
     episode: Episode
-    audit: str
-    output_hashes: tuple[str, ...]
+    episode_file: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,7 +27,7 @@ class PilotGroup:
     rewards: tuple[float, ...]
     unique_trajectories: int
     search_calls: tuple[int, ...]
-    audit_files: tuple[str, ...]
+    episode_files: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +39,44 @@ class PilotReport:
     all_one_fraction: float
     mixed_group_fraction: float
     groups: tuple[PilotGroup, ...]
+
+
+def summarize_episodes(output: Path, question_ids: set[str], group_size: int) -> PilotReport:
+    episodes: dict[str, list[PilotSample]] = defaultdict(list)
+    for path in (output / "episodes").glob("*.json"):
+        episode = read_record(path, Episode)
+        episodes[episode.question_id].append(PilotSample(episode, str(path)))
+    if set(episodes) != question_ids:
+        raise ValueError("Pilot question coverage is incomplete")
+    groups = []
+    for question_id, group in episodes.items():
+        if len(group) != group_size or {item.episode.sample_index for item in group} != set(
+            range(group_size)
+        ):
+            raise ValueError("Pilot sample slots are duplicated or incomplete")
+        rewards = tuple(sample.episode.reward for sample in group)
+        unique = len({json.dumps(sample.episode.messages, sort_keys=True) for sample in group})
+        groups.append(
+            PilotGroup(
+                question_id,
+                rewards,
+                unique,
+                tuple(sample.episode.search_calls for sample in group),
+                tuple(sample.episode_file for sample in group),
+            )
+        )
+    if not any(group.unique_trajectories > 1 for group in groups):
+        raise ValueError("Independent sample slots produced no observed trajectory diversity")
+    count = len(groups)
+    return PilotReport(
+        count,
+        group_size,
+        sum(sum(group.rewards) for group in groups) / (count * group_size),
+        sum(not any(group.rewards) for group in groups) / count,
+        sum(all(group.rewards) for group in groups) / count,
+        sum(0 < sum(group.rewards) < group_size for group in groups) / count,
+        tuple(groups),
+    )
 
 
 def run(request: WorkerRequest, questions: int) -> None:
@@ -77,49 +114,8 @@ def run(request: WorkerRequest, questions: int) -> None:
         results = rollout.wait(len(items), timeout=None)
         if len(results) != len(items) or any(result is None for result in results):
             raise ValueError("Pilot did not return every complete group")
-        episodes: dict[str, list[PilotSample]] = defaultdict(list)
-        for path in (Path(request.output) / "episodes").glob("*.json"):
-            if path.name.endswith(".audit.json"):
-                continue
-            episode = read_record(path, Episode)
-            audit = json.loads(path.with_suffix(".audit.json").read_text())
-            episodes[episode.question_id].append(
-                PilotSample(
-                    episode,
-                    str(path.with_suffix(".audit.json")),
-                    tuple(str(turn["output_sha256"]) for turn in audit["interactions"]),
-                )
-            )
-        if set(episodes) != {item["question_id"] for item in items}:
-            raise ValueError("Pilot question coverage is incomplete")
-        groups = []
-        for question_id, group in episodes.items():
-            if len(group) != group_size or {item.episode.sample_index for item in group} != set(
-                range(group_size)
-            ):
-                raise ValueError("Pilot sample slots are duplicated or incomplete")
-            rewards = tuple(sample.episode.reward for sample in group)
-            unique = len({sample.output_hashes for sample in group})
-            groups.append(
-                PilotGroup(
-                    question_id,
-                    rewards,
-                    unique,
-                    tuple(sample.episode.search_calls for sample in group),
-                    tuple(sample.audit for sample in group),
-                )
-            )
-        if not any(group.unique_trajectories > 1 for group in groups):
-            raise ValueError("Independent sample slots produced no observed trajectory diversity")
-        count = len(groups)
-        report = PilotReport(
-            count,
-            group_size,
-            sum(sum(group.rewards) for group in groups) / (count * group_size),
-            sum(not any(group.rewards) for group in groups) / count,
-            sum(all(group.rewards) for group in groups) / count,
-            sum(0 < sum(group.rewards) < group_size for group in groups) / count,
-            tuple(groups),
+        report = summarize_episodes(
+            Path(request.output), {item["question_id"] for item in items}, group_size
         )
         (Path(request.output) / "pilot.json").write_text(
             json.dumps(asdict(report), indent=2) + "\n"

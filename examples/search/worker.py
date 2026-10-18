@@ -11,11 +11,12 @@ import signal
 from pathlib import Path
 from typing import Any
 
-from areal_rsi.api.control import encode_record
+from areal_rsi.api.control import decode_record
 from areal_rsi.api.execution import TrainingReceipt
-from areal_rsi.api.records import EvaluationSample, TraceEvent
 from areal_rsi.infra.artifacts import read_record, write_record
+from examples.search.data import SearchQuestion
 from examples.search.pipeline import WorkerRequest
+from examples.search.rollouts import write_evaluation_samples
 
 
 def prepare_config(request: WorkerRequest) -> Any:
@@ -144,7 +145,6 @@ def workflow_kwargs(request: WorkerRequest) -> dict[str, Any]:
         "benchmark_repository": request.config.benchmark_repository,
         "mcp_url": request.mcp_url,
         "trace_directory": str(Path(request.output) / "episodes"),
-        "tokenizer_path": request.model,
         "max_completion_tokens": request.config.harness.max_completion_tokens,
         "evaluation_seed": request.config.evaluation_seed if request.mode == "eval" else None,
     }
@@ -209,12 +209,13 @@ def evaluate(request: WorkerRequest, config: Any) -> None:
     from areal.engine import RemoteSGLangEngine
     from areal.infra import LocalScheduler
     from areal.utils import seeding
+    from areal.utils.stats_logger import StatsLogger
 
     seeding.set_random_seed(request.config.evaluation_seed, key="search-eval")
     allocation = ModelAllocation.from_str(config.rollout.backend, name="rollout")
     scheduler = LocalScheduler(exp_config=config)
     rollout = RemoteSGLangEngine.as_controller(config.rollout, scheduler)
-    items = dataset(request.dataset)
+    items = list(dataset(request.dataset))
     try:
         args = SGLangConfig.build_args(
             config.sglang, tp_size=allocation.parallel.tp_size, base_gpu_id=0
@@ -234,44 +235,18 @@ def evaluate(request: WorkerRequest, config: Any) -> None:
         results = rollout.wait(len(items), timeout=None)
         if len(results) != len(items) or any(result is None for result in results):
             raise ValueError("Independent evaluation did not return every trajectory")
-        traces = {}
-        for path in (Path(request.output) / "episodes").glob("*.json"):
-            if not path.name.endswith(".audit.json"):
-                episode = json.loads(path.read_text())
-                if episode["question_id"] in traces:
-                    raise ValueError("Duplicate independent evaluation trajectory")
-                traces[episode["question_id"]] = (path, episode)
-        if set(traces) != {item["question_id"] for item in items}:
-            raise ValueError("Independent evaluation traces are incomplete")
-        with (Path(request.output) / "samples.jsonl").open("x") as output:
-            for item in items:
-                path, episode = traces[item["question_id"]]
-                audit = json.loads(path.with_suffix(".audit.json").read_text())["interactions"]
-                evidence = set(item["evidence_docids"])
-                recall = len(evidence & set(episode["retrieved_docids"])) / len(evidence)
-                events = [TraceEvent("prompt", item["question"])]
-                for message in episode["messages"]:
-                    kind = (
-                        "tool_result"
-                        if message["role"] == "function"
-                        else ("tool_call" if message.get("function_call") else "generation")
-                    )
-                    events.append(TraceEvent(kind, json.dumps(message, ensure_ascii=False)))
-                sample = EvaluationSample(
-                    item["question_id"],
-                    episode["final_answer"],
-                    episode["reward"],
-                    episode["reward"] == 1.0,
-                    tuple(events),
-                    {
-                        "evidence_recall": recall,
-                        "search_calls": float(episode["search_calls"]),
-                        "elapsed_seconds": episode["elapsed_seconds"],
-                        "input_tokens": float(sum(turn["input_tokens"] for turn in audit)),
-                        "output_tokens": float(sum(turn["output_tokens"] for turn in audit)),
-                    },
-                )
-                output.write(json.dumps(encode_record(sample), ensure_ascii=False) + "\n")
+        log_directory = Path(
+            StatsLogger.get_log_path(
+                experiment_name=config.experiment_name,
+                trial_name=config.trial_name,
+                fileroot=config.cluster.fileroot,
+            )
+        )
+        write_evaluation_samples(
+            Path(request.output),
+            tuple(decode_record(SearchQuestion, item) for item in items),
+            log_directory / "eval-rollout",
+        )
     finally:
         rollout.destroy()
         scheduler.delete_workers()

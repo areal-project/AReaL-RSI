@@ -21,11 +21,10 @@ from areal_rsi.infra.training import AReaLBackend
 from examples.search import pipeline
 from examples.search.data import Candidate, DatasetConfig, Passage, parse_hotpot, partition
 from examples.search.pipeline import (
-    ComputeBudget,
-    ComputeJob,
     ExperimentState,
     HarnessConfig,
     SearchConfig,
+    SlurmSubmission,
     TrainingConfig,
     WorkerRequest,
     stage_model,
@@ -136,27 +135,11 @@ def test_frozen_harness_rejects_silent_budget_changes() -> None:
         HarnessConfig(max_model_calls=5)
 
 
-def test_training_budget_requires_enough_full_batches() -> None:
+def test_training_steps_require_enough_full_batches() -> None:
     config = TrainingConfig(max_steps=200, epochs=1, batch_size=8)
     with pytest.raises(ValueError, match="allow 125 full updates"):
         config.validate_dataset_size(1000)
     replace(config, epochs=2).validate_dataset_size(1000)
-
-
-def test_budget_reserves_full_active_allocations_including_transitional_states() -> None:
-    budget = ComputeBudget(
-        256.0,
-        120,
-        120 / 3600,
-        (
-            ComputeJob("1", "failed-pilot", 2, "FAILED", elapsed_seconds=60),
-            ComputeJob(
-                "2", "training-candidate", 5, "RUNNING", elapsed_seconds=10, time_limit_seconds=7200
-            ),
-            ComputeJob("3", "index", 1, "REQUEUED", time_limit_seconds=600),
-        ),
-    )
-    assert budget.reserved_gpu_seconds == 120 + 5 * 7200 + 600
 
 
 def test_model_staging_preserves_original_and_rejects_changed_effective_config(
@@ -268,7 +251,188 @@ def test_heldout_evaluation_reloads_without_training_or_changing_incumbent(
         asyncio.run(pipeline.run(config, "heldout"))
 
 
-def test_heldout_submission_accounts_two_gpus_and_refuses_changed_resume_mode(
+@pytest.mark.parametrize("hold_reason", ["JobHeldUser", "None"])
+def test_heldout_submission_requests_two_gpus_and_refuses_changed_resume_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    hold_reason: str,
+) -> None:
+    config = search_config(tmp_path)
+    path = tmp_path / "config.json"
+    write_record(path, config)
+    image = tmp_path / "image.sif"
+    image.touch()
+    submissions = []
+
+    def submit(args: list[str], **kwargs: Any) -> str:
+        if args[0] == "sbatch":
+            assert {"--hold", "--reservation=rsi", "--gres=gpu:2"} <= set(args)
+            submissions.append(args)
+            return "123\n"
+        assert args == ["scontrol", "show", "job", "-o", "123"]
+        return f"JobId=123 JobState=PENDING Reason={hold_reason} Priority=0"
+
+    def release(args: list[str], **kwargs: Any) -> int:
+        assert args == ["scontrol", "release", "123"]
+        receipt = read_record(
+            Path(config.output_root) / "submissions/heldout/slurm-job.json", SlurmSubmission
+        )
+        assert receipt.release_pending  # The receipt exists before the job can start.
+        return 0
+
+    monkeypatch.setattr(subprocess, "check_output", submit)
+    monkeypatch.setattr(subprocess, "check_call", release)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "search.pipeline",
+            "--submit",
+            "--config",
+            str(path),
+            "--run-id",
+            "heldout",
+            "--image",
+            str(image),
+            "--time-limit",
+            "120",
+            "--evaluate-only",
+            "test",
+        ],
+    )
+    pipeline.main()
+    assert capsys.readouterr().out.strip() == "123"
+    receipt = read_record(
+        Path(config.output_root) / "submissions/heldout/slurm-job.json", SlurmSubmission
+    )
+    assert receipt.kind == "external-test-evaluation" and receipt.gpus == 2
+    assert not receipt.release_pending
+    assert (
+        pipeline.submit(path, "heldout", image, 120, evaluation_split="test") == "123"
+    )
+    assert len(submissions) == 1
+    with pytest.raises(ValueError, match="different configuration or mode"):
+        pipeline.submit(path, "heldout", image, 120, evaluation_split="dev")
+    with pytest.raises(ValueError, match="different configuration or mode"):
+        pipeline.submit(path, "heldout", image, 120)
+
+
+@pytest.mark.parametrize("published", [False, True])
+@pytest.mark.parametrize("cancel_fails", [False, True])
+def test_failed_receipt_cancels_held_job_or_reports_its_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, published: bool, cancel_fails: bool
+) -> None:
+    config = search_config(tmp_path)
+    path = tmp_path / "config.json"
+    write_record(path, config)
+    image = tmp_path / "image.sif"
+    image.touch()
+    submissions = []
+    cancellations = []
+
+    def submit(args: list[str], **kwargs: Any) -> str:
+        assert args[0] == "sbatch" and "--hold" in args
+        submissions.append(args)
+        return "123\n"
+
+    def fail_receipt(path: Path, value: Any) -> None:
+        if path.name == "slurm-job.json":
+            if published:
+                write_record(path, value)
+            raise OSError("injected receipt write failure")
+        write_record(path, value)
+
+    def cancel(args: list[str], **kwargs: Any) -> int:
+        assert args == ["scancel", "123"]  # A failed write must never release the job.
+        cancellations.append(args)
+        if cancel_fails:
+            raise OSError("injected cancellation failure")
+        return 0
+
+    monkeypatch.setattr(subprocess, "check_output", submit)
+    monkeypatch.setattr(subprocess, "check_call", cancel)
+    monkeypatch.setattr(pipeline, "write_record", fail_receipt)
+    message = "cancellation was not confirmed" if cancel_fails else "was cancelled"
+    with pytest.raises(RuntimeError, match=f"Slurm job 123.*{message}"):
+        pipeline.submit(path, "candidate", image, 120)
+    if not published:
+        with pytest.raises(RuntimeError, match="Incomplete submission"):
+            pipeline.submit(path, "candidate", image, 120)
+    assert len(submissions) == len(cancellations) == 1
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ["status_unavailable", "release_rejected", "release_ack_lost", "receipt_after_release"],
+)
+def test_submission_retry_recovers_release_without_submitting_another_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    config = search_config(tmp_path)
+    path = tmp_path / "config.json"
+    write_record(path, config)
+    image = tmp_path / "image.sif"
+    image.touch()
+    receipt = Path(config.output_root) / "submissions/candidate/slurm-job.json"
+    submissions = []
+    releases = []
+    released = False
+    fault_raised = False
+
+    def submit_or_status(args: list[str], **kwargs: Any) -> str:
+        nonlocal fault_raised
+        if args[0] == "sbatch":
+            assert "--hold" in args
+            submissions.append(args)
+            return "123\n"
+        assert args == ["scontrol", "show", "job", "-o", "123"]
+        if failure == "status_unavailable" and not fault_raised:
+            fault_raised = True
+            raise OSError("injected status lookup failure")
+        if released:
+            return "JobId=123 JobState=RUNNING Reason=None"
+        return "JobId=123 JobState=PENDING Reason=JobHeldUser"
+
+    def release(args: list[str], **kwargs: Any) -> int:
+        nonlocal released, fault_raised
+        assert args == ["scontrol", "release", "123"]
+        assert read_record(receipt, SlurmSubmission).release_pending
+        releases.append(args)
+        if failure == "release_rejected" and not fault_raised:
+            fault_raised = True
+            raise OSError("injected release failure")
+        released = True
+        if failure == "release_ack_lost" and not fault_raised:
+            fault_raised = True
+            raise OSError("injected release acknowledgement loss")
+        return 0
+
+    def save(path: Path, value: Any) -> None:
+        nonlocal fault_raised
+        if (
+            failure == "receipt_after_release"
+            and path == receipt
+            and not value.release_pending
+            and not fault_raised
+        ):
+            fault_raised = True
+            raise OSError("injected acknowledgement write failure")
+        write_record(path, value)
+
+    monkeypatch.setattr(subprocess, "check_output", submit_or_status)
+    monkeypatch.setattr(subprocess, "check_call", release)
+    monkeypatch.setattr(pipeline, "write_record", save)
+    with pytest.raises(RuntimeError, match=r"Slurm job 123 is recorded.*release is not confirmed"):
+        pipeline.submit(path, "candidate", image, 120)
+    assert read_record(receipt, SlurmSubmission).release_pending
+    assert pipeline.submit(path, "candidate", image, 120) == "123"
+    assert not read_record(receipt, SlurmSubmission).release_pending
+    assert released and len(submissions) == 1
+    assert len(releases) == (2 if failure == "release_rejected" else 1)
+
+
+def test_unobserved_submission_result_keeps_job_held_and_refuses_automatic_resubmission(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = search_config(tmp_path)
@@ -276,34 +440,23 @@ def test_heldout_submission_accounts_two_gpus_and_refuses_changed_resume_mode(
     write_record(path, config)
     image = tmp_path / "image.sif"
     image.touch()
-    budget_path = tmp_path / "budget.json"
-    budget = ComputeBudget(
-        256, 0, 0, (ComputeJob("1", "training-candidate", 5, "RUNNING", time_limit_seconds=60),)
-    )
-    write_record(budget_path, budget)
-    monkeypatch.setattr(pipeline, "refresh_budget", lambda path: read_record(path, ComputeBudget))
     submissions = []
 
     def submit(args: list[str], **kwargs: Any) -> str:
-        assert args[0] == "sbatch" and "--reservation=rsi" in args and "--gres=gpu:2" in args
+        assert args[0] == "sbatch" and "--hold" in args
         submissions.append(args)
-        return "123\n"
+        raise OSError("Slurm accepted the held job but its response was lost")
+
+    def release(args: list[str], **kwargs: Any) -> int:
+        pytest.fail("An unrecorded job must never be released")
 
     monkeypatch.setattr(subprocess, "check_output", submit)
-    assert (
-        pipeline.submit(path, "heldout", image, budget_path, 120, evaluation_split="test") == "123"
-    )
-    updated = read_record(budget_path, ComputeBudget)
-    assert updated.jobs[-1].kind == "external-test-evaluation" and updated.jobs[-1].gpus == 2
-    assert updated.reserved_gpu_seconds == 5 * 60 + 2 * 120
-    assert (
-        pipeline.submit(path, "heldout", image, budget_path, 120, evaluation_split="test") == "123"
-    )
+    monkeypatch.setattr(subprocess, "check_call", release)
+    with pytest.raises(OSError, match="response was lost"):
+        pipeline.submit(path, "candidate", image, 120)
+    with pytest.raises(RuntimeError, match=r"Incomplete submission.*search-candidate"):
+        pipeline.submit(path, "candidate", image, 120)
     assert len(submissions) == 1
-    with pytest.raises(ValueError, match="different configuration or mode"):
-        pipeline.submit(path, "heldout", image, budget_path, 120, evaluation_split="dev")
-    with pytest.raises(ValueError, match="different configuration or mode"):
-        pipeline.submit(path, "heldout", image, budget_path, 120)
 
 
 def test_submitted_script_uses_frozen_source_when_calling_directory_shadows_module(
@@ -326,11 +479,15 @@ def test_submitted_script_uses_frozen_source_when_calling_directory_shadows_modu
     write_record(config_path, config)
     image = tmp_path / "image.sif"
     image.touch()
-    budget_path = tmp_path / "budget.json"
-    write_record(budget_path, ComputeBudget(256, 0, 0, ()))
-    monkeypatch.setattr(pipeline, "refresh_budget", lambda path: read_record(path, ComputeBudget))
-    monkeypatch.setattr(subprocess, "check_output", lambda *args, **kwargs: "123\n")
-    pipeline.submit(config_path, "pinned-source", image, budget_path, 120, evaluation_split="dev")
+    monkeypatch.setattr(
+        subprocess,
+        "check_output",
+        lambda args, **kwargs: (
+            "123\n" if args[0] == "sbatch" else "JobId=123 JobState=PENDING Reason=JobHeldUser"
+        ),
+    )
+    monkeypatch.setattr(subprocess, "check_call", lambda *args, **kwargs: 0)
+    pipeline.submit(config_path, "pinned-source", image, 120, evaluation_split="dev")
     shadow = tmp_path / "mutable-workspace"
     package = shadow / "examples/search"
     package.mkdir(parents=True)

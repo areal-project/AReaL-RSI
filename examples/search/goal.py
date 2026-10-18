@@ -38,7 +38,7 @@ async def run(root: Path, workspace: Path, objective: Path, *, resume: bool) -> 
             "递归启动 examples.search.goal，或修改当前控制进程的 Python 环境。"
             "你负责亲自审查训练数据、选择配置、调用 examples.search.pipeline --submit "
             "提交 GPU 实验。"
-            "只对预算账本中的实际 GPU 实验作业执行等待和恢复。"
+            "只对提交回执中记录的实际 GPU 实验作业执行等待和恢复。"
             "不要运行 uv sync/uv run 重建共享 .venv；使用当前已提供的 Python 和已安装依赖。"
             "execution-ready.json 是执行授权与冻结运行时的唯一入口；不存在时可分析数据和策略，"
             "不能根据旧的 execution-ready-v*.json 启动作业。主目标和原验收条款全部保留。\n"

@@ -48,7 +48,12 @@ from areal_rsi.infra.execution import JobExecutor
 from areal_rsi.infra.training import AReaLBackend, read_training_samples
 from areal_rsi.infra.trajectories import LocalTrajectoryStore
 from examples.tir.benchmark import Benchmark, evaluation_cases, read_examples, write_examples
-from examples.tir.compositional import CompositionalManifest, propose, read_tasks
+from examples.tir.compositional import (
+    COMPOSITIONAL_FAMILIES,
+    CompositionalManifest,
+    propose,
+    read_tasks,
+)
 from examples.tir.distillation import DistillationAttempt, DistillationConfig, DistillationManifest
 from examples.tir.pipeline import (
     BACKEND_PATHS,
@@ -200,8 +205,11 @@ class CurriculumPlan:
                 or data.synthetic_count * 10 > data.real_count
             ):
                 raise ValueError("Probe enough synthetic proposals and preserve a 1:10 mixture")
-            if self.admission_policy.minimum_per_family * 3 > data.synthetic_count:
-                raise ValueError("Synthetic count cannot cover all three compositional families")
+            if (
+                self.admission_policy.minimum_per_family * len(COMPOSITIONAL_FAMILIES)
+                > data.synthetic_count
+            ):
+                raise ValueError("Synthetic count cannot cover all compositional families")
         elif self.synthetic_proposals != 0:
             raise ValueError("A real-only round must not request synthetic proposals")
 

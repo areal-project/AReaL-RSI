@@ -31,6 +31,7 @@ from examples.tir.compositional import (
     ConditionalDraw,
     DigitConstraints,
     LatticeRoutes,
+    LinearSystem,
     materialize,
     propose,
     read_tasks,
@@ -49,7 +50,7 @@ from examples.tir.distillation import (
     tokenize_trajectory,
     training_events,
 )
-from examples.tir.experiment import RoundRecipe
+from examples.tir.experiment import CurriculumPlan, RoundRecipe
 from examples.tir.synthesis import (
     CompositionalAdmissionPolicy,
     DataRecipe,
@@ -245,6 +246,11 @@ def test_composed_tasks_use_multiple_constraints_and_independent_exact_solvers(
     assert materialize(DigitConstraints(2, 5, 3, 2, 3)).example.answer == "4"
     assert materialize(LatticeRoutes(2, 2, (1, 1), ((0, 1),))).example.answer == "2"
     assert materialize(ConditionalDraw(2, 2, 1, 2, 1, 1, 2, 0)).example.answer == "4/5"
+    # Requires a pivot swap; the three equations uniquely yield x=2,y=3,z=4.
+    assert (
+        materialize(LinearSystem(((0, 1, 1), (1, 2, 0), (3, 0, 1)), (7, 8, 10))).example.answer
+        == "29/9"
+    )
     proposal_ref = propose(17, 18, (), tmp_path / "proposal")
     manifest = read_record(local_path(proposal_ref), CompositionalManifest)
     tasks = read_tasks(local_path(manifest.definitions))
@@ -252,9 +258,28 @@ def test_composed_tasks_use_multiple_constraints_and_independent_exact_solvers(
         "digit_constraints",
         "lattice_routes",
         "conditional_draws",
+        "linear_system",
     }
     with pytest.raises(ValueError, match="differs"):
         verify_task(replace(tasks[0], example=replace(tasks[0].example, answer="-100")))
+
+
+def test_composed_linear_system_rejects_singular_or_undefined_questions() -> None:
+    with pytest.raises(ValueError, match="unique solution"):
+        materialize(LinearSystem(((1, 2, 3), (2, 4, 6), (3, 6, 9)), (6, 12, 18)))
+    with pytest.raises(ValueError, match="nonzero denominator"):
+        materialize(LinearSystem(((1, 0, 0), (0, 1, 0), (0, 0, 1)), (1, 2, -3)))
+
+
+def test_dynamic_admission_budget_covers_all_compositional_families() -> None:
+    recipe = RoundRecipe(
+        "Current-student admission", data=DataRecipe(real_count=80, synthetic_count=6)
+    )
+    policy = CompositionalAdmissionPolicy(minimum_per_family=2)
+    with pytest.raises(ValueError, match="all compositional families"):
+        CurriculumPlan(recipe, mixed_count=40, synthetic_proposals=192, admission_policy=policy)
+    expanded = replace(recipe, data=DataRecipe(real_count=80, synthetic_count=8))
+    CurriculumPlan(expanded, mixed_count=40, synthetic_proposals=192, admission_policy=policy)
 
 
 def test_composed_admission_rejects_easy_and_unsolved_groups_and_caps_mixture(
@@ -377,7 +402,7 @@ def test_composed_admission_requires_actual_correct_stdout_and_family_coverage(
     admission = admit_compositional(
         proposals,
         probe,
-        count=6,
+        count=8,
         seed=17,
         excluded_ids=(),
         output=tmp_path / "admitted",
@@ -425,7 +450,7 @@ def test_composed_admission_requires_actual_correct_stdout_and_family_coverage(
         admit_compositional(
             proposals,
             partial,
-            count=6,
+            count=8,
             seed=17,
             excluded_ids=(),
             output=tmp_path / "missing-family",

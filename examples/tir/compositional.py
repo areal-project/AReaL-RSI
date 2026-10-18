@@ -17,6 +17,15 @@ from areal_rsi.api.records import ContentRef
 from areal_rsi.infra.artifacts import file_ref, write_record
 from examples.tir.benchmark import Example, identity, write_examples
 
+COMPOSITIONAL_FAMILIES = (
+    "digit_constraints",
+    "lattice_routes",
+    "conditional_draws",
+    "linear_system",
+)
+Vector3 = tuple[int, int, int]
+Matrix3 = tuple[Vector3, Vector3, Vector3]
+
 
 @dataclass(frozen=True, slots=True)
 class DigitConstraints:
@@ -47,7 +56,13 @@ class ConditionalDraw:
     score_remainder: int
 
 
-Definition = DigitConstraints | LatticeRoutes | ConditionalDraw
+@dataclass(frozen=True, slots=True)
+class LinearSystem:
+    coefficients: Matrix3
+    totals: Vector3
+
+
+Definition = DigitConstraints | LatticeRoutes | ConditionalDraw | LinearSystem
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,6 +186,59 @@ def _draw_labelled_enumeration(spec: ConditionalDraw) -> Fraction:
     return Fraction(good, eligible)
 
 
+def _linear_elimination(spec: LinearSystem) -> Fraction:
+    augmented = [
+        [Fraction(value) for value in (*row, total)]
+        for row, total in zip(spec.coefficients, spec.totals, strict=True)
+    ]
+    for column in range(3):
+        pivot = next((row for row in range(column, 3) if augmented[row][column]), None)
+        if pivot is None:
+            raise ValueError("Linear system must have a unique solution")
+        augmented[column], augmented[pivot] = augmented[pivot], augmented[column]
+        divisor = augmented[column][column]
+        augmented[column] = [value / divisor for value in augmented[column]]
+        for row in range(3):
+            if row != column:
+                multiplier = augmented[row][column]
+                augmented[row] = [
+                    value - multiplier * reference
+                    for value, reference in zip(augmented[row], augmented[column], strict=True)
+                ]
+    solution = tuple(row[3] for row in augmented)
+    total = sum(solution, Fraction(0))
+    if not total:
+        raise ValueError("Linear expression must have a nonzero denominator")
+    return sum((value * value for value in solution), Fraction(0)) / total
+
+
+def _determinant(matrix: Matrix3) -> int:
+    (a, b, c), (d, e, f), (g, h, i) = matrix
+    return a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g)
+
+
+def _linear_determinants(spec: LinearSystem) -> Fraction:
+    determinant = _determinant(spec.coefficients)
+    if determinant == 0:
+        raise ValueError("Linear system must have a unique solution")
+    numerators = []
+    for column in range(3):
+        rows = [
+            (
+                total if column == 0 else row[0],
+                total if column == 1 else row[1],
+                total if column == 2 else row[2],
+            )
+            for row, total in zip(spec.coefficients, spec.totals, strict=True)
+        ]
+        numerators.append(_determinant((rows[0], rows[1], rows[2])))
+    # Evaluate directly in determinants, independently of the elimination roots.
+    denominator = determinant * sum(numerators)
+    if denominator == 0:
+        raise ValueError("Linear expression must have a nonzero denominator")
+    return Fraction(sum(value * value for value in numerators), denominator)
+
+
 def materialize(spec: Definition) -> CompositionalTask:
     answer: int | Fraction
     independent: int | Fraction
@@ -192,7 +260,7 @@ def materialize(spec: Definition) -> CompositionalTask:
             "How many such paths are there?"
         )
         family = "lattice_routes"
-    else:
+    elif isinstance(spec, ConditionalDraw):
         answer, independent = _draw_hypergeometric(spec), _draw_labelled_enumeration(spec)
         prompt = (
             f"An urn contains {spec.red} red, {spec.blue} blue, and {spec.green} green "
@@ -203,9 +271,20 @@ def materialize(spec: Definition) -> CompositionalTask:
             f"conditional probability that R >= {spec.minimum_red}."
         )
         family = "conditional_draws"
+    else:
+        answer, independent = _linear_elimination(spec), _linear_determinants(spec)
+        equations = "; ".join(
+            f"({row[0]})*x + ({row[1]})*y + ({row[2]})*z = {total}"
+            for row, total in zip(spec.coefficients, spec.totals, strict=True)
+        )
+        prompt = (
+            f"Real numbers x, y, z satisfy the three equations {equations}. "
+            "Find the exact value of (x^2 + y^2 + z^2)/(x + y + z)."
+        )
+        family = "linear_system"
     if answer != independent or answer <= 0:
         raise ValueError("Independent compositional solvers disagree or task is degenerate")
-    if isinstance(answer, Fraction) and answer >= 1:
+    if isinstance(spec, ConditionalDraw) and answer >= 1:
         raise ValueError("Conditional task must have a nontrivial probability")
     example = Example(identity(prompt), prompt, str(answer), "verified-synthetic", family, 4)
     return CompositionalTask(example, spec)
@@ -245,8 +324,8 @@ def propose(
         if len(tasks) == count:
             break
         spec: Definition
-        family = attempt % 3
-        if family == 0:
+        family = COMPOSITIONAL_FAMILIES[attempt % len(COMPOSITIONAL_FAMILIES)]
+        if family == "digit_constraints":
             digits = rng.sample(range(10), rng.choice((4, 5)))
             if digits[0] == 0:
                 digits.reverse()
@@ -258,7 +337,7 @@ def propose(
                 int("".join(map(str, digits))) % modulus,
                 rng.randint(4, 8),
             )
-        elif family == 1:
+        elif family == "lattice_routes":
             width, height = rng.randint(5, 10), rng.randint(5, 10)
             checkpoint = (rng.randint(1, width - 1), rng.randint(1, height - 1))
             eligible = [
@@ -273,7 +352,7 @@ def propose(
                 checkpoint,
                 tuple(sorted(rng.sample(eligible, lattice_blocked_points))),
             )
-        else:
+        elif family == "conditional_draws":
             spec = ConditionalDraw(
                 rng.randint(3, 6),
                 rng.randint(3, 6),
@@ -284,6 +363,18 @@ def propose(
                 rng.randint(2, 4),
                 rng.randint(0, 1),
             )
+        else:
+            witness = tuple(rng.randint(2, 20) for _ in range(3))
+            rows = tuple(
+                (rng.randint(-6, 6), rng.randint(-6, 6), rng.randint(-6, 6)) for _ in range(3)
+            )
+            coefficients = (rows[0], rows[1], rows[2])
+            totals = tuple(
+                sum(a * b for a, b in zip(row, witness, strict=True)) for row in coefficients
+            )
+            # The witness constructs consistent equations but is never stored
+            # in the definition or used by either independent answer oracle.
+            spec = LinearSystem(coefficients, (totals[0], totals[1], totals[2]))
         try:
             task = materialize(spec)
         except (ValueError, ZeroDivisionError):

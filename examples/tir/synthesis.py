@@ -118,6 +118,9 @@ class DataRecipe:
     real_task_ids: tuple[str, ...] = ()
     curriculum: ContentRef | None = None
     synthetic_admission: ContentRef | None = None
+    # Exact JSONL order of all selected examples, useful for paired replacement
+    # controls. Selection and admission are still validated before ordering.
+    task_order: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if min(self.real_count, self.synthetic_count) < 0:
@@ -132,6 +135,11 @@ class DataRecipe:
             raise ValueError("Focused training task IDs must match real_count")
         if self.curriculum is not None and self.real_task_ids:
             raise ValueError("Use the recorded dynamic curriculum or explicit IDs, not both")
+        if self.task_order and (
+            len(self.task_order) != self.real_count + self.synthetic_count
+            or len(set(self.task_order)) != len(self.task_order)
+        ):
+            raise ValueError("Task order must list each training example exactly once")
         if self.synthetic_admission is not None and (
             self.synthetic_count <= 0 or self.synthetic_count * 10 > self.real_count
         ):
@@ -906,7 +914,13 @@ def build_dataset(
             items.append(replace(item, answer=normalize_gold(item.answer, recipe.gold_format)))
     if len(items) != recipe.real_count + recipe.synthetic_count:
         raise ValueError("Synthesis exhausted its unique-question retry limit")
-    rng.shuffle(items)
+    if recipe.task_order:
+        by_id = {item.task_id: item for item in items}
+        if set(recipe.task_order) != by_id.keys():
+            raise ValueError("Task order must match the selected training tasks")
+        items = [by_id[task_id] for task_id in recipe.task_order]
+    else:
+        rng.shuffle(items)
     output.mkdir(parents=True, exist_ok=False)
     ref = write_examples(output / "train.jsonl", tuple(items))
     manifest = SynthesisManifest(recipe, pool_ref, ref, recipe.real_count, recipe.synthetic_count)

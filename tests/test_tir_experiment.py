@@ -110,6 +110,35 @@ def test_real_task_id_curriculum_is_exact_and_rejects_invalid_ids(tmp_path: Path
         build_dataset(heldout, pool, ref, (pool[0].task_id,), tmp_path / "heldout")
 
 
+def test_task_order_is_exact_and_cannot_add_unselected_tasks(tmp_path: Path) -> None:
+    pool = tuple(example(f"Ordered training question {i}") for i in range(3))
+    ref = write_examples(tmp_path / "pool.jsonl", pool)
+    selected = (pool[0].task_id, pool[2].task_id)
+    recipe = DataRecipe(real_count=2, real_task_ids=selected, task_order=selected[::-1])
+    data = build_dataset(recipe, pool, ref, (), tmp_path / "ordered")
+    assert read_examples(local_path(data.dataset)) == (pool[2], pool[0])
+    for invalid in ((selected[0],), (selected[0], selected[0])):
+        with pytest.raises(ValueError, match="exactly once"):
+            replace(recipe, task_order=invalid)
+    with pytest.raises(ValueError, match="selected training tasks"):
+        build_dataset(
+            replace(recipe, task_order=(pool[0].task_id, pool[1].task_id)),
+            pool,
+            ref,
+            (),
+            tmp_path / "unselected",
+        )
+    assert not (tmp_path / "unselected").exists()
+    with pytest.raises(ValueError, match="freshly select"):
+        CurriculumPlan(
+            RoundRecipe(
+                "Select fresh student data", data=replace(recipe, real_task_ids=()), batch_size=2
+            ),
+            ProbeRecipe(count=2),
+            mixed_count=1,
+        )
+
+
 def _rollout(path: Path, prompt: str, rewards: tuple[int, ...], indices: tuple[int, ...]) -> Path:
     rows = [
         {"prompt": f"System\nUser:\n{prompt}\nAssistant:", "sample_idx": index, "reward": reward}
@@ -413,6 +442,51 @@ def experiment(tmp_path: Path) -> Experiment:
     root = tmp_path / "experiment"
     prepare(config, root)
     return Experiment(root)
+
+
+def test_training_rematerializes_persisted_task_order_before_execution(
+    experiment: Experiment, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    benchmark = experiment.protocol.benchmark
+    pool = read_examples(local_path(benchmark.train))
+    data_recipe = DataRecipe(real_count=1, synthetic_count=3)
+    rehearsal = build_dataset(
+        data_recipe, pool, benchmark.train, benchmark.excluded_ids, tmp_path / "rehearsal"
+    )
+    expected = read_examples(local_path(rehearsal.dataset))[::-1]
+    task_ids = tuple(item.task_id for item in read_examples(local_path(benchmark.valid)))
+    write_record(
+        experiment.root / "valid/base.json",
+        evaluation(
+            tmp_path / "baseline.jsonl",
+            (False,) * len(task_ids),
+            task_ids=task_ids,
+            solution_id="base",
+        ),
+    )
+    recipe = RoundRecipe(
+        "Preserve paired row positions through training materialization",
+        data=replace(data_recipe, task_order=tuple(item.task_id for item in expected)),
+        training_steps=1,
+        batch_size=2,
+    )
+    recipe_ref = write_record(tmp_path / "recipe.json", recipe)
+    requests: list[WorkerRequest] = []
+
+    def failing_spec(self: Experiment, request: WorkerRequest, name: str) -> JobSpec:
+        requests.append(request)
+        return JobSpec(("/bin/false",), timeout_seconds=5)
+
+    monkeypatch.setattr(Experiment, "spec", failing_spec)
+    with pytest.raises(RuntimeError, match="failed"):
+        asyncio.run(experiment.train("ordered", local_path(recipe_ref)))
+    candidate = experiment.candidate("ordered")
+    assert candidate.status == "failed" and candidate.training is None
+    assert isinstance(candidate.data, SynthesisManifest)
+    assert candidate.data.recipe == recipe.data
+    assert read_examples(local_path(candidate.data.dataset)) == expected
+    assert len(requests) == 1
+    assert requests[0].dataset == str(local_path(candidate.data.dataset))
 
 
 @pytest.mark.parametrize("synthetic_count", [0, 1])

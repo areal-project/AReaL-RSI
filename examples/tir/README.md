@@ -21,6 +21,14 @@
 
 `RoundRecipe.algorithm` 为 `sft` 时，`data` 为 `null`，`distillation` 引用已验证的教师 manifest；
 为 `grpo` 时使用 `DataRecipe`，可通过 `curriculum` 和 `synthetic_admission` 引用上述筛选记录。
+
+成对比较真实题对照与合成混合组时，可用 `DataRecipe.task_order` 指定全部训练题的物化顺序。
+构建器先完成选题与准入校验，再校验题序恰好包含已选数据的全部 ID，
+按该顺序写入 JSONL；配方重载和训练时重新物化均保留这一顺序。默认按 `seed` 打乱。
+配对实验应保持总行数、共享真实题及其位置相同，在固定位置替换真实题或合成题，
+并保持训练 seed、sampler、batch 和步数一致，以对齐样本曝光；实际 token 数和耗时单独记录。
+动态选题入口会自行选择当前学生的数据，预绑定题序的配方直接交给 `experiment train`。
+
 SFT 可用 `sft_style: "tool_first"` 把教师调用工具前的完整推导替换成简短计算计划，
 保留原程序、真实观察和已核验答案；原始教师轨迹保持不变，训练视图单独记录。
 SFT 在训练节点用实际 parent 的 tokenizer 重建 token 和 mask；题目及真实工具观察不参与 loss，

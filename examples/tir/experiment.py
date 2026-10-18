@@ -188,6 +188,7 @@ class CurriculumPlan:
             data.curriculum
             or data.synthetic_admission
             or data.real_task_ids
+            or data.task_order
             or self.probe.proposals
         ):
             raise ValueError("A dynamic round must freshly select data with its actual parent")

@@ -54,6 +54,7 @@ from examples.tir.synthesis import (
     CompositionalAdmissionPolicy,
     DataRecipe,
     StudentProbe,
+    SynthesisManifest,
     admit_compositional,
     build_dataset,
     dynamic_curriculum,
@@ -282,14 +283,48 @@ def test_composed_admission_rejects_easy_and_unsolved_groups_and_caps_mixture(
         DataRecipe(real_count=5, synthetic_count=1, synthetic_admission=ref)
     pool = tuple(real_example(i) for i in range(20))
     pool_ref = write_examples(tmp_path / "pool.jsonl", pool)
+    shared = tuple(item.task_id for item in pool[:10])
+    task_order = (*shared[:4], admission.selected_ids[0], *shared[4:])
+    recipe = DataRecipe(
+        real_count=10,
+        synthetic_count=1,
+        real_task_ids=shared,
+        synthetic_admission=ref,
+        task_order=task_order,
+    )
     data = build_dataset(
-        DataRecipe(real_count=10, synthetic_count=1, synthetic_admission=ref),
+        recipe,
         pool,
         pool_ref,
         (),
         tmp_path / "training",
     )
     assert data.synthetic_count == 1 and data.real_count == 10
+    control = build_dataset(
+        replace(
+            recipe,
+            real_count=11,
+            synthetic_count=0,
+            synthetic_admission=None,
+            real_task_ids=(*shared, pool[10].task_id),
+            task_order=tuple(
+                pool[10].task_id if task_id == admission.selected_ids[0] else task_id
+                for task_id in task_order
+            ),
+        ),
+        pool,
+        pool_ref,
+        (),
+        tmp_path / "control",
+    )
+    mixed_rows = read_examples(local_path(data.dataset))
+    control_rows = read_examples(local_path(control.dataset))
+    assert mixed_rows[4] == read_examples(local_path(admission.dataset))[0]
+    assert control_rows[4] == pool[10]
+    assert all(mixed_rows[i] == control_rows[i] for i in range(11) if i != 4)
+    restored = read_record(tmp_path / "training/manifest.json", SynthesisManifest)
+    replayed = build_dataset(restored.recipe, pool, pool_ref, (), tmp_path / "replayed")
+    assert replayed.dataset.digest == data.dataset.digest
 
 
 def test_lattice_proposals_calibrate_constraints_without_irrelevant_obstacles(
@@ -366,9 +401,16 @@ def test_composed_admission_requires_actual_correct_stdout_and_family_coverage(
     )
     pool = tuple(real_example(index) for index in range(20))
     pool_ref = write_examples(tmp_path / "pool.jsonl", pool)
+    shared_ids = tuple(item.task_id for item in pool[:10])
     with pytest.raises(ValueError, match="tool evidence"):
         build_dataset(
-            DataRecipe(real_count=10, synthetic_count=1, synthetic_admission=forged),
+            DataRecipe(
+                real_count=10,
+                synthetic_count=1,
+                synthetic_admission=forged,
+                real_task_ids=shared_ids,
+                task_order=(*shared_ids, loose.selected_ids[0]),
+            ),
             pool,
             pool_ref,
             (),

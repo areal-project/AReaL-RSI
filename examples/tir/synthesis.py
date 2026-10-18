@@ -375,6 +375,183 @@ class SynthesisManifest:
 
 
 @dataclass(frozen=True, slots=True)
+class ProbeTaskFeatures:
+    task_id: str
+    successes: int
+    samples: int
+    generated_tokens: int
+    tool_calls: int
+    passed_with_tool_io: int
+
+
+@dataclass(frozen=True, slots=True)
+class TaskReplacement:
+    position: int
+    synthetic: ProbeTaskFeatures
+    real: ProbeTaskFeatures
+    distance: int
+
+
+@dataclass(frozen=True, slots=True)
+class PairedDatasets:
+    parent: ContentRef
+    real: SynthesisManifest
+    mixed: SynthesisManifest
+    replacements: tuple[TaskReplacement, ...]
+    tool_call_token_weight: int = 128
+
+
+def probe_task_features(probe: StudentProbe) -> tuple[ProbeTaskFeatures, ...]:
+    """Read complete native evidence; these features do not estimate task difficulty."""
+    from examples.tir.benchmark import evaluation_cases
+
+    items = read_examples(local_path(probe.examples))
+    # Reuse correctness and repetition validation before reading per-sample metrics.
+    groups = {group.task_id: group for group in probe_groups(probe)}
+    samples = read_evaluation_samples(
+        probe.evaluation,
+        task_ids=tuple(item.task_id for item in evaluation_cases(items)),
+        split=BenchmarkSplit.TRAIN,
+    )
+    by_id = {sample.task_id: sample for sample in samples}
+    features = []
+    for item in items:
+        generated = calls = passed_io = 0
+        for index in range(item.repetitions):
+            sample = by_id[f"{item.task_id}-rep{index}"]
+            tokens = sample.metrics.get("generated_tokens")
+            if tokens is None or not math.isfinite(tokens) or tokens < 0 or int(tokens) != tokens:
+                raise ValueError("Matching requires observed nonnegative integer generated tokens")
+            generated += int(tokens)
+            calls += sum(event.kind == "tool_call" for event in sample.events)
+            actual_io = any(
+                previous.kind == "tool_call" and current.kind == "tool_result"
+                for previous, current in zip(sample.events, sample.events[1:], strict=False)
+            )
+            passed_io += sample.passed and actual_io
+        group = groups[item.task_id]
+        features.append(
+            ProbeTaskFeatures(
+                item.task_id, group.successes, group.samples, generated, calls, passed_io
+            )
+        )
+    return tuple(features)
+
+
+def paired_datasets(
+    recipe: DataRecipe,
+    pool_ref: ContentRef,
+    excluded_ids: tuple[str, ...],
+    output: Path,
+) -> PairedDatasets:
+    """Replace strict synthetic slots with matched real controls at identical positions.
+
+    Both probes must use the same actual parent. Controls have equal observed
+    success counts and a passed sample with adjacent actual tool I/O. Greedy
+    matching minimizes token distance plus128 times tool-call distance, with ID
+    tie-breaking, without replacement. It does not match latent difficulty or
+    establish that a real task's tool stdout independently verifies its gold.
+    """
+    if (
+        recipe.curriculum is None
+        or recipe.synthetic_admission is None
+        or recipe.real_task_ids
+        or recipe.task_order
+    ):
+        raise ValueError("Paired data requires a fresh shared curriculum and strict admission")
+    if output.exists():
+        raise FileExistsError(output)
+    curriculum = read_record(local_path(recipe.curriculum), DynamicCurriculum)
+    admission = read_record(local_path(recipe.synthetic_admission), SyntheticAdmission)
+    if curriculum.training_pool != pool_ref or not admission.policy.require_correct_tool_output:
+        raise ValueError("Paired data requires the same official pool and verified tool outputs")
+    real_probe = read_record(local_path(curriculum.probe), StudentProbe)
+    synthetic_probe = read_record(local_path(admission.probe), StudentProbe)
+    if real_probe.model != synthetic_probe.model:
+        raise ValueError("Paired probes must use the same actual parent checkpoint")
+    pool = read_examples(local_path(pool_ref))
+    by_id = {item.task_id: item for item in pool}
+    for item in read_examples(local_path(real_probe.examples)):
+        original = by_id.get(item.task_id)
+        if (
+            original is None
+            or replace(item, repetitions=1, answer=original.answer) != original
+            or item.answer
+            not in {original.answer, normalize_gold(original.answer, "math_delimited")}
+        ):
+            raise ValueError("Real matching probe differs from the frozen official training pool")
+    shared = (*curriculum.mixed_task_ids, *curriculum.random_task_ids)
+    if len(shared) != recipe.real_count or len(admission.selected_ids) != recipe.synthetic_count:
+        raise ValueError("Paired shared and replacement counts differ from the recipe")
+    protected = set(excluded_ids)
+    real = {
+        item.task_id: item
+        for item in probe_task_features(real_probe)
+        if item.task_id not in set(shared) | protected
+        and 0 < item.successes < item.samples
+        and item.passed_with_tool_io
+    }
+    synthetic = {item.task_id: item for item in probe_task_features(synthetic_probe)}
+    if not set(admission.selected_ids) <= synthetic.keys():
+        raise ValueError("Synthetic replacements lack complete student evidence")
+    order = list((*shared, *admission.selected_ids))
+    random.Random(recipe.seed).shuffle(order)
+    real_order = order.copy()
+    pairs = []
+    for position, task_id in enumerate(order):
+        if task_id not in synthetic:
+            continue
+        proposed = synthetic[task_id]
+        if not 0 < proposed.successes < proposed.samples or not proposed.passed_with_tool_io:
+            raise ValueError("Synthetic replacements require mixed success and actual tool I/O")
+        available = [
+            item
+            for item in real.values()
+            if (item.samples, item.successes) == (proposed.samples, proposed.successes)
+        ]
+        if not available:
+            raise ValueError("Insufficient exact-success, actual-tool real replacement controls")
+
+        def distance(other: ProbeTaskFeatures, target: ProbeTaskFeatures = proposed) -> int:
+            return abs(target.generated_tokens - other.generated_tokens) + (
+                128 * abs(target.tool_calls - other.tool_calls)
+            )
+
+        chosen = min(available, key=lambda other: (distance(other), other.task_id))
+        pairs.append(TaskReplacement(position, proposed, chosen, distance(chosen)))
+        real_order[position] = chosen.task_id
+        del real[chosen.task_id]
+    output.mkdir(parents=True)
+    # Controls are themselves student-mixed, so the real recipe retains the
+    # actual-parent evidence checked again by Experiment.train and build_dataset.
+    real_curriculum = write_record(
+        output / "real-curriculum.json",
+        replace(
+            curriculum,
+            mixed_task_ids=(*curriculum.mixed_task_ids, *(pair.real.task_id for pair in pairs)),
+        ),
+    )
+    real_recipe = replace(
+        recipe,
+        real_count=len(real_order),
+        synthetic_count=0,
+        curriculum=real_curriculum,
+        synthetic_admission=None,
+        task_order=tuple(real_order),
+    )
+    result = PairedDatasets(
+        real_probe.model,
+        build_dataset(real_recipe, pool, pool_ref, excluded_ids, output / "real"),
+        build_dataset(
+            replace(recipe, task_order=tuple(order)), pool, pool_ref, excluded_ids, output / "mixed"
+        ),
+        tuple(pairs),
+    )
+    write_record(output / "paired.json", result)
+    return result
+
+
+@dataclass(frozen=True, slots=True)
 class MixedRolloutEvidence:
     task_id: str
     rollout_file: ContentRef

@@ -54,12 +54,15 @@ from examples.tir.experiment import CurriculumPlan, RoundRecipe
 from examples.tir.synthesis import (
     CompositionalAdmissionPolicy,
     DataRecipe,
+    DynamicCurriculum,
+    PairedDatasets,
     StudentProbe,
     SynthesisManifest,
     admit_compositional,
     build_dataset,
     dynamic_curriculum,
     normalize_gold,
+    paired_datasets,
     probe_groups,
 )
 
@@ -150,6 +153,7 @@ def student_probe(
     scores: tuple[tuple[int, ...], ...],
     *,
     traces: dict[str, tuple[TraceEvent, ...]] | None = None,
+    generated_tokens: dict[str, int] | None = None,
 ) -> ContentRef:
     repeated = tuple(
         replace(item, repetitions=len(group)) for item, group in zip(items, scores, strict=True)
@@ -162,6 +166,9 @@ def student_probe(
             float(score),
             bool(score),
             traces[item.task_id] if traces is not None else (TraceEvent("generation", "answer"),),
+            {"generated_tokens": float(generated_tokens[item.task_id])}
+            if generated_tokens is not None
+            else {},
         )
         for item, group in zip(items, scores, strict=True)
         for index, score in enumerate(group)
@@ -169,6 +176,11 @@ def student_probe(
     path = root / "samples.jsonl"
     path.write_text("".join(json.dumps(encode_record(item)) + "\n" for item in samples))
     accuracy = sum(item.score for item in samples) / len(samples)
+    metrics = {"accuracy": accuracy, "num_tasks": float(len(samples))}
+    if generated_tokens is not None:
+        metrics["generated_tokens"] = sum(
+            item.metrics["generated_tokens"] for item in samples
+        ) / len(samples)
     result = EvaluationResult(
         "probe",
         EvaluationReport(
@@ -176,7 +188,7 @@ def student_probe(
             BenchmarkSplit.TRAIN,
             all(x.passed for x in samples),
             accuracy,
-            {"accuracy": accuracy, "num_tasks": float(len(samples))},
+            metrics,
             "fixture",
         ),
         file_ref(path),
@@ -350,6 +362,108 @@ def test_composed_admission_rejects_easy_and_unsolved_groups_and_caps_mixture(
     restored = read_record(tmp_path / "training/manifest.json", SynthesisManifest)
     replayed = build_dataset(restored.recipe, pool, pool_ref, (), tmp_path / "replayed")
     assert replayed.dataset.digest == data.dataset.digest
+
+
+def test_paired_data_matches_observed_controls_and_replays_exact_shared_positions(
+    tmp_path: Path,
+) -> None:
+    pool = tuple(real_example(i) for i in range(40))
+    pool_ref = write_examples(tmp_path / "pool.jsonl", pool)
+    traces: dict[str, tuple[TraceEvent, ...]] = {
+        item.task_id: (
+            TraceEvent("tool_call", "actual call"),
+            TraceEvent("tool_result", item.answer),
+        )
+        for item in pool
+    }
+    # The closest-length wrong-success and generated-output-only tasks must
+    # never displace a genuinely observed, equal-success real control.
+    traces[pool[21].task_id] = (TraceEvent("generation", "```output\n22\n```"),)
+    tokens = {item.task_id: 100 for item in pool}
+    tokens.update({item.task_id: 20 for item in pool[:22]})
+    tokens.update({pool[22].task_id: 22, pool[23].task_id: 21, pool[24].task_id: 21})
+    scores = tuple((0, 1, 1, 0) if i == 20 else (0, 1, 0, 0) for i in range(40))
+    real_probe = student_probe(
+        tmp_path / "real-probe", pool, scores, traces=traces, generated_tokens=tokens
+    )
+    curriculum = write_record(
+        tmp_path / "shared.json",
+        DynamicCurriculum(
+            pool_ref, real_probe, 17, (pool[0].task_id,), tuple(item.task_id for item in pool[1:20])
+        ),
+    )
+    proposals = propose(29, 2, (), tmp_path / "proposals")
+    proposal = read_record(local_path(proposals), CompositionalManifest)
+    items = read_examples(local_path(proposal.examples))
+    synthetic_probe = student_probe(
+        tmp_path / "synthetic-probe",
+        items,
+        ((0, 1, 0, 0),) * len(items),
+        traces={
+            item.task_id: (
+                TraceEvent("tool_call", "actual call"),
+                TraceEvent("tool_result", item.answer),
+            )
+            for item in items
+        },
+        generated_tokens={item.task_id: 20 for item in items},
+    )
+    admit_compositional(
+        proposals,
+        synthetic_probe,
+        count=2,
+        seed=17,
+        excluded_ids=(),
+        output=tmp_path / "admitted",
+        policy=CompositionalAdmissionPolicy(require_correct_tool_output=True),
+    )
+    recipe = DataRecipe(
+        real_count=20,
+        synthetic_count=2,
+        curriculum=curriculum,
+        synthetic_admission=file_ref(tmp_path / "admitted/admission.json"),
+        gold_format="math_delimited",
+    )
+    pair = paired_datasets(recipe, pool_ref, (), tmp_path / "paired")
+    assert {item.real.task_id for item in pair.replacements} == {pool[23].task_id, pool[24].task_id}
+    assert pair.replacements[0].real.task_id == min(pool[23].task_id, pool[24].task_id)
+    assert all(item.distance == 4 and item.real.successes == 1 for item in pair.replacements)
+    real_rows = read_examples(local_path(pair.real.dataset))
+    mixed_rows = read_examples(local_path(pair.mixed.dataset))
+    positions = {item.position for item in pair.replacements}
+    assert len(real_rows) == len(mixed_rows) == 22
+    assert sum(a == b for a, b in zip(real_rows, mixed_rows, strict=True)) == 20
+    assert all(real_rows[i] == mixed_rows[i] for i in range(22) if i not in positions)
+    restored = read_record(tmp_path / "paired/paired.json", PairedDatasets)
+    for name, manifest in (("real", restored.real), ("mixed", restored.mixed)):
+        replay = build_dataset(manifest.recipe, pool, pool_ref, (), tmp_path / f"replay-{name}")
+        assert replay.dataset.digest == manifest.dataset.digest
+    # Different physical parents are rejected before any dataset is published.
+    probe = read_record(local_path(real_probe), StudentProbe)
+    wrong_probe = write_record(
+        tmp_path / "wrong-probe.json", replace(probe, model=ContentRef("file:///other", "other"))
+    )
+    shared = read_record(local_path(curriculum), DynamicCurriculum)
+    wrong_curriculum = write_record(
+        tmp_path / "wrong-curriculum.json", replace(shared, probe=wrong_probe)
+    )
+    with pytest.raises(ValueError, match="same actual parent"):
+        paired_datasets(
+            replace(recipe, curriculum=wrong_curriculum), pool_ref, (), tmp_path / "wrong"
+        )
+    assert not (tmp_path / "wrong").exists()
+    # Exhaustion preserves the evidence and cannot silently reuse controls.
+    small_probe = student_probe(
+        tmp_path / "small-probe", pool[:20], scores[:20], traces=traces, generated_tokens=tokens
+    )
+    small_curriculum = write_record(
+        tmp_path / "small-curriculum.json", replace(shared, probe=small_probe)
+    )
+    with pytest.raises(ValueError, match="Insufficient exact-success"):
+        paired_datasets(
+            replace(recipe, curriculum=small_curriculum), pool_ref, (), tmp_path / "short"
+        )
+    assert not (tmp_path / "short").exists()
 
 
 def test_lattice_proposals_calibrate_constraints_without_irrelevant_obstacles(

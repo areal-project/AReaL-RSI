@@ -8,6 +8,7 @@
 
 ```text
 search/
+├── launch-goal.sh             从当前源码和已安装 Python 启动研究控制器
 ├── goal.py                    创建/恢复 RSI 研究会话，决定下一轮实验
 ├── experiment/                CPU host 上的实验编排
 │   ├── config.py              训练参数、固定 harness、配置和 worker 请求
@@ -54,7 +55,20 @@ goal.py 选择配置
 
 RSI 控制器在 Slurm CPU host 环境中运行；训练、检索、独立推理在已验证的 GPU 容器中运行。容器未提供 Slurm 客户端，提交脚本在容器外读取 allocation 记录并传入，worker 核对 JobId 与 reservation。不要在控制器运行期间重建它的共享 Python 环境，也不要将自己的控制 Job 当成训练作业等待、取消或递归启动。
 
-启动原生 Goal：
+仓库内的启动脚本是 `examples/search/launch-goal.sh`。它定位当前 checkout，默认使用其中的 `.venv/bin/python`，并把该 checkout 作为研究工作区；也可用 `RSI_PYTHON=/absolute/path/to/python` 指定已安装依赖的 Python。脚本可从任意工作目录通过绝对路径运行，不重建环境。
+
+从仓库根目录启动原生 Goal：
+
+```bash
+bash examples/search/launch-goal.sh \
+  --root /path/to/run/native-goal \
+  --objective /path/to/run/native-goal/objective.md \
+  --env-file /path/to/private/rsi.env
+```
+
+运行目录中的 `objective.md` 保存本轮研究目标和资源路径，`execution-ready.json` 指定可执行的冻结源码、候选配置及镜像；目标文件应明确引用本轮 `execution-ready.json` 的绝对路径。历史实验目录中的同名 shell 脚本是该次实验的本地配置，不属于仓库入口。新一轮使用独立运行目录，保留历史会话和冻结产物。
+
+也可直接调用 Python 入口：
 
 ```bash
 python -m examples.search.goal \

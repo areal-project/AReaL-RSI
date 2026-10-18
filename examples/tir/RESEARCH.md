@@ -227,6 +227,8 @@ python -m examples.tir.experiment --experiment /absolute/new-experiment dynamic-
 已经训练成功、只有 valid 失败的候选，可用 `evaluate --candidate NAME` 单独重试验证。
 此入口不执行 test、不启动 `/rsi`。至少完成两轮后，依据完整 valid 冻结最好的候选，
 再独立运行 `test`；未达目标仍应如实报告。
+`/rsi` 的 Leader 也可调用 `dynamic-round`；其训练 brief 将蒸馏视为可选分支，
+遵守用户停止 SFT 的决定，继续直接 GRPO。
 
 ## 运行
 

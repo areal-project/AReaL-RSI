@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
 import subprocess
 import sys
 import tarfile
@@ -110,6 +111,9 @@ def test_prepare_isolated_runs_and_archives_dirty_source(tmp_path: Path) -> None
     state = read_record(first / "experiment.json", ExperimentState)
     assert state.status == "prepared" and state.provenance is not None
     assert state.provenance.backend.dirty
+    with tarfile.open(local_path(state.provenance.project.archive)) as archive:
+        shared_probe = archive.extractfile("examples/checkpoints.py")
+        assert shared_probe is not None and b"def parameter_probe(" in shared_probe.read()
     with tarfile.open(local_path(state.provenance.backend.archive)) as archive:
         content = archive.extractfile("examples/tir/workflow.py")
         assert content is not None and content.read() == b"original = False\n"
@@ -189,6 +193,41 @@ def test_timeout_and_cancellation_kill_descendants(tmp_path: Path) -> None:
     assert record.pid is not None
     with pytest.raises(ProcessLookupError):
         os.kill(record.pid, 0)
+
+
+def test_surviving_descendant_is_not_reported_as_released(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jobs = JobExecutor(tmp_path)
+    pid_file = tmp_path / "survivor.pid"
+    real_kill = os.kill
+    child_pid: int | None = None
+
+    def ignore_child_kill(pid: int, sig: int) -> None:
+        if pid_file.exists() and pid == int(pid_file.read_text()) and sig == signal.SIGKILL:
+            return
+        real_kill(pid, sig)
+
+    monkeypatch.setattr(os, "kill", ignore_child_kill)
+    code = (
+        "import subprocess,sys,time; from pathlib import Path; "
+        "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'], "
+        "start_new_session=True); "
+        f"Path({str(pid_file)!r}).write_text(str(child.pid)); time.sleep(60)"
+    )
+    try:
+        with pytest.raises(JobExecutionError) as failed:
+            asyncio.run(jobs.run("run", "survivor", command(code, tmp_path, timeout=0.5)))
+        child_pid = int(pid_file.read_text())
+        assert failed.value.record.state == "timed_out"
+        assert not failed.value.record.resources_released
+        assert "cleanup incomplete" in (failed.value.record.error or "")
+        assert not jobs.detail("run", "survivor").resources_released
+    finally:
+        if child_pid is None and pid_file.exists():
+            child_pid = int(pid_file.read_text())
+        if child_pid is not None:
+            real_kill(child_pid, signal.SIGKILL)
 
 
 @pytest.mark.parametrize("task_ids", [("a", "b"), ("a", "a"), ("a", "c")])

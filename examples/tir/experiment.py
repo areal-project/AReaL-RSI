@@ -195,6 +195,7 @@ def prepare(config: ExperimentConfig, root: Path) -> None:
     # evaluator, rollout, data reader, reward or infrastructure invalidates a experiment.
     locked_paths = [
         *sorted((PROJECT / "src").rglob("*.py")),
+        PROJECT / "examples/checkpoints.py",
         *(
             PROJECT / "examples/tir" / name
             for name in (

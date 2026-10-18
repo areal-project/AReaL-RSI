@@ -41,15 +41,53 @@ class ProcessIdentity:
         except FileNotFoundError:
             if not Path("/proc").exists():
                 result = subprocess.run(
-                    ["ps", "-p", str(pid), "-o", "lstart="],
+                    ["ps", "-p", str(pid), "-o", "lstart=", "-o", "stat="],
                     capture_output=True,
                     text=True,
                     check=False,
                 )
-                started = result.stdout.strip()
-                return cls(pid, started) if started else None
+                fields = result.stdout.strip().rsplit(None, 1)
+                if len(fields) != 2 or fields[1].startswith(("Z", "X")):
+                    return None
+                return cls(pid, fields[0])
             return None
-        return cls(pid, stat.rsplit(")", 1)[1].split()[19])
+        fields = stat.rsplit(")", 1)[1].split()
+        return None if fields[0] in {"Z", "X"} else cls(pid, fields[19])
+
+
+def terminate_process_tree(pid: int) -> bool:
+    """Release an owned session and its observed descendants, including detached ones."""
+    descendants: list[ProcessIdentity] = []
+    table = subprocess.check_output(["ps", "-axo", "pid=,ppid="], text=True)
+    relations = [tuple(map(int, line.split())) for line in table.splitlines()]
+    parents = [pid]
+    while parents:
+        children = [child for child, parent in relations if parent in parents]
+        descendants.extend(
+            identity for child in children if (identity := ProcessIdentity.read(child)) is not None
+        )
+        parents = children
+    parent = ProcessIdentity.read(pid)
+    with suppress(ProcessLookupError):
+        os.killpg(pid, signal.SIGTERM)
+    deadline = time.monotonic() + 5
+    while parent is not None and ProcessIdentity.read(pid) == parent:
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.02)
+    with suppress(ProcessLookupError):
+        os.killpg(pid, signal.SIGKILL)
+    for identity in reversed(descendants):
+        if ProcessIdentity.read(identity.pid) == identity:
+            with suppress(ProcessLookupError):
+                os.kill(identity.pid, signal.SIGKILL)
+    deadline = time.monotonic() + 5
+    identities = ([parent] if parent is not None else []) + descendants
+    while any(ProcessIdentity.read(item.pid) == item for item in identities):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.02)
+    return True
 
 
 class JobExecutor:
@@ -130,11 +168,21 @@ class JobExecutor:
         except OSError as exc:
             record = replace(record, state="failed", error=str(exc))
         finally:
+            released = True
             if process is not None:
-                await self._terminate(process)
+                released = await self._terminate(process)
                 record = replace(record, exit_code=process.returncode)
+                if not released:
+                    record = replace(
+                        record,
+                        state="failed" if record.state == "succeeded" else record.state,
+                        error=(
+                            f"{record.error or 'Execution ended'}; "
+                            "process tree cleanup incomplete"
+                        ),
+                    )
             record = replace(
-                record, updated_at=time.time(), finished_at=time.time(), resources_released=True
+                record, updated_at=time.time(), finished_at=time.time(), resources_released=released
             )
             save()
         if record.state != "succeeded":
@@ -142,27 +190,8 @@ class JobExecutor:
         return record
 
     @staticmethod
-    async def _terminate(process: asyncio.subprocess.Process) -> None:
-        # AReaL workers may start their own sessions; retain descendants before
-        # terminating their parent so detached RPC/inference servers are reaped.
-        descendants: list[ProcessIdentity] = []
-        table = subprocess.check_output(["ps", "-axo", "pid=,ppid="], text=True)
-        relations = [tuple(map(int, line.split())) for line in table.splitlines()]
-        parents = [process.pid]
-        while parents:
-            children = [pid for pid, parent in relations if parent in parents]
-            descendants.extend(
-                identity for pid in children if (identity := ProcessIdentity.read(pid)) is not None
-            )
-            parents = children
-        with suppress(ProcessLookupError):
-            os.killpg(process.pid, signal.SIGTERM)
+    async def _terminate(process: asyncio.subprocess.Process) -> bool:
+        released = await asyncio.to_thread(terminate_process_tree, process.pid)
         with suppress(TimeoutError):
             await asyncio.wait_for(process.wait(), 5)
-        with suppress(ProcessLookupError):
-            os.killpg(process.pid, signal.SIGKILL)
-        for identity in reversed(descendants):
-            if ProcessIdentity.read(identity.pid) == identity:
-                with suppress(ProcessLookupError):
-                    os.kill(identity.pid, signal.SIGKILL)
-        await process.wait()
+        return released and process.returncode is not None

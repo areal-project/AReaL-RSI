@@ -37,7 +37,14 @@ from areal_rsi.infra.trajectories import LocalTrajectoryStore
 from examples.tir.data import DatasetManifest, SynthesisConfig, read_problems, synthesize
 
 PROJECT = Path(__file__).resolve().parents[2]
-PROJECT_PATHS = ("src", "examples/tir", "examples/__init__.py", "pyproject.toml", "uv.lock")
+PROJECT_PATHS = (
+    "src",
+    "examples/tir",
+    "examples/checkpoints.py",
+    "examples/__init__.py",
+    "pyproject.toml",
+    "uv.lock",
+)
 BACKEND_PATHS = ("areal", "examples/tir", "pyproject.toml", "uv.lock")
 
 

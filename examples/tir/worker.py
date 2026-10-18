@@ -15,6 +15,7 @@ from areal_rsi.api.control import encode_record
 from areal_rsi.api.execution import TrainingReceipt
 from areal_rsi.api.records import EvaluationSample
 from areal_rsi.infra.artifacts import read_record, write_record
+from examples.checkpoints import parameter_probe
 from examples.tir.benchmark import evaluation_cases, read_examples
 from examples.tir.data import read_problems
 from examples.tir.pipeline import WorkerRequest
@@ -155,21 +156,6 @@ def dataset(path: str, request: WorkerRequest) -> Any:
             for item in items
         ]
     )
-
-
-def parameter_probe(model: Path, key: str | None = None) -> tuple[str, Any]:
-    from safetensors import safe_open
-
-    paths = sorted(model.glob("*.safetensors"))
-    for path in paths:
-        with safe_open(path, framework="pt", device="cpu") as reader:
-            keys = list(reader.keys())
-            selected = key if key in keys else None
-            if key is None:
-                selected = next((name for name in keys if name.endswith("q_proj.weight")), None)
-            if selected is not None:
-                return selected, reader.get_tensor(selected).flatten()[:2048].float().clone()
-    raise ValueError(f"No matching parameter probe in {model}; this example uses safetensors")
 
 
 def train(request: WorkerRequest, config: Any) -> None:

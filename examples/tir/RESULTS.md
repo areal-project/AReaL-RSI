@@ -39,11 +39,11 @@ Mypy通过。文档/新实验模板更新后的针对性回归39 passed。新首
 
 历史归档沿用实验时的文件与字段名；当前源码使用 train / valid / test，归档不重写。
 
-本机实验产物均在 `/storage/openpsi/users/fenghui/experiments/tir-rsi-20261017/study-torl`：
+以下使用 `$TIR_RESULTS_ROOT` 表示本地实验归档目录；查看产物时替换为实际绝对路径。
 
-- [历史报告及证据目录](/storage/openpsi/users/fenghui/experiments/tir-rsi-20261017/study-torl)。
-- [结果图](/storage/openpsi/users/fenghui/experiments/tir-rsi-20261017/study-torl/metrics-v2.png)。
-- [最终checkpoint](/storage/openpsi/users/fenghui/experiments/tir-rsi-20261017/study-torl/execution/study-torl/jobs/r4-train/areal/checkpoints/root/rsi-tir/study-torl-r4-train/default/epoch5epochstep15globalstep95)。
+- 历史报告及证据目录：`$TIR_RESULTS_ROOT/`。
+- 结果图：`$TIR_RESULTS_ROOT/metrics-v2.png`。
+- 最终checkpoint：`$TIR_RESULTS_ROOT/execution/study-torl/jobs/r4-train/areal/checkpoints/root/rsi-tir/study-torl-r4-train/default/epoch5epochstep15globalstep95`。
 - 真实会话 `run-fb43e606bfbe` 的原始事件、阶段迁移和17条宿主复核反馈位于 `rsi/`。
 - 取消的r5不计完成轮次；其曾被删除的部分数据按原SHA恢复，未恢复的元数据如实列明，
   见 `recovery/r5/recovery.json`。原生报告更正另存 `research-report-corrections.md`，原稿保留。

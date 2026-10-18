@@ -58,7 +58,7 @@ GPU 使用 {current.protocol.config.slurm.reservation} reservation，避免改�
 
 研发权限：可修改 examples/tir/synthesis.py 和对应生成器测试，
 可新增/修改训练 recipe JSON 与分析/研究报告。
-examples/tir/experiment.py、benchmark.py、worker.py、workflow.py、reward.py、pipeline.py、
+examples/checkpoints.py、examples/tir/experiment.py、benchmark.py、worker.py、workflow.py、reward.py、pipeline.py、
 src/、AReaL 后端、protocol/freeze/harness/benchmark 数据与已有结果已冻结，禁止修改。
 test 对应 official test，只供宿主独立验收。禁止读取 official test、heldout/ 数据、test/ 结果。
 只能根据 valid 反馈调整策略；
@@ -178,9 +178,7 @@ async def run(experiment: Path, env_file: Path | None, *, resume: bool) -> None:
 
 async def launch(args: argparse.Namespace) -> None:
     if not (PROJECT / "src/areal_rsi").is_dir():
-        raise ValueError(
-            "Run the TIR example from a source checkout with uv sync --locked"
-        )
+        raise ValueError("Run the TIR example from a source checkout with uv sync --locked")
     root = args.experiment
     if root is None:
         if args.resume or args.action != "research":

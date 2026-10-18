@@ -8,16 +8,15 @@ import json
 import math
 import os
 import re
-import signal
 import socket
 import subprocess
 import time
 import urllib.error
 import urllib.request
-from contextlib import suppress
 from dataclasses import asdict
 from pathlib import Path
 
+from areal_rsi.infra.execution import terminate_process_tree
 from examples.search import PROJECT_ROOT
 from examples.search.evaluation.artifacts import (
     FinalEvalConfig,
@@ -57,13 +56,10 @@ def free_port() -> int:
 
 
 def stop(process: subprocess.Popen[bytes]) -> None:
-    with suppress(ProcessLookupError):
-        os.killpg(process.pid, signal.SIGTERM)
-    try:
-        process.wait(timeout=15)
-    except subprocess.TimeoutExpired:
-        os.killpg(process.pid, signal.SIGKILL)
-        process.wait()
+    released = terminate_process_tree(process.pid)
+    process.wait(timeout=5)
+    if not released:
+        raise RuntimeError(f"Evaluation service process tree cleanup incomplete: {process.pid}")
 
 
 def run(config: FinalEvalConfig) -> None:
@@ -342,8 +338,16 @@ def run(config: FinalEvalConfig) -> None:
         }
         (output / "solver-cost.json").write_text(json.dumps(metrics, indent=2) + "\n")
     finally:
+        # Clean every service even if one tree cannot be released. The judge
+        # must not start while an observed inference descendant still survives.
+        errors = []
         for process in processes:
-            stop(process)
+            try:
+                stop(process)
+            except (RuntimeError, subprocess.TimeoutExpired) as error:
+                errors.append(str(error))
+        if errors:
+            raise RuntimeError("; ".join(errors))
     # Preserve counters even when the legacy batch's JSON-only observation
     # check exits nonzero. Only proven local model-action errors may continue.
     from areal_rsi.infra.artifacts import write_record

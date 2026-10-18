@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
+import subprocess
+import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -11,6 +16,7 @@ import pytest
 
 from areal_rsi.api.records import DirectorySnapshot
 from areal_rsi.infra.artifacts import read_record, snapshot_directory
+from areal_rsi.infra.execution import ProcessIdentity
 from examples.search.evaluation.analysis import (
     paired_statistics,
     read_official_results,
@@ -18,12 +24,44 @@ from examples.search.evaluation.analysis import (
 )
 from examples.search.evaluation.artifacts import FinalEvalConfig, digest
 from examples.search.evaluation.checkpoints import export_checkpoint
-from examples.search.evaluation.official import counters
+from examples.search.evaluation.official import counters, stop
 from examples.search.evaluation.verification import (
     context_budget_exhaustion,
     recover_summary,
     tool_argument_failure,
 )
+
+
+@pytest.mark.skipif(not Path("/proc").exists(), reason="Linux process identity regression")
+def test_official_stop_releases_detached_inference_worker(tmp_path: Path) -> None:
+    pid_file = tmp_path / "inference.pid"
+    code = (
+        "import subprocess,sys,time; from pathlib import Path; "
+        "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'], "
+        "start_new_session=True); "
+        f"Path({str(pid_file)!r}).write_text(str(child.pid)); time.sleep(60)"
+    )
+    process = subprocess.Popen(
+        [sys.executable, "-c", code], start_new_session=True,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    child: ProcessIdentity | None = None
+    try:
+        deadline = time.monotonic() + 5
+        while not pid_file.exists():
+            assert process.poll() is None and time.monotonic() < deadline
+            time.sleep(0.01)
+        child = ProcessIdentity.read(int(pid_file.read_text()))
+        assert child is not None
+        stop(process)
+        assert process.poll() is not None
+        assert ProcessIdentity.read(child.pid) is None
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+        if child is not None and ProcessIdentity.read(child.pid) == child:
+            os.kill(child.pid, signal.SIGKILL)
 
 
 def test_hf5_export_preserves_weights_and_restores_legacy_position_metadata(tmp_path: Path) -> None:

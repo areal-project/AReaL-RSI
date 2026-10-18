@@ -55,6 +55,41 @@ class ProcessIdentity:
         return None if fields[0] in {"Z", "X"} else cls(pid, fields[19])
 
 
+def terminate_process_tree(pid: int) -> bool:
+    """Release an owned session and its observed descendants, including detached ones."""
+    descendants: list[ProcessIdentity] = []
+    table = subprocess.check_output(["ps", "-axo", "pid=,ppid="], text=True)
+    relations = [tuple(map(int, line.split())) for line in table.splitlines()]
+    parents = [pid]
+    while parents:
+        children = [child for child, parent in relations if parent in parents]
+        descendants.extend(
+            identity for child in children if (identity := ProcessIdentity.read(child)) is not None
+        )
+        parents = children
+    parent = ProcessIdentity.read(pid)
+    with suppress(ProcessLookupError):
+        os.killpg(pid, signal.SIGTERM)
+    deadline = time.monotonic() + 5
+    while parent is not None and ProcessIdentity.read(pid) == parent:
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.02)
+    with suppress(ProcessLookupError):
+        os.killpg(pid, signal.SIGKILL)
+    for identity in reversed(descendants):
+        if ProcessIdentity.read(identity.pid) == identity:
+            with suppress(ProcessLookupError):
+                os.kill(identity.pid, signal.SIGKILL)
+    deadline = time.monotonic() + 5
+    identities = ([parent] if parent is not None else []) + descendants
+    while any(ProcessIdentity.read(item.pid) == item for item in identities):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.02)
+    return True
+
+
 class JobExecutor:
     def __init__(self, root: Path):
         self.root = root.resolve()
@@ -156,41 +191,7 @@ class JobExecutor:
 
     @staticmethod
     async def _terminate(process: asyncio.subprocess.Process) -> bool:
-        # AReaL workers may start their own sessions; retain descendants before
-        # terminating their parent so detached RPC/inference servers are reaped.
-        descendants: list[ProcessIdentity] = []
-        table = subprocess.check_output(["ps", "-axo", "pid=,ppid="], text=True)
-        relations = [tuple(map(int, line.split())) for line in table.splitlines()]
-        parents = [process.pid]
-        while parents:
-            children = [pid for pid, parent in relations if parent in parents]
-            descendants.extend(
-                identity for pid in children if (identity := ProcessIdentity.read(pid)) is not None
-            )
-            parents = children
-        with suppress(ProcessLookupError):
-            os.killpg(process.pid, signal.SIGTERM)
+        released = await asyncio.to_thread(terminate_process_tree, process.pid)
         with suppress(TimeoutError):
             await asyncio.wait_for(process.wait(), 5)
-        with suppress(ProcessLookupError):
-            os.killpg(process.pid, signal.SIGKILL)
-        for identity in reversed(descendants):
-            if ProcessIdentity.read(identity.pid) == identity:
-                with suppress(ProcessLookupError):
-                    os.kill(identity.pid, signal.SIGKILL)
-        # SIGKILL can remain pending while a child waits for kernel I/O. A
-        # delivered signal alone does not prove that the resources are free.
-        deadline = time.monotonic() + 5
-        with suppress(TimeoutError):
-            await asyncio.wait_for(process.wait(), 5)
-        while True:
-            remaining = [
-                identity
-                for identity in descendants
-                if ProcessIdentity.read(identity.pid) == identity
-            ]
-            if process.returncode is not None and not remaining:
-                return True
-            if time.monotonic() >= deadline:
-                return False
-            await asyncio.sleep(0.02)
+        return released and process.returncode is not None

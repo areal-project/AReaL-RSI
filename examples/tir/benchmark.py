@@ -48,8 +48,10 @@ class EvaluationCase:
     family: str
 
 
-def evaluation_cases(items: tuple[Example, ...]) -> tuple[EvaluationCase, ...]:
-    return tuple(
+def evaluation_cases(
+    items: tuple[Example, ...], *, task_ids: tuple[str, ...] | None = None
+) -> tuple[EvaluationCase, ...]:
+    cases = tuple(
         EvaluationCase(
             item.task_id if item.repetitions == 1 else f"{item.task_id}-rep{replicate}",
             item.task_id,
@@ -60,6 +62,15 @@ def evaluation_cases(items: tuple[Example, ...]) -> tuple[EvaluationCase, ...]:
         for item in items
         for replicate in range(item.repetitions)
     )
+    if task_ids is None:
+        return cases
+    requested = set(task_ids)
+    if not task_ids or len(requested) != len(task_ids):
+        raise ValueError("Evaluation case selection must contain unique, nonempty IDs")
+    if requested.difference(case.task_id for case in cases):
+        raise ValueError("Requested evaluation cases are absent from the fixed dataset")
+    # Preserve original expansion order and replicate IDs during fault recovery.
+    return tuple(case for case in cases if case.task_id in requested)
 
 
 @dataclass(frozen=True, slots=True)

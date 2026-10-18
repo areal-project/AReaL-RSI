@@ -69,6 +69,18 @@ def test_dataset_preserves_unicode_separators_inside_json_strings(tmp_path: Path
     assert read_examples(path) == (item,)
 
 
+def test_recovery_selects_exact_replicate_ids_in_fixed_order() -> None:
+    first = replace(example("First fixed recovery question"), repetitions=4)
+    second = replace(example("Second fixed recovery question"), repetitions=4)
+    cases = evaluation_cases((first, second))
+    requested = (cases[6].task_id, cases[1].task_id)
+    assert evaluation_cases((first, second), task_ids=requested) == (cases[1], cases[6])
+    for invalid in ((), (cases[0].task_id,) * 2, ("unknown-rep0",), (first.task_id,)):
+        with pytest.raises(ValueError):
+            evaluation_cases((first, second), task_ids=invalid)
+    assert len(evaluation_cases((first, second))) == 8
+
+
 def test_word_problem_mixture_reproducible_verified_and_train_only(tmp_path: Path) -> None:
     pool = tuple(example(f"Training question {i}") for i in range(6))
     ref = write_examples(tmp_path / "pool.jsonl", pool)

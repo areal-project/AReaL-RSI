@@ -156,7 +156,11 @@ def dataset(path: str, request: WorkerRequest) -> Any:
 
     if request.dataset_format == "benchmark":
         examples = read_examples(Path(path))
-        items = evaluation_cases(examples) if request.mode == "eval" else examples
+        items = (
+            evaluation_cases(examples, task_ids=request.evaluation_case_ids)
+            if request.mode == "eval"
+            else examples
+        )
     else:
         items = read_problems(Path(path))
     return Dataset.from_list(

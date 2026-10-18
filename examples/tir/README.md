@@ -189,6 +189,15 @@ uv run --locked python -m examples.tir.pipeline \
 未发生参数变化都不会作为成功返回。超时或 Ctrl+C 会记录终态并清理本次子任务的进程树；
 强制 SIGKILL、节点丢失等无法执行清理的情况仍需结合 Slurm 作业状态核查。
 
+恢复不完整探测时，先停止所属控制器并单独登记恢复记录，封存原始题目清单和
+`worker-traces/` 的逐文件摘要。`WorkerRequest.evaluation_case_ids` 可以只执行清单中
+缺失的完整样本 ID，保留 `-repN` 和原始顺序；不能按分数挑选要重采样的答案。
+若故障来自判分服务，需要对保留的全部回答统一重判。`reward.native_reward_input`
+按原生路由和格式化规则重建完整判分文本，包含工具输出，不重新执行工具。
+`EvaluationSample.output` 只包含模型生成片段，不能直接替代原生判分输入。
+只有恢复后的全量样本与原清单完全一致、来源和评分实现均校验通过，才能经公共
+`EvaluationService` 发布新评测结果；部分恢复产物不能用于课程选题或训练准入。
+
 轨迹可以通过 `LocalTrajectoryStore.query(TrajectoryQuery(task_id=..., solution_id=...))`
 查询。评测服务可单独使用，不依赖训练服务，因此其他任务只修改 harness 时也能复用。
 

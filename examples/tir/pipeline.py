@@ -114,6 +114,16 @@ class WorkerRequest:
     output: str
     trial: str
     dataset_format: Literal["procedural", "benchmark", "distillation"] = "procedural"
+    evaluation_case_ids: tuple[str, ...] | None = None
+
+    def __post_init__(self) -> None:
+        if self.evaluation_case_ids is not None:
+            if self.mode != "eval" or self.dataset_format != "benchmark":
+                raise ValueError("Case selection requires a benchmark evaluation request")
+            if not self.evaluation_case_ids or len(set(self.evaluation_case_ids)) != len(
+                self.evaluation_case_ids
+            ):
+                raise ValueError("Evaluation case selection must contain unique, nonempty IDs")
 
 
 @dataclass(frozen=True, slots=True)

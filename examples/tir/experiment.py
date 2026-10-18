@@ -48,7 +48,7 @@ from areal_rsi.infra.execution import JobExecutor
 from areal_rsi.infra.training import AReaLBackend, read_training_samples
 from areal_rsi.infra.trajectories import LocalTrajectoryStore
 from examples.tir.benchmark import Benchmark, evaluation_cases, read_examples, write_examples
-from examples.tir.compositional import CompositionalManifest, read_tasks
+from examples.tir.compositional import CompositionalManifest, propose, read_tasks
 from examples.tir.distillation import DistillationAttempt, DistillationConfig, DistillationManifest
 from examples.tir.pipeline import (
     BACKEND_PATHS,
@@ -65,8 +65,11 @@ from examples.tir.synthesis import (
     StudentProbe,
     SynthesisManifest,
     SyntheticAdmission,
+    admit_compositional,
     build_dataset,
+    dynamic_curriculum,
     normalize_gold,
+    probe_groups,
 )
 
 
@@ -161,6 +164,36 @@ class ProbeRecipe:
     def __post_init__(self) -> None:
         if self.count < 1 or self.samples < 2 or self.temperature <= 0:
             raise ValueError("Probes require nonempty questions, repeated samples and exploration")
+
+
+@dataclass(frozen=True, slots=True)
+class CurriculumPlan:
+    recipe: RoundRecipe
+    probe: ProbeRecipe = field(default_factory=ProbeRecipe)
+    mixed_count: int = 256
+    synthetic_proposals: int = 0
+
+    def __post_init__(self) -> None:
+        data = self.recipe.data
+        if self.recipe.algorithm != "grpo" or data is None:
+            raise ValueError("Dynamic curricula require a GRPO question recipe")
+        if (
+            data.curriculum
+            or data.synthetic_admission
+            or data.real_task_ids
+            or self.probe.proposals
+        ):
+            raise ValueError("A dynamic round must freshly select data with its actual parent")
+        if not 0 < self.mixed_count < data.real_count or self.mixed_count > self.probe.count:
+            raise ValueError("Reserve both mixed and random real questions within the probe budget")
+        if data.synthetic_count:
+            if (
+                self.synthetic_proposals < data.synthetic_count
+                or data.synthetic_count * 10 > data.real_count
+            ):
+                raise ValueError("Probe enough synthetic proposals and preserve a 1:10 mixture")
+        elif self.synthetic_proposals != 0:
+            raise ValueError("A real-only round must not request synthetic proposals")
 
 
 @dataclass(slots=True)
@@ -487,6 +520,76 @@ class Experiment:
         if before.content.digest != after.content.digest:
             raise ValueError("Source changed during a GPU stage; its result is invalid")
 
+    async def dynamic_round(self, name: str, plan_path: Path) -> Candidate:
+        """Refresh the actual parent, admit data, then train and validate one round."""
+        _name(name)
+        _name(f"probe-{name}-composed")
+        if name == "base" or (self.root / "selection.json").exists():
+            raise ValueError("Invalid candidate name or experiment already selected")
+        if (self.root / "rounds" / name).exists():
+            raise FileExistsError("Preserve the existing round; use a new round name")
+        plan = read_record(plan_path, CurriculumPlan)
+        directory = self.root / "round-plans" / name
+        directory.mkdir(parents=True, exist_ok=False)
+        write_record(directory / "plan.json", plan)
+        source = _source(PROJECT, directory / "source-project.json")
+        await self.evaluate("base")
+        parent = plan.recipe.parent
+        benchmark = self.protocol.benchmark
+        real = await self.probe(f"{name}-real", parent, plan.probe)
+        mixed = min(plan.mixed_count, sum(group.mixed for group in probe_groups(real)))
+        if not mixed:
+            raise ValueError(
+                "No mixed real questions; preserve this probe and revise the next plan"
+            )
+        data = plan.recipe.data
+        assert data is not None
+        curriculum = dynamic_curriculum(
+            benchmark.train,
+            file_ref(self.root / "probes" / f"{name}-real" / "probe.json"),
+            mixed_count=mixed,
+            random_count=data.real_count - mixed,
+            seed=plan.probe.seed + 1,
+            excluded_ids=benchmark.excluded_ids,
+        )
+        curriculum_ref = write_record(directory / "curriculum.json", curriculum)
+        admission_ref = None
+        if data.synthetic_count:
+            proposals = propose(
+                plan.probe.seed + 2,
+                plan.synthetic_proposals,
+                benchmark.excluded_ids,
+                directory / "proposals",
+            )
+            composed_name = f"{name}-composed"
+            await self.probe(
+                composed_name,
+                parent,
+                replace(
+                    plan.probe,
+                    count=plan.synthetic_proposals,
+                    seed=plan.probe.seed + 3,
+                    proposals=proposals,
+                ),
+            )
+            admit_compositional(
+                proposals,
+                file_ref(self.root / "probes" / composed_name / "probe.json"),
+                count=data.synthetic_count,
+                seed=plan.probe.seed + 4,
+                excluded_ids=benchmark.excluded_ids,
+                output=directory / "admitted",
+            )
+            admission_ref = file_ref(directory / "admitted/admission.json")
+        recipe = replace(
+            plan.recipe,
+            data=replace(data, curriculum=curriculum_ref, synthetic_admission=admission_ref),
+        )
+        path = directory / "recipe.json"
+        write_record(path, recipe)
+        self.verify_source(source, f"{name}-admission")
+        return await self.train(name, path)
+
     async def train(self, name: str, recipe_path: Path) -> Candidate:
         _name(name)
         if name == "base" or (self.root / "selection.json").exists():
@@ -736,6 +839,9 @@ async def main() -> None:
     probe_parser.add_argument("--name", required=True)
     probe_parser.add_argument("--candidate", default="base")
     probe_parser.add_argument("--recipe", type=Path, required=True)
+    dynamic_parser = commands.add_parser("dynamic-round")
+    dynamic_parser.add_argument("--name", required=True)
+    dynamic_parser.add_argument("--plan", type=Path, required=True)
     test_parser = commands.add_parser("test")
     test_parser.add_argument("--candidate", required=True)
     commands.add_parser("status")
@@ -755,6 +861,8 @@ async def main() -> None:
             await experiment.train(args.name, args.recipe)
         elif args.command == "probe":
             await experiment.probe(args.name, args.candidate, read_record(args.recipe, ProbeRecipe))
+        elif args.command == "dynamic-round":
+            await experiment.dynamic_round(args.name, args.plan)
         elif args.command == "test":
             await experiment.test(args.candidate)
         else:

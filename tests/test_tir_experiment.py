@@ -11,13 +11,14 @@ from fractions import Fraction
 from pathlib import Path
 
 import pytest
+from test_tir_training_policy import student_probe
 from test_training import evaluation, git_repository
 
-from areal_rsi.api.execution import AReaLRuntime, TrainingResult
+from areal_rsi.api.execution import AReaLRuntime, JobSpec, TrainingResult
 from areal_rsi.api.records import (
     BenchmarkSplit,
 )
-from areal_rsi.infra.artifacts import local_path, write_record
+from areal_rsi.infra.artifacts import local_path, read_record, write_record
 from examples.tir.benchmark import (
     Benchmark,
     Example,
@@ -31,12 +32,23 @@ from examples.tir.benchmark import (
     torl_examples,
     write_examples,
 )
-from examples.tir.experiment import Candidate, Experiment, ExperimentConfig, prepare, protocol
-from examples.tir.pipeline import TIRConfig
+from examples.tir.experiment import (
+    Candidate,
+    CurriculumPlan,
+    Experiment,
+    ExperimentConfig,
+    ProbeRecipe,
+    RoundRecipe,
+    prepare,
+    protocol,
+)
+from examples.tir.pipeline import TIRConfig, WorkerRequest
 from examples.tir.synthesis import (
     DataRecipe,
+    DynamicCurriculum,
     Family,
     FamilyWeight,
+    StudentProbe,
     SynthesisManifest,
     SynthesisPolicy,
     build_dataset,
@@ -401,6 +413,87 @@ def experiment(tmp_path: Path) -> Experiment:
     root = tmp_path / "experiment"
     prepare(config, root)
     return Experiment(root)
+
+
+@pytest.mark.parametrize("synthetic_count", [0, 1])
+def test_dynamic_round_materializes_admitted_data_and_preserves_failed_execution(
+    experiment: Experiment, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, synthetic_count: int
+) -> None:
+    # Repeated-score fixtures exercise admission, not model ability. The final
+    # training command is a real failing CPU process, never mocked GPU success.
+    pool = tuple(example(f"Dynamic official train {index}") for index in range(20))
+    train = write_examples(tmp_path / "dynamic-train.jsonl", pool)
+    benchmark = replace(experiment.protocol.benchmark, train=train)
+    manifest = tmp_path / "dynamic-benchmark.json"
+    write_record(manifest, benchmark)
+    root = tmp_path / "dynamic-experiment"
+    prepare(replace(experiment.protocol.config, benchmark=str(manifest)), root)
+    current = Experiment(root)
+    task_ids = tuple(item.task_id for item in read_examples(local_path(benchmark.valid)))
+    write_record(
+        root / "valid/base.json",
+        evaluation(
+            root / "baseline.jsonl",
+            (False,) * len(task_ids),
+            task_ids=task_ids,
+            solution_id="base",
+        ),
+    )
+    plan = CurriculumPlan(
+        RoundRecipe(
+            "Fresh-parent admission, preserve evidence on training failure",
+            data=DataRecipe(real_count=10, synthetic_count=synthetic_count),
+            training_steps=1,
+            batch_size=4,
+        ),
+        ProbeRecipe(count=4),
+        mixed_count=2,
+        synthetic_proposals=6 if synthetic_count else 0,
+    )
+    plan_path = tmp_path / "dynamic-plan.json"
+    write_record(plan_path, plan)
+
+    async def fixture_probe(
+        self: Experiment, name: str, parent: str, recipe: ProbeRecipe
+    ) -> StudentProbe:
+        if recipe.proposals is None:
+            items = pool[: recipe.count]
+            scores = ((0, 1, 0, 1), *((0, 0, 0, 0),) * (len(items) - 1))
+        else:
+            from examples.tir.compositional import CompositionalManifest
+
+            proposals = read_record(local_path(recipe.proposals), CompositionalManifest)
+            items = read_examples(local_path(proposals.examples))
+            scores = ((0, 1, 0, 1),) * len(items)
+        path = root / "probes" / name
+        ref = student_probe(path, items, scores)
+        probe = replace(
+            read_record(local_path(ref), StudentProbe), model=self.solution(parent).model.content
+        )
+        write_record(path / "probe.json", probe)
+        return probe
+
+    def failing_spec(self: Experiment, request: WorkerRequest, name: str) -> JobSpec:
+        return JobSpec(("/bin/false",), timeout_seconds=5)
+
+    monkeypatch.setattr(Experiment, "probe", fixture_probe)
+    monkeypatch.setattr(Experiment, "spec", failing_spec)
+    with pytest.raises(RuntimeError, match="failed"):
+        asyncio.run(current.dynamic_round("dynamic", plan_path))
+    candidate = current.candidate("dynamic")
+    assert candidate.status == "failed" and candidate.solution is None and candidate.valid is None
+    assert isinstance(candidate.data, SynthesisManifest)
+    assert candidate.data.real_count == 10 and candidate.data.synthetic_count == synthetic_count
+    recipe = read_record(local_path(candidate.recipe), RoundRecipe)
+    assert recipe.data is not None and recipe.data.curriculum is not None
+    curriculum = read_record(local_path(recipe.data.curriculum), DynamicCurriculum)
+    assert curriculum.mixed_task_ids == (pool[0].task_id,)
+    assert len(curriculum.random_task_ids) == 9
+    assert (recipe.data.synthetic_admission is not None) == bool(synthetic_count)
+    saved = root / "round-plans/dynamic/plan.json"
+    assert read_record(saved, CurriculumPlan) == plan
+    with pytest.raises(FileExistsError, match="Preserve"):
+        asyncio.run(current.dynamic_round("dynamic", plan_path))
 
 
 def test_native_protocol_refuses_integer_only_reward(

@@ -1,0 +1,31 @@
+{
+  "recipe": {
+    "hypothesis": "Refresh the actual parent on official training questions, retain mixed-success and random real questions, and compare a small independently verified, student-admitted synthetic mixture on native valid.",
+    "parent": "base",
+    "data": {
+      "seed": 20261106,
+      "real_count": 512,
+      "synthetic_count": 16,
+      "gold_format": "math_delimited"
+    },
+    "training_steps": 128,
+    "batch_size": 16,
+    "n_samples": 4,
+    "learning_rate": 0.000005,
+    "max_new_tokens": 512,
+    "temperature": 1.0
+  },
+  "probe": {
+    "count": 1024,
+    "samples": 4,
+    "seed": 20261101,
+    "temperature": 1.0
+  },
+  "mixed_count": 256,
+  "synthetic_proposals": 192,
+  "lattice_blocked_points": 1,
+  "admission_policy": {
+    "minimum_per_family": 2,
+    "require_correct_tool_output": true
+  }
+}

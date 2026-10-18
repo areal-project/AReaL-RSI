@@ -8,6 +8,48 @@
 要直接启动多轮研究，配置 `experiment.json` 后运行 `python -m examples.tir.rsi`。
 原生 ToRL 的多轮训练、冻结评测和 `/rsi` 驱动研究见 [RESEARCH.md](RESEARCH.md)。
 
+多轮研究现在支持三种互相衔接的数据阶段：
+
+- `experiment probe` 用当前 checkpoint 对训练池每题重复采样；`dynamic_curriculum`
+  根据同题的正确与错误回答选题，同时保留随机真实题。训练前会核对 probe 对应的模型，
+  warm start 模型变化后需要重新试答。
+- `distillation.py` 让教师先生成推理和 Python 程序，使用后端真实工具执行后，再请求最终答案。
+  教师请求不包含 gold；只有实际程序输出与最终回答均通过独立数学答案校验，且工具成功、
+  长度合规的轨迹能进入 SFT。程序打印错误值、最后只在文字中纠正答案的轨迹会被拒绝。
+  教师生成可在 CPU 的 AReaL 环境运行；凭证从环境读取，不写入配置与轨迹。
+- `compositional.py` 生成不同数字约束、带必经点和障碍的路径、条件抽样概率题，每题通过
+  两种独立的精确算法验算。`admit_compositional` 再筛选当前学生有对有错的题，
+  混入比例受限于至少十道真实题配一道合成题。
+
+`RoundRecipe.algorithm` 为 `sft` 时，`data` 为 `null`，`distillation` 引用已验证的教师 manifest；
+为 `grpo` 时使用 `DataRecipe`，可通过 `curriculum` 和 `synthetic_admission` 引用上述筛选记录。
+SFT 可用 `sft_style: "tool_first"` 把教师调用工具前的完整推导替换成简短计算计划，
+保留原程序、真实观察和已核验答案；原始教师轨迹保持不变，训练视图单独记录。
+SFT 在训练节点用实际 parent 的 tokenizer 重建 token 和 mask；题目及真实工具观察不参与 loss，
+仅学习教师生成内容。通用的 token 契约、SFT 执行、权重变化检查和 checkpoint 校验位于
+`api/execution.py` 与 `infra/training.py`；任务选题、合成和训练阶段编排保留在本例。
+后端保存时会检查共享 embedding 的声明：不一致的两组权重会拒绝发布；
+完全重复的输出权重会去重，保证下一轮 HF 加载仍保持参数共享，与推理服务一致。
+独立评测只需一张 GPU，GRPO 的 actor 与 rollout 各使用一张。
+
+教师批次较大时，可先发布已完整处理的题目前缀，提前启动小批 SFT：
+
+```bash
+uv run --locked python -m examples.tir.distillation \
+  --config /absolute/teacher-collection/config.json \
+  --prefix-count 256 --publish-output /absolute/teacher-prefix-256
+```
+
+前缀按生成前确定的题目顺序选择，必须包含这些题目的全部成功或失败记录；
+不会按完成速度或正确率挑选题目。新 manifest 引用原配置及不可变轨迹，原批次继续生成。
+
+历史批次可用 `--readmit-manifest /absolute/old/manifest.json --publish-output /absolute/new`
+重新核验程序输出。所有原题与失败记录均保留；只有新增拒绝决定会写入派生产物，原始轨迹、
+manifest 与已完成实验不改写。`program-output-admission.json` 关联原批次、逐题检查和新批次。
+
+`ExperimentConfig.target_accuracy` 可额外指定 test 的绝对准确率目标，例如 `0.37` 表示必须
+严格超过 37%，并且仍要满足 `target_delta` 的相对提升要求。模型选择继续只使用 valid。
+
 ## 环境与运行
 
 提交端按仓库 README 准备 `uv` 环境。训练使用独立的 AReaL Python 环境，需能导入

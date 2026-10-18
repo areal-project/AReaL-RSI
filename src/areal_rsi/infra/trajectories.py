@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -24,6 +25,9 @@ class LocalTrajectoryStore:
         return self.root / f"{trajectory_id}.json"
 
     async def save(self, trajectory: Trajectory) -> TrajectoryRef:
+        return await asyncio.to_thread(self._save, trajectory)
+
+    def _save(self, trajectory: Trajectory) -> TrajectoryRef:
         path = self._path(trajectory.trajectory_id)
         # Publish complete bytes atomically without replacing an existing ID.
         fd, temporary = tempfile.mkstemp(prefix=".trajectory-", dir=self.root)
@@ -34,7 +38,7 @@ class LocalTrajectoryStore:
                 os.fsync(output.fileno())
             os.link(temporary, path)
         except FileExistsError:
-            if await self.get(trajectory.trajectory_id) != trajectory:
+            if read_record(path, Trajectory) != trajectory:
                 raise ValueError(
                     f"Trajectory ID already has different content: {path.stem}"
                 ) from None

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import math
@@ -19,6 +20,7 @@ from areal_rsi.api.records import (
     EvaluationSample,
     PairedComparison,
     Trajectory,
+    TrajectoryRef,
 )
 from areal_rsi.infra.artifacts import file_ref, local_path, write_record
 from areal_rsi.infra.execution import JobExecutor
@@ -97,23 +99,36 @@ class EvaluationService:
             )
         metrics = _metrics(samples)
         created_at = datetime.now(UTC).isoformat()
-        references = []
-        for sample in samples:
+
+        async def persist(sample: EvaluationSample) -> TrajectoryRef:
             digest = hashlib.sha256(f"{run_id}:{name}:{sample.task_id}".encode()).hexdigest()
-            content = write_record(directory / "traces" / f"{digest}.json", sample)
-            references.append(
-                await self.trajectories.save(
-                    Trajectory(
-                        f"trace-{digest}",
-                        name,
-                        content,
-                        {},
-                        created_at,
-                        task_id=sample.task_id,
-                        solution_id=solution_id,
-                    )
+            content = await asyncio.to_thread(
+                write_record, directory / "traces" / f"{digest}.json", sample
+            )
+            return await self.trajectories.save(
+                Trajectory(
+                    f"trace-{digest}",
+                    name,
+                    content,
+                    {},
+                    created_at,
+                    task_id=sample.task_id,
+                    solution_id=solution_id,
                 )
             )
+
+        references = []
+        # Bound pending tasks and filesystem pressure even for large probe jobs.
+        # Drain each batch on an I/O failure before returning without a report.
+        for offset in range(0, len(samples), 8):
+            batch = await asyncio.gather(
+                *(persist(sample) for sample in samples[offset : offset + 8]),
+                return_exceptions=True,
+            )
+            for reference in batch:
+                if isinstance(reference, BaseException):
+                    raise reference
+                references.append(reference)
         count = len(samples)
         report = EvaluationReport(
             solution_id,

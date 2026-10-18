@@ -8,22 +8,33 @@ import os
 import subprocess
 import sys
 import tarfile
+import threading
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+import areal_rsi.infra.coordination.evaluation as evaluation_module
 from areal_rsi.api.control import encode_record
 from areal_rsi.api.execution import AReaLRuntime, JobSpec, TrainingReceipt
 from areal_rsi.api.records import (
     BenchmarkSplit,
+    ContentRef,
     EvaluationReport,
     EvaluationResult,
     EvaluationSample,
     TraceEvent,
+    Trajectory,
     TrajectoryQuery,
+    TrajectoryRef,
 )
-from areal_rsi.infra.artifacts import file_ref, local_path, read_record, snapshot_source
+from areal_rsi.infra.artifacts import (
+    file_ref,
+    local_path,
+    read_record,
+    snapshot_source,
+    write_record,
+)
 from areal_rsi.infra.coordination.evaluation import (
     EvaluationService,
     paired,
@@ -232,6 +243,118 @@ def test_evaluation_requires_exact_task_coverage(
         asyncio.run(traces.save(replace(original, task_id="tampered")))
     queried = asyncio.run(traces.query(TrajectoryQuery(task_id="a", solution_id="solution")))
     assert len(queried.trajectories) == 1
+
+
+@pytest.mark.parametrize("index_failure", [False, True])
+def test_evaluation_bounds_parallel_persistence_and_requires_complete_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, index_failure: bool
+) -> None:
+    jobs = JobExecutor(tmp_path / "jobs")
+    traces = LocalTrajectoryStore(tmp_path / "index")
+    evaluator = EvaluationService(jobs, traces)
+    directory = jobs.directory("run", "eval")
+    task_ids = tuple(f"task-{i}" for i in range(20))
+    rows = [
+        EvaluationSample(name, "answer", 1, True, (TraceEvent("generation", "answer"),))
+        for name in task_ids
+    ]
+    payload = "".join(json.dumps(encode_record(row)) + "\n" for row in rows)
+    code = (
+        "from pathlib import Path; "
+        f"Path({str(directory / 'samples.jsonl')!r}).write_text({payload!r})"
+    )
+    lock = threading.Lock()
+    overlap = threading.Event()
+    active = peak = 0
+    original_write = write_record
+
+    def write_with_slow_storage(path: Path, value: object) -> ContentRef:
+        nonlocal active, peak
+        if path.parent.name != "traces":
+            return original_write(path, value)
+        with lock:
+            active += 1
+            peak = max(peak, active)
+            if active >= 2:
+                overlap.set()
+        try:
+            if not overlap.wait(5):
+                raise TimeoutError("Trace persistence blocked the event loop")
+            return original_write(path, value)
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(evaluation_module, "write_record", write_with_slow_storage)
+    original_save = traces.save
+
+    async def save_with_index_failure(trajectory: Trajectory) -> TrajectoryRef:
+        if index_failure and trajectory.task_id == "task-5":
+            raise OSError("Trajectory index unavailable")
+        return await original_save(trajectory)
+
+    monkeypatch.setattr(traces, "save", save_with_index_failure)
+
+    async def exercise() -> None:
+        operation = evaluator.evaluate(
+            "run", "eval", command(code, tmp_path), task_ids=task_ids, solution_id="model"
+        )
+        if index_failure:
+            with pytest.raises(OSError, match="index unavailable"):
+                await operation
+            assert not (directory / "evaluation.json").exists()
+        else:
+            result = await operation
+            indexed = [await traces.get(ref.trajectory_id) for ref in result.trajectories]
+            assert tuple(item.task_id for item in indexed if item is not None) == task_ids
+            assert result.report.score == 1
+            assert read_evaluation_samples(result) == tuple(rows)
+        assert 2 <= peak <= 8
+        assert active == 0
+
+    asyncio.run(exercise())
+
+
+def test_trajectory_save_keeps_event_loop_live_and_publishes_append_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    content = tmp_path / "content.json"
+    content.write_text("{}")
+    original = Trajectory("first", "agent", file_ref(content), {}, "fixture")
+    store = LocalTrajectoryStore(tmp_path / "index")
+    syncing = threading.Event()
+    release = threading.Event()
+    original_fsync = os.fsync
+
+    def blocked_fsync(fd: int) -> None:
+        syncing.set()
+        if not release.wait(5):
+            raise TimeoutError("Trajectory fsync blocked the event loop")
+        original_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", blocked_fsync)
+
+    async def exercise() -> None:
+        saving = asyncio.create_task(store.save(original))
+        try:
+            assert await asyncio.to_thread(syncing.wait, 5)
+        finally:
+            release.set()
+        reference = await saving
+        assert await store.get(reference.trajectory_id) == original
+        assert await asyncio.gather(*(store.save(original) for _ in range(8))) == [reference] * 8
+        contenders = (
+            replace(original, trajectory_id="contended", task_id="one"),
+            replace(original, trajectory_id="contended", task_id="two"),
+        )
+        outcomes = await asyncio.gather(
+            *(store.save(item) for item in contenders), return_exceptions=True
+        )
+        assert sum(isinstance(item, TrajectoryRef) for item in outcomes) == 1
+        assert sum(isinstance(item, ValueError) for item in outcomes) == 1
+        assert await store.get("contended") in contenders
+
+    asyncio.run(exercise())
 
 
 @pytest.mark.parametrize("condition", ["valid", "outside", "missing_shard", "no_steps"])

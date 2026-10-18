@@ -47,7 +47,7 @@ def brief(current: Experiment) -> str:
         [sys.executable, "-m", "examples.tir.experiment", "--experiment", str(experiment)]
     )
     return f"""用户明确授权现在开始执行真实 TIR 多轮研究与训练。先保存任务，然后交接 Leader。
-目标：在冻结的 train/valid/test 协议下，改进数据合成代码、数据配比/难度课程和 GRPO 训练配方，
+目标：在冻结的 train/valid/test 协议下，改进动态真实题课程、合成准入与 GRPO 训练配方，
 让模型经过多轮迭代后有提升。公共执行/训练/评测服务已在 infra，研究策略在 examples/tir。
 
 工作区：{PROJECT}。冻结实验：{experiment}。先读取 examples/tir/RESEARCH.md、protocol.json、
@@ -56,9 +56,9 @@ valid/base.json 和 valid 基线轨迹，检查冻结条件。用户要求数据
 GPU 使用 {current.protocol.config.slurm.reservation} reservation，避免改动其他用户的作业。
 已有阶段会持久化记录；不要重复提交。
 
-研发权限：可修改 examples/tir/synthesis.py 和对应生成器测试，
-可新增/修改训练 recipe JSON 与分析/研究报告。
-examples/tir/experiment.py、benchmark.py、worker.py、workflow.py、reward.py、pipeline.py、
+研发权限：可修改 examples/tir/synthesis.py、compositional.py 和对应生成器测试，
+可新增/修改训练 recipe、课程 plan JSON 与分析/研究报告。
+examples/tir/experiment.py、benchmark.py、worker.py、workflow.py、reward.py、pipeline.py、distillation.py、
 src/、AReaL 后端、protocol/freeze/harness/benchmark 数据与已有结果已冻结，禁止修改。
 test 对应 official test，只供宿主独立验收。禁止读取 official test、heldout/ 数据、test/ 结果。
 只能根据 valid 反馈调整策略；
@@ -69,8 +69,23 @@ test 对应 official test，只供宿主独立验收。禁止读取 official tes
 阶段命令（从工作区运行，不要同时改源码与运行阶段）：
   {command} status
   {command} round --name r1 --recipe /absolute/path/to/recipe.json
+  {command} probe --name r1-real --candidate r1 --recipe /absolute/path/to/probe-recipe.json
+  {command} dynamic-round --name dynamic1 --plan /absolute/path/to/curriculum-plan.json
   {command} evaluate --candidate r1  # 仅用于已训练但 valid 阶段中断的候选
 recipe 按 examples.tir.experiment.RoundRecipe 解码，写明 hypothesis、parent、data 和训练参数；
+algorithm="sft" 时 data=null，distillation 引用已核验的 DistillationManifest；
+algorithm="grpo" 时 data 为 DataRecipe，distillation=null。
+先读取已有训练池 probe 与选题证据，尽量复用有效阶段。
+dynamic-round 的 plan 按 CurriculumPlan 解码，内部完成实际 parent 的试答、课程、
+可选合成准入、GRPO 与 valid。参考 recipes/dynamic.json；纯真实题设 synthetic_count=0、
+synthetic_proposals=0。需要严格匹配同一课程的消融时，复用其引用通过普通 round 提交。
+动态课程通过 examples.tir.synthesis.dynamic_curriculum 从当前 parent 的 StudentProbe 选题，
+同时保留随机真实题，不能一直沿用旧 checkpoint 的题目难度。DataRecipe.curriculum 引用其记录。
+合成题由 compositional.py 的多条件任务提案，两种独立算法核验，再用当前学生重复试答；
+admit_compositional 只接受同题有对有错的样本。DataRecipe.synthetic_admission 引用准入记录，
+真实题与合成题至少 10:1。
+轨迹蒸馏是可选分支，按用户当前选择决定；如使用，读取宿主核验后的教师 manifest。
+用户已经停止 SFT 时保持停止，继续直接 GRPO，不因示例保留 SFT 能力而重新启动。
 本次 ToRL 数据参考 examples/tir/recipes/r1.json。每轮新建名字，
 使用上轮 checkpoint warm start 或明确分支；
 优化器每轮重新初始化，不能声称恢复了优化器状态。每轮只有最后一步保存 checkpoint。
@@ -90,7 +105,8 @@ ToRL 训练数据没有完整参考推导；可以依据实际 rollout 研发训
 选择 valid 最好的已训练候选，写 {experiment}/decision.json，格式为
 {{"candidate": "候选名", "rationale": "选择依据"}}，并写 {experiment}/research-report.md。
 然后通过 rsi_update_goal 完成这个 valid 研发子目标。宿主会冻结选择，再独立做最终评测；
-test 目标约 +3 个百分点，不能提前声称已达到，也不要自行运行 test。
+test 绝对目标由 protocol.config.target_accuracy 指定（若非 null 则必须严格超过），
+相对目标仍需达到 protocol.config.target_delta。不能提前声称已达到，也不要自行运行 test。
 """
 
 

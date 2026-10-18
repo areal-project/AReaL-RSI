@@ -10,6 +10,7 @@ import argparse
 import asyncio
 import fcntl
 import math
+import random
 import re
 import signal
 from dataclasses import dataclass, field, replace
@@ -44,18 +45,33 @@ from areal_rsi.infra.coordination.evaluation import (
     read_evaluation_samples,
 )
 from areal_rsi.infra.execution import JobExecutor
-from areal_rsi.infra.training import AReaLBackend
+from areal_rsi.infra.training import AReaLBackend, read_training_samples
 from areal_rsi.infra.trajectories import LocalTrajectoryStore
-from examples.tir.benchmark import Benchmark, evaluation_cases, read_examples
+from examples.tir.benchmark import Benchmark, evaluation_cases, read_examples, write_examples
+from examples.tir.compositional import CompositionalManifest, propose, read_tasks
+from examples.tir.distillation import DistillationAttempt, DistillationConfig, DistillationManifest
 from examples.tir.pipeline import (
     BACKEND_PATHS,
     PROJECT,
     PROJECT_PATHS,
     HarnessManifest,
+    SFTStyle,
     TIRConfig,
     WorkerRequest,
 )
-from examples.tir.synthesis import DataRecipe, SynthesisManifest, build_dataset
+from examples.tir.synthesis import (
+    CompositionalAdmissionPolicy,
+    DataRecipe,
+    DynamicCurriculum,
+    StudentProbe,
+    SynthesisManifest,
+    SyntheticAdmission,
+    admit_compositional,
+    build_dataset,
+    dynamic_curriculum,
+    normalize_gold,
+    probe_groups,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,10 +95,13 @@ class ExperimentConfig:
     slurm: SlurmResources = field(default_factory=SlurmResources)
     min_rounds: int = 2
     target_delta: float = 0.03
+    target_accuracy: float | None = None
 
     def __post_init__(self) -> None:
         if self.min_rounds < 2 or not 0 < self.target_delta < 1:
             raise ValueError("Require multiple research rounds and a positive improvement target")
+        if self.target_accuracy is not None and not 0 < self.target_accuracy < 1:
+            raise ValueError("Absolute target accuracy must be between zero and one")
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,7 +119,7 @@ class Protocol:
 class RoundRecipe:
     hypothesis: str
     parent: str = "base"
-    data: DataRecipe = field(default_factory=DataRecipe)
+    data: DataRecipe | None = field(default_factory=DataRecipe)
     # Fresh optimizer per round; parent specifies warm-started model weights.
     training_steps: int = 32
     batch_size: int = 16
@@ -108,6 +127,9 @@ class RoundRecipe:
     learning_rate: float = 0.00001
     max_new_tokens: int = 768
     temperature: float = 1.0
+    algorithm: Literal["grpo", "sft"] = "grpo"
+    distillation: ContentRef | None = None
+    sft_style: SFTStyle = "teacher"
 
     def __post_init__(self) -> None:
         if not self.hypothesis.strip():
@@ -116,15 +138,78 @@ class RoundRecipe:
             raise ValueError("Training steps, batch size and token limit must be positive")
         if self.n_samples < 2 or min(self.learning_rate, self.temperature) <= 0:
             raise ValueError("GRPO requires multiple samples, positive learning rate/temperature")
-        if self.data.real_count + self.data.synthetic_count < self.batch_size:
-            raise ValueError("Training mixture must supply at least one full batch")
+        if self.algorithm == "grpo":
+            if (
+                self.data is None
+                or self.data.real_count + self.data.synthetic_count < self.batch_size
+            ):
+                raise ValueError("GRPO mixture must supply at least one full batch")
+        elif self.data is not None:
+            raise ValueError("SFT uses a distillation manifest; set question data to null")
+        if (self.algorithm == "sft") != (self.distillation is not None):
+            raise ValueError(
+                "SFT requires a verified distillation manifest; GRPO uses question data"
+            )
+        if self.algorithm != "sft" and self.sft_style != "teacher":
+            raise ValueError("A distillation training view only applies to SFT")
+
+
+@dataclass(frozen=True, slots=True)
+class ProbeRecipe:
+    count: int = 1024
+    samples: int = 4
+    seed: int = 20261018
+    temperature: float = 1.0
+    proposals: ContentRef | None = None
+
+    def __post_init__(self) -> None:
+        if self.count < 1 or self.samples < 2 or self.temperature <= 0:
+            raise ValueError("Probes require nonempty questions, repeated samples and exploration")
+
+
+@dataclass(frozen=True, slots=True)
+class CurriculumPlan:
+    recipe: RoundRecipe
+    probe: ProbeRecipe = field(default_factory=ProbeRecipe)
+    mixed_count: int = 256
+    synthetic_proposals: int = 0
+    lattice_blocked_points: int = 4
+    admission_policy: CompositionalAdmissionPolicy = field(
+        default_factory=CompositionalAdmissionPolicy
+    )
+
+    def __post_init__(self) -> None:
+        data = self.recipe.data
+        if not 1 <= self.lattice_blocked_points <= 4:
+            raise ValueError("Lattice proposals require 1..4 blocked points")
+        if self.recipe.algorithm != "grpo" or data is None:
+            raise ValueError("Dynamic curricula require a GRPO question recipe")
+        if (
+            data.curriculum
+            or data.synthetic_admission
+            or data.real_task_ids
+            or self.probe.proposals
+        ):
+            raise ValueError("A dynamic round must freshly select data with its actual parent")
+        if not 0 < self.mixed_count < data.real_count or self.mixed_count > self.probe.count:
+            raise ValueError("Reserve both mixed and random real questions within the probe budget")
+        if data.synthetic_count:
+            if (
+                self.synthetic_proposals < data.synthetic_count
+                or data.synthetic_count * 10 > data.real_count
+            ):
+                raise ValueError("Probe enough synthetic proposals and preserve a 1:10 mixture")
+            if self.admission_policy.minimum_per_family * 3 > data.synthetic_count:
+                raise ValueError("Synthetic count cannot cover all three compositional families")
+        elif self.synthetic_proposals != 0:
+            raise ValueError("A real-only round must not request synthetic proposals")
 
 
 @dataclass(slots=True)
 class Candidate:
     name: str
     recipe: ContentRef
-    data: SynthesisManifest
+    data: SynthesisManifest | DistillationManifest
     project: SourceSnapshot
     parent: SolutionVersion
     status: Literal["prepared", "training", "evaluating", "completed", "failed"] = "prepared"
@@ -206,6 +291,7 @@ def prepare(config: ExperimentConfig, root: Path) -> None:
                 "slurm_worker.sh",
                 "experiment.py",
                 "rsi.py",
+                "distillation.py",
             )
         ),
         repository / config.tir.backend_config,
@@ -297,7 +383,7 @@ class Experiment:
             f"--partition={resources.partition}",
             "--nodes=1",
             "--ntasks=1",
-            "--gres=gpu:2",
+            "--gres=gpu:2" if request.mode == "train" else "--gres=gpu:1",
             f"--cpus-per-task={resources.cpus}",
             f"--mem={resources.memory_gb}G",
             f"--time={resources.minutes}",
@@ -316,7 +402,7 @@ class Experiment:
 
     def request(
         self,
-        mode: Literal["train", "eval"],
+        mode: Literal["train", "sft", "eval"],
         name: str,
         solution: SolutionVersion,
         data: ContentRef,
@@ -330,8 +416,60 @@ class Experiment:
             str(local_path(self.protocol.benchmark.valid)),
             str(self.jobs.directory(self.root.name, name)),
             f"{self.root.name}-{name}",
-            "benchmark",
+            "distillation" if mode == "sft" else "benchmark",
         )
+
+    async def probe(self, name: str, parent: str, recipe: ProbeRecipe) -> StudentProbe:
+        if (self.root / "selection.json").exists():
+            raise ValueError("Cannot generate a training curriculum after frozen model selection")
+        directory = self.root / "probes" / _name(name)
+        directory.mkdir(parents=True, exist_ok=False)
+        write_record(directory / "recipe.json", recipe)
+        solution = self.solution(parent)
+        benchmark = self.protocol.benchmark
+        if recipe.proposals is None:
+            pool = read_examples(local_path(benchmark.train))
+        else:
+            proposal = read_record(local_path(recipe.proposals), CompositionalManifest)
+            tasks = read_tasks(local_path(proposal.definitions))
+            pool = read_examples(local_path(proposal.examples))
+            if tuple(task.example for task in tasks) != pool:
+                raise ValueError(
+                    "Synthetic proposal questions differ from independently verified tasks"
+                )
+        if recipe.count > len(pool) or set(benchmark.excluded_ids).intersection(
+            item.task_id for item in pool
+        ):
+            raise ValueError("Probe exceeds its independent training pool")
+        items = tuple(
+            replace(
+                item,
+                answer=normalize_gold(item.answer, "math_delimited"),
+                repetitions=recipe.samples,
+            )
+            for item in random.Random(recipe.seed).sample(pool, recipe.count)
+        )
+        data = write_examples(directory / "questions.jsonl", items)
+        config = replace(
+            self.config,
+            evaluation=replace(
+                self.config.evaluation, seed=recipe.seed, temperature=recipe.temperature
+            ),
+        )
+        job_name = _name(f"probe-{name}")
+        source = _source(PROJECT, directory / "source-project.json")
+        evaluation = await self.evaluator.evaluate(
+            self.root.name,
+            job_name,
+            self.spec(self.request("eval", job_name, solution, data, config), job_name),
+            task_ids=tuple(item.task_id for item in evaluation_cases(items)),
+            solution_id=solution.solution_id,
+            split=BenchmarkSplit.TRAIN,
+        )
+        self.verify_source(source, job_name)
+        result = StudentProbe(solution.model.content, data, evaluation)
+        write_record(directory / "probe.json", result)
+        return result
 
     async def evaluate(self, name: str, *, test: bool = False) -> EvaluationResult:
         if test:
@@ -391,6 +529,78 @@ class Experiment:
         if before.content.digest != after.content.digest:
             raise ValueError("Source changed during a GPU stage; its result is invalid")
 
+    async def dynamic_round(self, name: str, plan_path: Path) -> Candidate:
+        """Refresh the actual parent, admit data, then train and validate one round."""
+        _name(name)
+        _name(f"probe-{name}-composed")
+        if name == "base" or (self.root / "selection.json").exists():
+            raise ValueError("Invalid candidate name or experiment already selected")
+        if (self.root / "rounds" / name).exists():
+            raise FileExistsError("Preserve the existing round; use a new round name")
+        plan = read_record(plan_path, CurriculumPlan)
+        directory = self.root / "round-plans" / name
+        directory.mkdir(parents=True, exist_ok=False)
+        write_record(directory / "plan.json", plan)
+        source = _source(PROJECT, directory / "source-project.json")
+        await self.evaluate("base")
+        parent = plan.recipe.parent
+        benchmark = self.protocol.benchmark
+        real = await self.probe(f"{name}-real", parent, plan.probe)
+        mixed = min(plan.mixed_count, sum(group.mixed for group in probe_groups(real)))
+        if not mixed:
+            raise ValueError(
+                "No mixed real questions; preserve this probe and revise the next plan"
+            )
+        data = plan.recipe.data
+        assert data is not None
+        curriculum = dynamic_curriculum(
+            benchmark.train,
+            file_ref(self.root / "probes" / f"{name}-real" / "probe.json"),
+            mixed_count=mixed,
+            random_count=data.real_count - mixed,
+            seed=plan.probe.seed + 1,
+            excluded_ids=benchmark.excluded_ids,
+        )
+        curriculum_ref = write_record(directory / "curriculum.json", curriculum)
+        admission_ref = None
+        if data.synthetic_count:
+            proposals = propose(
+                plan.probe.seed + 2,
+                plan.synthetic_proposals,
+                benchmark.excluded_ids,
+                directory / "proposals",
+                lattice_blocked_points=plan.lattice_blocked_points,
+            )
+            composed_name = f"{name}-composed"
+            await self.probe(
+                composed_name,
+                parent,
+                replace(
+                    plan.probe,
+                    count=plan.synthetic_proposals,
+                    seed=plan.probe.seed + 3,
+                    proposals=proposals,
+                ),
+            )
+            admit_compositional(
+                proposals,
+                file_ref(self.root / "probes" / composed_name / "probe.json"),
+                count=data.synthetic_count,
+                seed=plan.probe.seed + 4,
+                excluded_ids=benchmark.excluded_ids,
+                output=directory / "admitted",
+                policy=plan.admission_policy,
+            )
+            admission_ref = file_ref(directory / "admitted/admission.json")
+        recipe = replace(
+            plan.recipe,
+            data=replace(data, curriculum=curriculum_ref, synthetic_admission=admission_ref),
+        )
+        path = directory / "recipe.json"
+        write_record(path, recipe)
+        self.verify_source(source, f"{name}-admission")
+        return await self.train(name, path)
+
     async def train(self, name: str, recipe_path: Path) -> Candidate:
         _name(name)
         if name == "base" or (self.root / "selection.json").exists():
@@ -403,18 +613,62 @@ class Experiment:
         recipe_ref = write_record(directory / "recipe.json", recipe)
         parent = self.solution(recipe.parent)
         benchmark = self.protocol.benchmark
-        data = build_dataset(
-            recipe.data,
-            read_examples(local_path(benchmark.train)),
-            benchmark.train,
-            benchmark.excluded_ids,
-            directory / "data",
-        )
+        data: SynthesisManifest | DistillationManifest
+        if recipe.algorithm == "sft":
+            assert recipe.distillation is not None
+            data = read_record(local_path(recipe.distillation), DistillationManifest)
+            if data.training_pool != benchmark.train:
+                raise ValueError("Distillation belongs to a different frozen training pool")
+            teacher_config = read_record(local_path(data.config), DistillationConfig)
+            seed = teacher_config.seed
+            pool_by_id = {item.task_id: item for item in read_examples(local_path(benchmark.train))}
+            for tokenizer_ref in data.tokenizer_files:
+                local_path(tokenizer_ref)
+            accepted = []
+            for ref in data.attempts:
+                attempt = read_record(local_path(ref), DistillationAttempt)
+                if pool_by_id.get(attempt.example.task_id) != attempt.example:
+                    raise ValueError("Distillation includes a modified or non-training question")
+                if attempt.accepted:
+                    if attempt.sample is None or attempt.error:
+                        raise ValueError("Accepted teacher trajectory has no tokenized targets")
+                    accepted.append(attempt.sample)
+
+            if (
+                tuple(accepted) != read_training_samples(local_path(data.dataset))
+                or len(accepted) != data.accepted_count
+            ):
+                raise ValueError("Distillation dataset differs from its verified teacher attempts")
+            size = data.accepted_count
+        else:
+            assert recipe.data is not None
+            seed = recipe.data.seed
+            for selection_ref in (recipe.data.curriculum, recipe.data.synthetic_admission):
+                if selection_ref is not None:
+                    selection: DynamicCurriculum | SyntheticAdmission
+                    if selection_ref == recipe.data.curriculum:
+                        selection = read_record(local_path(selection_ref), DynamicCurriculum)
+                    else:
+                        selection = read_record(local_path(selection_ref), SyntheticAdmission)
+                    probe = read_record(local_path(selection.probe), StudentProbe)
+                    if probe.model != parent.model.content:
+                        raise ValueError(
+                            "Refresh student admission with the actual parent checkpoint"
+                        )
+            data = build_dataset(
+                recipe.data,
+                read_examples(local_path(benchmark.train)),
+                benchmark.train,
+                benchmark.excluded_ids,
+                directory / "data",
+            )
+            size = data.real_count + data.synthetic_count
         source = _source(PROJECT, directory / "source-project.json")
         candidate = Candidate(name, recipe_ref, data, source, parent)
         state = directory / "candidate.json"
         write_record(state, candidate)
-        size = recipe.data.real_count + recipe.data.synthetic_count
+        if size < recipe.batch_size:
+            raise ValueError("Verified training dataset cannot supply a complete batch")
         epochs = math.ceil(recipe.training_steps / (size // recipe.batch_size))
         training = replace(
             self.config.training,
@@ -425,11 +679,12 @@ class Experiment:
             learning_rate=recipe.learning_rate,
             max_new_tokens=recipe.max_new_tokens,
             temperature=recipe.temperature,
+            sft_style=recipe.sft_style,
         )
         config = replace(
             self.config,
             training=training,
-            synthesis=replace(self.config.synthesis, seed=recipe.data.seed, train_size=size),
+            synthesis=replace(self.config.synthesis, seed=seed, train_size=size),
         )
         job_name = f"{name}-train"
         try:
@@ -438,7 +693,16 @@ class Experiment:
             candidate.training = await self.backend.train(
                 self.root.name,
                 job_name,
-                self.spec(self.request("train", job_name, parent, data.dataset, config), job_name),
+                self.spec(
+                    self.request(
+                        "sft" if recipe.algorithm == "sft" else "train",
+                        job_name,
+                        parent,
+                        recipe.distillation if recipe.distillation is not None else data.dataset,
+                        config,
+                    ),
+                    job_name,
+                ),
             )
             self.verify_source(source, job_name)
             created = datetime.now(UTC).isoformat()
@@ -478,10 +742,8 @@ class Experiment:
         completed = [item for item in candidates if item.status == "completed" and item.valid]
         if len(completed) < self.protocol.config.min_rounds:
             raise ValueError("Complete the preregistered minimum number of research rounds")
-        task_ids = tuple(
-            case.task_id
-            for case in evaluation_cases(read_examples(local_path(self.protocol.benchmark.valid)))
-        )
+        cases = evaluation_cases(read_examples(local_path(self.protocol.benchmark.valid)))
+        task_ids = tuple(case.task_id for case in cases)
         baseline = read_record(self.root / "valid/base.json", EvaluationResult)
         read_evaluation_samples(
             baseline,
@@ -506,7 +768,11 @@ class Experiment:
             or selected.valid.report.score < (best.valid.report.score if best.valid else 0)
         ):
             raise ValueError("Select a candidate with the best valid score")
-        comparison = paired(baseline, selected.valid)
+        comparison = paired(
+            baseline,
+            selected.valid,
+            clusters={case.task_id: case.question_id for case in cases},
+        )
         if comparison.delta <= 0:
             raise ValueError("Continue research: no valid improvement yet")
         selection = Selection(
@@ -538,7 +804,11 @@ class Experiment:
             baseline,
             candidate,
             comparison,
-            comparison.delta >= self.protocol.config.target_delta,
+            comparison.delta >= self.protocol.config.target_delta
+            and (
+                self.protocol.config.target_accuracy is None
+                or comparison.candidate_accuracy > self.protocol.config.target_accuracy
+            ),
         )
         write_record(self.root / "test/result.json", result)
         p_text = (
@@ -576,6 +846,13 @@ async def main() -> None:
     train_parser = commands.add_parser("round")
     train_parser.add_argument("--name", required=True)
     train_parser.add_argument("--recipe", type=Path, required=True)
+    probe_parser = commands.add_parser("probe")
+    probe_parser.add_argument("--name", required=True)
+    probe_parser.add_argument("--candidate", default="base")
+    probe_parser.add_argument("--recipe", type=Path, required=True)
+    dynamic_parser = commands.add_parser("dynamic-round")
+    dynamic_parser.add_argument("--name", required=True)
+    dynamic_parser.add_argument("--plan", type=Path, required=True)
     test_parser = commands.add_parser("test")
     test_parser.add_argument("--candidate", required=True)
     commands.add_parser("status")
@@ -593,6 +870,10 @@ async def main() -> None:
             await experiment.evaluate(args.candidate)
         elif args.command == "round":
             await experiment.train(args.name, args.recipe)
+        elif args.command == "probe":
+            await experiment.probe(args.name, args.candidate, read_record(args.recipe, ProbeRecipe))
+        elif args.command == "dynamic-round":
+            await experiment.dynamic_round(args.name, args.plan)
         elif args.command == "test":
             await experiment.test(args.candidate)
         else:

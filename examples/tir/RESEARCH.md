@@ -1,7 +1,9 @@
 # TIR 多轮训练研究
 
-`pipeline.py` 保留最小独立端到端例子；`experiment.py` 管理真实数据上的分阶段研究，
-`rsi.py` 才是实际 `/rsi` 的例子入口。训练并不是 `/rsi` 的必选步骤。
+TIR research 是一个独立示例，`rsi.py` 是 Agent 驱动多轮研究的主入口，
+`experiment.py` 管理真实数据上的分阶段实验。需要先检查训练链路时，可使用
+`pipeline.py`，具体步骤见 [单次 pipeline 接入检查](README.md)。
+训练并不是 `/rsi` 的必选步骤。
 其他任务可以只优化 harness，或调用同一套 infra 服务组织自己的训练过程。
 
 公共 `JobExecutor` 执行进程并处理失败/取消，`EvaluationService` 检查完整覆盖并保存轨迹，
@@ -196,34 +198,67 @@ linear 仍是一步方程，counting 仍是基础选人组合；没有覆盖足�
 
 ## 运行
 
-以下命令从项目根目录执行。准备 parquet 的可选依赖 pyarrow 位于 AReaL 镜像中，
-不需要装进 RSI 宿主环境。CPU 数据准备也通过 Slurm 执行。
+在可提交 Slurm 的集群上，从项目根目录安装一次：
 
 ```bash
-python -m examples.tir.benchmark --source /absolute/torl_data --output /absolute/benchmark
-python -m examples.tir.experiment --experiment /absolute/experiment prepare --config examples/tir/experiment.json
-python -m examples.tir.experiment --experiment /absolute/experiment evaluate --candidate base
-python -m examples.tir.rsi --experiment /absolute/experiment --env-file /absolute/private.env
+uv sync --locked
+source .venv/bin/activate
 ```
 
-experiment.json 中的 benchmark 路径指向第一步产物，`tir` 中填写实际后端与模型配置。
-默认申请 rsi reservation 的 2 GPU、16 CPU、128G；阶段结束即释放，不会在 Leader 分析时占住 GPU。
-最后一个命令使用真实 ResearchSystem 和模型 API：Interaction 整理目标并交接 Leader，
-Leader 修改合成代码/数据配方、多轮训练与分析，然后提交 decision.json。该命令完成 valid
-研发后返回；宿主核对证据后独立执行：
+TIR 是独立 example，调用 RSI 公共 API；通用 CLI 和安装包均不依赖或包含 examples。
+以下命令从项目根目录执行。研究会修改源码并归档整个项目，需要保留源码 checkout。
+宿主不需要安装 GPU 依赖或 pyarrow；训练、评测与 parquet 准备使用 AReaL 容器。
+
+先配置 `examples/tir/experiment.json`：
+
+- `tir.runtime.repository` 指向实际 AReaL 源码目录。
+- 核对 `tir.runtime.python`、`tir.model`；默认镜像在 `slurm.image` 的代码默认值中。
+- `benchmark` 指向已有 `benchmark.json`；首次准备时填写一个尚不存在的目录下的
+  `/absolute/new-benchmark/benchmark.json`。
+- 按需添加 `slurm` 配置覆盖 image、reservation、partition 等；默认 rsi reservation。
+- 在 `.env` 设置 RSI_API_KEY、RSI_BASE_URL、RSI_MODEL，Codex CLI 需要 >=0.162.1。
+
+已有 benchmark 后，一条命令启动多轮研究：
 
 ```bash
-python -m examples.tir.experiment --experiment /absolute/experiment test --candidate NAME
+python -m examples.tir.rsi
 ```
 
-此命令冻结选择并运行 test。会话、角色迁移、工具和原生历史保存在 experiment/rsi，凭据由环境读取。
-原生 Codex CLI 需要 >=0.162.1。已有中断会话使用同一 experiment 加 `--resume`，不要另建会话。
-
-无需启动 RSI 也可手动执行：
+首次需要准备 ToRL 数据时（目录内含 `train.parquet` 和 `test.parquet`）：
 
 ```bash
-python -m examples.tir.experiment --experiment /absolute/experiment round \
-  --name r1 --recipe examples/tir/recipes/r1.json
+python -m examples.tir.rsi --source /absolute/torl_data
 ```
 
-这用于开发阶段检查，不能作为“真实 RSI 驱动研究”的证据。
+该命令依次执行 CPU Slurm 数据准备（仅指定 --source 时）、冻结协议、valid 基线、
+Interaction → Leader 多轮研究。默认打印并使用 `runs/tir-research/tir-<时间>-<ID>` 新目录。
+数据准备失败的部分输出会保留，重试时用新的 benchmark 输出目录，不覆盖已有记录。
+每个训练/评测阶段申请 2 GPU、16 CPU、128G，结束即释放，Leader 分析时不占 GPU。
+所有路径须在提交端和容器内可见；容器默认绑定 `/storage`。相对路径按启动工作目录解析。
+
+自定义配置、实验目录和凭据文件：
+
+```bash
+python -m examples.tir.rsi --config /absolute/experiment-config.json \
+  --experiment /absolute/new-experiment --env-file /absolute/private.env
+```
+
+Leader 修改合成代码/数据配方、多轮训练与分析，提交 `decision.json` 和 `research-report.md`。
+默认只完成 valid 研发，不自动使用 test。会话与原生历史保存在 experiment/rsi。
+查看进度、恢复中断（含基线完成前的中断）：
+
+```bash
+python -m examples.tir.rsi status --experiment /absolute/experiment
+python -m examples.tir.rsi --experiment /absolute/experiment --resume --env-file /absolute/private.env
+```
+
+已有冻结协议直接复用，--config 不会改写它；已有会话必须显式 --resume。
+宿主审核候选证据后，独立冻结选择并验收：
+
+```bash
+python -m examples.tir.rsi test --experiment /absolute/experiment --candidate r2
+```
+
+最终输出 `report.md` 和 `test/result.json`。候选名应取自审核后的 decision.json。
+底层 `python -m examples.tir.experiment` 仍可用于开发阶段的单轮训练与故障定位；
+旧冻结实验必须使用其原始归档源码，更新入口不会迁移既有证据。

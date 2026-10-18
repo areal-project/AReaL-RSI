@@ -17,8 +17,8 @@ import pytest
 from areal_rsi.api.control import decode_record
 from areal_rsi.api.records import EvaluationSample
 from areal_rsi.infra.artifacts import write_record
-from examples.search.data import SearchQuestion
-from examples.search.rollouts import (
+from examples.search.task.dataset import SearchQuestion
+from examples.search.task.rollouts import (
     Episode,
     TokenUsage,
     read_rollout_usage,
@@ -119,7 +119,7 @@ def agent_context(monkeypatch: pytest.MonkeyPatch) -> Any:
         get=lambda: SimpleNamespace(task_id=3, sample_idx=0),
     )
     monkeypatch.setitem(sys.modules, "areal", module)
-    return importlib.import_module("examples.search.agent")
+    return importlib.import_module("examples.search.task.agent")
 
 
 @pytest.mark.parametrize("failed", [False, True])
@@ -200,7 +200,7 @@ def test_cancellation_drains_the_model_request_before_releasing_the_agent(
 
 
 def test_g4_pilot_uses_episode_results_without_tensor_audit_files(tmp_path: Path) -> None:
-    pilot = importlib.import_module("examples.search.pilot")
+    pilot = importlib.import_module("examples.search.training.pilot")
     for sample in range(4):
         write_record(tmp_path / f"episodes/{sample}.json", episode("q", 3, sample=sample))
     report = pilot.summarize_episodes(tmp_path, {"q"}, 4)

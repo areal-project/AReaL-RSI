@@ -111,6 +111,9 @@ def test_prepare_isolated_runs_and_archives_dirty_source(tmp_path: Path) -> None
     state = read_record(first / "experiment.json", ExperimentState)
     assert state.status == "prepared" and state.provenance is not None
     assert state.provenance.backend.dirty
+    with tarfile.open(local_path(state.provenance.project.archive)) as archive:
+        shared_probe = archive.extractfile("examples/checkpoints.py")
+        assert shared_probe is not None and b"def parameter_probe(" in shared_probe.read()
     with tarfile.open(local_path(state.provenance.backend.archive)) as archive:
         content = archive.extractfile("examples/tir/workflow.py")
         assert content is not None and content.read() == b"original = False\n"

@@ -13,8 +13,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from examples.search.reward import answer_reward
-from examples.search.rollouts import Episode
+from examples.search.task.reward import answer_reward
+from examples.search.task.rollouts import Episode
 
 _mcp_lock = threading.Lock()
 _mcp_tools: dict[str, tuple[Any, ...]] = {}

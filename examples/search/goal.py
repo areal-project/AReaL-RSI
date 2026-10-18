@@ -36,7 +36,7 @@ async def run(root: Path, workspace: Path, objective: Path, *, resume: bool) -> 
             f"{os.environ.get('SLURM_JOB_ID', 'local')}。"
             "这个 Job 运行你自己，不是等待产出的训练实验。不要等待它结束、取消它、杀死父进程、"
             "递归启动 examples.search.goal，或修改当前控制进程的 Python 环境。"
-            "你负责亲自审查训练数据、选择配置、调用 examples.search.pipeline --submit "
+            "你负责亲自审查训练数据、选择配置、调用 examples.search.experiment.pipeline --submit "
             "提交 GPU 实验。"
             "只对提交回执中记录的实际 GPU 实验作业执行等待和恢复。"
             "不要运行 uv sync/uv run 重建共享 .venv；使用当前已提供的 Python 和已安装依赖。"

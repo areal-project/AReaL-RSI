@@ -14,6 +14,7 @@
 - `test_architecture.py`：API/infra/UI 依赖方向和协调状态边界。
 - `test_training.py`：独立 TIR 数据合成与答案校验、真实子进程的失败/超时/中断、
   评测完整性、轨迹索引、训练产物新鲜性和分片完整性；不模拟训练成绩。
+- `test_search_layout.py`：在源码目录外运行 Search 各入口的 `--help`，检查迁移后的包路径及 GPU 可选依赖隔离。
 
 本机需安装 Node >= 22 和 Codex >= 0.162.1 才能执行原生协议测试；缺少二进制时会明确跳过。
 真实 API 冒烟测试需另行使用本地 `.env`，不进入默认测试集，不将密钥写入 fixture。

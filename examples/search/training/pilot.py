@@ -10,9 +10,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from areal_rsi.infra.artifacts import read_record
-from examples.search.pipeline import WorkerRequest
-from examples.search.rollouts import Episode
-from examples.search.worker import dataset, prepare_config, workflow_kwargs
+from examples.search.experiment.config import WorkerRequest
+from examples.search.task.rollouts import Episode
+from examples.search.training.worker import dataset, prepare_config, workflow_kwargs
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,7 +104,7 @@ def run(request: WorkerRequest, questions: int) -> None:
         for item in items:
             rollout.submit(
                 item,
-                workflow="examples.search.agent.BrowseCompTrainAgent",
+                workflow="examples.search.task.agent.BrowseCompTrainAgent",
                 workflow_kwargs=kwargs,
                 group_size=group_size,
                 is_eval=True,

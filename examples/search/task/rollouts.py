@@ -10,7 +10,7 @@ from typing import Any, Literal
 from areal_rsi.api.control import encode_record
 from areal_rsi.api.records import EvaluationSample, TraceEvent
 from areal_rsi.infra.artifacts import read_record
-from examples.search.data import SearchQuestion
+from examples.search.task.dataset import SearchQuestion
 
 
 @dataclass(frozen=True, slots=True)

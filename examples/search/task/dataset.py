@@ -13,7 +13,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from examples.search.reward import answer_in_text, normalize_answer
+from examples.search.task.reward import answer_in_text, normalize_answer
 
 Split = Literal["train", "dev", "test"]
 

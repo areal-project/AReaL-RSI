@@ -16,7 +16,7 @@ from typing import Literal
 
 from areal_rsi.api.records import ArtifactFile, DirectorySnapshot
 from areal_rsi.infra.artifacts import file_ref, read_record, write_record
-from examples.search.final_evaluation import FinalEvalConfig
+from examples.search.evaluation.artifacts import FinalEvalConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,7 +140,11 @@ def run(config_path: Path, runtime: Path, image: Path, work_root: Path) -> Path:
     ):
         if Path(getattr(config, name)).resolve().is_relative_to(parent):
             raise ValueError(f"Output bind would hide a frozen input: {name}")
-    entrypoint = runtime.resolve(strict=True) / "examples/search/final_evaluation.py"
+    frozen_runtime = runtime.resolve(strict=True)
+    entrypoint = frozen_runtime / "examples/search/evaluation/official.py"
+    if not entrypoint.is_file():
+        # Archived H0 runtimes retain their original layout and source-lock.
+        entrypoint = frozen_runtime / "examples/search/final_evaluation.py"
     if not entrypoint.is_file() or not image.is_file():
         raise ValueError("Missing immutable H0 runtime or image")
     work = work_root.resolve(strict=True) / f"search-rsi-official-{job_id}"

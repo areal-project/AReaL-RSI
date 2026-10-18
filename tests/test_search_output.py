@@ -1,12 +1,14 @@
 import os
+import subprocess
 from dataclasses import replace
 from pathlib import Path
+from typing import NoReturn
 
 import pytest
 
 from areal_rsi.infra.artifacts import file_ref, read_record, write_record
-from examples.search import official_output as output
-from examples.search.final_evaluation import FinalEvalConfig
+from examples.search.evaluation import publish as output
+from examples.search.evaluation.artifacts import FinalEvalConfig
 
 
 def state_for(tmp_path: Path) -> output.OutputState:
@@ -36,6 +38,46 @@ def state_for(tmp_path: Path) -> output.OutputState:
     return output.OutputState(
         "123", str(config_path), file_ref(config_path).digest, str(local), str(shared), "running"
     )
+
+
+@pytest.mark.parametrize(
+    "entrypoint_path",
+    ["examples/search/evaluation/official.py", "examples/search/final_evaluation.py"],
+)
+def test_publication_launches_the_requested_frozen_runtime_layout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entrypoint_path: str
+) -> None:
+    state = state_for(tmp_path)
+    config_path = Path(state.config)
+    destination = tmp_path / "published/trial"
+    destination.parent.mkdir()
+    write_record(
+        config_path, replace(read_record(config_path, FinalEvalConfig), output=str(destination))
+    )
+    frozen = tmp_path / "frozen-runtime"
+    entrypoint = frozen / entrypoint_path
+    entrypoint.parent.mkdir(parents=True)
+    source = b"# Immutable frozen evaluation entrypoint.\n"
+    entrypoint.write_bytes(source)
+    image = tmp_path / "runtime.sif"
+    image.touch()
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setenv("SLURM_JOB_ID", "123")
+    monkeypatch.setenv("SEARCH_SLURM_JOB_INFO", "JobId=123 Reservation=rsi")
+
+    class LaunchObserved(RuntimeError):
+        pass
+
+    def inspect_launch(command: list[str], **kwargs: object) -> NoReturn:
+        script = Path(command[-1]).read_text()
+        assert str(entrypoint) in script
+        assert entrypoint.read_bytes() == source
+        raise LaunchObserved
+
+    monkeypatch.setattr(subprocess, "Popen", inspect_launch)
+    with pytest.raises(LaunchObserved):
+        output.run(config_path, frozen, image, scratch)
 
 
 def test_mirror_waits_for_complete_solver_json_and_withholds_final_scores(tmp_path: Path) -> None:

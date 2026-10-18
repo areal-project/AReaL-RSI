@@ -10,8 +10,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from examples.search.data import Passage, digest
-from examples.search.reward import answer_in_text, normalize_answer
+from examples.search.task.dataset import Passage, digest
+from examples.search.task.reward import answer_in_text, normalize_answer
 
 QUERY_PREFIX = (
     "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:"

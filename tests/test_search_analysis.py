@@ -11,13 +11,16 @@ import pytest
 
 from areal_rsi.api.records import DirectorySnapshot
 from areal_rsi.infra.artifacts import read_record, snapshot_directory
-from examples.search.analysis import paired_statistics, read_official_results, wilson_interval
-from examples.search.final_evaluation import (
-    FinalEvalConfig,
+from examples.search.evaluation.analysis import (
+    paired_statistics,
+    read_official_results,
+    wilson_interval,
+)
+from examples.search.evaluation.artifacts import FinalEvalConfig, digest
+from examples.search.evaluation.checkpoints import export_checkpoint
+from examples.search.evaluation.official import counters
+from examples.search.evaluation.verification import (
     context_budget_exhaustion,
-    counters,
-    digest,
-    export_checkpoint,
     recover_summary,
     tool_argument_failure,
 )
@@ -331,14 +334,14 @@ def test_summary_recovery_preserves_full_official_denominator_and_rejects_other_
         )
     )
     monkeypatch.setattr(
-        "examples.search.final_evaluation.subprocess.check_output",
+        "examples.search.evaluation.verification.subprocess.check_output",
         lambda *a, **k: "123|RUNNING|40|\n",
     )
     with pytest.raises(ValueError, match="must be terminal"):
         recover_summary(config_path, tmp_path / "live.json")
     before = {str(path): digest(path) for path in source.rglob("*") if path.is_file()}
     monkeypatch.setattr(
-        "examples.search.final_evaluation.subprocess.check_output",
+        "examples.search.evaluation.verification.subprocess.check_output",
         lambda *a, **k: "123|FAILED|42|\n",
     )
     recovered = recover_summary(config_path, tmp_path / "recovered.json")

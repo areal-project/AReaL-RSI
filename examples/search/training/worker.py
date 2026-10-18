@@ -14,9 +14,9 @@ from typing import Any
 from areal_rsi.api.control import decode_record
 from areal_rsi.api.execution import TrainingReceipt
 from areal_rsi.infra.artifacts import read_record, write_record
-from examples.search.data import SearchQuestion
-from examples.search.pipeline import WorkerRequest
-from examples.search.rollouts import write_evaluation_samples
+from examples.search.experiment.config import WorkerRequest
+from examples.search.task.dataset import SearchQuestion
+from examples.search.task.rollouts import write_evaluation_samples
 
 
 def prepare_config(request: WorkerRequest) -> Any:
@@ -163,14 +163,14 @@ def train(request: WorkerRequest, config: Any) -> None:
     from areal import PPOTrainer
     from areal.utils.saver import Saver
 
-    from examples.tir.worker import parameter_probe
+    from examples.checkpoints import parameter_probe
 
     training_data = dataset(request.dataset)
     request.config.training.validate_dataset_size(len(training_data))
     key, initial = parameter_probe(Path(request.model))
     with PPOTrainer(config, training_data, valid_dataset=None) as trainer:
         trainer.train(
-            workflow="examples.search.agent.BrowseCompTrainAgent",
+            workflow="examples.search.task.agent.BrowseCompTrainAgent",
             workflow_kwargs=workflow_kwargs(request),
             eval_workflow=None,
         )
@@ -225,7 +225,7 @@ def evaluate(request: WorkerRequest, config: Any) -> None:
         for item in items:
             rollout.submit(
                 item,
-                workflow="examples.search.agent.BrowseCompTrainAgent",
+                workflow="examples.search.task.agent.BrowseCompTrainAgent",
                 workflow_kwargs=workflow_kwargs(request),
                 group_size=1,
                 is_eval=True,

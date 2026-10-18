@@ -18,18 +18,17 @@ from areal_rsi.api.execution import AReaLRuntime, JobSpec
 from areal_rsi.api.records import BenchmarkSplit, EvaluationSample, TraceEvent
 from areal_rsi.infra.artifacts import read_record, write_record
 from areal_rsi.infra.training import AReaLBackend
-from examples.search import pipeline
-from examples.search.data import Candidate, DatasetConfig, Passage, parse_hotpot, partition
-from examples.search.pipeline import (
-    ExperimentState,
+from examples.search.experiment import pipeline, slurm
+from examples.search.experiment.config import (
     HarnessConfig,
     SearchConfig,
-    SlurmSubmission,
     TrainingConfig,
     WorkerRequest,
-    stage_model,
 )
-from examples.search.reward import answer_in_text, answer_reward, extract_answer
+from examples.search.experiment.pipeline import ExperimentState, stage_model
+from examples.search.experiment.slurm import SlurmSubmission
+from examples.search.task.dataset import Candidate, DatasetConfig, Passage, parse_hotpot, partition
+from examples.search.task.reward import answer_in_text, answer_reward, extract_answer
 
 
 def candidate(index: int) -> Candidate:
@@ -173,7 +172,7 @@ def search_config(tmp_path: Path) -> SearchConfig:
     repository = tmp_path / "backend"
     (repository / "areal").mkdir(parents=True)
     (repository / "areal" / "__init__.py").touch()
-    entrypoint = tmp_path / "examples/search/pipeline.py"
+    entrypoint = tmp_path / "examples/search/experiment/pipeline.py"
     entrypoint.parent.mkdir(parents=True)
     entrypoint.write_text("# Frozen submission fixture.\n")
     return SearchConfig(
@@ -210,6 +209,7 @@ def test_heldout_evaluation_reloads_without_training_or_changing_incumbent(
     def spec(
         self: AReaLBackend, entrypoint: Path, arguments: tuple[str, ...], *, timeout: float
     ) -> JobSpec:
+        assert entrypoint.is_file() and entrypoint.parent.name == "training"
         request = read_record(Path(arguments[1]), WorkerRequest)
         assert request.mode == "eval" and request.dataset == str(data / "test.jsonl")
         assert request.model == config.model
@@ -227,7 +227,7 @@ def test_heldout_evaluation_reloads_without_training_or_changing_incumbent(
     real_spawn = asyncio.create_subprocess_exec
 
     async def spawn(*args: Any, **kwargs: Any) -> asyncio.subprocess.Process:
-        if "examples.search.dense" in args:
+        if "examples.search.task.retrieval" in args:
             assert "test-corpus.jsonl" in str(args) and "test.npy" in str(args)
             return await real_spawn(sys.executable, "-c", "import time; time.sleep(60)", **kwargs)
         return await real_spawn(*args, **kwargs)
@@ -308,14 +308,12 @@ def test_heldout_submission_requests_two_gpus_and_refuses_changed_resume_mode(
     )
     assert receipt.kind == "external-test-evaluation" and receipt.gpus == 2
     assert not receipt.release_pending
-    assert (
-        pipeline.submit(path, "heldout", image, 120, evaluation_split="test") == "123"
-    )
+    assert slurm.submit(path, "heldout", image, 120, evaluation_split="test") == "123"
     assert len(submissions) == 1
     with pytest.raises(ValueError, match="different configuration or mode"):
-        pipeline.submit(path, "heldout", image, 120, evaluation_split="dev")
+        slurm.submit(path, "heldout", image, 120, evaluation_split="dev")
     with pytest.raises(ValueError, match="different configuration or mode"):
-        pipeline.submit(path, "heldout", image, 120)
+        slurm.submit(path, "heldout", image, 120)
 
 
 @pytest.mark.parametrize("published", [False, True])
@@ -352,13 +350,13 @@ def test_failed_receipt_cancels_held_job_or_reports_its_id(
 
     monkeypatch.setattr(subprocess, "check_output", submit)
     monkeypatch.setattr(subprocess, "check_call", cancel)
-    monkeypatch.setattr(pipeline, "write_record", fail_receipt)
+    monkeypatch.setattr(slurm, "write_record", fail_receipt)
     message = "cancellation was not confirmed" if cancel_fails else "was cancelled"
     with pytest.raises(RuntimeError, match=f"Slurm job 123.*{message}"):
-        pipeline.submit(path, "candidate", image, 120)
+        slurm.submit(path, "candidate", image, 120)
     if not published:
         with pytest.raises(RuntimeError, match="Incomplete submission"):
-            pipeline.submit(path, "candidate", image, 120)
+            slurm.submit(path, "candidate", image, 120)
     assert len(submissions) == len(cancellations) == 1
 
 
@@ -422,11 +420,11 @@ def test_submission_retry_recovers_release_without_submitting_another_job(
 
     monkeypatch.setattr(subprocess, "check_output", submit_or_status)
     monkeypatch.setattr(subprocess, "check_call", release)
-    monkeypatch.setattr(pipeline, "write_record", save)
+    monkeypatch.setattr(slurm, "write_record", save)
     with pytest.raises(RuntimeError, match=r"Slurm job 123 is recorded.*release is not confirmed"):
-        pipeline.submit(path, "candidate", image, 120)
+        slurm.submit(path, "candidate", image, 120)
     assert read_record(receipt, SlurmSubmission).release_pending
-    assert pipeline.submit(path, "candidate", image, 120) == "123"
+    assert slurm.submit(path, "candidate", image, 120) == "123"
     assert not read_record(receipt, SlurmSubmission).release_pending
     assert released and len(submissions) == 1
     assert len(releases) == (2 if failure == "release_rejected" else 1)
@@ -453,9 +451,9 @@ def test_unobserved_submission_result_keeps_job_held_and_refuses_automatic_resub
     monkeypatch.setattr(subprocess, "check_output", submit)
     monkeypatch.setattr(subprocess, "check_call", release)
     with pytest.raises(OSError, match="response was lost"):
-        pipeline.submit(path, "candidate", image, 120)
+        slurm.submit(path, "candidate", image, 120)
     with pytest.raises(RuntimeError, match=r"Incomplete submission.*search-candidate"):
-        pipeline.submit(path, "candidate", image, 120)
+        slurm.submit(path, "candidate", image, 120)
     assert len(submissions) == 1
 
 
@@ -464,7 +462,7 @@ def test_submitted_script_uses_frozen_source_when_calling_directory_shadows_modu
 ) -> None:
     config = search_config(tmp_path)
     marker = tmp_path / "frozen-entry-ran"
-    entrypoint = tmp_path / "examples/search/pipeline.py"
+    entrypoint = tmp_path / "examples/search/experiment/pipeline.py"
     entrypoint.write_text(f"from pathlib import Path\nPath({str(marker)!r}).write_text('frozen')\n")
     # The test environment lacks CUDA; intercept only the CUDA-library lookup.
     interpreter = tmp_path / "image-python"
@@ -487,11 +485,12 @@ def test_submitted_script_uses_frozen_source_when_calling_directory_shadows_modu
         ),
     )
     monkeypatch.setattr(subprocess, "check_call", lambda *args, **kwargs: 0)
-    pipeline.submit(config_path, "pinned-source", image, 120, evaluation_split="dev")
+    slurm.submit(config_path, "pinned-source", image, 120, evaluation_split="dev")
     shadow = tmp_path / "mutable-workspace"
-    package = shadow / "examples/search"
+    package = shadow / "examples/search/experiment"
     package.mkdir(parents=True)
     (shadow / "examples/__init__.py").touch()
+    (shadow / "examples/search/__init__.py").touch()
     (package / "__init__.py").touch()
     (package / "pipeline.py").write_text("raise RuntimeError('mutable source was imported')\n")
     script = Path(config.output_root) / "submissions/pinned-source/inside.sh"

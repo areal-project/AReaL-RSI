@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import math
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -50,6 +51,7 @@ from examples.tir.distillation import (
 )
 from examples.tir.experiment import RoundRecipe
 from examples.tir.synthesis import (
+    CompositionalAdmissionPolicy,
     DataRecipe,
     StudentProbe,
     admit_compositional,
@@ -141,7 +143,11 @@ def test_tool_first_training_view_preserves_execution_and_masks_observations() -
 
 
 def student_probe(
-    root: Path, items: tuple[Example, ...], scores: tuple[tuple[int, ...], ...]
+    root: Path,
+    items: tuple[Example, ...],
+    scores: tuple[tuple[int, ...], ...],
+    *,
+    traces: dict[str, tuple[TraceEvent, ...]] | None = None,
 ) -> ContentRef:
     repeated = tuple(
         replace(item, repetitions=len(group)) for item, group in zip(items, scores, strict=True)
@@ -153,7 +159,7 @@ def student_probe(
             "answer",
             float(score),
             bool(score),
-            (TraceEvent("generation", "answer"),),
+            traces[item.task_id] if traces is not None else (TraceEvent("generation", "answer"),),
         )
         for item, group in zip(items, scores, strict=True)
         for index, score in enumerate(group)
@@ -284,6 +290,106 @@ def test_composed_admission_rejects_easy_and_unsolved_groups_and_caps_mixture(
         tmp_path / "training",
     )
     assert data.synthetic_count == 1 and data.real_count == 10
+
+
+def test_lattice_proposals_calibrate_constraints_without_irrelevant_obstacles(
+    tmp_path: Path,
+) -> None:
+    proposals = propose(29, 30, (), tmp_path / "proposals", lattice_blocked_points=1)
+    manifest = read_record(local_path(proposals), CompositionalManifest)
+    tasks = read_tasks(local_path(manifest.definitions))
+    lattice = [task for task in tasks if isinstance(task.definition, LatticeRoutes)]
+    assert lattice
+    for task in lattice:
+        spec = task.definition
+        assert isinstance(spec, LatticeRoutes) and len(spec.blocked) == 1
+        x, y = spec.checkpoint
+        unblocked = math.comb(x + y, x) * math.comb(
+            spec.width - x + spec.height - y, spec.width - x
+        )
+        assert 0 < int(task.example.answer) < unblocked
+    repeated = propose(29, 30, (), tmp_path / "repeated", lattice_blocked_points=1)
+    second = read_record(local_path(repeated), CompositionalManifest)
+    assert read_tasks(local_path(second.definitions)) == tasks
+
+
+def test_composed_admission_requires_actual_correct_stdout_and_family_coverage(
+    tmp_path: Path,
+) -> None:
+    proposals = propose(29, 30, (), tmp_path / "proposals", lattice_blocked_points=1)
+    manifest = read_record(local_path(proposals), CompositionalManifest)
+    items = read_examples(local_path(manifest.examples))
+    traces: dict[str, tuple[TraceEvent, ...]] = {
+        item.task_id: (
+            TraceEvent("tool_call", "recorded execution"),
+            TraceEvent("tool_result", item.answer),
+            TraceEvent("generation", "final answer"),
+        )
+        for item in items
+    }
+    rejected = {item.task_id for item in items[:3]}
+    traces[items[0].task_id] = (TraceEvent("generation", f"```output\n{items[0].answer}\n```"),)
+    traces[items[1].task_id] = (
+        TraceEvent("tool_call", "recorded execution"),
+        TraceEvent("tool_result", f"Error: failed near {items[1].answer}"),
+    )
+    traces[items[2].task_id] = (
+        TraceEvent("tool_call", "recorded execution"),
+        TraceEvent("tool_result", "-100"),
+    )
+    probe = student_probe(tmp_path / "probe", items, ((0, 1, 0, 0),) * len(items), traces=traces)
+    policy = CompositionalAdmissionPolicy(minimum_per_family=2, require_correct_tool_output=True)
+    admission = admit_compositional(
+        proposals,
+        probe,
+        count=6,
+        seed=17,
+        excluded_ids=(),
+        output=tmp_path / "admitted",
+        policy=policy,
+    )
+    selected = read_examples(local_path(admission.dataset))
+    assert not rejected.intersection(admission.selected_ids)
+    assert all(
+        sum(item.family == family for item in selected) == 2
+        for family in {item.family for item in items}
+    )
+    # A native pass without genuine stdout cannot be laundered by changing the
+    # admission record: materialization rechecks the policy against the traces.
+    unverified = student_probe(tmp_path / "unverified-probe", items, ((0, 1),) * len(items))
+    loose = admit_compositional(
+        proposals, unverified, count=1, seed=17, excluded_ids=(), output=tmp_path / "loose"
+    )
+    forged = write_record(
+        tmp_path / "forged-admission.json",
+        replace(loose, policy=CompositionalAdmissionPolicy(require_correct_tool_output=True)),
+    )
+    pool = tuple(real_example(index) for index in range(20))
+    pool_ref = write_examples(tmp_path / "pool.jsonl", pool)
+    with pytest.raises(ValueError, match="tool evidence"):
+        build_dataset(
+            DataRecipe(real_count=10, synthetic_count=1, synthetic_admission=forged),
+            pool,
+            pool_ref,
+            (),
+            tmp_path / "forged-training",
+        )
+    # A missing family fails before publishing a partial admission directory.
+    one_family = tuple(item for item in items if item.family != "lattice_routes")
+    partial = student_probe(
+        tmp_path / "partial", one_family, ((0, 1),) * len(one_family), traces=traces
+    )
+    with pytest.raises(ValueError, match="family lattice_routes"):
+        admit_compositional(
+            proposals,
+            partial,
+            count=6,
+            seed=17,
+            excluded_ids=(),
+            output=tmp_path / "missing-family",
+            policy=policy,
+        )
+    assert not (tmp_path / "missing-family").exists()
 
 
 def test_sft_and_grpo_recipes_have_distinct_data_inputs() -> None:

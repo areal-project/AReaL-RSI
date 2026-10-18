@@ -22,5 +22,10 @@
     "temperature": 1.0
   },
   "mixed_count": 256,
-  "synthetic_proposals": 96
+  "synthetic_proposals": 192,
+  "lattice_blocked_points": 1,
+  "admission_policy": {
+    "minimum_per_family": 2,
+    "require_correct_tool_output": true
+  }
 }

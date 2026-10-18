@@ -60,6 +60,7 @@ from examples.tir.pipeline import (
     WorkerRequest,
 )
 from examples.tir.synthesis import (
+    CompositionalAdmissionPolicy,
     DataRecipe,
     DynamicCurriculum,
     StudentProbe,
@@ -172,9 +173,15 @@ class CurriculumPlan:
     probe: ProbeRecipe = field(default_factory=ProbeRecipe)
     mixed_count: int = 256
     synthetic_proposals: int = 0
+    lattice_blocked_points: int = 4
+    admission_policy: CompositionalAdmissionPolicy = field(
+        default_factory=CompositionalAdmissionPolicy
+    )
 
     def __post_init__(self) -> None:
         data = self.recipe.data
+        if not 1 <= self.lattice_blocked_points <= 4:
+            raise ValueError("Lattice proposals require 1..4 blocked points")
         if self.recipe.algorithm != "grpo" or data is None:
             raise ValueError("Dynamic curricula require a GRPO question recipe")
         if (
@@ -192,6 +199,8 @@ class CurriculumPlan:
                 or data.synthetic_count * 10 > data.real_count
             ):
                 raise ValueError("Probe enough synthetic proposals and preserve a 1:10 mixture")
+            if self.admission_policy.minimum_per_family * 3 > data.synthetic_count:
+                raise ValueError("Synthetic count cannot cover all three compositional families")
         elif self.synthetic_proposals != 0:
             raise ValueError("A real-only round must not request synthetic proposals")
 
@@ -560,6 +569,7 @@ class Experiment:
                 plan.synthetic_proposals,
                 benchmark.excluded_ids,
                 directory / "proposals",
+                lattice_blocked_points=plan.lattice_blocked_points,
             )
             composed_name = f"{name}-composed"
             await self.probe(
@@ -579,6 +589,7 @@ class Experiment:
                 seed=plan.probe.seed + 4,
                 excluded_ids=benchmark.excluded_ids,
                 output=directory / "admitted",
+                policy=plan.admission_policy,
             )
             admission_ref = file_ref(directory / "admitted/admission.json")
         recipe = replace(

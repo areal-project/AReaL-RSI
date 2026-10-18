@@ -226,9 +226,18 @@ def read_tasks(path: Path) -> tuple[CompositionalTask, ...]:
     return tasks
 
 
-def propose(seed: int, count: int, excluded_ids: tuple[str, ...], output: Path) -> ContentRef:
+def propose(
+    seed: int,
+    count: int,
+    excluded_ids: tuple[str, ...],
+    output: Path,
+    *,
+    lattice_blocked_points: int = 4,
+) -> ContentRef:
     if not 1 <= count <= 2000:
         raise ValueError("Propose 1..2000 composed tasks per student admission round")
+    if not 1 <= lattice_blocked_points <= 4:
+        raise ValueError("Lattice proposals require 1..4 blocked points")
     rng = random.Random(seed)
     seen = set(excluded_ids)
     tasks: list[CompositionalTask] = []
@@ -258,7 +267,12 @@ def propose(seed: int, count: int, excluded_ids: tuple[str, ...], output: Path) 
                 for y in range(height + 1)
                 if (x, y) not in {(0, 0), (width, height), checkpoint}
             ]
-            spec = LatticeRoutes(width, height, checkpoint, tuple(sorted(rng.sample(eligible, 4))))
+            spec = LatticeRoutes(
+                width,
+                height,
+                checkpoint,
+                tuple(sorted(rng.sample(eligible, lattice_blocked_points))),
+            )
         else:
             spec = ConditionalDraw(
                 rng.randint(3, 6),
@@ -274,6 +288,13 @@ def propose(seed: int, count: int, excluded_ids: tuple[str, ...], output: Path) 
             task = materialize(spec)
         except (ValueError, ZeroDivisionError):
             continue
+        if isinstance(spec, LatticeRoutes):
+            cx, cy = spec.checkpoint
+            unblocked = math.comb(cx + cy, cx) * math.comb(
+                spec.width - cx + spec.height - cy, spec.width - cx
+            )
+            if int(task.example.answer) == unblocked:
+                continue
         if task.example.task_id not in seen:
             tasks.append(task)
             seen.add(task.example.task_id)
@@ -295,5 +316,8 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--seed", type=int, default=20261018)
     parser.add_argument("--count", type=int, default=256)
+    parser.add_argument("--lattice-blocked-points", type=int, default=4)
     args = parser.parse_args()
-    propose(args.seed, args.count, (), args.output)
+    propose(
+        args.seed, args.count, (), args.output, lattice_blocked_points=args.lattice_blocked_points
+    )

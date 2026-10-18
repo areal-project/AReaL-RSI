@@ -130,6 +130,20 @@ class CohortPublication:
 
 
 @dataclass(frozen=True, slots=True)
+class ProgramOutputCheck:
+    original_attempt: ContentRef
+    admitted_attempt: ContentRef
+    error: str
+
+
+@dataclass(frozen=True, slots=True)
+class ProgramOutputAdmission:
+    original_manifest: ContentRef
+    manifest: ContentRef
+    checks: tuple[ProgramOutputCheck, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class StudentTrainingView:
     teacher_manifest: ContentRef
     style: SFTStyle
@@ -247,6 +261,52 @@ def publish_prefix(config_path: Path, count: int, output: Path) -> DistillationM
     return manifest
 
 
+def readmit_program_outputs(manifest_path: Path, output: Path) -> DistillationManifest:
+    """Recheck historical teacher stdout without rewriting producer records.
+
+    An executable program may print a wrong value that the teacher corrects
+    only in its final prose. Such a trajectory is unsuitable for tool-first
+    training. Keep every planned attempt, deriving a rejected record only
+    when an originally accepted program fails independent output verification.
+    """
+    original = read_record(manifest_path, DistillationManifest)
+    config = read_record(local_path(original.config), DistillationConfig)
+    attempts = tuple(read_record(local_path(ref), DistillationAttempt) for ref in original.attempts)
+    questions = tuple(attempt.example for attempt in attempts)
+    if (
+        len(attempts) != original.attempted_count
+        or questions != _questions(config)[: len(attempts)]
+    ):
+        raise ValueError("Output admission must preserve the planned teacher question prefix")
+    output.mkdir(parents=True, exist_ok=False)
+    published = []
+    checks = []
+    for ref, attempt in zip(original.attempts, attempts, strict=True):
+        admitted_ref = ref
+        if attempt.accepted:
+            error = ""
+            try:
+                verify_program_output(attempt.example, attempt.events)
+            except Exception as exc:
+                error = f"{type(exc).__name__}: {exc}"[:300]
+                admitted_ref = write_record(
+                    output / "attempts" / f"{attempt.example.task_id}.json",
+                    replace(attempt, accepted=False, error=error, sample=None),
+                )
+            checks.append(ProgramOutputCheck(ref, admitted_ref, error))
+        published.append(admitted_ref)
+    manifest = _publish(
+        original.config, questions, original.tokenizer_files, tuple(published), output
+    )
+    write_record(
+        output / "program-output-admission.json",
+        ProgramOutputAdmission(
+            file_ref(manifest_path), file_ref(output / "manifest.json"), tuple(checks)
+        ),
+    )
+    return manifest
+
+
 def teacher_completion(
     config: TeacherConfig, messages: tuple[TeacherMessage, ...], *, json_output: bool = False
 ) -> str:
@@ -341,7 +401,8 @@ Return ONLY a JSON object with exactly two string fields: reasoning and code.
 reasoning: a concise derivation of the equations or algorithm, at most 100 words.
 Use plain text equations without LaTeX backslashes, and escape JSON correctly.
 code: executable Python, at most 30 lines and 350 tokens, that computes and prints
-the answer. Use exact integers, fractions or sympy when appropriate. Do not assume
+only the final answer, without labels or diagnostic output. Use exact integers,
+fractions or sympy when appropriate. Do not assume
 the answer. Do not hard-code a guessed result or print an unexplained constant.
 Use no files, network, input(), markdown fences, or boxed answers. Sympy is installed.
 The code will actually run, and you will receive its stdout before answering.
@@ -423,12 +484,6 @@ def execute_draft(pending: PendingTeacher, response: str) -> tuple[TeacherMessag
 def admit_answer(
     config: DistillationConfig, pending: PendingTeacher, answer: str, tokenizer: Any
 ) -> DistillationAttempt:
-    from math_verify import parse, verify  # type: ignore[import-not-found]
-    from math_verify.parser import (  # type: ignore[import-not-found]
-        ExprExtractionConfig,
-        LatexExtractionConfig,
-    )
-
     pending.events.append(TraceEvent("generation", "\n" + answer.strip()))
     sample = tokenize_trajectory(
         pending.example.task_id,
@@ -437,14 +492,8 @@ def admit_answer(
         max_length=config.max_length,
         max_segment_tokens=config.max_segment_tokens,
     )
-    targets = (ExprExtractionConfig(), LatexExtractionConfig())
-    gold = parse(
-        normalize_gold(pending.example.answer, "math_delimited"),
-        extraction_config=targets,
-        parsing_timeout=3,
-    )
-    prediction = parse(boxed_answer(answer), extraction_config=targets, parsing_timeout=3)
-    if not gold or not prediction or not verify(gold, prediction, timeout_seconds=3):
+    verify_program_output(pending.example, tuple(pending.events))
+    if not _matches_gold(boxed_answer(answer), pending.example.answer):
         raise ValueError("Post-execution teacher answer failed independent gold verification")
     return DistillationAttempt(
         pending.example,
@@ -455,6 +504,32 @@ def admit_answer(
         sample,
         pending.draft_response,
     )
+
+
+def _matches_gold(prediction: str, answer: str) -> bool:
+    from math_verify import parse, verify  # type: ignore[import-not-found]
+    from math_verify.parser import (  # type: ignore[import-not-found]
+        ExprExtractionConfig,
+        LatexExtractionConfig,
+    )
+
+    targets = (ExprExtractionConfig(), LatexExtractionConfig())
+    gold = parse(
+        normalize_gold(answer, "math_delimited"), extraction_config=targets, parsing_timeout=3
+    )
+    parsed = parse(prediction, extraction_config=targets, parsing_timeout=3)
+    return bool(gold and parsed and verify(gold, parsed, timeout_seconds=3))
+
+
+def verify_program_output(example: Example, events: tuple[TraceEvent, ...]) -> None:
+    if len(events) != 6 or events[4].kind != "tool_result":
+        raise ValueError("Program verification requires the actual single-tool observation")
+    observation = events[4].content
+    prefix, suffix = "\n```output\n", "\n```\n"
+    if not observation.startswith(prefix) or not observation.endswith(suffix):
+        raise ValueError("Program observation does not use the backend formatter")
+    if not _matches_gold(observation[len(prefix) : -len(suffix)], example.answer):
+        raise ValueError("Teacher program stdout failed independent gold verification")
 
 
 def generate(config: DistillationConfig) -> DistillationManifest:
@@ -623,7 +698,9 @@ def materialize_for_student(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--config", type=Path)
+    source.add_argument("--readmit-manifest", type=Path)
     parser.add_argument("--env-file", type=Path)
     parser.add_argument(
         "--prefix-count", type=int, help="Publish a completely processed question prefix"
@@ -632,13 +709,18 @@ def main() -> None:
     args = parser.parse_args()
     if args.env_file:
         load_dotenv(args.env_file, override=False)
-    if (args.prefix_count is None) != (args.publish_output is None):
-        parser.error("--prefix-count and --publish-output must be supplied together")
-    manifest = (
-        publish_prefix(args.config, args.prefix_count, args.publish_output)
-        if args.prefix_count is not None
-        else generate(read_record(args.config, DistillationConfig))
-    )
+    if args.readmit_manifest is not None:
+        if args.publish_output is None or args.prefix_count is not None:
+            parser.error("--readmit-manifest requires --publish-output and no --prefix-count")
+        manifest = readmit_program_outputs(args.readmit_manifest, args.publish_output)
+    else:
+        if (args.prefix_count is None) != (args.publish_output is None):
+            parser.error("--prefix-count and --publish-output must be supplied together")
+        manifest = (
+            publish_prefix(args.config, args.prefix_count, args.publish_output)
+            if args.prefix_count is not None
+            else generate(read_record(args.config, DistillationConfig))
+        )
     print(f"verified_teacher_trajectories={manifest.accepted_count}", flush=True)
 
 

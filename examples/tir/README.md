@@ -12,7 +12,8 @@
   根据同题的正确与错误回答选题，同时保留随机真实题。训练前会核对 probe 对应的模型，
   warm start 模型变化后需要重新试答。
 - `distillation.py` 让教师先生成推理和 Python 程序，使用后端真实工具执行后，再请求最终答案。
-  教师请求不包含 gold；只有最终回答通过数学答案校验、工具成功且长度合规的轨迹能进入 SFT。
+  教师请求不包含 gold；只有实际程序输出与最终回答均通过独立数学答案校验，且工具成功、
+  长度合规的轨迹能进入 SFT。程序打印错误值、最后只在文字中纠正答案的轨迹会被拒绝。
   教师生成可在 CPU 的 AReaL 环境运行；凭证从环境读取，不写入配置与轨迹。
 - `compositional.py` 生成不同数字约束、带必经点和障碍的路径、条件抽样概率题，每题通过
   两种独立的精确算法验算。`admit_compositional` 再筛选当前学生有对有错的题，
@@ -39,6 +40,10 @@ uv run --locked python -m examples.tir.distillation \
 
 前缀按生成前确定的题目顺序选择，必须包含这些题目的全部成功或失败记录；
 不会按完成速度或正确率挑选题目。新 manifest 引用原配置及不可变轨迹，原批次继续生成。
+
+历史批次可用 `--readmit-manifest /absolute/old/manifest.json --publish-output /absolute/new`
+重新核验程序输出。所有原题与失败记录均保留；只有新增拒绝决定会写入派生产物，原始轨迹、
+manifest 与已完成实验不改写。`program-output-admission.json` 关联原批次、逐题检查和新批次。
 
 `ExperimentConfig.target_accuracy` 可额外指定 test 的绝对准确率目标，例如 `0.37` 表示必须
 严格超过 37%，并且仍要满足 `target_delta` 的相对提升要求。模型选择继续只使用 valid。

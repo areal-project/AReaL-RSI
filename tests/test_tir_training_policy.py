@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import sys
 from dataclasses import replace
@@ -43,6 +44,7 @@ from examples.tir.distillation import (
     TeacherMessage,
     boxed_answer,
     publish_prefix,
+    readmit_program_outputs,
     tokenize_trajectory,
     training_events,
 )
@@ -438,3 +440,64 @@ def test_teacher_cohort_uses_planned_prefix_and_preserves_closed_producer_record
     assert local_path(rejected).read_bytes() == before
     with pytest.raises(FileExistsError):
         publish_prefix(config_path, 2, tmp_path / "cohort")
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("math_verify") is None,
+    reason="Independent math verification runs in the AReaL backend environment",
+)
+def test_program_output_admission_rejects_correct_prose_after_wrong_execution(
+    tmp_path: Path,
+) -> None:
+    questions = tuple(replace(real_example(index), answer="2") for index in range(2))
+    pool = write_examples(tmp_path / "pool.jsonl", questions)
+    tokenizer = tmp_path / "tokenizer"
+    tokenizer.mkdir()
+    (tokenizer / "tokenizer.json").write_text("{}")
+    producer = tmp_path / "producer"
+    producer.mkdir()
+    config = DistillationConfig(
+        TeacherConfig("https://teacher.example/v1", "teacher"),
+        pool,
+        (),
+        str(tokenizer),
+        str(producer),
+        count=2,
+        task_ids=tuple(item.task_id for item in questions),
+    )
+    config_ref = write_record(producer / "config.json", config)
+    correct = tool_trace()
+    wrong = (
+        *correct[:2],
+        TraceEvent("generation", "\nprint(-2)\n```"),
+        TraceEvent("tool_call", "```python\nprint(-2)\n```"),
+        TraceEvent("tool_result", "\n```output\n-2\n```\n"),
+        correct[-1],
+    )
+    refs = []
+    for question, events in zip(questions, (wrong, correct), strict=True):
+        sample = tokenize_trajectory(
+            question.task_id, events, CharacterTokenizer(), max_length=1000, max_segment_tokens=100
+        )
+        refs.append(
+            write_record(
+                producer / "attempts" / f"{question.task_id}.json",
+                DistillationAttempt(question, "teacher", events, True, "", sample),
+            )
+        )
+    distillation._publish(
+        config_ref, questions, (file_ref(tokenizer / "tokenizer.json"),), tuple(refs), producer
+    )
+    before = tuple(local_path(ref).read_bytes() for ref in refs)
+    manifest = readmit_program_outputs(producer / "manifest.json", tmp_path / "readmitted")
+    assert manifest.attempted_count == 2 and manifest.accepted_count == 1
+    assert tuple(x.task_id for x in read_training_samples(local_path(manifest.dataset))) == (
+        questions[1].task_id,
+    )
+    rejected = read_record(local_path(manifest.attempts[0]), DistillationAttempt)
+    assert not rejected.accepted and rejected.sample is None
+    assert "stdout" in rejected.error and rejected.events == wrong
+    assert tuple(local_path(ref).read_bytes() for ref in refs) == before
+    pending = PendingTeacher(questions[0], "answer", list(wrong[:-1]))
+    with pytest.raises(ValueError, match="stdout"):
+        distillation.admit_answer(config, pending, r"\boxed{2}", CharacterTokenizer())

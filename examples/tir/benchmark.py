@@ -1,4 +1,4 @@
-"""Frozen ToRL splits: train, tuning valid, and independent test (official test)."""
+"""Frozen evaluation splits and an optional ToRL training pool."""
 
 from __future__ import annotations
 
@@ -120,13 +120,13 @@ def torl_examples(rows: tuple[ToRLRow, ...], *, training: bool) -> tuple[Example
 @dataclass(frozen=True, slots=True)
 class Benchmark:
     seed: int
-    official_train: ContentRef
-    official_test: ContentRef
-    train: ContentRef
     valid: ContentRef
     test: ContentRef
     # Store identities only; synthesis never needs held-out questions/solutions.
     excluded_ids: tuple[str, ...]
+    train: ContentRef | None = None
+    official_train: ContentRef | None = None
+    official_test: ContentRef | None = None
 
 
 def read_examples(path: Path) -> tuple[Example, ...]:
@@ -145,6 +145,35 @@ def write_examples(path: Path, items: tuple[Example, ...]) -> ContentRef:
         for item in items:
             stream.write(json.dumps(encode_record(item), ensure_ascii=False) + "\n")
     return file_ref(path)
+
+
+def prepare_benchmark(
+    valid: tuple[Example, ...],
+    test: tuple[Example, ...],
+    output: Path,
+    *,
+    seed: int = 20261017,
+    train: tuple[Example, ...] = (),
+    official_train: ContentRef | None = None,
+    official_test: ContentRef | None = None,
+) -> Benchmark:
+    ids = [{item.task_id for item in split} for split in (train, valid, test)]
+    if any(ids[i] & ids[j] for i in range(3) for j in range(i)):
+        raise ValueError("Training, valid and test data overlap")
+    if not valid or not test:
+        raise ValueError("Independent nonempty valid and test data are required")
+    output.mkdir(parents=True, exist_ok=False)
+    result = Benchmark(
+        seed=seed,
+        valid=write_examples(output / "valid.jsonl", valid),
+        test=write_examples(output / "heldout/test.jsonl", test),
+        excluded_ids=tuple(sorted(ids[1] | ids[2])),
+        train=write_examples(output / "train.jsonl", train) if train else None,
+        official_train=official_train,
+        official_test=official_test,
+    )
+    write_record(output / "benchmark.json", result)
+    return result
 
 
 def prepare_torl_benchmark(
@@ -167,29 +196,44 @@ def prepare_torl_benchmark(
     # Keep the original RNG stream key: renaming the split must not change its questions.
     random.Random(f"{seed}:dev").shuffle(eligible)
     valid, training = tuple(eligible[:valid_size]), tuple(eligible[valid_size:])
-    output.mkdir(parents=True, exist_ok=False)
-    result = Benchmark(
-        seed,
-        file_ref(source / "train.parquet"),
-        file_ref(source / "test.parquet"),
-        write_examples(output / "train.jsonl", training),
-        write_examples(output / "valid.jsonl", valid),
-        write_examples(output / "heldout/test.jsonl", test),
-        tuple(sorted(test_ids | {item.task_id for item in valid})),
+    return prepare_benchmark(
+        valid,
+        test,
+        output,
+        seed=seed,
+        train=training,
+        official_train=file_ref(source / "train.parquet"),
+        official_test=file_ref(source / "test.parquet"),
     )
-    write_record(output / "benchmark.json", result)
-    return result
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", type=Path, required=True)
+    inputs = parser.add_mutually_exclusive_group(required=True)
+    inputs.add_argument("--source", type=Path, help="Directory containing ToRL parquet files")
+    inputs.add_argument("--valid", type=Path, help="Prepared valid Example JSONL")
+    parser.add_argument("--test", type=Path, help="Prepared independent test Example JSONL")
+    parser.add_argument("--train", type=Path, help="Optional official training Example JSONL")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--seed", type=int, default=20261017)
     parser.add_argument("--valid-size", type=int, default=256)
     args = parser.parse_args()
-    result = prepare_torl_benchmark(
-        args.source, args.output.resolve(), seed=args.seed, valid_size=args.valid_size
-    )
+    if args.source is not None:
+        if args.test is not None or args.train is not None:
+            parser.error("--test and --train require --valid")
+        result = prepare_torl_benchmark(
+            args.source, args.output.resolve(), seed=args.seed, valid_size=args.valid_size
+        )
+    else:
+        if args.test is None:
+            parser.error("--valid requires --test")
+        result = prepare_benchmark(
+            read_examples(args.valid),
+            read_examples(args.test),
+            args.output.resolve(),
+            seed=args.seed,
+            train=read_examples(args.train) if args.train is not None else (),
+        )
     print(f"benchmark={args.output.resolve() / 'benchmark.json'}")
-    print(f"train_sha256={result.train.digest} valid_sha256={result.valid.digest}")
+    print(f"train_sha256={result.train.digest if result.train else 'none'}")
+    print(f"valid_sha256={result.valid.digest} test_sha256={result.test.digest}")

@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import random
 import re
+import subprocess
+import sys
 from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
@@ -13,12 +17,14 @@ from typing import cast
 import pytest
 from test_training import git_repository
 
-from areal_rsi.api.execution import AReaLRuntime
+from areal_rsi.api.execution import AReaLRuntime, JobSpec
 from areal_rsi.api.records import (
     BenchmarkSplit,
 )
+from areal_rsi.api.research import CandidateContext, CandidatePlan, CandidateStatus
 from areal_rsi.infra.artifacts import local_path, read_record, write_record
 from areal_rsi.infra.coordination import ProblemRun
+from areal_rsi.infra.execution import JobExecutionError
 from examples.tir.benchmark import (
     Benchmark,
     Example,
@@ -28,16 +34,18 @@ from examples.tir.benchmark import (
     ToRLRow,
     evaluation_cases,
     identity,
+    prepare_benchmark,
     read_examples,
     torl_examples,
     write_examples,
 )
-from examples.tir.pipeline import TIRConfig
-from examples.tir.problem import ExperimentConfig, TIRProblem
+from examples.tir.pipeline import PROJECT, TIRConfig, WorkerRequest
+from examples.tir.problem import ExperimentConfig, RoundRecipe, TIRProblem
 from examples.tir.synthesis import (
     DataRecipe,
     Family,
     FamilyWeight,
+    SynthesisManifest,
     SynthesisPolicy,
     build_dataset,
     generate,
@@ -47,7 +55,7 @@ from examples.tir.synthesis import (
 
 
 @pytest.fixture
-def experiment(tmp_path: Path) -> ProblemRun:
+def experiment(tmp_path: Path, request: pytest.FixtureRequest) -> ProblemRun:
     from areal_rsi.api.research import ProblemBinding
     from areal_rsi.infra.coordination import ProblemRun, pin_problem
 
@@ -60,13 +68,23 @@ def experiment(tmp_path: Path) -> ProblemRun:
     model = tmp_path / "model"
     model.mkdir()
     (model / "config.json").write_text("{}")
-    train = write_examples(tmp_path / "train.jsonl", (example("train"),))
+    train = (
+        write_examples(tmp_path / "train.jsonl", (example("train"),))
+        if getattr(request, "param", True)
+        else None
+    )
     valid = write_examples(tmp_path / "valid.jsonl", (example("valid"),))
     test = write_examples(
         tmp_path / "test.jsonl", (replace(example("test"), source="torl-test", repetitions=4),)
     )
     benchmark = Benchmark(
-        17, train, test, train, valid, test, (identity("valid"), identity("test"))
+        seed=17,
+        valid=valid,
+        test=test,
+        excluded_ids=(identity("valid"), identity("test")),
+        train=train,
+        official_train=train,
+        official_test=test,
     )
     write_record(tmp_path / "benchmark.json", benchmark)
     config = ExperimentConfig(
@@ -123,10 +141,6 @@ def test_tir_evaluation_preserves_repetitions_and_fixed_harness(experiment: Prob
 def test_each_candidate_loads_the_current_synthesis_source(
     experiment: ProblemRun, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from areal_rsi.api.research import CandidateContext
-    from examples.tir.pipeline import PROJECT
-    from examples.tir.problem import RoundRecipe
-
     project = tmp_path / "editable"
     package = project / "examples/tir"
     package.mkdir(parents=True)
@@ -162,6 +176,188 @@ def test_each_candidate_loads_the_current_synthesis_source(
         plan = problem.build_candidate(context, recipe)
         assert plan.job is not None
         assert (directory / "loaded-policy").read_text() == version
+
+
+@pytest.mark.parametrize("with_training_pool", [False, True])
+def test_benchmark_cli_freezes_evaluation_without_requiring_training_data(
+    tmp_path: Path, with_training_pool: bool
+) -> None:
+    valid = (generate(random.Random(17), "ratio", 2),)
+    test = (replace(generate(random.Random(29), "fraction", 3), repetitions=4),)
+    valid_path, test_path = tmp_path / "input-valid.jsonl", tmp_path / "input-test.jsonl"
+    write_examples(valid_path, valid)
+    write_examples(test_path, test)
+    output = tmp_path / "benchmark"
+    arguments = [
+        sys.executable,
+        "-m",
+        "examples.tir.benchmark",
+        "--valid",
+        str(valid_path),
+        "--test",
+        str(test_path),
+        "--output",
+        str(output),
+    ]
+    if with_training_pool:
+        train_path = tmp_path / "input-train.jsonl"
+        write_examples(train_path, (example("official training question"),))
+        arguments.extend(("--train", str(train_path)))
+    subprocess.run(arguments, cwd=PROJECT, check=True, capture_output=True, text=True)
+    benchmark = read_record(output / "benchmark.json", Benchmark)
+    assert read_examples(local_path(benchmark.valid)) == valid
+    assert read_examples(local_path(benchmark.test)) == test
+    assert set(benchmark.excluded_ids) == {valid[0].task_id, test[0].task_id}
+    assert (benchmark.train is not None) == with_training_pool
+    assert (output / "train.jsonl").exists() == with_training_pool
+    valid_path.write_text("changed original input")
+    assert read_examples(local_path(benchmark.valid)) == valid
+    with pytest.raises(ValueError, match="overlap"):
+        prepare_benchmark(valid, valid, tmp_path / "overlap")
+
+
+@pytest.mark.parametrize("experiment", [False], indirect=True)
+def test_tir_generates_fresh_training_data_for_each_round_without_a_training_pool(
+    experiment: ProblemRun,
+) -> None:
+    problem = cast(TIRProblem, experiment.problem)
+    spec = experiment.spec
+    benchmark = problem.benchmark()
+    assert benchmark.train is None
+    assert not (experiment.root.parent / "train.jsonl").exists()
+    manifests: list[SynthesisManifest] = []
+    for candidate_id, seed in (("r1", 17), ("r2", 29)):
+        directory = experiment.path(candidate_id).parent
+        directory.mkdir(parents=True)
+        context = CandidateContext(
+            experiment.run_id,
+            str(experiment.root),
+            candidate_id,
+            spec.baseline,
+            spec,
+            str(directory / "job"),
+        )
+        recipe = RoundRecipe(
+            "Generate a new training mixture",
+            data=DataRecipe(seed=seed, real_count=0, synthetic_count=16),
+        )
+        plan = problem.build_candidate(context, recipe)
+        data = read_record(directory / "data.json", SynthesisManifest)
+        manifests.append(data)
+        assert data.training_pool is None and data.recipe == recipe.data
+        items = read_examples(local_path(data.dataset))
+        assert len(items) == 16 and all(item.source == "verified-synthetic" for item in items)
+        assert not {item.task_id for item in items}.intersection(benchmark.excluded_ids)
+        assert data.dataset in plan.inputs
+        assert plan.job is not None
+        assert read_record(Path(plan.job.command[-1]), WorkerRequest).dataset == str(
+            local_path(data.dataset)
+        )
+    assert manifests[0].dataset.digest != manifests[1].dataset.digest
+    assert local_path(manifests[0].dataset) != local_path(manifests[1].dataset)
+    assert experiment.spec == spec
+
+
+@pytest.mark.parametrize("experiment", [False], indirect=True)
+def test_real_examples_require_a_training_pool(experiment: ProblemRun) -> None:
+    problem = cast(TIRProblem, experiment.problem)
+    spec = experiment.spec
+    context = CandidateContext(
+        experiment.run_id,
+        str(experiment.root),
+        "r1",
+        spec.baseline,
+        spec,
+        str(experiment.root / "job"),
+    )
+    with pytest.raises(ValueError, match="require a training pool"):
+        problem.build_candidate(context, RoundRecipe("Use official training questions"))
+    with pytest.raises(ValueError, match="require a training pool"):
+        build_dataset(DataRecipe(), (), None, (), experiment.root / "invalid-data")
+
+
+@pytest.mark.parametrize("experiment", [False], indirect=True)
+def test_tir_validation_retry_reuses_generated_data_and_completed_training(
+    experiment: ProblemRun, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    worker = tmp_path / "cpu-worker.py"
+    gate = tmp_path / "fail-validation"
+    gate.touch()
+    worker.write_text(
+        """import json, sys
+from pathlib import Path
+from areal_rsi.api.control import encode_record
+from areal_rsi.api.execution import TrainingReceipt
+from areal_rsi.api.records import EvaluationSample, TraceEvent
+from areal_rsi.infra.artifacts import read_record, write_record
+from examples.tir.benchmark import evaluation_cases, read_examples
+from examples.tir.pipeline import WorkerRequest
+request = read_record(Path(sys.argv[1]), WorkerRequest)
+output = Path(request.output)
+items = read_examples(Path(request.dataset))
+if request.mode == 'train':
+    assert all(item.source == 'verified-synthetic' for item in items)
+    checkpoint = output / 'checkpoint'
+    checkpoint.mkdir()
+    (checkpoint / 'config.json').write_text('{}')
+    (checkpoint / 'model.safetensors').write_bytes(b'CPU contract fixture, not a trained model')
+    write_record(output / 'training.json', TrainingReceipt(str(checkpoint), 1))
+else:
+    if '-r1-' in request.trial and Path(sys.argv[2]).exists():
+        raise SystemExit('Injected validation failure')
+    with (output / 'samples.jsonl').open('x') as stream:
+        for case in evaluation_cases(items):
+            sample = EvaluationSample(case.task_id, 'fixture', 1.0, True,
+                                      (TraceEvent('generation', 'CPU contract fixture'),))
+            stream.write(json.dumps(encode_record(sample)) + '\\n')
+"""
+    )
+
+    def job(problem: TIRProblem, root: Path, request: WorkerRequest) -> JobSpec:
+        path = root / "requests" / (request.trial + ".json")
+        write_record(path, request)
+        return JobSpec(
+            (sys.executable, str(worker), str(path), str(gate)),
+            cwd=str(PROJECT),
+            env={"PYTHONPATH": os.pathsep.join((str(PROJECT / "src"), str(PROJECT)))},
+            timeout_seconds=30,
+        )
+
+    monkeypatch.setattr(TIRProblem, "_job", job)
+
+    async def execute() -> None:
+        await experiment.evaluate("base")
+        recipe = write_record(
+            tmp_path / "recipe.json",
+            RoundRecipe(
+                "Generate the first training set", data=DataRecipe(real_count=0, synthetic_count=16)
+            ),
+        )
+        experiment.create_candidate("r1", "base", "Pure synthesis", local_path(recipe))
+        with pytest.raises(JobExecutionError):
+            await experiment.evaluate("r1")
+        record = experiment.candidate("r1")
+        assert record.status == CandidateStatus.FAILED and record.training is not None
+        data_path = experiment.path("r1").parent / "data.json"
+        data = read_record(data_path, SynthesisManifest)
+        before = local_path(data.dataset).read_bytes()
+        gate.unlink()
+
+        def reject_regeneration(
+            problem: TIRProblem, context: CandidateContext, recipe: RoundRecipe
+        ) -> CandidatePlan:
+            raise AssertionError("Recovery must reuse the saved candidate plan")
+
+        monkeypatch.setattr(TIRProblem, "build_candidate", reject_regeneration)
+        reopened = ProblemRun(experiment.run_id, experiment.root, experiment.binding)
+        result = await reopened.evaluate("r1", retry=True)
+        assert result.status == CandidateStatus.COMPLETED
+        assert result.training == record.training
+        assert local_path(data.dataset).read_bytes() == before
+        assert read_record(data_path, SynthesisManifest) == data
+        assert len(list((experiment.root / "execution").rglob("training.json"))) == 1
+
+    asyncio.run(execute())
 
 
 def example(prompt: str) -> Example:

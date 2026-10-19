@@ -123,7 +123,9 @@ uv run --locked python -m examples.tir.pipeline \
 
 只有所有题目均返回、训练至少完成一步、新 checkpoint 校验通过并可重载评测、源码在
 实验期间未变化时，状态才是 `completed`。分数没有上升也可完成闭环；报告训练前后的配对准确率变化，不根据 test 分数选择模型。
-多轮候选选择由 `experiment.py` 使用 valid 完成。源码发生变化会拒绝发布对比结果，应保留该失败记录并用新运行重试。
+多轮研究由统一 ResearchSystem 使用 valid 选择候选；初始训练池可选，具体见
+[没有初始训练集时启动](RESEARCH.md#没有初始训练集时启动)。源码发生变化会拒绝发布 pipeline
+对比结果，应保留该失败记录并用新运行重试。
 
 每个阶段失败会立即停止 pipeline，先查看 `experiment.json` 和相应 `stdout.log`，
 再看 `areal/logs/` 下的 actor／rollout 日志。评测缺题、重复题、推理异常、缺失分片和

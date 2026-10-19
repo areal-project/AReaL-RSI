@@ -19,7 +19,22 @@ areal-rsi research \
 ```
 
 TIR 配置使用 `examples/tir/experiment.json` 的结构，需要实际 AReaL 源码、基模型、
-GPU Python、已有 benchmark 和可用镜像。`image` 和 `slurm` 在配置顶层。
+GPU Python、固定评测 benchmark 和可用镜像。`image` 和 `slurm` 在配置顶层。
+benchmark 必须有独立的 valid/test，初始训练池可选。没有训练集时，先用 `Example` 格式的
+评测 JSONL 创建 benchmark，无需 datasets/pyarrow：
+
+```bash
+python -m examples.tir.benchmark \
+  --valid /absolute/valid.jsonl --test /absolute/test.jsonl \
+  --output /absolute/benchmark/tir-001
+```
+
+`--train` 可额外提供官方训练题 JSONL；未提供时不会创建空训练文件。
+启动只冻结评测协议和基线，不生成训练集。Leader 首轮提交 `real_count=0`、
+`synthetic_count>0` 的配方，每轮通过 `build_candidate` 生成并冻结自己的训练数据。
+只有请求真实题时才要求提供训练池。纯合成配方和 JSONL 格式见
+`examples/tir/RESEARCH.md` 的“没有初始训练集时启动”。
+
 准备原始 ToRL parquet 的入口仍为 `python -m examples.tir.benchmark --source ... --output ...`，
 需在带 datasets/pyarrow 的环境运行；准备好的 benchmark 再交给研究入口。
 
@@ -69,6 +84,11 @@ held-out；提供 `official: FinalEvalConfig` 和 `official_image` 后，finaliz
 准备和构造计划可以写本地文件，远程作业必须由 infra 执行。任务无需实现会话驱动、
 候选状态机、Slurm 提交回执、结果缓存或选择冻结。三个接口的实际实现见
 `examples/tir/problem.py` 和 `examples/search/problem.py`。
+
+训练数据可以在每轮候选准备时生成，无需作为启动输入。固定评测条件与可演化的训练数据
+分别记录；每轮保存 recipe、生成器源码快照、数据内容引用及父模型。恢复已有候选计划时
+复用并校验保存的数据，不重新合成。准备阶段失败或中断保留记录，新配方使用新候选 ID。
+当前 TIR 合成是本地程序生成；独立 GPU 或教师模型生成作业仍需通过 infra 的执行计划接入。
 
 `CandidatePlan` 没有训练作业时直接使用冻结 solution，支持 harness/artifact 演化。
 有训练作业时提供 AReaL runtime 与 JobSpec，worker 仅在真实训练和 checkpoint 写完后发布

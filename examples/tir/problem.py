@@ -102,14 +102,17 @@ class TIRProblem(ResearchProblem[ExperimentConfig, RoundRecipe]):
     def prepare(self, root: Path) -> ProblemSpec:
         config, benchmark = self.config.tir, self.benchmark()
         splits = [
-            read_examples(local_path(ref))
-            for ref in (benchmark.train, benchmark.valid, benchmark.test)
+            read_examples(local_path(benchmark.train)) if benchmark.train is not None else (),
+            read_examples(local_path(benchmark.valid)),
+            read_examples(local_path(benchmark.test)),
         ]
         ids = [{item.task_id for item in split} for split in splits]
         if any(ids[i] & ids[j] for i in range(3) for j in range(i)):
             raise ValueError("Training, valid and test data overlap")
         if ids[0] & set(benchmark.excluded_ids):
             raise ValueError("Training pool includes a held-out identity")
+        if not (ids[1] | ids[2]).issubset(benchmark.excluded_ids):
+            raise ValueError("Synthesis exclusions must include every valid and test identity")
         if any(item.source.startswith("torl-") for split in splits for item in split) and (
             config.reward != "math_verify"
         ):
@@ -156,7 +159,7 @@ class TIRProblem(ResearchProblem[ExperimentConfig, RoundRecipe]):
         )
         conditions = (
             file_ref(Path(self.config.benchmark)),
-            benchmark.train,
+            *((benchmark.train,) if benchmark.train is not None else ()),
             benchmark.valid,
             write_record(root / "evaluation-config.json", config.evaluation),
             harness,
@@ -164,7 +167,9 @@ class TIRProblem(ResearchProblem[ExperimentConfig, RoundRecipe]):
         return ProblemSpec(
             "tir",
             "Read examples/tir/RESEARCH.md. Improve training data, synthesis.py and GRPO recipes "
-            "using only train/valid evidence. Evaluator, reward, worker, infrastructure and "
+            "using only train/valid evidence. The training pool is optional; without one, "
+            "set real_count=0 and generate training data for each candidate. "
+            "Evaluator, reward, worker, infrastructure and "
             "backend are frozen. Never read heldout/test or tune using test. Every round has "
             "a fresh optimizer; "
             "parent specifies model warm start. Submit candidates through the research tools, "
@@ -212,6 +217,8 @@ class TIRProblem(ResearchProblem[ExperimentConfig, RoundRecipe]):
         if recipe.parent != context.parent.solution_id:
             raise ValueError("Recipe parent differs from the proposed parent")
         root, benchmark = Path(context.root), self.benchmark()
+        if recipe.data.real_count > 0 and benchmark.train is None:
+            raise ValueError("Real training examples require a training pool; set real_count=0")
         directory = root / "candidates" / context.candidate_id
         data_recipe = directory / "data-recipe.json"
         write_record(data_recipe, recipe.data)
@@ -274,7 +281,11 @@ class TIRProblem(ResearchProblem[ExperimentConfig, RoundRecipe]):
         data_ref = write_record(root / "candidates" / context.candidate_id / "data.json", data)
         return CandidatePlan(
             solution,
-            (data.dataset, data_ref, benchmark.train),
+            (
+                data.dataset,
+                data_ref,
+                *((benchmark.train,) if benchmark.train is not None else ()),
+            ),
             self._job(root, request),
             config.runtime,
         )

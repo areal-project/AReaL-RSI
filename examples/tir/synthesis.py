@@ -1,4 +1,4 @@
-"""Editable TIR research policy: verified math tasks mixed with training-only ToRL.
+"""Editable TIR research policy: verified math tasks with optional training-only ToRL.
 
 The Leader may change these generators and recipes between rounds. Each generated
 dataset is immutable and its source archive is recorded by the experiment pipeline.
@@ -132,7 +132,7 @@ class DataRecipe:
 @dataclass(frozen=True, slots=True)
 class SynthesisManifest:
     recipe: DataRecipe
-    training_pool: ContentRef
+    training_pool: ContentRef | None
     dataset: ContentRef
     real_count: int
     synthetic_count: int
@@ -588,10 +588,14 @@ def generate(rng: random.Random, family: Family, difficulty: int) -> Example:
 def build_dataset(
     recipe: DataRecipe,
     pool: tuple[Example, ...],
-    pool_ref: ContentRef,
+    pool_ref: ContentRef | None,
     excluded_ids: tuple[str, ...],
     output: Path,
 ) -> SynthesisManifest:
+    if recipe.real_count > 0 and pool_ref is None:
+        raise ValueError("Real training examples require a training pool; set real_count=0")
+    if bool(pool) != (pool_ref is not None):
+        raise ValueError("Training pool and its reference must be supplied together")
     if any(item.source != "torl-train" for item in pool):
         raise ValueError("Only official training examples may enter synthesis")
     excluded = set(excluded_ids)
@@ -654,7 +658,7 @@ if __name__ == "__main__":
     benchmark = read_record(args.benchmark, Benchmark)
     build_dataset(
         read_record(args.recipe, DataRecipe),
-        read_examples(local_path(benchmark.train)),
+        read_examples(local_path(benchmark.train)) if benchmark.train is not None else (),
         benchmark.train,
         benchmark.excluded_ids,
         args.output,

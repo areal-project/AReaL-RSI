@@ -18,6 +18,60 @@ Slurm 在本例中装配到公共 JobSpec 命令，AReaL worker 在 allocation �
 候选 JSON 中的分数。最小 pipeline 只报告 test 上的训练前后对比，不用 test 决定候选。
 历史实验使用其归档源码、协议和数据恢复；入口与字段改名不会迁移或覆盖原始证据。
 
+## 没有初始训练集时启动
+
+训练集可以由第一轮候选创建，再根据 train/valid 反馈逐轮重新生成。启动前只需准备基模型、
+固定 harness/reward/推理预算，以及互不重叠的 valid/test。评测题可以来自独立外部数据或
+预先独立生成，不能根据本轮训练结果修改它们。
+
+评测 JSONL 每行使用 `benchmark.py:Example`，例如下面两行分别保存到 valid 和 test：
+
+```python
+from pathlib import Path
+from examples.tir.benchmark import Example, identity, write_examples
+
+valid_prompt = "What is 17 * 23?"
+test_prompt = "What is 19 * 29?"
+write_examples(Path("/absolute/valid.jsonl"), (
+    Example(identity(valid_prompt), valid_prompt, "391", "verified-synthetic"),
+))
+write_examples(Path("/absolute/test.jsonl"), (
+    Example(identity(test_prompt), test_prompt, "551", "verified-synthetic"),
+))
+```
+
+这两道题仅演示文件格式，实际评测需独立准备足够的题目覆盖。然后创建新的 benchmark：
+
+```bash
+python -m examples.tir.benchmark \
+  --valid /absolute/valid.jsonl --test /absolute/test.jsonl \
+  --output /absolute/benchmark/tir-001
+```
+
+该入口不依赖 datasets/pyarrow，不创建训练池或空训练文件，并保存全部 valid/test 身份用于
+训练数据排除。已有官方训练池时，可额外提供 `--train /absolute/train.jsonl`。
+将生成的 `benchmark.json` 填入 `experiment.json`，按文末统一 `research` 命令启动。
+没有训练池时，Leader 的首轮 RoundRecipe 可以是：
+
+```json
+{
+  "hypothesis": "从独立验证的纯合成题建立首轮训练，再根据 valid 证据调整题型和难度。",
+  "parent": "base",
+  "data": {
+    "seed": 17,
+    "real_count": 0,
+    "synthetic_count": 1024,
+    "gold_format": "math_delimited"
+  }
+}
+```
+
+每个候选分别保存 `data-recipe.json`、`data/manifest.json`、`data/train.jsonl`、
+生成日志和源码快照。后续轮次可修改 seed、题型、难度、数量或生成器，旧数据保持原样。
+valid 失败后的恢复复用已生成数据和已完成训练；准备失败使用新候选 ID，不盲目重放。
+缺少训练池却请求 `real_count>0` 会明确失败，不自动替换为合成题。
+目前此路径使用本地程序合成，不包含教师模型轨迹蒸馏或独立 GPU 数据生成作业。
+
 ## 数据与实验协议
 
 默认采用 AReaL TIR 示例配置对应的 ToRL 数据，评分复用 AReaL 的
@@ -26,9 +80,9 @@ https://github.com/GAIR-NLP/ToRL/tree/1db091d9cbd37df493d7bd836fc3cc4c6f0c9a7e/d
 保存原始文件、下载版本和 SHA-256，再生成独立的 benchmark；不覆盖共享数据。
 
 本例统一使用 `train / valid / test`：train 用于训练，valid 用于多轮研发和候选选择，
-test 仅供冻结选择后的独立验收。**test 对应 ToRL 官方 test**，保留全部题目和采样次数，
+test 仅供冻结选择后的独立验收。默认 ToRL 配置的 test 对应官方 test，保留全部题目和采样次数，
 在公共评测契约中仍使用 `BenchmarkSplit.TEST`；它不参与调参。新 benchmark 保存
-`heldout/test.jsonl`，结果保存 `experiment/test/`，验收入口为 `experiment test`。
+`heldout/test.jsonl`，验收入口为统一 `areal-rsi finalize`。以下数据规模描述默认 ToRL 协议。
 
 该版本 train 有 28,740 行、28,738 道规范化去重题。先排除全部 test 身份，再从剩余
 训练题中确定性抽出 256 道 valid，其余作为训练池。test 原样保留 374 行的采样次数：
@@ -108,6 +162,7 @@ from examples.tir.synthesis import SynthesisManifest, select_mixed_rollout_curri
 root = Path("/absolute/system/sessions/run-ID/problem")
 config = read_record(root / "config.json", ExperimentConfig)
 benchmark = read_record(Path(config.benchmark), Benchmark)
+assert benchmark.train is not None  # 真实题 rollout 课程需要官方训练池。
 observed = read_record(root / "candidates/r3/candidate.json", CandidateRecord)
 data = read_record(root / "candidates/r3/data.json", SynthesisManifest)
 logs = root / "execution" / "run-ID" / "jobs/r3-train/areal/logs"

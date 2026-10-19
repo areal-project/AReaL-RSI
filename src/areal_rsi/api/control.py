@@ -38,6 +38,30 @@ class StartGoal:
 
 
 @dataclass(slots=True)
+class CandidateProposal:
+    candidate_id: str
+    parent_id: str
+    hypothesis: str
+    recipe: str
+
+
+@dataclass(slots=True)
+class CandidateQuery:
+    candidate_id: str = ""
+
+
+@dataclass(slots=True)
+class CandidateEvaluation:
+    candidate_id: str
+    retry: bool = False
+
+
+@dataclass(slots=True)
+class SelectCandidate:
+    candidate_id: str
+
+
+@dataclass(slots=True)
 class LessonDraft:
     slug: str
     title: str

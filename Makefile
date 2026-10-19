@@ -15,8 +15,8 @@ lint:
 typecheck:
 	$(UV) run --locked mypy src tests \
 		examples/tir/pipeline.py examples/tir/data.py examples/tir/reward.py \
-		examples/tir/benchmark.py examples/tir/synthesis.py examples/tir/experiment.py examples/tir/rsi.py \
-		examples/search/goal.py examples/search/experiment \
+		examples/tir/benchmark.py examples/tir/synthesis.py examples/tir/problem.py \
+		examples/search/problem.py examples/search/experiment \
 		examples/search/task/dataset.py examples/search/task/reward.py examples/search/task/rollouts.py \
 		examples/search/evaluation
 

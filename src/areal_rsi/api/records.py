@@ -400,6 +400,7 @@ class EvaluationSample:
     passed: bool
     events: tuple[TraceEvent, ...]
     metrics: dict[str, float] = field(default_factory=dict)
+    attachments: tuple[ContentRef, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.task_id or not math.isfinite(self.score):

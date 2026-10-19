@@ -13,7 +13,7 @@ import pytest
 @pytest.mark.parametrize(
     "module",
     [
-        "examples.search.goal",
+        "areal_rsi",
         "examples.search.experiment.pipeline",
         "examples.search.task.dataset",
         "examples.search.task.retrieval",

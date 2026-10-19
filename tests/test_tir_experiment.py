@@ -4,20 +4,27 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import random
 import re
+import subprocess
+import sys
 from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
+from typing import cast
 
 import pytest
-from test_training import evaluation, git_repository
+from test_training import git_repository
 
-from areal_rsi.api.execution import AReaLRuntime, TrainingResult
+from areal_rsi.api.execution import AReaLRuntime, JobSpec
 from areal_rsi.api.records import (
     BenchmarkSplit,
 )
-from areal_rsi.infra.artifacts import local_path, write_record
+from areal_rsi.api.research import CandidateContext, CandidatePlan, CandidateStatus
+from areal_rsi.infra.artifacts import local_path, read_record, write_record
+from areal_rsi.infra.coordination import ProblemRun
+from areal_rsi.infra.execution import JobExecutionError
 from examples.tir.benchmark import (
     Benchmark,
     Example,
@@ -27,12 +34,13 @@ from examples.tir.benchmark import (
     ToRLRow,
     evaluation_cases,
     identity,
+    prepare_benchmark,
     read_examples,
     torl_examples,
     write_examples,
 )
-from examples.tir.experiment import Candidate, Experiment, ExperimentConfig, prepare, protocol
-from examples.tir.pipeline import TIRConfig
+from examples.tir.pipeline import PROJECT, TIRConfig, WorkerRequest
+from examples.tir.problem import ExperimentConfig, RoundRecipe, TIRProblem
 from examples.tir.synthesis import (
     DataRecipe,
     Family,
@@ -44,6 +52,312 @@ from examples.tir.synthesis import (
     normalize_gold,
     select_mixed_rollout_curriculum,
 )
+
+
+@pytest.fixture
+def experiment(tmp_path: Path, request: pytest.FixtureRequest) -> ProblemRun:
+    from areal_rsi.api.research import ProblemBinding
+    from areal_rsi.infra.coordination import ProblemRun, pin_problem
+
+    backend = tmp_path / "backend"
+    (backend / "areal").mkdir(parents=True)
+    (backend / "areal/__init__.py").touch()
+    (backend / "examples/tir").mkdir(parents=True)
+    (backend / "examples/tir/tir_math_config.yaml").write_text("test: true\n")
+    git_repository(backend)
+    model = tmp_path / "model"
+    model.mkdir()
+    (model / "config.json").write_text("{}")
+    train = (
+        write_examples(tmp_path / "train.jsonl", (example("train"),))
+        if getattr(request, "param", True)
+        else None
+    )
+    valid = write_examples(tmp_path / "valid.jsonl", (example("valid"),))
+    test = write_examples(
+        tmp_path / "test.jsonl", (replace(example("test"), source="torl-test", repetitions=4),)
+    )
+    benchmark = Benchmark(
+        seed=17,
+        valid=valid,
+        test=test,
+        excluded_ids=(identity("valid"), identity("test")),
+        train=train,
+        official_train=train,
+        official_test=test,
+    )
+    write_record(tmp_path / "benchmark.json", benchmark)
+    config = ExperimentConfig(
+        TIRConfig(AReaLRuntime(str(backend), "/unused/python"), str(model), reward="math_verify"),
+        str(tmp_path / "benchmark.json"),
+    )
+    config_ref = write_record(tmp_path / "config.json", config)
+    root = tmp_path / "experiment"
+    run = ProblemRun(
+        "tir",
+        root,
+        pin_problem(ProblemBinding("examples.tir.problem:TIRProblem", config_ref), root),
+    )
+    run.prepare()
+    return run
+
+
+def test_tir_protocol_pins_reward_data_and_source(experiment: ProblemRun) -> None:
+    problem = cast(TIRProblem, experiment.problem)
+    config = replace(problem.config, tir=replace(problem.config.tir, reward="integer"))
+    with pytest.raises(ValueError, match="native mathematical equivalence"):
+        TIRProblem(config).prepare(experiment.root / "invalid")
+    benchmark = problem.benchmark()
+    path = local_path(benchmark.valid)
+    path.write_text(path.read_text() + "\n")
+    with pytest.raises(ValueError, match="changed"):
+        _ = experiment.spec
+
+
+def test_tir_evaluation_preserves_repetitions_and_fixed_harness(experiment: ProblemRun) -> None:
+    from areal_rsi.api.research import EvaluationContext
+
+    problem = cast(TIRProblem, experiment.problem)
+    context = EvaluationContext(
+        experiment.run_id,
+        str(experiment.root),
+        experiment.spec,
+        experiment.spec.baseline,
+        BenchmarkSplit.TEST,
+        str(experiment.root / "test-output"),
+    )
+    plan = problem.build_evaluation(context)
+    assert len(plan.task_ids) == 4 and plan.clusters and len(set(plan.clusters.values())) == 1
+    assert plan.job.slurm and plan.job.slurm.gpus == 2
+    assert "srun" not in plan.job.command  # The common executor owns the allocation.
+    request_path = Path(plan.job.command[-1])
+    from examples.tir.pipeline import WorkerRequest
+
+    request = read_record(request_path, WorkerRequest)
+    assert request.config.evaluation == problem.config.tir.evaluation
+    assert request.dataset == str(local_path(problem.benchmark().test))
+
+
+def test_each_candidate_loads_the_current_synthesis_source(
+    experiment: ProblemRun, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "editable"
+    package = project / "examples/tir"
+    package.mkdir(parents=True)
+    (project / "examples/__init__.py").touch()
+    (package / "__init__.py").touch()
+    (package / "benchmark.py").write_bytes((PROJECT / "examples/tir/benchmark.py").read_bytes())
+    source = (PROJECT / "examples/tir/synthesis.py").read_text()
+    source += '\n    (args.output.parent / "loaded-policy").write_text("version1")\n'
+    policy = package / "synthesis.py"
+    policy.write_text(source)
+    monkeypatch.setattr("examples.tir.problem.PROJECT", project)
+    problem = cast(TIRProblem, experiment.problem)
+    spec = experiment.spec
+    recipe = RoundRecipe(
+        "Check fresh policy",
+        data=DataRecipe(real_count=1, synthetic_count=0),
+        training_steps=1,
+        batch_size=1,
+        n_samples=2,
+    )
+    for candidate_id, version in (("r1", "version1"), ("r2", "version2")):
+        policy.write_text(source.replace("version1", version))
+        directory = experiment.path(candidate_id).parent
+        directory.mkdir(parents=True)
+        context = CandidateContext(
+            experiment.run_id,
+            str(experiment.root),
+            candidate_id,
+            spec.baseline,
+            spec,
+            str(directory / "job"),
+        )
+        plan = problem.build_candidate(context, recipe)
+        assert plan.job is not None
+        assert (directory / "loaded-policy").read_text() == version
+
+
+@pytest.mark.parametrize("with_training_pool", [False, True])
+def test_benchmark_cli_freezes_evaluation_without_requiring_training_data(
+    tmp_path: Path, with_training_pool: bool
+) -> None:
+    valid = (generate(random.Random(17), "ratio", 2),)
+    test = (replace(generate(random.Random(29), "fraction", 3), repetitions=4),)
+    valid_path, test_path = tmp_path / "input-valid.jsonl", tmp_path / "input-test.jsonl"
+    write_examples(valid_path, valid)
+    write_examples(test_path, test)
+    output = tmp_path / "benchmark"
+    arguments = [
+        sys.executable,
+        "-m",
+        "examples.tir.benchmark",
+        "--valid",
+        str(valid_path),
+        "--test",
+        str(test_path),
+        "--output",
+        str(output),
+    ]
+    if with_training_pool:
+        train_path = tmp_path / "input-train.jsonl"
+        write_examples(train_path, (example("official training question"),))
+        arguments.extend(("--train", str(train_path)))
+    subprocess.run(arguments, cwd=PROJECT, check=True, capture_output=True, text=True)
+    benchmark = read_record(output / "benchmark.json", Benchmark)
+    assert read_examples(local_path(benchmark.valid)) == valid
+    assert read_examples(local_path(benchmark.test)) == test
+    assert set(benchmark.excluded_ids) == {valid[0].task_id, test[0].task_id}
+    assert (benchmark.train is not None) == with_training_pool
+    assert (output / "train.jsonl").exists() == with_training_pool
+    valid_path.write_text("changed original input")
+    assert read_examples(local_path(benchmark.valid)) == valid
+    with pytest.raises(ValueError, match="overlap"):
+        prepare_benchmark(valid, valid, tmp_path / "overlap")
+
+
+@pytest.mark.parametrize("experiment", [False], indirect=True)
+def test_tir_generates_fresh_training_data_for_each_round_without_a_training_pool(
+    experiment: ProblemRun,
+) -> None:
+    problem = cast(TIRProblem, experiment.problem)
+    spec = experiment.spec
+    benchmark = problem.benchmark()
+    assert benchmark.train is None
+    assert not (experiment.root.parent / "train.jsonl").exists()
+    manifests: list[SynthesisManifest] = []
+    for candidate_id, seed in (("r1", 17), ("r2", 29)):
+        directory = experiment.path(candidate_id).parent
+        directory.mkdir(parents=True)
+        context = CandidateContext(
+            experiment.run_id,
+            str(experiment.root),
+            candidate_id,
+            spec.baseline,
+            spec,
+            str(directory / "job"),
+        )
+        recipe = RoundRecipe(
+            "Generate a new training mixture",
+            data=DataRecipe(seed=seed, real_count=0, synthetic_count=16),
+        )
+        plan = problem.build_candidate(context, recipe)
+        data = read_record(directory / "data.json", SynthesisManifest)
+        manifests.append(data)
+        assert data.training_pool is None and data.recipe == recipe.data
+        items = read_examples(local_path(data.dataset))
+        assert len(items) == 16 and all(item.source == "verified-synthetic" for item in items)
+        assert not {item.task_id for item in items}.intersection(benchmark.excluded_ids)
+        assert data.dataset in plan.inputs
+        assert plan.job is not None
+        assert read_record(Path(plan.job.command[-1]), WorkerRequest).dataset == str(
+            local_path(data.dataset)
+        )
+    assert manifests[0].dataset.digest != manifests[1].dataset.digest
+    assert local_path(manifests[0].dataset) != local_path(manifests[1].dataset)
+    assert experiment.spec == spec
+
+
+@pytest.mark.parametrize("experiment", [False], indirect=True)
+def test_real_examples_require_a_training_pool(experiment: ProblemRun) -> None:
+    problem = cast(TIRProblem, experiment.problem)
+    spec = experiment.spec
+    context = CandidateContext(
+        experiment.run_id,
+        str(experiment.root),
+        "r1",
+        spec.baseline,
+        spec,
+        str(experiment.root / "job"),
+    )
+    with pytest.raises(ValueError, match="require a training pool"):
+        problem.build_candidate(context, RoundRecipe("Use official training questions"))
+    with pytest.raises(ValueError, match="require a training pool"):
+        build_dataset(DataRecipe(), (), None, (), experiment.root / "invalid-data")
+
+
+@pytest.mark.parametrize("experiment", [False], indirect=True)
+def test_tir_validation_retry_reuses_generated_data_and_completed_training(
+    experiment: ProblemRun, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    worker = tmp_path / "cpu-worker.py"
+    gate = tmp_path / "fail-validation"
+    gate.touch()
+    worker.write_text(
+        """import json, sys
+from pathlib import Path
+from areal_rsi.api.control import encode_record
+from areal_rsi.api.execution import TrainingReceipt
+from areal_rsi.api.records import EvaluationSample, TraceEvent
+from areal_rsi.infra.artifacts import read_record, write_record
+from examples.tir.benchmark import evaluation_cases, read_examples
+from examples.tir.pipeline import WorkerRequest
+request = read_record(Path(sys.argv[1]), WorkerRequest)
+output = Path(request.output)
+items = read_examples(Path(request.dataset))
+if request.mode == 'train':
+    assert all(item.source == 'verified-synthetic' for item in items)
+    checkpoint = output / 'checkpoint'
+    checkpoint.mkdir()
+    (checkpoint / 'config.json').write_text('{}')
+    (checkpoint / 'model.safetensors').write_bytes(b'CPU contract fixture, not a trained model')
+    write_record(output / 'training.json', TrainingReceipt(str(checkpoint), 1))
+else:
+    if '-r1-' in request.trial and Path(sys.argv[2]).exists():
+        raise SystemExit('Injected validation failure')
+    with (output / 'samples.jsonl').open('x') as stream:
+        for case in evaluation_cases(items):
+            sample = EvaluationSample(case.task_id, 'fixture', 1.0, True,
+                                      (TraceEvent('generation', 'CPU contract fixture'),))
+            stream.write(json.dumps(encode_record(sample)) + '\\n')
+"""
+    )
+
+    def job(problem: TIRProblem, root: Path, request: WorkerRequest) -> JobSpec:
+        path = root / "requests" / (request.trial + ".json")
+        write_record(path, request)
+        return JobSpec(
+            (sys.executable, str(worker), str(path), str(gate)),
+            cwd=str(PROJECT),
+            env={"PYTHONPATH": os.pathsep.join((str(PROJECT / "src"), str(PROJECT)))},
+            timeout_seconds=30,
+        )
+
+    monkeypatch.setattr(TIRProblem, "_job", job)
+
+    async def execute() -> None:
+        await experiment.evaluate("base")
+        recipe = write_record(
+            tmp_path / "recipe.json",
+            RoundRecipe(
+                "Generate the first training set", data=DataRecipe(real_count=0, synthetic_count=16)
+            ),
+        )
+        experiment.create_candidate("r1", "base", "Pure synthesis", local_path(recipe))
+        with pytest.raises(JobExecutionError):
+            await experiment.evaluate("r1")
+        record = experiment.candidate("r1")
+        assert record.status == CandidateStatus.FAILED and record.training is not None
+        data_path = experiment.path("r1").parent / "data.json"
+        data = read_record(data_path, SynthesisManifest)
+        before = local_path(data.dataset).read_bytes()
+        gate.unlink()
+
+        def reject_regeneration(
+            problem: TIRProblem, context: CandidateContext, recipe: RoundRecipe
+        ) -> CandidatePlan:
+            raise AssertionError("Recovery must reuse the saved candidate plan")
+
+        monkeypatch.setattr(TIRProblem, "build_candidate", reject_regeneration)
+        reopened = ProblemRun(experiment.run_id, experiment.root, experiment.binding)
+        result = await reopened.evaluate("r1", retry=True)
+        assert result.status == CandidateStatus.COMPLETED
+        assert result.training == record.training
+        assert local_path(data.dataset).read_bytes() == before
+        assert read_record(data_path, SynthesisManifest) == data
+        assert len(list((experiment.root / "execution").rglob("training.json"))) == 1
+
+    asyncio.run(execute())
 
 
 def example(prompt: str) -> Example:
@@ -374,153 +688,3 @@ def test_native_training_mixture_keeps_fractional_gold_and_excludes_test(tmp_pat
     assert read_examples(tmp_path / "native/train.jsonl") == pool
     with pytest.raises(ValueError, match="Only official training"):
         build_dataset(recipe, (replace(item, source="torl-test"),), ref, (), tmp_path / "leaked")
-
-
-@pytest.fixture
-def experiment(tmp_path: Path) -> Experiment:
-    backend = tmp_path / "backend"
-    (backend / "areal").mkdir(parents=True)
-    (backend / "areal/__init__.py").touch()
-    (backend / "examples/tir").mkdir(parents=True)
-    (backend / "examples/tir/tir_math_config.yaml").write_text("test: true\n")
-    git_repository(backend)
-    model = tmp_path / "model"
-    model.mkdir()
-    (model / "config.json").write_text("{}")
-    train = write_examples(tmp_path / "train.jsonl", (example("train"),))
-    valid = write_examples(tmp_path / "valid.jsonl", tuple(example(f"valid-{i}") for i in range(4)))
-    test = write_examples(
-        tmp_path / "test.jsonl", (replace(example("test"), source="torl-test", repetitions=4),)
-    )
-    manifest = Benchmark(17, train, test, train, valid, test, (identity("valid"), identity("test")))
-    write_record(tmp_path / "benchmark.json", manifest)
-    config = ExperimentConfig(
-        TIRConfig(AReaLRuntime(str(backend), "/unused/python"), str(model), reward="math_verify"),
-        str(tmp_path / "benchmark.json"),
-    )
-    root = tmp_path / "experiment"
-    prepare(config, root)
-    return Experiment(root)
-
-
-def test_native_protocol_refuses_integer_only_reward(
-    experiment: Experiment, tmp_path: Path
-) -> None:
-    items = (
-        replace(example("Native train"), source="torl-train", answer=r"\frac{1}{2}"),
-        replace(example("Native valid"), source="torl-train", answer=r"\frac{1}{2}"),
-        replace(example("Native test"), source="torl-test", answer=r"\frac{1}{2}"),
-    )
-    refs = tuple(
-        write_examples(tmp_path / f"native-{index}.jsonl", (item,))
-        for index, item in enumerate(items)
-    )
-    benchmark = replace(
-        experiment.protocol.benchmark,
-        train=refs[0],
-        valid=refs[1],
-        test=refs[2],
-        excluded_ids=(items[1].task_id, items[2].task_id),
-    )
-    path = tmp_path / "native-benchmark.json"
-    write_record(path, benchmark)
-    config = replace(
-        experiment.protocol.config,
-        tir=replace(experiment.protocol.config.tir, reward="integer"),
-        benchmark=str(path),
-    )
-    with pytest.raises(ValueError, match="native mathematical equivalence"):
-        prepare(config, tmp_path / "invalid-native-experiment")
-
-
-def test_selection_requires_multiple_rounds_best_valid_and_is_immutable(
-    experiment: Experiment,
-) -> None:
-    root, frozen = experiment.root, experiment.protocol
-    valid_ids = tuple(item.task_id for item in read_examples(local_path(frozen.benchmark.valid)))
-    base = evaluation(
-        root / "base-samples.jsonl",
-        (True, False, False, False),
-        task_ids=valid_ids,
-        solution_id="base",
-    )
-    write_record(root / "valid/base.json", base)
-    recipe_ref = write_record(root / "recipe.json", DataRecipe())
-    data = SynthesisManifest(DataRecipe(), frozen.benchmark.train, frozen.benchmark.train, 1, 0)
-
-    def candidate(name: str, passed: tuple[bool, ...]) -> None:
-        valid = evaluation(
-            root / f"{name}-samples.jsonl", passed, task_ids=valid_ids, solution_id=name
-        )
-        solution = replace(frozen.baseline, solution_id=name)
-        # This fixture tests selection only; it does not represent real training.
-        training = TrainingResult("fixture", solution.model.content, frozen.base_model, 1, {})
-        record = Candidate(
-            name,
-            recipe_ref,
-            data,
-            frozen.project,
-            frozen.baseline,
-            "completed",
-            training,
-            solution,
-            valid,
-        )
-        write_record(root / f"rounds/{name}/candidate.json", record)
-
-    candidate("r1", (True, True, False, False))
-    with pytest.raises(ValueError, match="minimum number"):
-        experiment.select("r1")
-    candidate("r2", (True, True, True, False))
-    original = experiment.candidate("r2")
-    assert original.valid is not None
-    forged = replace(
-        original,
-        valid=replace(original.valid, report=replace(original.valid.report, score=1)),
-    )
-    write_record(root / "rounds/r2/candidate.json", forged)
-    with pytest.raises(ValueError, match="sample evidence"):
-        experiment.select("r2")
-    write_record(root / "rounds/r2/candidate.json", original)
-    with pytest.raises(ValueError, match="best valid"):
-        experiment.select("r1")
-    selected = experiment.select("r2")
-    assert selected.valid_comparison.delta == 0.5 and selected.completed_rounds == ("r1", "r2")
-    with pytest.raises(ValueError, match="immutable"):
-        experiment.select("r1")
-    with pytest.raises(ValueError, match="Selection is frozen"):
-        asyncio.run(experiment.evaluate("r1"))
-    with pytest.raises(ValueError, match="restricted"):
-        asyncio.run(experiment.evaluate("r1", test=True))
-    # Independent acceptance reuses persisted samples, preserving the official
-    # repeated cases as one question rather than four independent observations.
-    cases = evaluation_cases(read_examples(local_path(frozen.benchmark.test)))
-    task_ids = tuple(case.task_id for case in cases)
-    for name, passed in (("base", False), ("r2", True)):
-        saved = evaluation(
-            root / f"test-{name}-samples.jsonl", (passed,) * 4, task_ids=task_ids, solution_id=name
-        )
-        saved = replace(saved, report=replace(saved.report, split=BenchmarkSplit.TEST))
-        write_record(root / f"test/{name}.json", saved)
-    result = asyncio.run(experiment.test("r2"))
-    assert result.target_met and result.comparison.delta == 1
-    assert result.comparison.count == 4 and result.comparison.independent_questions == 1
-    assert (root / "test/result.json").exists()
-    assert "Test / official test" in (root / "report.md").read_text()
-
-
-def test_frozen_protocol_rejects_data_and_source_changes(experiment: Experiment) -> None:
-    source = Path(experiment.config.runtime.repository) / "examples/tir/tir_math_config.yaml"
-    source.write_text("changed: true\n")
-    with pytest.raises(ValueError, match="changed"):
-        protocol(experiment.root)
-
-
-def test_model_reference_must_match_its_manifest(experiment: Experiment, tmp_path: Path) -> None:
-    other = tmp_path / "unrelated-model"
-    other.mkdir()
-    baseline = experiment.protocol.baseline
-    model = replace(baseline.model, content=replace(baseline.model.content, uri=other.as_uri()))
-    experiment.protocol = replace(experiment.protocol, baseline=replace(baseline, model=model))
-    with pytest.raises(ValueError, match="checkpoint manifest"):
-        experiment.solution("base")

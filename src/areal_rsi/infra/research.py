@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import copy
+import hashlib
+import json
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -12,11 +14,27 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, TextIO, cast
 
-from areal_rsi.api.control import public_tool_text
+from areal_rsi.api.control import (
+    CandidateEvaluation,
+    CandidateProposal,
+    CandidateQuery,
+    GoalUpdate,
+    SelectCandidate,
+    decode_record,
+    encode_record,
+    public_tool_text,
+)
 from areal_rsi.api.research import (
+    CandidateFeedback,
+    CandidateRecord,
+    CandidateSelection,
+    CandidateStatus,
     ExperienceRef,
+    FinalEvaluation,
     GoalProgress,
     LearningRecord,
+    ProblemBinding,
+    ProblemSpec,
     PromptQuestion,
     ReasoningEffort,
     SessionConfig,
@@ -25,11 +43,14 @@ from areal_rsi.api.research import (
     SessionPhase,
     SessionRecord,
     SessionStatus,
+    ToolReceipt,
     UserPrompt,
 )
 from areal_rsi.infra.agents import HOST, instructions
+from areal_rsi.infra.artifacts import write_record
 from areal_rsi.infra.codex import CodexClient, CodexError, NativeEvent
 from areal_rsi.infra.config import available_models, data_root, validate_config
+from areal_rsi.infra.coordination import ProblemRun, pin_problem
 from areal_rsi.infra.coordination.policies.goal import budget_exhausted, settle, should_continue
 from areal_rsi.infra.coordination.store import SessionStore
 from areal_rsi.infra.coordination.tools.control import apply_control, definitions
@@ -58,19 +79,185 @@ class ResearchSystem:
         self.experience = ExperienceLibrary(self.root / "experience")
         self.live: dict[str, LiveSession] = {}
         self.open_lock = asyncio.Lock()
+        self.problems: dict[str, ProblemRun] = {}
+        self.operations: dict[str, asyncio.Task[CandidateRecord]] = {}
 
-    async def create(self, config: SessionConfig) -> str:
+    async def create(self, config: SessionConfig, *, problem: ProblemBinding | None = None) -> str:
         """Save a new ordinary conversation without starting a model turn."""
         run_id = "run-" + uuid.uuid4().hex[:12]
         config = validate_config(config)
+        if problem is not None:
+            problem = pin_problem(problem, self.store.directory(run_id) / "problem")
         self.store.save(
             SessionRecord(
                 run_id,
                 config,
                 experience=self.experience.documents() if config.use_experience else [],
+                problem=problem,
             )
         )
         return run_id
+
+    def _problem(self, run_id: str) -> ProblemRun:
+        binding = self.detail(run_id).problem
+        if binding is None:
+            raise ValueError("This session has no bound research problem")
+        if run_id not in self.problems:
+            self.problems[run_id] = ProblemRun(
+                run_id, self.store.directory(run_id) / "problem", binding
+            )
+        return self.problems[run_id]
+
+    async def prepare_problem(self, run_id: str) -> ProblemSpec:
+        record = self.detail(run_id)
+        if record.phase != SessionPhase.CHAT or record.active_turn_id:
+            raise ValueError("Prepare the problem before entering RSI")
+        problem = self._problem(run_id)
+        spec = await asyncio.to_thread(problem.prepare)
+        await problem.evaluate("base")
+        return spec
+
+    def problem_detail(self, run_id: str) -> ProblemSpec:
+        return self._problem(run_id).spec
+
+    def candidate_status(self, run_id: str, candidate_id: str = "") -> list[CandidateFeedback]:
+        return self._problem(run_id).feedback(candidate_id)
+
+    def _research_access(self, run_id: str) -> None:
+        record = self.detail(run_id)
+        if record.phase != SessionPhase.LEADER or record.status not in {
+            SessionStatus.RUNNING,
+            SessionStatus.IDLE,
+        }:
+            raise ValueError("Candidate control requires an executing Leader")
+
+    async def submit_candidate(self, run_id: str, proposal: CandidateProposal) -> CandidateFeedback:
+        self._research_access(run_id)
+        problem = self._problem(run_id)
+        recipe_path = Path(proposal.recipe).expanduser()
+        if not recipe_path.is_absolute():
+            recipe_path = Path(self.detail(run_id).config.workspace) / recipe_path
+        recipe_path = recipe_path.resolve(strict=True)
+        operation = self.operations.get(run_id)
+        if operation is not None and not operation.done():
+            if operation.get_name() != f"candidate-{run_id}-{proposal.candidate_id}":
+                raise ValueError("A candidate operation is already running; inspect its status")
+            await asyncio.to_thread(
+                problem.create_candidate,
+                proposal.candidate_id,
+                proposal.parent_id,
+                proposal.hypothesis,
+                recipe_path,
+            )
+            return problem.feedback(proposal.candidate_id)[0]
+        await asyncio.to_thread(
+            problem.create_candidate,
+            proposal.candidate_id,
+            proposal.parent_id,
+            proposal.hypothesis,
+            recipe_path,
+        )
+        self._schedule_candidate(run_id, proposal.candidate_id, retry=False)
+        return problem.feedback(proposal.candidate_id)[0]
+
+    async def evaluate_candidate(
+        self, run_id: str, candidate_id: str, *, retry: bool = False
+    ) -> CandidateFeedback:
+        self._research_access(run_id)
+        operation = self.operations.get(run_id)
+        if operation is not None and not operation.done():
+            raise ValueError("A candidate operation is already running; inspect its status")
+        problem = self._problem(run_id)
+        candidate = problem.candidate(candidate_id)
+        if candidate.plan is not None and candidate.validation is None:
+            candidate.status, candidate.error = CandidateStatus.PREPARED, ""
+            write_record(problem.path(candidate_id), candidate)
+        self._schedule_candidate(run_id, candidate_id, retry=retry)
+        return problem.feedback(candidate_id)[0]
+
+    def _schedule_candidate(self, run_id: str, candidate_id: str, *, retry: bool) -> None:
+        async def execute() -> CandidateRecord:
+            event: SessionEvent | None = None
+            try:
+                result = await self._problem(run_id).evaluate(candidate_id, retry=retry)
+                event = SessionEvent(
+                    "tool",
+                    "leader",
+                    public_tool_text(
+                        encode_record(self._problem(run_id).feedback(candidate_id)[0])
+                    ),
+                    completed=True,
+                )
+                return result
+            except Exception as exc:
+                event = SessionEvent("error", text=public_tool_text(str(exc)))
+                raise
+            finally:
+                if event is not None:
+                    if run_id in self.live:
+                        self._emit(self.live[run_id], event)
+                    else:
+                        self.store.append(run_id, event)
+
+        task = asyncio.create_task(execute(), name=f"candidate-{run_id}-{candidate_id}")
+        # Failures are retained in candidate records and emitted, not lost as task warnings.
+        task.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+        self.operations[run_id] = task
+
+    async def _problem_control(
+        self, record: SessionRecord, key: str, name: str, arguments: Any
+    ) -> ToolReceipt:
+        digest = hashlib.sha256(json.dumps(arguments, sort_keys=True).encode()).hexdigest()
+        if key in record.receipts:
+            receipt = record.receipts[key]
+            if receipt.tool != name or receipt.arguments_digest != digest:
+                raise ValueError("A tool call ID cannot be reused with different arguments")
+            return receipt
+        if record.status != SessionStatus.RUNNING:
+            raise ValueError("Candidate tools require a running turn")
+        self._research_access(record.run_id)
+        if name == "rsi_submit_candidate":
+            result = encode_record(
+                await self.submit_candidate(
+                    record.run_id, decode_record(CandidateProposal, arguments)
+                )
+            )
+        elif name == "rsi_evaluate_candidate":
+            request = decode_record(CandidateEvaluation, arguments)
+            result = encode_record(
+                await self.evaluate_candidate(
+                    record.run_id, request.candidate_id, retry=request.retry
+                )
+            )
+        elif name == "rsi_select_candidate":
+            request_select = decode_record(SelectCandidate, arguments)
+            result = encode_record(
+                self.select_candidate(record.run_id, request_select.candidate_id)
+            )
+        else:
+            request_query = decode_record(CandidateQuery, arguments)
+            result = {
+                "candidates": [
+                    encode_record(item)
+                    for item in self.candidate_status(record.run_id, request_query.candidate_id)
+                ]
+            }
+        receipt = ToolReceipt(name, digest, public_tool_text(result), True)
+        record.receipts[key] = receipt
+        return receipt
+
+    def select_candidate(self, run_id: str, candidate_id: str) -> CandidateSelection:
+        self._research_access(run_id)
+        operation = self.operations.get(run_id)
+        if operation is not None and not operation.done():
+            raise ValueError("Wait for the running candidate before freezing selection")
+        return self._problem(run_id).select(candidate_id)
+
+    async def finalize_problem(self, run_id: str, candidate_id: str) -> FinalEvaluation:
+        record = self.detail(run_id)
+        if record.active_turn_id or record.status == SessionStatus.RUNNING:
+            raise ValueError("Pause or complete research before host final evaluation")
+        return await self._problem(run_id).finalize(candidate_id)
 
     def detail(self, run_id: str) -> SessionRecord:
         return (
@@ -219,7 +406,7 @@ class ResearchSystem:
                         "thread/start",
                         {
                             **params,
-                            "dynamicTools": definitions(),
+                            "dynamicTools": definitions(problem=record.problem is not None),
                         },
                     )
                     record.thread_id = result["thread"]["id"]
@@ -308,6 +495,10 @@ class ResearchSystem:
     ) -> None:
         """Switch the existing ordinary thread to Interaction at a completed-turn boundary."""
         paths = [str(path.expanduser().resolve(strict=True)) for path in images or []]
+        if self.detail(run_id).problem is not None:
+            problem = self._problem(run_id)
+            if not problem.path("base").exists() or problem.candidate("base").validation is None:
+                raise ValueError("Prepare and evaluate the bound problem before entering RSI")
         live = await self._attach(run_id)
         async with live.lock:
             record = live.record
@@ -360,6 +551,16 @@ class ResearchSystem:
             live.record.handoff_pending = False
             self._save(live)
             await self._interrupt(live)
+        operation = self.operations.get(run_id)
+        if operation is not None and not operation.done():
+            operation.cancel()
+            await asyncio.gather(operation, return_exceptions=True)
+        if live.record.problem is not None:
+            problem = self._problem(run_id)
+            for path in (problem.root / "execution" / run_id / "jobs").glob("*/job.json"):
+                job = problem.jobs.detail(run_id, path.parent.name)
+                if not job.terminal or not job.resources_released:
+                    await problem.jobs.cancel(run_id, path.parent.name)
 
     async def resume(self, run_id: str) -> None:
         """Resume explicitly, auditing interrupted work instead of replaying commands."""
@@ -609,7 +810,8 @@ class ResearchSystem:
                 ),
             )
             self._save(live)
-        if should_continue(record):
+        operation = self.operations.get(record.run_id)
+        if should_continue(record) and (operation is None or operation.done()):
             record.pending_inputs.append(
                 SessionInput(
                     uuid.uuid4().hex,
@@ -630,6 +832,10 @@ class ResearchSystem:
         record.experience = self.experience.documents() if record.config.use_experience else []
         live.did_work = False
         self._save(live)  # Commit intent before a possibly ambiguous transport operation.
+        role = instructions(record)
+        if record.problem is not None:
+            problem = self._problem(record.run_id)
+            role += problem.context()
         result = await live.client.request(
             "turn/start",
             {
@@ -639,7 +845,7 @@ class ResearchSystem:
                 "model": record.config.model,
                 "effort": record.config.effort,
                 "additionalContext": {
-                    "rsi-role": {"kind": "application", "value": instructions(record)},
+                    "rsi-role": {"kind": "application", "value": role},
                     "rsi-experience": {
                         "kind": "application",
                         "value": (
@@ -810,14 +1016,33 @@ class ResearchSystem:
                 if params["turnId"] != live.record.active_turn_id:
                     raise ValueError("Tool call is not from the current turn")
                 updated = copy.deepcopy(live.record)
-                receipt = apply_control(updated, key, params["tool"], params["arguments"])
+                name, arguments = params["tool"], params["arguments"]
+                if name in {
+                    "rsi_submit_candidate",
+                    "rsi_candidate_status",
+                    "rsi_evaluate_candidate",
+                    "rsi_select_candidate",
+                }:
+                    receipt = await self._problem_control(updated, key, name, arguments)
+                else:
+                    if name == "rsi_update_goal" and updated.problem is not None:
+                        update = decode_record(GoalUpdate, arguments)
+                        if update.status == "completed":
+                            self._problem(updated.run_id).verify_completion()
+                    receipt = apply_control(updated, key, name, arguments)
                 self.store.save(updated)
                 live.record = updated
+                if name in {
+                    "rsi_submit_candidate",
+                    "rsi_evaluate_candidate",
+                    "rsi_select_candidate",
+                }:
+                    live.did_work = True
                 text, success = receipt.text, receipt.success
                 self._emit(
                     live, SessionEvent("tool", updated.phase.value, params["tool"], completed=True)
                 )
-            except (TypeError, ValueError) as exc:
+            except (OSError, TypeError, ValueError, RuntimeError) as exc:
                 text, success = str(exc), False
             await live.client.reply(
                 event.request_id,
@@ -881,5 +1106,10 @@ class ResearchSystem:
             live.lease.close()
 
     async def close(self) -> None:
+        operations = list(self.operations.values())
+        for task in operations:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*operations, return_exceptions=True)
         for run_id in list(self.live):
             await self._detach(run_id)

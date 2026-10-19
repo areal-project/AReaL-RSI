@@ -70,10 +70,11 @@ curate experience. See the [user guide](docs/usage.md) for all commands and reco
 
 ## Research Examples
 
-Examples use shared infrastructure through their own entry points; they are not CLI subcommands.
+TIR and Search implement the same ResearchProblem contract and use the unified research command.
 
 | Example | Description | Resources |
 | --- | --- | --- |
+| Search research | Model training with fixed retrieval and independently judged evaluations | [Setup](examples/search/README.md) |
 | TIR research | Agent-driven, multi-round research on data and training recipes; select on valid, then evaluate on test | [Setup](examples/tir/RESEARCH.md) · [Results](examples/tir/RESULTS.md) |
 
 For multi-round TIR, configure `examples/tir/experiment.json` and `.env` on a Slurm cluster
@@ -82,7 +83,9 @@ with Apptainer and an AReaL training environment, then run from the repository r
 ```bash
 uv sync --locked
 source .venv/bin/activate
-python -m examples.tir.rsi
+areal-rsi research --problem examples.tir.problem:TIRProblem \
+  --config /absolute/tir-experiment.json --objective /absolute/objective.md \
+  --root /absolute/runs/tir-001 --env-file /absolute/private.env
 ```
 
 ## Documentation and Development

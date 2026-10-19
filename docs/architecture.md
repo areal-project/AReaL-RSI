@@ -15,11 +15,11 @@ infra/research.py · ResearchSystem
 ```
 
 `api/` 定义具名数据契约和协议，不依赖实现；`infra/` 不依赖 UI。
-主会话没有 Researcher、独立 verifier、版本管理、memory、训练或 legacy 内核。
-独立 `examples/tir` 使用 `infra/execution.py` 的子任务执行、`infra/training.py` 的 AReaL 接入、
-`infra/coordination/evaluation/` 的评测与 `infra/trajectories.py` 的轨迹索引；
-数据、流程和 TIR 策略保留在 example，尚未注册到会话控制工具。
-API 中其余未来契约保留，当前会话运行不会实例化它们。
+未绑定任务的会话保持单 Agent 执行。可选 ResearchProblem 绑定由 ResearchSystem 管理；
+infra/coordination 的 ProblemRun 负责候选、计划、证据与冻结选择，policies/selection 负责比较规则。
+TIR 与 Search 通过三个任务接口提供业务数据、worker 和计划，复用 execution、training、
+evaluation 与 trajectories。绑定任务的 Agent 工具放 coordination/tools，最终评测只由宿主调用。
+任务绑定不增加会话角色或第二套模型上下文。接入与运行命令见 [任务 API](interfaces/README.md)。
 
 ## 一次会话
 
@@ -64,7 +64,8 @@ Leader fork 是一个新 thread，但保留来源会话已有的上下文；后�
 token 用量从 Leader 开始计算，使用 Codex 上报的累计用量差值，包含输入上下文。
 它是收到用量通知后的中断上限，单次模型调用可能超出剩余额度。
 `max_wall_seconds` 在本版计 Leader 活跃执行秒数，排除暂停和等待用户的时间。
-完成证据由 Leader 提交，宿主校验结构；本版没有独立验证器替模型判断质量。
+普通 Goal 的完成证据由 Leader 提交，宿主校验结构。绑定实验任务时还校验真实候选证据与冻结选择；
+会话完成与最终 test 验收、主指标达标分别记录。
 
 ## 恢复与持久化
 

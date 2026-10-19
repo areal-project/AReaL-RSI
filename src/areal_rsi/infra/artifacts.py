@@ -13,7 +13,13 @@ from typing import Any, TypeVar
 from urllib.parse import unquote, urlparse
 
 from areal_rsi.api.control import decode_record, encode_record
-from areal_rsi.api.records import ArtifactFile, ContentRef, DirectorySnapshot, SourceSnapshot
+from areal_rsi.api.records import (
+    ArtifactFile,
+    ContentRef,
+    DirectorySnapshot,
+    SolutionVersion,
+    SourceSnapshot,
+)
 
 T = TypeVar("T")
 
@@ -61,7 +67,7 @@ def snapshot_directory(root: Path, manifest: Path) -> ContentRef:
 
 
 def snapshot_source(root: Path, manifest: Path, *, paths: tuple[str, ...]) -> SourceSnapshot:
-    """Hash tracked and unignored source, including uncommitted changes."""
+    """Hash tracked and unignored source, excluding generated Python caches."""
     root = root.resolve(strict=True)
 
     def git(*args: str) -> bytes:
@@ -79,6 +85,8 @@ def snapshot_source(root: Path, manifest: Path, *, paths: tuple[str, ...]) -> So
         ArtifactFile(name, (root / name).stat().st_size, file_ref(root / name).digest)
         for name in files
         if (root / name).is_file()
+        and "__pycache__" not in Path(name).parts
+        and Path(name).suffix not in {".pyc", ".pyo"}
     )
     content = write_record(manifest, DirectorySnapshot(str(root), entries))
     archive = manifest.with_suffix(".tar.gz")
@@ -102,3 +110,26 @@ def local_path(ref: ContentRef) -> Path:
     if file_ref(path).digest != ref.digest:
         raise ValueError(f"Artifact content changed: {path}")
     return path
+
+
+def verify_model(solution: SolutionVersion, manifest_ref: ContentRef) -> Path:
+    return verify_directory(solution.model.content, manifest_ref)
+
+
+def verify_directory(content: ContentRef, manifest_ref: ContentRef) -> Path:
+    manifest = read_record(local_path(manifest_ref), DirectorySnapshot)
+    parsed = urlparse(content.uri)
+    if parsed.scheme != "file" or parsed.netloc not in {"", "localhost"}:
+        raise ValueError("A local model artifact is required")
+    model = Path(unquote(parsed.path)).resolve(strict=True)
+    if (
+        model != Path(manifest.root).resolve()
+        or content.digest != manifest_ref.digest
+        or not manifest.files
+    ):
+        raise ValueError("Model reference does not match its checkpoint manifest")
+    for entry in manifest.files:
+        path = model / entry.path
+        if not path.resolve().is_relative_to(model) or file_ref(path).digest != entry.sha256:
+            raise ValueError(f"Model artifact changed: {path}")
+    return model

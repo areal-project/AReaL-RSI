@@ -4,31 +4,157 @@ from __future__ import annotations
 
 import asyncio
 import json
-import shlex
-import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
 
 import pytest
 
 from areal_rsi.api.control import encode_record
-from areal_rsi.api.execution import AReaLRuntime, JobSpec
-from areal_rsi.api.records import BenchmarkSplit, EvaluationSample, TraceEvent
-from areal_rsi.infra.artifacts import read_record, write_record
-from areal_rsi.infra.training import AReaLBackend
-from examples.search.experiment import pipeline, slurm
+from areal_rsi.api.execution import AReaLRuntime
+from areal_rsi.api.records import BenchmarkSplit
+from areal_rsi.infra.artifacts import read_record
+from examples.search.evaluation.checkpoints import stage_model
 from examples.search.experiment.config import (
     HarnessConfig,
+    MicrobatchConfig,
     SearchConfig,
     TrainingConfig,
-    WorkerRequest,
 )
-from examples.search.experiment.pipeline import ExperimentState, stage_model
-from examples.search.experiment.slurm import SlurmSubmission
 from examples.search.task.dataset import Candidate, DatasetConfig, Passage, parse_hotpot, partition
 from examples.search.task.reward import answer_in_text, answer_reward, extract_answer
+
+
+def test_search_stage_child_inherits_the_infra_package_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Real CPU service/worker children; no model or GPU evaluation is performed."""
+    from examples.search.experiment.config import WorkerRequest
+    from examples.search.experiment.pipeline import run
+    from examples.search.problem import StageRequest
+
+    dense = tmp_path / "dense-python"
+    dense.write_text(
+        f"#!{sys.executable}\n"
+        "import sys\nfrom http.server import BaseHTTPRequestHandler, HTTPServer\n"
+        "class Handler(BaseHTTPRequestHandler):\n"
+        " def do_GET(self): self.send_response(200); self.end_headers()\n"
+        "port=int(sys.argv[sys.argv.index('--port')+1])\n"
+        "HTTPServer(('127.0.0.1',port),Handler).serve_forever()\n"
+    )
+    dense.chmod(0o700)
+    worker = tmp_path / "examples/search/training/worker.py"
+    worker.parent.mkdir(parents=True)
+    worker.write_text(
+        "import json,sys\nfrom pathlib import Path\n"
+        "import areal_rsi.api.control as control\n"
+        "request=json.loads(Path(sys.argv[-1]).read_text())\n"
+        "(Path(request['output'])/'imported-package').write_text(control.__file__)\n"
+    )
+    output = tmp_path / "stage"
+    output.mkdir()
+    config = SearchConfig(
+        AReaLRuntime(str(tmp_path / "backend"), sys.executable, {"PYTHONPATH": "/old-overlay"}),
+        "model",
+        "benchmark",
+        "data",
+        "index",
+        "embedding",
+        "tokenizer",
+        project=str(tmp_path),
+        dense_python=str(dense),
+    )
+    source = Path(__file__).resolve().parents[1] / "src"
+    monkeypatch.setenv("PYTHONPATH", str(source))
+    monkeypatch.setenv("SLURM_JOB_ID", "cpu-fixture")
+    monkeypatch.setenv("RSI_SLURM_JOB_INFO", "JobId=cpu-fixture Reservation=rsi")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1")
+    request = WorkerRequest("eval", config, "model", "dev.jsonl", "", str(output), "fixture")
+    asyncio.run(asyncio.wait_for(run(StageRequest(worker=request)), 15))
+    assert Path((output / "imported-package").read_text()).is_relative_to(source)
+
+
+def test_standard_search_evaluation_uses_requested_split_without_training(tmp_path: Path) -> None:
+    from areal_rsi.api.records import ContentRef, HarnessVersion, ModelVersion, SolutionVersion
+    from areal_rsi.api.research import EvaluationContext, ProblemSpec
+    from examples.search.problem import SearchProblem, SearchProblemConfig, StageRequest
+    from examples.search.task.dataset import SearchQuestion
+
+    config = SearchConfig(
+        AReaLRuntime(str(tmp_path / "backend"), sys.executable),
+        str(tmp_path / "model"),
+        str(tmp_path / "benchmark"),
+        str(tmp_path / "data"),
+        str(tmp_path / "index"),
+        str(tmp_path / "embedding"),
+        str(tmp_path / "tokenizer"),
+        project=str(tmp_path),
+    )
+    data = Path(config.dataset_directory)
+    data.mkdir()
+    question = SearchQuestion(
+        "external-test", "question", ("answer",), ("doc",), ("group",), "test", "source", "hard"
+    )
+    (data / "test.jsonl").write_text(json.dumps(encode_record(question)) + "\n")
+    ref = ContentRef(Path(config.model).as_uri(), "fixture")
+    solution = SolutionVersion(
+        "selected",
+        ModelVersion("model", "selected", ref, "fixture"),
+        HarnessVersion("harness", "search", ref, "fixture"),
+        "fixture",
+    )
+    spec = ProblemSpec("search", "test", solution, ref)
+    problem = SearchProblem(SearchProblemConfig(config, "image.sif"))
+    plan = problem.build_evaluation(
+        EvaluationContext(
+            "run",
+            str(tmp_path / "run"),
+            spec,
+            solution,
+            BenchmarkSplit.TEST,
+            str(tmp_path / "evaluation"),
+        )
+    )
+    assert plan.job.slurm and plan.job.slurm.gpus == 2
+    assert plan.task_ids == ("external-test",)
+    stage = read_record(Path(plan.job.command[-1]), StageRequest)
+    assert stage.worker and stage.worker.mode == "eval"
+    assert stage.worker.dataset == str(data / "test.jsonl")
+    assert stage.worker.model == config.model
+    assert plan.job.command[plan.job.command.index("--request") - 1] == str(
+        tmp_path / "examples/search/experiment/pipeline.py"
+    )
+
+
+def test_official_trace_preserves_h0_answer_and_tool_sequence(tmp_path: Path) -> None:
+    from examples.search.experiment.pipeline import official_trace
+
+    source = tmp_path / "run_1.json"
+    steps = [
+        {"type": "reasoning", "output": ["Reason about evidence."]},
+        {
+            "type": "tool_call",
+            "tool_name": "search",
+            "arguments": '{"query":"evidence"}',
+            "output": '[{"docid":"doc","text":"evidence"}]',
+        },
+        {"type": "output_text", "output": "The answer [doc]."},
+    ]
+    source.write_text(json.dumps({"query_id": "1", "result": steps, "status": "completed"}))
+    response, events = official_trace(source, "question")
+    assert response == "The answer [doc]."
+    assert [item.kind for item in events] == [
+        "prompt",
+        "generation",
+        "tool_call",
+        "tool_result",
+        "generation",
+    ]
+    assert events[1].content == "Reason about evidence."
+    assert events[3].content == '[{"docid":"doc","text":"evidence"}]'
+    source.write_text(json.dumps({"result": steps[:-1], "status": "incomplete"}))
+    response, events = official_trace(source, "question")
+    assert response == "" and events[-1].kind == "tool_result"
 
 
 def candidate(index: int) -> Candidate:
@@ -44,6 +170,90 @@ def candidate(index: int) -> Candidate:
         ),
         "hard",
     )
+
+
+def test_candidate_training_data_versions_do_not_replace_frozen_evaluation(tmp_path: Path) -> None:
+    from areal_rsi.api.records import ContentRef, HarnessVersion, ModelVersion, SolutionVersion
+    from areal_rsi.api.research import CandidateContext, EvaluationContext, ProblemSpec
+    from examples.search.problem import (
+        SearchProblem,
+        SearchProblemConfig,
+        SearchRecipe,
+        StageRequest,
+    )
+    from examples.search.task.dataset import SearchQuestion, Split
+
+    config = SearchConfig(
+        AReaLRuntime(str(tmp_path / "backend"), sys.executable),
+        str(tmp_path / "model"),
+        str(tmp_path / "benchmark"),
+        str(tmp_path / "fixed-data"),
+        str(tmp_path / "fixed-index"),
+        str(tmp_path / "embedding"),
+        str(tmp_path / "tokenizer"),
+        training=TrainingConfig(batch_size=1, max_steps=1),
+        project=str(tmp_path),
+    )
+    data = Path(config.dataset_directory)
+    version = tmp_path / "candidate-data"
+    index = tmp_path / "candidate-index"
+    for directory in (data, version, index):
+        directory.mkdir()
+
+    def question(identity: str, split: Split) -> SearchQuestion:
+        return SearchQuestion(
+            identity, "question", ("answer",), (identity,), (identity,), split, identity, "hard"
+        )
+
+    for split in ("dev", "test"):
+        (data / f"{split}.jsonl").write_text(
+            json.dumps(encode_record(question(split, split))) + "\n"
+        )
+    train = version / "train.jsonl"
+    train.write_text(json.dumps(encode_record(question("new-train", "train"))) + "\n")
+    (version / "train-corpus.jsonl").write_text("corpus")
+    (index / "train.npy").write_bytes(b"index")
+    ref = ContentRef(Path(config.model).as_uri(), "fixture")
+    solution = SolutionVersion(
+        "base",
+        ModelVersion("model", "base", ref, "fixture"),
+        HarnessVersion("harness", "search", ref, "fixture"),
+        "fixture",
+    )
+    spec = ProblemSpec("search", "test", solution, ref)
+    problem = SearchProblem(SearchProblemConfig(config, "image.sif"))
+    context = CandidateContext(
+        "run", str(tmp_path / "run"), "r1", solution, spec, str(tmp_path / "training")
+    )
+    training = replace(config.training, microbatch=MicrobatchConfig(16384, 1))
+    recipe = SearchRecipe(
+        training=training, dataset_directory=str(version), index_directory=str(index)
+    )
+    plan = problem.build_candidate(context, recipe)
+    assert plan.job
+    request = read_record(Path(plan.job.command[-1]), StageRequest)
+    assert request.worker and request.worker.config.dataset_directory == str(version)
+    assert request.worker.config.index_directory == str(index)
+    assert request.worker.config.training.microbatch == MicrobatchConfig(16384, 1)
+    assert {item.uri for item in plan.inputs} == {
+        path.as_uri() for path in (train, version / "train-corpus.jsonl", index / "train.npy")
+    }
+    evaluation = problem.build_evaluation(
+        EvaluationContext(
+            "run", context.root, spec, solution, BenchmarkSplit.VALIDATE, str(tmp_path / "valid")
+        )
+    )
+    request = read_record(Path(evaluation.job.command[-1]), StageRequest)
+    assert request.worker and request.worker.config.dataset_directory == str(data)
+    assert request.worker.config.index_directory == config.index_directory
+    assert request.worker.config.training.microbatch == MicrobatchConfig()
+
+    train.write_text(
+        json.dumps(encode_record(replace(question("new-train", "train"), source_groups=("dev",))))
+        + "\n"
+    )
+    with pytest.raises(ValueError, match="overlaps frozen"):
+        problem.build_candidate(context, recipe)
 
 
 def test_partitions_isolate_all_documents_and_retain_evidence() -> None:
@@ -166,333 +376,3 @@ def test_model_staging_preserves_original_and_rejects_changed_effective_config(
     (output / "config.json").write_text("{}")
     with pytest.raises(ValueError, match="different effective"):
         stage_model(source, output)
-
-
-def search_config(tmp_path: Path) -> SearchConfig:
-    repository = tmp_path / "backend"
-    (repository / "areal").mkdir(parents=True)
-    (repository / "areal" / "__init__.py").touch()
-    entrypoint = tmp_path / "examples/search/experiment/pipeline.py"
-    entrypoint.parent.mkdir(parents=True)
-    entrypoint.write_text("# Frozen submission fixture.\n")
-    return SearchConfig(
-        AReaLRuntime(str(repository), sys.executable),
-        str(tmp_path / "frozen-best-model"),
-        str(tmp_path / "benchmark"),
-        str(tmp_path / "data"),
-        str(tmp_path / "index"),
-        str(tmp_path / "embedding"),
-        str(tmp_path / "tokenizer"),
-        str(tmp_path / "runs"),
-        project=str(tmp_path),
-    )
-
-
-def test_heldout_evaluation_reloads_without_training_or_changing_incumbent(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    config = search_config(tmp_path)
-    data = Path(config.dataset_directory)
-    data.mkdir()
-    # No train/dev files exist: the independent mode must use the requested split.
-    (data / "test.jsonl").write_text('{"question_id":"external-test"}\n')
-    root = Path(config.output_root)
-    root.mkdir()
-    incumbent = root / "incumbent.json"
-    incumbent.write_text("incumbent must not be read or changed by held-out results")
-    original = incumbent.read_bytes()
-    monkeypatch.setenv("SLURM_JOB_ID", "123")
-    monkeypatch.setenv("SEARCH_SLURM_JOB_INFO", "JobId=123 Reservation=rsi")
-    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1")
-    worker_requests = []
-
-    def spec(
-        self: AReaLBackend, entrypoint: Path, arguments: tuple[str, ...], *, timeout: float
-    ) -> JobSpec:
-        assert entrypoint.is_file() and entrypoint.parent.name == "training"
-        request = read_record(Path(arguments[1]), WorkerRequest)
-        assert request.mode == "eval" and request.dataset == str(data / "test.jsonl")
-        assert request.model == config.model
-        worker_requests.append(request)
-        sample = EvaluationSample(
-            "external-test", "answer", 1.0, True, (TraceEvent("generation", "answer"),)
-        )
-        payload = json.dumps(encode_record(sample)) + "\n"
-        command = (
-            "from pathlib import Path; "
-            f"Path({str(Path(request.output) / 'samples.jsonl')!r}).write_text({payload!r})"
-        )
-        return JobSpec((sys.executable, "-c", command), cwd=str(tmp_path), timeout_seconds=10)
-
-    real_spawn = asyncio.create_subprocess_exec
-
-    async def spawn(*args: Any, **kwargs: Any) -> asyncio.subprocess.Process:
-        if "examples.search.task.retrieval" in args:
-            assert "test-corpus.jsonl" in str(args) and "test.npy" in str(args)
-            return await real_spawn(sys.executable, "-c", "import time; time.sleep(60)", **kwargs)
-        return await real_spawn(*args, **kwargs)
-
-    async def ready(process: asyncio.subprocess.Process, url: str) -> None:
-        assert process.returncode is None
-
-    monkeypatch.setattr(AReaLBackend, "spec", spec)
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
-    monkeypatch.setattr(pipeline, "wait_for_dense", ready)
-    directory = asyncio.run(pipeline.run(config, "heldout", evaluation_split="test"))
-    state = read_record(directory / "experiment.json", ExperimentState)
-    assert state.phase == "completed" and state.evaluation_split == "test"
-    assert state.training is None and state.baseline is None
-    assert state.candidate is not None and state.candidate.report.split == BenchmarkSplit.TEST
-    assert state.candidate.report.score == 1 and incumbent.read_bytes() == original
-    assert asyncio.run(pipeline.run(config, "heldout", evaluation_split="test")) == directory
-    assert len(worker_requests) == 1  # Resume reuses the verified durable result.
-    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1,2,3,4,5,6")
-    with pytest.raises(ValueError, match="Resume evaluation split differs"):
-        asyncio.run(pipeline.run(config, "heldout"))
-
-
-@pytest.mark.parametrize("hold_reason", ["JobHeldUser", "None"])
-def test_heldout_submission_requests_two_gpus_and_refuses_changed_resume_mode(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    hold_reason: str,
-) -> None:
-    config = search_config(tmp_path)
-    path = tmp_path / "config.json"
-    write_record(path, config)
-    image = tmp_path / "image.sif"
-    image.touch()
-    submissions = []
-
-    def submit(args: list[str], **kwargs: Any) -> str:
-        if args[0] == "sbatch":
-            assert {"--hold", "--reservation=rsi", "--gres=gpu:2"} <= set(args)
-            submissions.append(args)
-            return "123\n"
-        assert args == ["scontrol", "show", "job", "-o", "123"]
-        return f"JobId=123 JobState=PENDING Reason={hold_reason} Priority=0"
-
-    def release(args: list[str], **kwargs: Any) -> int:
-        assert args == ["scontrol", "release", "123"]
-        receipt = read_record(
-            Path(config.output_root) / "submissions/heldout/slurm-job.json", SlurmSubmission
-        )
-        assert receipt.release_pending  # The receipt exists before the job can start.
-        return 0
-
-    monkeypatch.setattr(subprocess, "check_output", submit)
-    monkeypatch.setattr(subprocess, "check_call", release)
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "search.pipeline",
-            "--submit",
-            "--config",
-            str(path),
-            "--run-id",
-            "heldout",
-            "--image",
-            str(image),
-            "--time-limit",
-            "120",
-            "--evaluate-only",
-            "test",
-        ],
-    )
-    pipeline.main()
-    assert capsys.readouterr().out.strip() == "123"
-    receipt = read_record(
-        Path(config.output_root) / "submissions/heldout/slurm-job.json", SlurmSubmission
-    )
-    assert receipt.kind == "external-test-evaluation" and receipt.gpus == 2
-    assert not receipt.release_pending
-    assert slurm.submit(path, "heldout", image, 120, evaluation_split="test") == "123"
-    assert len(submissions) == 1
-    with pytest.raises(ValueError, match="different configuration or mode"):
-        slurm.submit(path, "heldout", image, 120, evaluation_split="dev")
-    with pytest.raises(ValueError, match="different configuration or mode"):
-        slurm.submit(path, "heldout", image, 120)
-
-
-@pytest.mark.parametrize("published", [False, True])
-@pytest.mark.parametrize("cancel_fails", [False, True])
-def test_failed_receipt_cancels_held_job_or_reports_its_id(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, published: bool, cancel_fails: bool
-) -> None:
-    config = search_config(tmp_path)
-    path = tmp_path / "config.json"
-    write_record(path, config)
-    image = tmp_path / "image.sif"
-    image.touch()
-    submissions = []
-    cancellations = []
-
-    def submit(args: list[str], **kwargs: Any) -> str:
-        assert args[0] == "sbatch" and "--hold" in args
-        submissions.append(args)
-        return "123\n"
-
-    def fail_receipt(path: Path, value: Any) -> None:
-        if path.name == "slurm-job.json":
-            if published:
-                write_record(path, value)
-            raise OSError("injected receipt write failure")
-        write_record(path, value)
-
-    def cancel(args: list[str], **kwargs: Any) -> int:
-        assert args == ["scancel", "123"]  # A failed write must never release the job.
-        cancellations.append(args)
-        if cancel_fails:
-            raise OSError("injected cancellation failure")
-        return 0
-
-    monkeypatch.setattr(subprocess, "check_output", submit)
-    monkeypatch.setattr(subprocess, "check_call", cancel)
-    monkeypatch.setattr(slurm, "write_record", fail_receipt)
-    message = "cancellation was not confirmed" if cancel_fails else "was cancelled"
-    with pytest.raises(RuntimeError, match=f"Slurm job 123.*{message}"):
-        slurm.submit(path, "candidate", image, 120)
-    if not published:
-        with pytest.raises(RuntimeError, match="Incomplete submission"):
-            slurm.submit(path, "candidate", image, 120)
-    assert len(submissions) == len(cancellations) == 1
-
-
-@pytest.mark.parametrize(
-    "failure",
-    ["status_unavailable", "release_rejected", "release_ack_lost", "receipt_after_release"],
-)
-def test_submission_retry_recovers_release_without_submitting_another_job(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
-) -> None:
-    config = search_config(tmp_path)
-    path = tmp_path / "config.json"
-    write_record(path, config)
-    image = tmp_path / "image.sif"
-    image.touch()
-    receipt = Path(config.output_root) / "submissions/candidate/slurm-job.json"
-    submissions = []
-    releases = []
-    released = False
-    fault_raised = False
-
-    def submit_or_status(args: list[str], **kwargs: Any) -> str:
-        nonlocal fault_raised
-        if args[0] == "sbatch":
-            assert "--hold" in args
-            submissions.append(args)
-            return "123\n"
-        assert args == ["scontrol", "show", "job", "-o", "123"]
-        if failure == "status_unavailable" and not fault_raised:
-            fault_raised = True
-            raise OSError("injected status lookup failure")
-        if released:
-            return "JobId=123 JobState=RUNNING Reason=None"
-        return "JobId=123 JobState=PENDING Reason=JobHeldUser"
-
-    def release(args: list[str], **kwargs: Any) -> int:
-        nonlocal released, fault_raised
-        assert args == ["scontrol", "release", "123"]
-        assert read_record(receipt, SlurmSubmission).release_pending
-        releases.append(args)
-        if failure == "release_rejected" and not fault_raised:
-            fault_raised = True
-            raise OSError("injected release failure")
-        released = True
-        if failure == "release_ack_lost" and not fault_raised:
-            fault_raised = True
-            raise OSError("injected release acknowledgement loss")
-        return 0
-
-    def save(path: Path, value: Any) -> None:
-        nonlocal fault_raised
-        if (
-            failure == "receipt_after_release"
-            and path == receipt
-            and not value.release_pending
-            and not fault_raised
-        ):
-            fault_raised = True
-            raise OSError("injected acknowledgement write failure")
-        write_record(path, value)
-
-    monkeypatch.setattr(subprocess, "check_output", submit_or_status)
-    monkeypatch.setattr(subprocess, "check_call", release)
-    monkeypatch.setattr(slurm, "write_record", save)
-    with pytest.raises(RuntimeError, match=r"Slurm job 123 is recorded.*release is not confirmed"):
-        slurm.submit(path, "candidate", image, 120)
-    assert read_record(receipt, SlurmSubmission).release_pending
-    assert slurm.submit(path, "candidate", image, 120) == "123"
-    assert not read_record(receipt, SlurmSubmission).release_pending
-    assert released and len(submissions) == 1
-    assert len(releases) == (2 if failure == "release_rejected" else 1)
-
-
-def test_unobserved_submission_result_keeps_job_held_and_refuses_automatic_resubmission(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    config = search_config(tmp_path)
-    path = tmp_path / "config.json"
-    write_record(path, config)
-    image = tmp_path / "image.sif"
-    image.touch()
-    submissions = []
-
-    def submit(args: list[str], **kwargs: Any) -> str:
-        assert args[0] == "sbatch" and "--hold" in args
-        submissions.append(args)
-        raise OSError("Slurm accepted the held job but its response was lost")
-
-    def release(args: list[str], **kwargs: Any) -> int:
-        pytest.fail("An unrecorded job must never be released")
-
-    monkeypatch.setattr(subprocess, "check_output", submit)
-    monkeypatch.setattr(subprocess, "check_call", release)
-    with pytest.raises(OSError, match="response was lost"):
-        slurm.submit(path, "candidate", image, 120)
-    with pytest.raises(RuntimeError, match=r"Incomplete submission.*search-candidate"):
-        slurm.submit(path, "candidate", image, 120)
-    assert len(submissions) == 1
-
-
-def test_submitted_script_uses_frozen_source_when_calling_directory_shadows_module(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    config = search_config(tmp_path)
-    marker = tmp_path / "frozen-entry-ran"
-    entrypoint = tmp_path / "examples/search/experiment/pipeline.py"
-    entrypoint.write_text(f"from pathlib import Path\nPath({str(marker)!r}).write_text('frozen')\n")
-    # The test environment lacks CUDA; intercept only the CUDA-library lookup.
-    interpreter = tmp_path / "image-python"
-    interpreter.write_text(
-        '#!/bin/sh\nif [ "$1" = "-c" ]; then printf "/tmp\\n"; exit 0; fi\nexec '
-        + shlex.quote(sys.executable)
-        + ' "$@"\n'
-    )
-    interpreter.chmod(0o700)
-    config = replace(config, runtime=replace(config.runtime, python=str(interpreter)))
-    config_path = tmp_path / "config.json"
-    write_record(config_path, config)
-    image = tmp_path / "image.sif"
-    image.touch()
-    monkeypatch.setattr(
-        subprocess,
-        "check_output",
-        lambda args, **kwargs: (
-            "123\n" if args[0] == "sbatch" else "JobId=123 JobState=PENDING Reason=JobHeldUser"
-        ),
-    )
-    monkeypatch.setattr(subprocess, "check_call", lambda *args, **kwargs: 0)
-    slurm.submit(config_path, "pinned-source", image, 120, evaluation_split="dev")
-    shadow = tmp_path / "mutable-workspace"
-    package = shadow / "examples/search/experiment"
-    package.mkdir(parents=True)
-    (shadow / "examples/__init__.py").touch()
-    (shadow / "examples/search/__init__.py").touch()
-    (package / "__init__.py").touch()
-    (package / "pipeline.py").write_text("raise RuntimeError('mutable source was imported')\n")
-    script = Path(config.output_root) / "submissions/pinned-source/inside.sh"
-    subprocess.run(["bash", str(script)], cwd=shadow, check=True, capture_output=True, text=True)
-    assert marker.read_text() == "frozen"

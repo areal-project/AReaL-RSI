@@ -21,3 +21,9 @@
 
 `tests/experience_e2e/run.py` 是显式启动的真实 API 实验，不在 pytest 自动发现范围中。
 方法与全部结果见 [经验实验](../docs/experience-study.md)。
+
+- test_problems.py：真实 CPU artifact 任务的完整研究、缓存校验、显式重试、工具授权与最终验收。
+- test_slurm.py：文件状态驱动的真实 scheduler-client 子进程，覆盖 held 回执、release 响应丢失和禁止重提。
+- test_problem_cli.py：统一 CLI、无需模型的状态查询和独立最终评测。
+
+- test_problem_native.py：真实 app-server 与离线模型端点，验证绑定任务的工具继承、后台反馈和完成校验。

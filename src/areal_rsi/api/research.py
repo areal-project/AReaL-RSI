@@ -7,8 +7,17 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Literal
 
-from areal_rsi.api.execution import JobSpec
-from areal_rsi.api.records import ContentRef, JsonObject, RecordRef
+from areal_rsi.api.execution import AReaLRuntime, JobSpec, TrainingResult
+from areal_rsi.api.records import (
+    BenchmarkSplit,
+    ContentRef,
+    EvaluationResult,
+    JsonObject,
+    PairedComparison,
+    RecordRef,
+    SolutionVersion,
+    SourceSnapshot,
+)
 from areal_rsi.api.records import JsonValue as JsonValue  # Recursive JsonObject type resolution.
 
 
@@ -115,6 +124,7 @@ class SessionRecord:
     receipts: dict[str, ToolReceipt] = field(default_factory=dict)
     experience: list[ExperienceRef] = field(default_factory=list)
     learning: LearningRecord = field(default_factory=LearningRecord)
+    problem: ProblemBinding | None = None
 
 
 @dataclass(slots=True)
@@ -233,6 +243,159 @@ class TaskBrief:
                 "verification 只能包含 metric、direction、target、description、identity；"
                 "具体评测约定请放在 description 或 instructions 中"
             )
+
+
+@dataclass(frozen=True, slots=True)
+class ProblemBinding:
+    """Operator-selected adapter; config and adapter bytes are pinned on creation."""
+
+    entrypoint: str
+    config: ContentRef
+    adapter: ContentRef | None = None
+    objective: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class SourceTree:
+    root: str
+    paths: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ComparisonContract:
+    """Fixed comparison conditions; evolving solution contents live separately."""
+
+    metric: str = "score"
+    direction: Literal["maximize", "minimize"] = "maximize"
+    min_rounds: int = 1
+    min_improvement: float = 0.0
+    target_delta: float | None = None
+    conditions: tuple[ContentRef, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.metric or self.direction not in {"maximize", "minimize"}:
+            raise ValueError("A comparison requires a metric and direction")
+        if self.min_rounds < 0 or not math.isfinite(self.min_improvement):
+            raise ValueError("Invalid comparison requirements")
+        if self.target_delta is not None and not math.isfinite(self.target_delta):
+            raise ValueError("Invalid comparison target")
+
+
+@dataclass(frozen=True, slots=True)
+class ProblemSpec:
+    name: str
+    instructions: str
+    baseline: SolutionVersion
+    model_manifest: ContentRef
+    contract: ComparisonContract = field(default_factory=ComparisonContract)
+    locked_files: tuple[ContentRef, ...] = ()
+    sources: tuple[SourceTree, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateContext:
+    run_id: str
+    root: str
+    candidate_id: str
+    parent: SolutionVersion
+    problem: ProblemSpec
+    output: str
+
+
+@dataclass(frozen=True, slots=True)
+class CandidatePlan:
+    """A frozen solution, optionally produced by a training job."""
+
+    solution: SolutionVersion
+    inputs: tuple[ContentRef, ...] = ()
+    job: JobSpec | None = None
+    runtime: AReaLRuntime | None = None
+
+    def __post_init__(self) -> None:
+        if (self.job is None) != (self.runtime is None):
+            raise ValueError("Training requires both a job and an AReaL runtime")
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluationContext:
+    run_id: str
+    root: str
+    problem: ProblemSpec
+    solution: SolutionVersion
+    split: BenchmarkSplit
+    output: str
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluationPlan:
+    job: JobSpec
+    task_ids: tuple[str, ...]
+    inputs: tuple[ContentRef, ...] = ()
+    # Repeated samples belong to the same independent question.
+    clusters: dict[str, str] | None = None
+    sources: tuple[SourceSnapshot, ...] = ()
+
+
+class CandidateStatus(StrEnum):
+    PREPARED = "prepared"
+    PREPARING = "preparing"
+    TRAINING = "training"
+    EVALUATING = "evaluating"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    INTERRUPTED = "interrupted"
+
+
+@dataclass(slots=True)
+class CandidateRecord:
+    candidate_id: str
+    parent_id: str | None
+    hypothesis: str
+    recipe: ContentRef | None
+    plan: CandidatePlan | None
+    sources: tuple[SourceSnapshot, ...] = ()
+    status: CandidateStatus = CandidateStatus.PREPARED
+    solution: SolutionVersion | None = None
+    training: TrainingResult | None = None
+    validation: EvaluationResult | None = None
+    test: EvaluationResult | None = None
+    validation_attempt: int = 1
+    test_attempt: int = 1
+    validation_plan: ContentRef | None = None
+    test_plan: ContentRef | None = None
+    error: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateSelection:
+    candidate_id: str
+    solution: SolutionVersion
+    protocol: ContentRef
+    validation: ContentRef
+    selected_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class FinalEvaluation:
+    selection: ContentRef
+    baseline: EvaluationResult
+    candidate: EvaluationResult
+    improvement: float
+    target_met: bool
+    comparison: PairedComparison | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateFeedback:
+    candidate_id: str
+    parent_id: str | None
+    hypothesis: str
+    status: CandidateStatus
+    score: float | None
+    metrics: dict[str, float]
+    training_steps: int | None
+    evidence: tuple[ContentRef, ...]
+    error: str
 
 
 @dataclass(slots=True)

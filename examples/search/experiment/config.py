@@ -10,6 +10,16 @@ from areal_rsi.api.execution import AReaLRuntime
 
 
 @dataclass(frozen=True, slots=True)
+class MicrobatchConfig:
+    max_tokens_per_mb: int = 131072
+    n_mbs: int = 8
+
+    def __post_init__(self) -> None:
+        if min(self.max_tokens_per_mb, self.n_mbs) < 1:
+            raise ValueError("Microbatch token limit and minimum count must be positive")
+
+
+@dataclass(frozen=True, slots=True)
 class TrainingConfig:
     batch_size: int = 8
     n_samples: int = 4
@@ -17,6 +27,7 @@ class TrainingConfig:
     epochs: int = 1
     learning_rate: float = 1e-6
     seed: int = 17
+    microbatch: MicrobatchConfig = field(default_factory=MicrobatchConfig)
 
     def __post_init__(self) -> None:
         if min(self.batch_size, self.max_steps, self.epochs) < 1 or self.n_samples < 2:
@@ -69,7 +80,7 @@ class SearchConfig:
     index_directory: str
     embedding_model: str
     snippet_tokenizer: str
-    output_root: str
+    project: str
     training: TrainingConfig = field(default_factory=TrainingConfig)
     harness: HarnessConfig = field(default_factory=HarnessConfig)
     actor_gpus: int = 4
@@ -78,7 +89,6 @@ class SearchConfig:
     evaluation_seed: int = 42
     timeout_seconds: float = 7200.0
     dense_python: str = sys.executable
-    project: str = ""
 
     def __post_init__(self) -> None:
         if min(self.actor_gpus, self.rollout_gpus, self.max_concurrent_rollouts) < 1:

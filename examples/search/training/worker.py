@@ -74,14 +74,11 @@ def prepare_config(request: WorkerRequest) -> Any:
                 "backend": f"fsdp:d{settings.actor_gpus}p1t1",
                 "path": request.model,
                 "optimizer": {"lr": settings.training.learning_rate, "gradient_clipping": 1.0},
-                # Admit the full frozen context for indivisible long turns.  The
-                # minimum microbatch count keeps long rows from forcing one
-                # whole group through a single forward, while FFD preserves the
-                # native packing behavior.  Do not clip the original harness.
+                # Training packing is recipe-specific; inference keeps the fixed harness.
                 "mb_spec": {
-                    "n_mbs": 8,
+                    "n_mbs": settings.training.microbatch.n_mbs,
                     "granularity": 1,
-                    "max_tokens_per_mb": settings.harness.context_tokens,
+                    "max_tokens_per_mb": settings.training.microbatch.max_tokens_per_mb,
                     "n_mbs_divisor": 1,
                     "packing_algorithm": "ffd",
                 },

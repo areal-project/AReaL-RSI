@@ -80,7 +80,10 @@ async def wait_for_dense(process: asyncio.subprocess.Process, url: str) -> None:
 async def run(stage: StageRequest) -> None:
     allocation = set(os.environ.get("RSI_SLURM_JOB_INFO", "").split())
     job_id = os.environ.get("SLURM_JOB_ID", "")
-    if not job_id or {f"JobId={job_id}", f"Reservation={stage.reservation}"} - allocation:
+    required_allocation = {f"JobId={job_id}"}
+    if stage.reservation is not None:
+        required_allocation.add(f"Reservation={stage.reservation}")
+    if not job_id or required_allocation - allocation:
         raise ValueError("Search requires a host-verified Slurm allocation")
     if stage.official is not None:
         await asyncio.to_thread(official, stage)

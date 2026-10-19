@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -16,6 +17,50 @@ from areal_rsi.api.research import ProblemBinding, SessionConfig
 from areal_rsi.infra.artifacts import write_record
 from areal_rsi.infra.research import ResearchSystem
 from areal_rsi.ui.cli import run
+
+
+@pytest.mark.parametrize(
+    ("entrypoint", "config_type"),
+    [
+        ("examples.tir.problem:TIRProblem", "ExperimentConfig"),
+        ("examples.search.problem:SearchProblem", "SearchProblemConfig"),
+    ],
+)
+def test_console_script_loads_source_examples_with_documented_pythonpath(
+    tmp_path: Path, entrypoint: str, config_type: str
+) -> None:
+    repository = Path(__file__).resolve().parents[1]
+    config = tmp_path / "config.json"
+    config.write_text("{}")
+    objective = tmp_path / "objective.md"
+    objective.write_text("Validate adapter loading without starting a model or GPU job")
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("RSI_")}
+    environment["PYTHONPATH"] = str(repository)
+    result = subprocess.run(
+        [
+            str(Path(sys.executable).parent / "areal-rsi"),
+            "research",
+            "--problem",
+            entrypoint,
+            "--config",
+            str(config),
+            "--objective",
+            str(objective),
+            "--root",
+            str(tmp_path / "state"),
+            "--env-file",
+            os.devnull,
+        ],
+        cwd=repository,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    # Reaching the adapter's schema proves import succeeded; invalid config prevents execution.
+    assert result.returncode == 1
+    assert f"Invalid {config_type}" in result.stderr
+    assert "Cannot load research problem" not in result.stderr
 
 
 @pytest.mark.parametrize("pending_interaction", [False, True])

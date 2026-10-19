@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      NO_PROXY: localhost,127.0.0.1,::1
+      UV_PYTHON: '3.12.12'
+      PYTEST_ADDOPTS: --junitxml=test-results.xml
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.14.0'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.9.11'
+      - name: Install required native runtime
+        run: |
+          npm install --global @openai/codex@0.162.1
+          test "$(codex --version)" = 'codex-cli 0.162.1'
+          command -v patch
+          uv python install "$UV_PYTHON"
+          uv sync --locked
+      - name: Check Python and native terminal behavior
+        id: tests
+        run: |
+          export no_proxy="$NO_PROXY"
+          make check
+      - name: Reject unexpected test skips
+        if: always() && steps.tests.outcome != 'skipped'
+        run: |
+          uv run --locked python - <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+          cases = ET.parse('test-results.xml').findall('.//testcase')
+          allowed = ('macOS assertion integration test' if sys.platform == 'linux'
+                     else 'Linux process identity regression')
+          for case in cases:
+              for skip in case.findall('skipped'):
+                  assert skip.get('message') == allowed, ET.tostring(case).decode()
+          for name in ('test_codex_native', 'test_problem_native', 'test_tui'):
+              matched = [c for c in cases if name in c.get('classname', '')]
+              assert matched and all(c.find('skipped') is None for c in matched), name
+          PY
+      - name: Build and install wheel outside checkout
+        run: |
+          uv build
+          uv venv "$RUNNER_TEMP/wheel-smoke"
+          uv pip install --python "$RUNNER_TEMP/wheel-smoke/bin/python" dist/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/wheel-smoke/bin/areal-rsi" --help
+          "$RUNNER_TEMP/wheel-smoke/bin/python" - <<'PY'
+          from importlib.metadata import distribution
+          from pathlib import Path
+          import areal_rsi
+          dist = distribution('areal-rsi')
+          files = {str(f) for f in dist.files}
+          for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md'):
+              assert any(f.endswith('/licenses/' + name) for f in files), name
+          ui = Path(areal_rsi.__file__).parent / 'ui/dsh'
+          for name in ('main.mjs', 'vendor.mjs', 'patch.mjs', 'package-lock.json',
+                       'upstream/LICENSE', 'upstream/pi-tui.patch'):
+              assert (ui / name).is_file(), name
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: checks-${{ matrix.os }}
+          path: |
+            test-results.xml
+            dist/*

@@ -75,6 +75,22 @@ def scheduler(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[JobExecu
     )
 
 
+@pytest.mark.parametrize("names", [None, "public-gpu"])
+def test_submission_uses_only_explicit_cluster_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, names: str | None
+) -> None:
+    jobs, spec = scheduler(tmp_path, monkeypatch)
+    assert spec.slurm is not None
+    spec = replace(spec, slurm=replace(spec.slurm, reservation=names))
+    assert asyncio.run(jobs.run("run", "stage", spec)).state == "succeeded"
+    call = (tmp_path / "scheduler/calls").read_text().splitlines()[0]
+    assert "--partition" not in call
+    if names is None:
+        assert "--reservation" not in call
+    else:
+        assert f"--reservation={names}" in call
+
+
 @pytest.mark.parametrize(
     ("timeout", "requested_minutes", "expected_minutes"),
     [(70.5, 180, 2), (70.5, 1, 1), (None, 180, 180)],

@@ -25,7 +25,7 @@ base valid 为72/256。宿主另做过4步smoke，不计正式轮次。选定权
 课程提取接口、严格校验与复现用法见 [RESEARCH.md](RESEARCH.md)。
 
 `synthesis.py` 提供15类可验算合成题、具名数据配方、答案表示策略和真实rollout课程选择；
-`experiment.py` 保存冻结协议、源码归档、父checkpoint、实际更新、dev选择与独立valid。
+历史版本的 `experiment.py` 保存冻结协议、源码归档、父checkpoint、实际更新、dev选择与独立valid。
 执行、评测轨迹和训练校验复用公共infra。`/rsi`继续作为研究入口；其他任务可以只迭代harness。
 
 所用原生评分器存在bare LaTeX gold解析问题，主评分保持冻结。二级诊断在valid前冻结，

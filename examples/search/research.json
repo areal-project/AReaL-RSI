@@ -3,7 +3,10 @@
     "runtime": {
       "repository": "/absolute/AReaL",
       "python": "/opt/.venv/bin/python",
-      "environment": {"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"}
+      "environment": {
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1"
+      }
     },
     "project": "/absolute/frozen-rsi-source",
     "model": "/absolute/staged-Qwen3-8B",
@@ -15,6 +18,13 @@
     "dense_python": "/absolute/retrieval-environment/bin/python"
   },
   "image": "/absolute/areal-training.sif",
-  "slurm": {"reservation": "rsi", "partition": "all", "cpus": 32, "memory_gb": 256},
-  "min_rounds": 1
+  "slurm": {
+    "reservation": null,
+    "cpus": 32,
+    "memory_gb": 256
+  },
+  "min_rounds": 1,
+  "binds": [
+    "/absolute/shared:/absolute/shared"
+  ]
 }

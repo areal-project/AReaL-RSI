@@ -83,6 +83,7 @@ with Apptainer and an AReaL training environment, then run from the repository r
 ```bash
 uv sync --locked
 source .venv/bin/activate
+export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
 areal-rsi research --problem examples.tir.problem:TIRProblem \
   --config /absolute/tir-experiment.json --objective /absolute/objective.md \
   --root /absolute/runs/tir-001 --env-file /absolute/private.env
@@ -93,8 +94,7 @@ areal-rsi research --problem examples.tir.problem:TIRProblem \
 Detailed guides are currently in Chinese:
 
 [Usage](docs/usage.md) · [Architecture](docs/architecture.md) ·
-[API](docs/interfaces/README.md) · [Code walkthrough](docs/walkthrough.md) ·
-[Testing](tests/README.md) · [Experience study](docs/experience-study.md)
+[API](docs/interfaces/README.md) · [Testing](tests/README.md)
 
 Dependencies flow **UI / examples → infra → api**. The core does not import examples.
 Read [AGENTS.md](AGENTS.md) before contributing, and run:
@@ -126,4 +126,9 @@ If AReaL-RSI's research ideas are useful to your work, please cite:
 
 We thank [AReaL](https://github.com/areal-project/AReaL) for its training infrastructure,
 [Codex](https://github.com/openai/codex) for its execution runtime, and
-[DSH](docs/tui-comparison.md) for the terminal components.
+[DSH](https://github.com/deepseek-ai/deepseek-harness) for the terminal components.
+
+## License
+
+Original code is licensed under [Apache-2.0](LICENSE). Vendored components retain
+their licenses; see [third-party notices](THIRD_PARTY_NOTICES.md).

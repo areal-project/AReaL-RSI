@@ -17,8 +17,7 @@ TERMINAL_STATES = frozenset({"succeeded", "failed", "cancelled", "timed_out", "l
 
 @dataclass(frozen=True, slots=True)
 class SlurmResources:
-    reservation: str = "rsi"
-    partition: str = "all"
+    reservation: str | None = None
     gpus: int = 2
     cpus: int = 16
     memory_gb: int = 128
@@ -28,8 +27,8 @@ class SlurmResources:
     def __post_init__(self) -> None:
         if min(self.cpus, self.memory_gb, self.minutes) < 1 or self.gpus < 0:
             raise ValueError("Invalid Slurm resources")
-        if not self.reservation or not self.partition:
-            raise ValueError("Slurm requires a reservation and partition")
+        if self.reservation is not None and not re.fullmatch(r"[a-zA-Z0-9_.-]+", self.reservation):
+            raise ValueError("Slurm reservation must be a name or null")
         if self.node is not None and not re.fullmatch(r"[a-zA-Z0-9_.-]+", self.node):
             raise ValueError("Slurm node must be one hostname")
 

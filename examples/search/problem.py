@@ -47,6 +47,7 @@ from examples.search.task.dataset import SearchQuestion
 class SearchProblemConfig:
     search: SearchConfig
     image: str
+    binds: tuple[str, ...] = ()
     slurm: SlurmResources = field(default_factory=lambda: SlurmResources(cpus=32, memory_gb=256))
     min_rounds: int = 1
     target_delta: float | None = None
@@ -65,7 +66,7 @@ class SearchRecipe:
 class StageRequest:
     worker: WorkerRequest | None = None
     official: FinalEvalConfig | None = None
-    reservation: str = "rsi"
+    reservation: str | None = None
 
     def __post_init__(self) -> None:
         if (self.worker is None) == (self.official is None):
@@ -202,8 +203,7 @@ class SearchProblem(ResearchProblem[SearchProblemConfig, SearchRecipe]):
                 "exec",
                 "--no-eval",
                 "--nv",
-                "--bind",
-                "/storage:/storage",
+                *(argument for bind in self.config.binds for argument in ("--bind", bind)),
                 image or self.config.image,
                 "bash",
                 str(self.project / "src/areal_rsi/infra/worker.sh"),
@@ -303,7 +303,12 @@ class SearchProblem(ResearchProblem[SearchProblemConfig, SearchRecipe]):
             with query_path.open() as stream:
                 task_ids = tuple(row[0] for row in csv.reader(stream, delimiter="\t"))
             return EvaluationPlan(
-                self._job(root, StageRequest(official=final), 3, image=self.config.official_image),
+                self._job(
+                    root,
+                    StageRequest(official=final, reservation=self.config.slurm.reservation),
+                    3,
+                    image=self.config.official_image,
+                ),
                 task_ids,
                 (file_ref(query_path), exported_ref),
             )

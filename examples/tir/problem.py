@@ -56,8 +56,9 @@ from examples.tir.synthesis import DataRecipe, SynthesisManifest
 class ExperimentConfig:
     tir: TIRConfig
     benchmark: str
+    image: str
     slurm: SlurmResources = field(default_factory=SlurmResources)
-    image: str = "/storage/openpsi/images/areal-dev-sglang-0821.sif"
+    binds: tuple[str, ...] = ()
     min_rounds: int = 2
     target_delta: float = 0.03
 
@@ -203,8 +204,7 @@ class TIRProblem(ResearchProblem[ExperimentConfig, RoundRecipe]):
                 "apptainer",
                 "exec",
                 "--nv",
-                "--bind",
-                "/storage:/storage",
+                *(argument for bind in self.config.binds for argument in ("--bind", bind)),
                 self.config.image,
                 "bash",
                 str(PROJECT / "src/areal_rsi/infra/worker.sh"),

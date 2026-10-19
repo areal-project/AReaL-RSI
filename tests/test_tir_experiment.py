@@ -90,6 +90,7 @@ def experiment(tmp_path: Path, request: pytest.FixtureRequest) -> ProblemRun:
     config = ExperimentConfig(
         TIRConfig(AReaLRuntime(str(backend), "/unused/python"), str(model), reward="math_verify"),
         str(tmp_path / "benchmark.json"),
+        image="/unused/training.sif",
     )
     config_ref = write_record(tmp_path / "config.json", config)
     root = tmp_path / "experiment"
@@ -114,10 +115,14 @@ def test_tir_protocol_pins_reward_data_and_source(experiment: ProblemRun) -> Non
         _ = experiment.spec
 
 
-def test_tir_evaluation_preserves_repetitions_and_fixed_harness(experiment: ProblemRun) -> None:
+@pytest.mark.parametrize("binds", [(), ("/shared:/shared", "/models:/models:ro")])
+def test_tir_evaluation_preserves_repetitions_and_fixed_harness(
+    experiment: ProblemRun, binds: tuple[str, ...]
+) -> None:
     from areal_rsi.api.research import EvaluationContext
 
     problem = cast(TIRProblem, experiment.problem)
+    problem = TIRProblem(replace(problem.config, binds=binds))
     context = EvaluationContext(
         experiment.run_id,
         str(experiment.root),
@@ -127,6 +132,8 @@ def test_tir_evaluation_preserves_repetitions_and_fixed_harness(experiment: Prob
         str(experiment.root / "test-output"),
     )
     plan = problem.build_evaluation(context)
+    command = plan.job.command
+    assert tuple(command[i + 1] for i, arg in enumerate(command) if arg == "--bind") == binds
     assert len(plan.task_ids) == 4 and plan.clusters and len(set(plan.clusters.values())) == 1
     assert plan.job.slurm and plan.job.slurm.gpus == 2
     assert "srun" not in plan.job.command  # The common executor owns the allocation.

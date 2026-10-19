@@ -262,6 +262,7 @@ linear 仍是一步方程，counting 仍是基础选人组合；没有覆盖足�
 ```bash
 uv sync --locked
 source .venv/bin/activate
+export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
 ```
 
 TIR 是独立任务实现，数据和 GPU worker 保留在 example，统一入口由 ResearchSystem 提供。
@@ -289,3 +290,16 @@ finalize 仅针对冻结选择执行独立 test，输出 problem/final.json 与 
 聚类的配对统计。所有任务记录位于 sessions/run-ID/problem。完整接入契约、任务工具和恢复语义
 见 [统一接入文档](../../docs/interfaces/README.md)。历史结果章节描述旧实验布局；历史实验必须
 使用其原始归档源码，更新入口不会迁移既有证据。
+
+## 新集群配置
+
+模板中的 `/absolute/` 路径均需替换为实际资源路径。
+先在训练镜像中安装所选 AReaL 版本及示例依赖，准备本地模型和评测数据，记录实际使用的
+源码版本与镜像摘要。GPU Python 使用容器内路径，控制节点只需安装本仓库的轻量依赖。
+
+顶层 `image` 必须显式提供。`binds` 是 Apptainer 挂载字符串列表，例如
+`["/shared:/shared"]`；应覆盖 RSI/AReaL 源码、模型、数据、配置和输出目录，并保持相同
+绝对路径。空列表只使用 Apptainer 自带挂载，不再默认挂载 `/storage`。
+`slurm.reservation` 仅在实际持有时填写，`null` 表示不指定 reservation。
+分区使用集群默认调度策略。已有冻结记录不自动迁移，
+历史实验仍应使用归档的运行时；这些模板只用于新实验。

@@ -37,11 +37,11 @@
 
 ## 实现约定
 
-源码职责与调用关系见 [Search 示例导航](examples/search/README.md#先看哪里)。
+源码职责与调用关系见 [Search 示例导航](README.md)。
 
 ### 1. 复用当前 RSI 架构
 
-以 `ResearchSystem` 和现有 Goal 持续执行机制负责实验决策，复用 `JobExecutor`、`AReaLBackend`、评测及轨迹存储能力。参考现有 [TIR 示例](examples/tir/README.md)，新增搜索任务所需的配置与入口，避免另建一套调度框架。
+以 `ResearchSystem` 和现有 Goal 持续执行机制负责实验决策，复用 `JobExecutor`、`AReaLBackend`、评测及轨迹存储能力。参考现有 [TIR 示例](../tir/README.md)，新增搜索任务所需的配置与入口，避免另建一套调度框架。
 
 ### 2. 训练和评测共享 Agent 行为
 

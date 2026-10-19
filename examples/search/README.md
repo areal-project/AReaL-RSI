@@ -1,6 +1,6 @@
 # Qwen3-8B 搜索训练与自动实验
 
-本例把固定的 BrowseComp-Plus Qwen-Agent ReAct 行为接入 AReaL v1 在线 GRPO，使用外部搜索问答训练，并由原生 `ResearchSystem` Goal 选择后续实验。主目标和15% 的验收门槛见项目根目录 `search-rsi.md`。一次候选 pipeline 完成不等于整个研究 Goal 完成。
+本例把固定的 BrowseComp-Plus Qwen-Agent ReAct 行为接入 AReaL v1 在线 GRPO，使用外部搜索问答训练，并由原生 `ResearchSystem` Goal 选择后续实验。主目标和15% 的验收门槛见[示例研究目标](OBJECTIVE.md)。一次候选 pipeline 完成不等于整个研究 Goal 完成。
 
 ## 标准研究入口
 
@@ -20,7 +20,10 @@ search.project 指向包含新接入代码的冻结源码；worker 使用其中�
 search.model 中的文件须实际位于模型目录内。历史 YaRN 模型若通过符号链接引用目录外权重，
 应在新实验目录展开复制并校验所有文件哈希，保持原配置与权重内容一致。
 
+从仓库根目录运行，并在启动和恢复会话的 shell 中设置示例导入路径：
+
 ```bash
+export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
 areal-rsi research --problem examples.search.problem:SearchProblem \
   --config /absolute/search.json --objective /absolute/objective.md \
   --root /absolute/runs/search-001 --env-file /absolute/private.env
@@ -78,7 +81,7 @@ finalize 默认独立评测外部 test。配置 official（FinalEvalConfig）和
 areal-rsi finalize --root /absolute/runs/search-001 --resume run-ID --candidate candidate-001
 ```
 
-全量评测使用 `evaluation/artifacts.py` 中的 `FinalEvalConfig` JSON，分别指定模型、原始 tokenizer/generation-config、模型文件 manifest 及其 SHA256、`asset_lock` 及其 SHA256、原检索环境 Python 和 vLLM Python。asset lock 引用并校验原模型、embedding、judge、官方索引、语料、题目/标签、snippet tokenizer、Qwen-Agent 和冻结评测源码的文件清单。题目和标签仅用于全量评测，不能成为训练输入。官方索引文件另按公开 LFS SHA256 校验来源。提交脚本传入 host 核验的 `rsi` allocation，使用3张 GPU。
+全量评测使用 `evaluation/artifacts.py` 中的 `FinalEvalConfig` JSON，分别指定模型、原始 tokenizer/generation-config、模型文件 manifest 及其 SHA256、`asset_lock` 及其 SHA256、原检索环境 Python 和 vLLM Python。asset lock 引用并校验原模型、embedding、judge、官方索引、语料、题目/标签、snippet tokenizer、Qwen-Agent 和冻结评测源码的文件清单。题目和标签仅用于全量评测，不能成为训练输入。官方索引文件另按公开 LFS SHA256 校验来源。提交脚本传入 host 核验的 Slurm allocation，使用3张 GPU；若配置 reservation，还会核对其名称。
 
 训练镜像使用 HF5，最终 vLLM 镜像使用 Transformers4.57。HF5 将 `rope_theta` 移入 `rope_parameters`；直接使用该 checkpoint 时，旧环境会采用错误的默认 theta。先在项目环境中生成兼容导出，补齐对应的 legacy RoPE/dtype 字段，并检查每个权重文件的 SHA256 未变。原始 checkpoint 保留，导出 manifest 与来源记录位于新目录旁。最终配置的 `model` 和 `checkpoint_manifest` 指向导出目录及其 manifest；评测仍使用原冻结 H0 运行时和 asset lock。
 
@@ -100,3 +103,16 @@ python -m examples.search.evaluation.analysis \
 基线和候选沿用同一份 asset lock，候选 checkpoint 使用独立冻结的模型 manifest。主种子42，补充种子43；每次使用新的 output 目录。评测不会覆盖已有目录，正式结果必须覆盖全部830题，并通过 judge 解析与运行故障检查。
 
 `make check` 检查 CPU 架构、测试、Ruff、Mypy 与 UI；原生轨迹读取和任务关联在 CPU 测试中验证。小文件或 mock 测试不提供模型学习的证据；真实 step、权重变化、完整保存、独立重载与评测必须由 GPU 产物证明。
+
+## 新集群配置
+
+模板中的 `/absolute/` 路径均需替换为实际资源路径。
+先在训练镜像中安装所选 AReaL 版本及示例依赖，准备本地模型和评测数据，记录实际使用的
+源码版本与镜像摘要。GPU Python 使用容器内路径，控制节点只需安装本仓库的轻量依赖。
+
+顶层 `image` 必须显式提供。`binds` 是 Apptainer 挂载字符串列表，例如
+`["/shared:/shared"]`；应覆盖 RSI/AReaL 源码、模型、数据、配置和输出目录，并保持相同
+绝对路径。空列表只使用 Apptainer 自带挂载，不再默认挂载 `/storage`。
+`slurm.reservation` 仅在实际持有时填写，`null` 表示不指定 reservation。
+分区使用集群默认调度策略。已有冻结记录不自动迁移，
+历史实验仍应使用归档的运行时；这些模板只用于新实验。

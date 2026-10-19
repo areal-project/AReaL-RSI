@@ -18,20 +18,24 @@
 `config.json` 提供集群运行配置示例；启动前必须将 `runtime.repository` 改为实际的 AReaL 源码目录，并核对模型、Python 和镜像路径：
 
 - 后端：`/path/to/AReaL`（占位路径，运行前替换）。
-- 模型：`/storage/openpsi/models/Qwen__Qwen2.5-Math-1.5B`。
+- 模型：`/absolute/models/Qwen2.5-Math-1.5B（预先下载 `Qwen/Qwen2.5-Math-1.5B`）`。
 - GPU Python：容器内 `/opt/.venv/bin/python`。
-- 镜像：`/storage/openpsi/images/areal-dev-sglang-0821.sif`。
+- 镜像：`/absolute/images/areal-training.sif（自行准备的 Apptainer 镜像）`。
 
 从仓库根目录运行一条命令提交完整实验：
 
 ```bash
+export TIR_IMAGE=/absolute/images/areal-training.sif
+export TIR_BINDS=/absolute/shared:/absolute/shared
+# 集群要求指定分区时设置；reservation 仅在实际持有时设置。
+export TIR_PARTITION=your-gpu-partition
 bash examples/tir/run_slurm.sh
 ```
 
-脚本返回 Slurm job ID，在 `rsi` reservation、`all` 分区申请单节点两张 GPU、
+脚本返回 Slurm job ID，申请单节点两张 GPU、
 16 CPU、128 GiB 内存。整个 pipeline 在同一个 allocation 的容器内运行；
 AReaL 使用 v1、本地 scheduler，在 allocation 内启动 actor 和 rollout worker。
-不另行申请未指定 reservation 的 GPU worker。
+分区与 reservation 未设置时使用集群默认调度策略，不另行申请 GPU worker。
 
 ```bash
 squeue -j <job-id>
@@ -45,8 +49,10 @@ tail -f runs/tir-slurm/slurm-<job-id>.log
 bash examples/tir/run_slurm.sh /absolute/path/to/config.json
 ```
 
-`TIR_IMAGE`、`TIR_SUBMIT_ROOT`、`TIR_TIME_LIMIT` 可覆盖镜像、提交日志目录和 Slurm 时限；
-`TIR_RESERVATION` 默认 `rsi`。这里只取消自己提交的精确 job ID：
+`TIR_IMAGE` 和 `TIR_BINDS` 必填；挂载需覆盖 RSI/AReaL 源码、模型、配置与输出目录，
+并在容器内保持相同绝对路径。`TIR_PYTHON` 默认 `/opt/.venv/bin/python`，应与配置的
+`runtime.python` 一致。`TIR_SUBMIT_ROOT`、`TIR_TIME_LIMIT` 可覆盖提交日志目录和 Slurm 时限；
+`TIR_PARTITION`、`TIR_RESERVATION` 均可选。这里只取消自己提交的精确 job ID：
 `scancel <job-id>`。不要按共享用户批量取消作业。
 
 在已分配两张 GPU、安装好 AReaL 的环境中，可直接执行同一入口：

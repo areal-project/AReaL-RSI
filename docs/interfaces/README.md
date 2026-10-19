@@ -9,7 +9,10 @@ Interaction → Leader 流程；任务绑定增加候选和评测能力，不改
 TIR/Search 的 GPU 依赖在各自的 Apptainer 运行环境内。凭据通过私有 env 文件读取，
 不放入任务配置或 recipe。以下示例在已安装本仓库的源码 checkout 中运行。
 
+从仓库根目录运行；启动、恢复和最终评测时均需保留此 `PYTHONPATH`：
+
 ```bash
+export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
 areal-rsi research \
   --problem examples.tir.problem:TIRProblem \
   --config /absolute/tir-experiment.json \
@@ -19,7 +22,8 @@ areal-rsi research \
 ```
 
 TIR 配置使用 `examples/tir/experiment.json` 的结构，需要实际 AReaL 源码、基模型、
-GPU Python、固定评测 benchmark 和可用镜像。`image` 和 `slurm` 在配置顶层。
+GPU Python、固定评测 benchmark 和可用镜像。`image`、`binds` 和 `slurm` 在配置顶层。`binds` 显式指定同路径容器挂载；
+`slurm.reservation` 为 `null` 时不指定 reservation；分区使用集群默认调度策略。
 benchmark 必须有独立的 valid/test，初始训练池可选。没有训练集时，先用 `Example` 格式的
 评测 JSONL 创建 benchmark，无需 datasets/pyarrow：
 
@@ -44,7 +48,7 @@ Search 使用 `examples.search.problem:SearchProblem`，完整模板见 `example
 {
   "search": {"...": "SearchConfig 的字段"},
   "image": "/absolute/training.sif",
-  "slurm": {"reservation": "rsi", "partition": "all", "cpus": 32, "memory_gb": 256},
+  "slurm": {"reservation": null, "cpus": 32, "memory_gb": 256},
   "min_rounds": 1
 }
 ```

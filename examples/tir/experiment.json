@@ -8,7 +8,7 @@
         "TRANSFORMERS_OFFLINE": "1"
       }
     },
-    "model": "/storage/openpsi/models/Qwen__Qwen2.5-Math-1.5B",
+    "model": "/absolute/models/Qwen2.5-Math-1.5B",
     "harness": {
       "max_turns": 2,
       "max_length": 3000,
@@ -26,5 +26,16 @@
   },
   "benchmark": "/absolute/benchmark/benchmark.json",
   "min_rounds": 2,
-  "target_delta": 0.03
+  "target_delta": 0.03,
+  "image": "/absolute/images/areal-training.sif",
+  "binds": [
+    "/absolute/shared:/absolute/shared"
+  ],
+  "slurm": {
+    "reservation": null,
+    "gpus": 2,
+    "cpus": 16,
+    "memory_gb": 128,
+    "minutes": 180
+  }
 }

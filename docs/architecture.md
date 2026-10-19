@@ -101,3 +101,12 @@ Interaction 不接收新的经验目录，且不能把经验建议写成用户�
 执行期间持有系统闲置休眠抑制，停止/等待时释放。目标续行参考
 [Codex Goals](https://developers.openai.com/cookbook/examples/codex/using_goals_in_codex)，
 休眠范围参考原生 Codex 的 sleep-inhibitor；本版没有后台守护进程或跨机器恢复。
+
+## 源码阅读入口
+
+从 `api/research.py` 的会话与任务契约开始，沿 `infra/research.py` 的
+`create → open → send_message → enter_rsi → start` 阅读正常路径，再看暂停和恢复。
+目标策略与工具授权分别位于 `coordination/policies` 和 `coordination/tools`；
+经验的读取、整理与并发写入位于 `infra/experience.py`。
+`ui/cli.py` 与 `ui/tui.py` 只负责入口和事件展示。第三方终端组件、补丁及其来源
+见 [第三方声明](../THIRD_PARTY_NOTICES.md)，原文件哈希由 UI 测试核验。

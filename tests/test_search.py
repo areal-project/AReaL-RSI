@@ -25,8 +25,9 @@ from examples.search.task.dataset import Candidate, DatasetConfig, Passage, pars
 from examples.search.task.reward import answer_in_text, answer_reward, extract_answer
 
 
+@pytest.mark.parametrize("reservation", [None, "research"])
 def test_search_stage_child_inherits_the_infra_package_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reservation: str | None
 ) -> None:
     """Real CPU service/worker children; no model or GPU evaluation is performed."""
     from examples.search.experiment.config import WorkerRequest
@@ -67,10 +68,15 @@ def test_search_stage_child_inherits_the_infra_package_path(
     source = Path(__file__).resolve().parents[1] / "src"
     monkeypatch.setenv("PYTHONPATH", str(source))
     monkeypatch.setenv("SLURM_JOB_ID", "cpu-fixture")
-    monkeypatch.setenv("RSI_SLURM_JOB_INFO", "JobId=cpu-fixture Reservation=rsi")
+    allocation = "JobId=cpu-fixture"
+    if reservation:
+        allocation += f" Reservation={reservation}"
+    monkeypatch.setenv("RSI_SLURM_JOB_INFO", allocation)
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1")
     request = WorkerRequest("eval", config, "model", "dev.jsonl", "", str(output), "fixture")
-    asyncio.run(asyncio.wait_for(run(StageRequest(worker=request)), 15))
+    with pytest.raises(ValueError, match="host-verified"):
+        asyncio.run(run(StageRequest(worker=request, reservation="wrong-reservation")))
+    asyncio.run(asyncio.wait_for(run(StageRequest(worker=request, reservation=reservation)), 15))
     assert Path((output / "imported-package").read_text()).is_relative_to(source)
 
 
@@ -104,7 +110,7 @@ def test_standard_search_evaluation_uses_requested_split_without_training(tmp_pa
         "fixture",
     )
     spec = ProblemSpec("search", "test", solution, ref)
-    problem = SearchProblem(SearchProblemConfig(config, "image.sif"))
+    problem = SearchProblem(SearchProblemConfig(config, "image.sif", binds=("/shared:/shared",)))
     plan = problem.build_evaluation(
         EvaluationContext(
             "run",
@@ -116,6 +122,7 @@ def test_standard_search_evaluation_uses_requested_split_without_training(tmp_pa
         )
     )
     assert plan.job.slurm and plan.job.slurm.gpus == 2
+    assert plan.job.command[plan.job.command.index("--bind") + 1] == "/shared:/shared"
     assert plan.task_ids == ("external-test",)
     stage = read_record(Path(plan.job.command[-1]), StageRequest)
     assert stage.worker and stage.worker.mode == "eval"

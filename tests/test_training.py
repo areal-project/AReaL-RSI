@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import py_compile
 import signal
 import subprocess
 import sys
@@ -15,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from areal_rsi.api.control import encode_record
-from areal_rsi.api.execution import AReaLRuntime, JobSpec, TrainingReceipt
+from areal_rsi.api.execution import AReaLRuntime, GPUAllocation, JobSpec, TrainingReceipt
 from areal_rsi.api.records import (
     BenchmarkSplit,
     EvaluationReport,
@@ -30,7 +31,7 @@ from areal_rsi.infra.coordination.evaluation import (
     paired,
     read_evaluation_samples,
 )
-from areal_rsi.infra.execution import JobExecutionError, JobExecutor
+from areal_rsi.infra.execution import JobExecutionError, JobExecutor, verify_gpu_allocation
 from areal_rsi.infra.training import AReaLBackend
 from areal_rsi.infra.trajectories import LocalTrajectoryStore
 from examples.tir.data import SynthesisConfig, read_problems, synthesize, validate_problem
@@ -40,6 +41,57 @@ from examples.tir.reward import integer_reward
 
 def command(code: str, cwd: Path, *, timeout: float = 10) -> JobSpec:
     return JobSpec((sys.executable, "-c", code), cwd=str(cwd), timeout_seconds=timeout)
+
+
+def test_gpu_admission_respects_assigned_devices_and_blocks_busy_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clients = tmp_path / "clients"
+    clients.mkdir()
+    inventory = tmp_path / "inventory.csv"
+    inventory.write_text(
+        "2, GPU-two, NVIDIA L20X, 143771, 4\n5, GPU-five, NVIDIA L20X, 143771, 4\n"
+    )
+    smi = clients / "nvidia-smi"
+    smi.write_text(
+        f"#!{sys.executable}\nimport sys\nfrom pathlib import Path\n"
+        "assert '--id=2,5' in sys.argv\n"
+        f"print(Path({str(inventory)!r}).read_text(),end='')\n"
+    )
+    smi.chmod(0o700)
+    monkeypatch.setenv("PATH", str(clients) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("SLURM_JOB_ID", "123")
+    monkeypatch.setenv("SLURMD_NODENAME", "slurmd-test")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "2,5")
+    monkeypatch.setenv("RSI_EXPECTED_GPUS", "2")
+    monkeypatch.setenv("RSI_EXECUTION_DIRECTORY", str(tmp_path))
+    allocation = verify_gpu_allocation()
+    assert allocation is not None and [d.index for d in allocation.devices] == [2, 5]
+    assert read_record(tmp_path / "gpu-allocation.json", GPUAllocation) == allocation
+
+    occupied = tmp_path / "occupied"
+    occupied.mkdir()
+    inventory.write_text(
+        "2, GPU-two, NVIDIA L20X, 143771, 27742\n5, GPU-five, NVIDIA L20X, 143771, 4\n"
+    )
+    monkeypatch.setenv("RSI_EXECUTION_DIRECTORY", str(occupied))
+    # The control host's shell rc replaces CUDA visibility; containers use their own rc.
+    monkeypatch.delenv("BASH_ENV", raising=False)
+    root = Path(__file__).resolve().parents[1]
+    monkeypatch.setenv("PYTHONPATH", str(root / "src"))
+    payload = tmp_path / "payload.py"
+    marker = tmp_path / "payload-ran"
+    payload.write_text(f"from pathlib import Path\nPath({str(marker)!r}).touch()\n")
+    result = subprocess.run(
+        ["bash", str(root / "src/areal_rsi/infra/worker.sh"), sys.executable, str(payload)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0 and "occupied before workload launch" in result.stderr
+    assert not marker.exists()
+    receipt = read_record(occupied / "gpu-allocation.json", GPUAllocation)
+    assert receipt.devices[0].used_memory_mib == 27742
 
 
 def git_repository(root: Path) -> None:
@@ -87,6 +139,31 @@ def evaluation(
         "fixture",
     )
     return EvaluationResult("test", report, file_ref(path), ())
+
+
+def test_source_snapshot_ignores_generated_bytecode_without_gitignore(tmp_path: Path) -> None:
+    repository = tmp_path / "backend"
+    package = repository / "areal"
+    package.mkdir(parents=True)
+    module = package / "worker.py"
+    module.write_text("value = 1\n")
+    git_repository(repository)
+    original = snapshot_source(repository, tmp_path / "original.json", paths=("areal",))
+
+    py_compile.compile(str(module), doraise=True)
+    py_compile.compile(str(module), cfile=str(package / "legacy.pyc"), doraise=True)
+    assert list(package.glob("__pycache__/*.pyc"))
+    compiled = snapshot_source(repository, tmp_path / "compiled.json", paths=("areal",))
+    assert compiled.content.digest == original.content.digest
+    with tarfile.open(local_path(compiled.archive)) as archive:
+        assert archive.getnames() == ["areal/worker.py"]
+
+    module.write_text("value = 2\n")
+    edited = snapshot_source(repository, tmp_path / "edited.json", paths=("areal",))
+    assert edited.content.digest != original.content.digest
+    (package / "untracked.py").write_text("value = 3\n")
+    added = snapshot_source(repository, tmp_path / "added.json", paths=("areal",))
+    assert added.content.digest != edited.content.digest
 
 
 def test_prepare_isolated_runs_and_archives_dirty_source(tmp_path: Path) -> None:
@@ -171,17 +248,21 @@ def test_timeout_and_cancellation_kill_descendants(tmp_path: Path) -> None:
         f"Path({str(pid_file)!r}).write_text(str(child.pid)); time.sleep(60)"
     )
     with pytest.raises(JobExecutionError):
-        asyncio.run(jobs.run("run", "timeout", command(code, tmp_path, timeout=0.5)))
+        asyncio.run(jobs.run("run", "timeout", command(code, tmp_path, timeout=5)))
     assert jobs.detail("run", "timeout").state == "timed_out"
     child = int(pid_file.read_text())
     status = Path(f"/proc/{child}/status")
     assert not status.exists() or "State:\tZ" in status.read_text()
+    pid_file.unlink()
 
     async def cancel() -> None:
         task = asyncio.create_task(jobs.run("run", "cancel", command(code, tmp_path)))
         while not (jobs.directory("run", "cancel") / "job.json").exists():
             await asyncio.sleep(0.01)
         while jobs.detail("run", "cancel").state != "running":
+            await asyncio.sleep(0.01)
+        while not pid_file.exists():
+            assert not task.done()
             await asyncio.sleep(0.01)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -190,6 +271,9 @@ def test_timeout_and_cancellation_kill_descendants(tmp_path: Path) -> None:
     asyncio.run(cancel())
     record = jobs.detail("run", "cancel")
     assert record.state == "cancelled" and record.resources_released
+    child = int(pid_file.read_text())
+    status = Path(f"/proc/{child}/status")
+    assert not status.exists() or "State:\tZ" in status.read_text()
     assert record.pid is not None
     with pytest.raises(ProcessLookupError):
         os.kill(record.pid, 0)
@@ -217,7 +301,7 @@ def test_surviving_descendant_is_not_reported_as_released(
     )
     try:
         with pytest.raises(JobExecutionError) as failed:
-            asyncio.run(jobs.run("run", "survivor", command(code, tmp_path, timeout=0.5)))
+            asyncio.run(jobs.run("run", "survivor", command(code, tmp_path, timeout=5)))
         child_pid = int(pid_file.read_text())
         assert failed.value.record.state == "timed_out"
         assert not failed.value.record.resources_released
@@ -362,3 +446,17 @@ def test_repeated_samples_do_not_inflate_independent_question_evidence(tmp_path:
     assert paired(base, trained).ci95_low > 0
     with pytest.raises(ValueError, match="clusters must cover"):
         paired(base, trained, clusters={"0": "only-one"})
+
+
+def test_cached_evaluation_rejects_changed_original_evidence(tmp_path: Path) -> None:
+    raw = tmp_path / "original-judge.json"
+    raw.write_text('{"correct":true}')
+    result = evaluation(tmp_path / "samples.jsonl", (True,))
+    sample = replace(read_evaluation_samples(result)[0], attachments=(file_ref(raw),))
+    samples = local_path(result.samples)
+    samples.write_text(json.dumps(encode_record(sample)) + "\n")
+    result = replace(result, samples=file_ref(samples))
+    assert read_evaluation_samples(result)[0].passed
+    raw.write_text('{"correct":false}')
+    with pytest.raises(ValueError, match="changed"):
+        read_evaluation_samples(result)

@@ -5,8 +5,9 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, TypeVar, runtime_checkable
 
+from areal_rsi.api.execution import JobSpec, TrainingResult
 from areal_rsi.api.records import (
     AgentSpec,
     ArtifactChange,
@@ -21,7 +22,6 @@ from areal_rsi.api.records import (
     JsonValue,
     MemoryHit,
     MemoryRecord,
-    ModelChange,
     ModelVersion,
     SolutionVersion,
     Task,
@@ -37,7 +37,38 @@ from areal_rsi.api.records import (
     VerificationResult,
     VerifierSpec,
 )
-from areal_rsi.api.research import TaskReport, TeamTask
+from areal_rsi.api.research import (
+    CandidateContext,
+    CandidatePlan,
+    EvaluationContext,
+    EvaluationPlan,
+    ProblemSpec,
+    TaskReport,
+    TeamTask,
+)
+
+ConfigT = TypeVar("ConfigT", covariant=True)
+RecipeT = TypeVar("RecipeT")
+
+
+class ResearchProblem(Protocol[ConfigT, RecipeT]):
+    """Task integration shared by TIR and Search; no conversation lifecycle hooks.
+
+    Methods may prepare local artifacts, but external execution belongs to the
+    returned plans. Config and recipe are decoded once at the plugin boundary.
+    """
+
+    @property
+    def config_type(self) -> type[ConfigT]: ...
+
+    @property
+    def recipe_type(self) -> type[RecipeT]: ...
+
+    def prepare(self, root: Path) -> ProblemSpec: ...
+
+    def build_candidate(self, context: CandidateContext, recipe: RecipeT) -> CandidatePlan: ...
+
+    def build_evaluation(self, context: EvaluationContext) -> EvaluationPlan: ...
 
 
 class AgentTeam(Protocol):
@@ -267,7 +298,7 @@ class ArtifactBuilder(Protocol):
 class TrainingBackend(Protocol):
     """Backend-neutral model training interface; AReaL is one implementation."""
 
-    async def train(self, base: ModelVersion, change: ModelChange) -> ContentRef: ...
+    async def train(self, run_id: str, name: str, spec: JobSpec) -> TrainingResult: ...
 
 
 class Benchmark(Protocol):

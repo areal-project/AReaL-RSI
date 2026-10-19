@@ -9,7 +9,12 @@ from pathlib import Path
 
 from areal_rsi.api.execution import AReaLRuntime, JobSpec, TrainingReceipt, TrainingResult
 from areal_rsi.api.records import ContentRef
-from areal_rsi.infra.artifacts import read_record, snapshot_directory, write_record
+from areal_rsi.infra.artifacts import (
+    read_record,
+    snapshot_directory,
+    verify_directory,
+    write_record,
+)
 from areal_rsi.infra.execution import JobExecutor
 
 
@@ -28,8 +33,9 @@ class AReaLBackend:
         *,
         timeout: float,
         python_paths: tuple[Path, ...] = (),
+        project: Path | None = None,
     ) -> JobSpec:
-        project = Path(__file__).resolve().parents[3]
+        project = (project or Path(__file__).resolve().parents[3]).resolve(strict=True)
         search = [
             *(str(path.resolve()) for path in python_paths),
             str(entrypoint.resolve().parent),
@@ -52,9 +58,20 @@ class AReaLBackend:
         )
 
     async def train(self, run_id: str, name: str, spec: JobSpec) -> TrainingResult:
-        job = await self.jobs.run(run_id, name, spec)
+        job = await self.jobs.run(run_id, name, spec, recover=True)
         directory = Path(job.result_path)
         receipt = read_record(directory / "training.json", TrainingReceipt)
+        if (directory / "result.json").exists():
+            result = read_record(directory / "result.json", TrainingResult)
+            checkpoint = verify_directory(result.checkpoint, result.manifest)
+            if (
+                result.job_id != job.job_id
+                or str(checkpoint) != str(Path(receipt.checkpoint).resolve())
+                or result.global_step != receipt.global_step
+                or result.metrics != receipt.metrics
+            ):
+                raise ValueError("Saved training result differs from its receipt")
+            return result
         checkpoint = Path(receipt.checkpoint).resolve(strict=True)
         if not checkpoint.is_relative_to(directory) or receipt.global_step <= 0:
             raise ValueError(

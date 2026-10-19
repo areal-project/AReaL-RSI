@@ -7,7 +7,11 @@ import json
 from typing import Any
 
 from areal_rsi.api.control import (
+    CandidateEvaluation,
+    CandidateProposal,
+    CandidateQuery,
     GoalUpdate,
+    SelectCandidate,
     StartGoal,
     TaskProposal,
     decode_record,
@@ -24,8 +28,8 @@ from areal_rsi.api.research import (
 )
 
 
-def definitions() -> list[dict[str, Any]]:
-    return [
+def definitions(*, problem: bool = False) -> list[dict[str, Any]]:
+    tools = [
         {
             "type": "function",
             "name": name,
@@ -50,6 +54,38 @@ def definitions() -> list[dict[str, Any]]:
             ),
         )
     ]
+    if problem:
+        tools.extend(
+            {
+                "type": "function",
+                "name": name,
+                "description": description,
+                "inputSchema": record_schema(kind),
+            }
+            for name, description, kind in (
+                (
+                    "rsi_submit_candidate",
+                    "Leader: submit an existing JSON recipe file path; returns a handle.",
+                    CandidateProposal,
+                ),
+                (
+                    "rsi_candidate_status",
+                    "Leader: inspect candidate feedback and evidence.",
+                    CandidateQuery,
+                ),
+                (
+                    "rsi_evaluate_candidate",
+                    "Leader: resume a candidate or explicitly retry validation.",
+                    CandidateEvaluation,
+                ),
+                (
+                    "rsi_select_candidate",
+                    "Leader: freeze the best validated candidate before completion.",
+                    SelectCandidate,
+                ),
+            )
+        )
+    return tools
 
 
 def apply_control(record: SessionRecord, key: str, name: str, arguments: Any) -> ToolReceipt:

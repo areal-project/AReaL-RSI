@@ -47,6 +47,9 @@ def read_evaluation_samples(
     """Verify persisted evidence before reusing an aggregate or comparing models."""
     with local_path(result.samples).open() as stream:
         samples = tuple(decode_record(EvaluationSample, json.loads(line)) for line in stream)
+    for sample in samples:
+        for attachment in sample.attachments:
+            local_path(attachment)
     actual = {sample.task_id for sample in samples}
     if not samples or len(actual) != len(samples):
         raise ValueError("Incomplete evaluation: empty or duplicate task identities")
@@ -85,18 +88,28 @@ class EvaluationService:
     ) -> EvaluationResult:
         if not task_ids or len(set(task_ids)) != len(task_ids):
             raise ValueError("Evaluation requires unique, nonempty expected task IDs")
-        job = await self.jobs.run(run_id, name, spec)
+        job = await self.jobs.run(run_id, name, spec, recover=True)
         directory = Path(job.result_path)
+        saved = directory / "evaluation.json"
+        if saved.exists():
+            from areal_rsi.infra.artifacts import read_record
+
+            result = read_record(saved, EvaluationResult)
+            read_evaluation_samples(result, task_ids=task_ids, solution_id=solution_id, split=split)
+            return result
         path = directory / "samples.jsonl"
         with path.open() as stream:
             samples = tuple(decode_record(EvaluationSample, json.loads(line)) for line in stream)
         actual = [sample.task_id for sample in samples]
+        for sample in samples:
+            for attachment in sample.attachments:
+                local_path(attachment)
         if len(actual) != len(set(actual)) or set(actual) != set(task_ids):
             raise ValueError(
                 f"Incomplete evaluation in {path}: missing, duplicate or unexpected tasks"
             )
         metrics = _metrics(samples)
-        created_at = datetime.now(UTC).isoformat()
+        created_at = datetime.fromtimestamp(job.finished_at or job.created_at, UTC).isoformat()
         references = []
         for sample in samples:
             digest = hashlib.sha256(f"{run_id}:{name}:{sample.task_id}".encode()).hexdigest()

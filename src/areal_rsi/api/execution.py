@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -12,6 +13,41 @@ JobState = Literal[
 ]
 
 TERMINAL_STATES = frozenset({"succeeded", "failed", "cancelled", "timed_out", "lost"})
+
+
+@dataclass(frozen=True, slots=True)
+class SlurmResources:
+    reservation: str = "rsi"
+    partition: str = "all"
+    gpus: int = 2
+    cpus: int = 16
+    memory_gb: int = 128
+    minutes: int = 180
+    node: str | None = None
+
+    def __post_init__(self) -> None:
+        if min(self.cpus, self.memory_gb, self.minutes) < 1 or self.gpus < 0:
+            raise ValueError("Invalid Slurm resources")
+        if not self.reservation or not self.partition:
+            raise ValueError("Slurm requires a reservation and partition")
+        if self.node is not None and not re.fullmatch(r"[a-zA-Z0-9_.-]+", self.node):
+            raise ValueError("Slurm node must be one hostname")
+
+
+@dataclass(frozen=True, slots=True)
+class GPUDevice:
+    index: int
+    uuid: str
+    name: str
+    total_memory_mib: int
+    used_memory_mib: int
+
+
+@dataclass(frozen=True, slots=True)
+class GPUAllocation:
+    job_id: str
+    node: str
+    devices: tuple[GPUDevice, ...]
 
 
 @dataclass(frozen=True)
@@ -26,6 +62,9 @@ class JobSpec:
     environment variable inheritance where possible; do not expose this field
     through a web API. ``mock`` exercises lifecycle/resource scheduling without
     executing the command or accessing GPUs.
+
+    For Slurm, ``timeout_seconds`` also caps the requested allocation walltime,
+    rounded up to whole minutes. A shorter explicit Slurm limit is preserved.
     """
 
     command: tuple[str, ...] = ()
@@ -39,6 +78,7 @@ class JobSpec:
     mock_duration_seconds: float = 0.0
     mock_exit_code: int = 0
     mock_stdout: str = "Simulated job; no training or evaluation was performed.\n"
+    slurm: SlurmResources | None = None
 
 
 @dataclass(frozen=True)
@@ -60,6 +100,8 @@ class JobRecord:
     result_path: str = ""
     resources_released: bool = True
     revision: int = 0
+    remote_id: str | None = None
+    release_pending: bool = False
 
     @property
     def terminal(self) -> bool:

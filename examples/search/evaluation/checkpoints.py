@@ -114,3 +114,32 @@ def export_checkpoint(source_manifest: Path, output: Path, *, source_sha256: str
         ),
     )
     return manifest
+
+
+def stage_model(source: Path, output: Path) -> Path:
+    """Match historical inference's explicit YaRN config without modifying weights."""
+    source = source.resolve(strict=True)
+    effective = json.loads((source / "config.json").read_text())
+    effective["max_position_embeddings"] = 131072
+    effective["rope_scaling"] = {
+        "rope_type": "yarn",
+        "factor": 4.0,
+        "original_max_position_embeddings": 32768,
+    }
+    if output.exists():
+        if json.loads((output / "config.json").read_text()) != effective:
+            raise ValueError("Existing staged model has a different effective configuration")
+        for path in source.iterdir():
+            if path.is_file() and path.name != "config.json":
+                staged = output / path.name
+                if not staged.is_symlink() or staged.resolve() != path:
+                    raise ValueError(
+                        "Existing staged model is incomplete or has a different source"
+                    )
+        return output
+    output.mkdir(parents=True)
+    for path in source.iterdir():
+        if path.is_file() and path.name != "config.json":
+            (output / path.name).symlink_to(path)
+    (output / "config.json").write_text(json.dumps(effective, indent=2) + "\n")
+    return output

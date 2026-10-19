@@ -1,0 +1,20 @@
+{
+  "search": {
+    "runtime": {
+      "repository": "/absolute/AReaL",
+      "python": "/opt/.venv/bin/python",
+      "environment": {"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"}
+    },
+    "project": "/absolute/frozen-rsi-source",
+    "model": "/absolute/staged-Qwen3-8B",
+    "benchmark_repository": "/absolute/BrowseComp-Plus",
+    "dataset_directory": "/absolute/search-data",
+    "index_directory": "/absolute/search-index",
+    "embedding_model": "/absolute/Qwen3-Embedding-8B",
+    "snippet_tokenizer": "/absolute/search-snippet-tokenizer",
+    "dense_python": "/absolute/retrieval-environment/bin/python"
+  },
+  "image": "/absolute/areal-training.sif",
+  "slurm": {"reservation": "rsi", "partition": "all", "cpus": 32, "memory_gb": 256},
+  "min_rounds": 1
+}

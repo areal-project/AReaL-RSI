@@ -1,7 +1,7 @@
 # TIR 多轮训练研究
 
-TIR research 是一个独立示例，`rsi.py` 是 Agent 驱动多轮研究的主入口，
-`experiment.py` 管理真实数据上的分阶段实验。需要先检查训练链路时，可使用
+TIR research 通过 `problem.py:TIRProblem` 接入统一 ResearchSystem，
+公共协调器管理真实数据上的多轮候选、恢复和最终验收。需要先检查训练链路时，可使用
 `pipeline.py`，具体步骤见 [单次 pipeline 接入检查](README.md)。
 训练并不是 `/rsi` 的必选步骤。
 其他任务可以只优化 harness，或调用同一套 infra 服务组织自己的训练过程。
@@ -12,8 +12,8 @@ TIR research 是一个独立示例，`rsi.py` 是 Agent 驱动多轮研究的主
 数据切分、题目合成、配比、课程、轮次、选择和统计协议属于 TIR example。
 Slurm 在本例中装配到公共 JobSpec 命令，AReaL worker 在 allocation 内使用 local scheduler。
 
-`experiment` 表示一次包含多个训练轮次的实验；`pipeline` 是单次接入检查，`rsi` 是研究驱动入口。
-三个入口共用执行、训练、轨迹和评测能力；不为两种使用方式建立重复的基础服务。
+`research` 表示一次包含多个候选的研究会话，`pipeline` 是独立的单次训练链路检查。
+研究入口、候选记录和选择机制与 Search 共用。
 缓存评测与候选选择都会核对样本内容哈希、任务覆盖、模型/分区以及汇总指标，不能只相信
 候选 JSON 中的分数。最小 pipeline 只报告 test 上的训练前后对比，不用 test 决定候选。
 历史实验使用其归档源码、协议和数据恢复；入口与字段改名不会迁移或覆盖原始证据。
@@ -100,21 +100,25 @@ prepare 冻结数据哈希、harness、reward、worker、数据读入和后端�
 from pathlib import Path
 from areal_rsi.infra.artifacts import local_path, read_record, write_record
 from examples.tir.benchmark import read_examples
-from examples.tir.experiment import Candidate, protocol
-from examples.tir.synthesis import select_mixed_rollout_curriculum
+from areal_rsi.api.research import CandidateRecord
+from examples.tir.problem import ExperimentConfig
+from examples.tir.benchmark import Benchmark
+from examples.tir.synthesis import SynthesisManifest, select_mixed_rollout_curriculum
 
-root = Path("/absolute/experiment")
-frozen = protocol(root)
-observed = read_record(root / "rounds/r3/candidate.json", Candidate)
-logs = root / "execution" / root.name / "jobs/r3-train/areal/logs"
+root = Path("/absolute/system/sessions/run-ID/problem")
+config = read_record(root / "config.json", ExperimentConfig)
+benchmark = read_record(Path(config.benchmark), Benchmark)
+observed = read_record(root / "candidates/r3/candidate.json", CandidateRecord)
+data = read_record(root / "candidates/r3/data.json", SynthesisManifest)
+logs = root / "execution" / "run-ID" / "jobs/r3-train/areal/logs"
 selection = select_mixed_rollout_curriculum(
-    read_examples(local_path(frozen.benchmark.train)),
-    read_examples(local_path(observed.data.dataset)),
+    read_examples(local_path(benchmark.train)),
+    read_examples(local_path(data.dataset)),
     tuple(sorted(logs.glob("*/rsi-tir/*/rollout/*/*.jsonl"))),
-    frozen_pool_source=frozen.benchmark.train,
-    trained_dataset_source=observed.data.dataset,
+    frozen_pool_source=benchmark.train,
+    trained_dataset_source=data.dataset,
     n_samples=4,
-    excluded_ids=frozen.benchmark.excluded_ids,
+    excluded_ids=benchmark.excluded_ids,
 )
 write_record(root / "data-audits/new-curriculum-selection.json", selection)
 ```
@@ -205,60 +209,28 @@ uv sync --locked
 source .venv/bin/activate
 ```
 
-TIR 是独立 example，调用 RSI 公共 API；通用 CLI 和安装包均不依赖或包含 examples。
-以下命令从项目根目录执行。研究会修改源码并归档整个项目，需要保留源码 checkout。
-宿主不需要安装 GPU 依赖或 pyarrow；训练、评测与 parquet 准备使用 AReaL 容器。
-
-先配置 `examples/tir/experiment.json`：
-
-- `tir.runtime.repository` 指向实际 AReaL 源码目录。
-- 核对 `tir.runtime.python`、`tir.model`；默认镜像在 `slurm.image` 的代码默认值中。
-- `benchmark` 指向已有 `benchmark.json`；首次准备时填写一个尚不存在的目录下的
-  `/absolute/new-benchmark/benchmark.json`。
-- 按需添加 `slurm` 配置覆盖 image、reservation、partition 等；默认 rsi reservation。
-- 在 `.env` 设置 RSI_API_KEY、RSI_BASE_URL、RSI_MODEL，Codex CLI 需要 >=0.162.1。
-
-已有 benchmark 后，一条命令启动多轮研究：
+TIR 是独立任务实现，数据和 GPU worker 保留在 example，统一入口由 ResearchSystem 提供。
+先填写 experiment.json 中的真实模型、AReaL 源码、GPU Python、已有 benchmark、image 与 slurm 资源。
+在 objective.md 中写明研究范围、轮次和验收目标，然后运行：
 
 ```bash
-python -m examples.tir.rsi
+areal-rsi research --problem examples.tir.problem:TIRProblem \
+  --config /absolute/experiment.json --objective /absolute/objective.md \
+  --root /absolute/runs/tir-001 --env-file /absolute/private.env
 ```
 
-首次需要准备 ToRL 数据时（目录内含 `train.parquet` 和 `test.parquet`）：
+入口先冻结资源、执行 valid 基线，再交接 Interaction → Leader。Leader 使用标准候选工具，
+提交 RoundRecipe（见 problem.py）与研究假设，分析 valid 反馈后继续迭代，最后冻结最佳候选。
+训练/评测使用配置中的 Slurm allocation，分析阶段不占用 GPU。原始 ToRL parquet 需先在带
+ datasets/pyarrow 的环境通过 benchmark.py 转为 benchmark.json；研究配置只引用已准备数据。
 
 ```bash
-python -m examples.tir.rsi --source /absolute/torl_data
+areal-rsi status --root /absolute/runs/tir-001 --resume run-ID
+areal-rsi research --root /absolute/runs/tir-001 --resume run-ID --env-file /absolute/private.env
+areal-rsi finalize --root /absolute/runs/tir-001 --resume run-ID --candidate r2
 ```
 
-该命令依次执行 CPU Slurm 数据准备（仅指定 --source 时）、冻结协议、valid 基线、
-Interaction → Leader 多轮研究。默认打印并使用 `runs/tir-research/tir-<时间>-<ID>` 新目录。
-数据准备失败的部分输出会保留，重试时用新的 benchmark 输出目录，不覆盖已有记录。
-每个训练/评测阶段申请 2 GPU、16 CPU、128G，结束即释放，Leader 分析时不占 GPU。
-所有路径须在提交端和容器内可见；容器默认绑定 `/storage`。相对路径按启动工作目录解析。
-
-自定义配置、实验目录和凭据文件：
-
-```bash
-python -m examples.tir.rsi --config /absolute/experiment-config.json \
-  --experiment /absolute/new-experiment --env-file /absolute/private.env
-```
-
-Leader 修改合成代码/数据配方、多轮训练与分析，提交 `decision.json` 和 `research-report.md`。
-默认只完成 valid 研发，不自动使用 test。会话与原生历史保存在 experiment/rsi。
-查看进度、恢复中断（含基线完成前的中断）：
-
-```bash
-python -m examples.tir.rsi status --experiment /absolute/experiment
-python -m examples.tir.rsi --experiment /absolute/experiment --resume --env-file /absolute/private.env
-```
-
-已有冻结协议直接复用，--config 不会改写它；已有会话必须显式 --resume。
-宿主审核候选证据后，独立冻结选择并验收：
-
-```bash
-python -m examples.tir.rsi test --experiment /absolute/experiment --candidate r2
-```
-
-最终输出 `report.md` 和 `test/result.json`。候选名应取自审核后的 decision.json。
-底层 `python -m examples.tir.experiment` 仍可用于开发阶段的单轮训练与故障定位；
-旧冻结实验必须使用其原始归档源码，更新入口不会迁移既有证据。
+finalize 仅针对冻结选择执行独立 test，输出 problem/final.json 与 report.md，包括按独立题目
+聚类的配对统计。所有任务记录位于 sessions/run-ID/problem。完整接入契约、任务工具和恢复语义
+见 [统一接入文档](../../docs/interfaces/README.md)。历史结果章节描述旧实验布局；历史实验必须
+使用其原始归档源码，更新入口不会迁移既有证据。

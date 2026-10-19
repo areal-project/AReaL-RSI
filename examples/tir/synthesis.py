@@ -638,3 +638,24 @@ def build_dataset(
     manifest = SynthesisManifest(recipe, pool_ref, ref, recipe.real_count, recipe.synthetic_count)
     write_record(output / "manifest.json", manifest)
     return manifest
+
+
+if __name__ == "__main__":
+    import argparse
+
+    from areal_rsi.infra.artifacts import read_record
+    from examples.tir.benchmark import Benchmark
+
+    parser = argparse.ArgumentParser(description="Prepare one immutable training mixture")
+    parser.add_argument("--recipe", type=Path, required=True)
+    parser.add_argument("--benchmark", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    benchmark = read_record(args.benchmark, Benchmark)
+    build_dataset(
+        read_record(args.recipe, DataRecipe),
+        read_examples(local_path(benchmark.train)),
+        benchmark.train,
+        benchmark.excluded_ids,
+        args.output,
+    )

@@ -25,7 +25,13 @@ from areal_rsi.api.records import (
     TraceEvent,
     TrajectoryQuery,
 )
-from areal_rsi.infra.artifacts import file_ref, local_path, read_record, snapshot_source
+from areal_rsi.infra.artifacts import (
+    file_ref,
+    local_path,
+    read_record,
+    snapshot_source,
+    write_record,
+)
 from areal_rsi.infra.coordination.evaluation import (
     EvaluationService,
     paired,
@@ -406,6 +412,33 @@ def test_paired_statistics_align_tasks_and_refuse_tampering(tmp_path: Path) -> N
     Path(tmp_path / "candidate.jsonl").write_text("tampered")
     with pytest.raises(ValueError, match="changed"):
         paired(baseline, candidate)
+
+
+def test_cached_evaluation_rejects_valid_evidence_from_another_execution(tmp_path: Path) -> None:
+    jobs = JobExecutor(tmp_path / "execution")
+    evaluator = EvaluationService(jobs, LocalTrajectoryStore(tmp_path / "traces"))
+    sample = EvaluationSample("a", "answer", 1, True, (TraceEvent("generation", "answer"),))
+    payload = json.dumps(encode_record(sample)) + "\n"
+    plans: dict[str, JobSpec] = {}
+    results = []
+    for name in ("first", "second"):
+        path = jobs.directory("run", name) / "samples.jsonl"
+        plans[name] = command(
+            f"from pathlib import Path; Path({str(path)!r}).write_text({payload!r})", tmp_path
+        )
+        results.append(
+            asyncio.run(
+                evaluator.evaluate("run", name, plans[name], task_ids=("a",), solution_id="model")
+            )
+        )
+    assert results[0].job_id != results[1].job_id
+    read_evaluation_samples(results[1], task_ids=("a",), solution_id="model")
+    write_record(jobs.directory("run", "first") / "evaluation.json", results[1])
+    with pytest.raises(ValueError, match="different job"):
+        asyncio.run(
+            evaluator.evaluate("run", "first", plans["first"], task_ids=("a",), solution_id="model")
+        )
+    assert len(list((tmp_path / "execution").rglob("job.json"))) == 2
 
 
 @pytest.mark.parametrize("mismatch", ["score", "metrics", "solution", "split", "tasks"])

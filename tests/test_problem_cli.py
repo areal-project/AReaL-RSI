@@ -18,6 +18,70 @@ from areal_rsi.infra.research import ResearchSystem
 from areal_rsi.ui.cli import run
 
 
+@pytest.mark.parametrize("pending_interaction", [False, True])
+def test_research_cli_resumes_paused_chat_and_pending_interaction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pending_interaction: bool
+) -> None:
+    from fake_codex import FakeCodex
+    from test_research import eventually
+
+    from areal_rsi.api.research import SessionInput, SessionPhase, SessionStatus
+
+    FakeCodex.instances.clear()
+    FakeCodex.threads.clear()
+    monkeypatch.setattr("areal_rsi.infra.research.CodexClient", FakeCodex)
+
+    async def execute() -> None:
+        system = ResearchSystem(tmp_path / "system")
+        monkeypatch.setattr("areal_rsi.ui.cli.ResearchSystem", lambda root: system)
+        config = write_record(tmp_path / "config.json", TextConfig())
+        run_id = await system.create(
+            SessionConfig(str(tmp_path), auto_learn=False),
+            problem=ProblemBinding(
+                "test_problems:TextProblem", config, objective="Resume the text task"
+            ),
+        )
+        if pending_interaction:
+            await system.prepare_problem(run_id)
+        record = system.detail(run_id)
+        record.status = SessionStatus.PAUSED
+        if pending_interaction:
+            record.next_phase = SessionPhase.INTERACTION
+            record.pending_inputs.append(SessionInput("transition", "Resume the text task"))
+        system.store.save(record)
+        args = argparse.Namespace(
+            command="research",
+            data_root=system.root,
+            resume=run_id,
+            problem=None,
+            config=None,
+            objective=None,
+            workspace=tmp_path,
+        )
+        task = asyncio.create_task(run(args))
+        try:
+            await eventually(
+                lambda: task.done()
+                or (
+                    system.detail(run_id).phase == SessionPhase.INTERACTION
+                    and bool(system.detail(run_id).active_turn_id)
+                )
+            )
+            if task.done():
+                await task
+                pytest.fail("Research CLI exited before resuming the interaction")
+            assert system.candidate_status(run_id, "base")[0].score == 0
+            assert system.detail(run_id).next_phase is None
+            problem = system._problem(run_id)
+            assert len(list((problem.root / "execution").rglob("job.json"))) == 1
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            await system.close()
+
+    asyncio.run(execute())
+
+
 def test_research_cli_waits_while_leader_fork_is_pending(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

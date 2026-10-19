@@ -65,6 +65,9 @@ class JobSpec:
 
     For Slurm, ``timeout_seconds`` also caps the requested allocation walltime,
     rounded up to whole minutes. A shorter explicit Slurm limit is preserved.
+    For unfinished jobs, the software deadline starts with the first request and
+    includes queue time and controller downtime; reconnecting does not reset it.
+    Completed jobs remain reusable after that deadline.
     """
 
     command: tuple[str, ...] = ()

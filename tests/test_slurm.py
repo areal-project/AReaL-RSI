@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import time
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,7 @@ def scheduler(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[JobExecu
         " print('123')\n"
         "elif name=='scontrol':\n"
         " if sys.argv[1]=='show':\n"
+        "  if (root/'status-missing').exists(): sys.exit(1)\n"
         "  if (root/'status-failure').exists():\n"
         "   (root/'status-failure').unlink();sys.exit(1)\n"
         "  held=(root/'state').read_text()=='held'\n"
@@ -51,8 +53,12 @@ def scheduler(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[JobExecu
         "  (root/'state').write_text('released')\n"
         "  if (root/'ack-lost').exists(): (root/'ack-lost').unlink();sys.exit(1)\n"
         "elif name=='sacct':\n"
-        " print('123|CANCELLED|0:15' if (root/'state').read_text()=='cancelled' "
-        "else '123|COMPLETED|0:0')\n"
+        " if (root/'state').read_text()=='cancelled': print('123|CANCELLED|0:15')\n"
+        " elif (root/'state').read_text()=='held': print('123|PENDING|0:0')\n"
+        " elif (root/'active').exists():\n"
+        "  status=(root/'active').read_text()\n"
+        "  print('123|'+status+'|'+('0:15' if status=='TIMEOUT' else '0:0'))\n"
+        " else: print('123|COMPLETED|0:0')\n"
         "elif name=='scancel': (root/'state').write_text('cancelled')\n"
     )
     for name in ("sbatch", "scontrol", "sacct", "scancel"):
@@ -148,6 +154,24 @@ def test_unobserved_submission_remains_held_and_cannot_be_replayed(
     assert len(calls) == 1 and (state / "state").read_text() == "held"
 
 
+def test_release_recovery_accepts_accounting_after_job_leaves_scontrol(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jobs, spec = scheduler(tmp_path, monkeypatch)
+    state = tmp_path / "scheduler"
+    (state / "ack-lost").touch()
+    with pytest.raises(RuntimeError):
+        asyncio.run(jobs.run("run", "stage", spec, recover=True))
+    assert jobs.detail("run", "stage").release_pending
+    (state / "status-missing").touch()
+    result = asyncio.run(jobs.run("run", "stage", spec, recover=True))
+    assert result.state == "succeeded" and result.resources_released
+    assert not result.release_pending
+    calls = (state / "calls").read_text().splitlines()
+    assert sum(line.startswith("sbatch ") for line in calls) == 1
+    assert sum(line.startswith("scontrol release ") for line in calls) == 1
+
+
 def test_explicit_node_placement_is_passed_to_scheduler(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -179,10 +203,53 @@ def test_cancel_acknowledgment_can_reconnect_to_confirm_resource_release(
     with pytest.raises(execution.JobExecutionError) as caught:
         asyncio.run(jobs.run("run", "stage", spec, recover=True))
     assert caught.value.record.resources_released
+    assert caught.value.record.state == "cancelled"
     assert "CANCELLED" in (caught.value.record.error or "")
     calls = (state / "calls").read_text().splitlines()
     assert sum(line.startswith("sbatch ") for line in calls) == 1
     assert sum(line.startswith("scancel ") for line in calls) == 1
+    assert sum(line.startswith("scontrol release ") for line in calls) == 0
+
+
+@pytest.mark.parametrize("remote_state", ["PENDING", "RUNNING"])
+def test_reconnecting_expired_job_keeps_deadline_and_confirms_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, remote_state: str
+) -> None:
+    jobs, spec = scheduler(tmp_path, monkeypatch)
+    spec = replace(spec, timeout_seconds=3600)
+    state = tmp_path / "scheduler"
+    (state / ("status-failure" if remote_state == "PENDING" else "ack-lost")).touch()
+    with pytest.raises(RuntimeError):
+        asyncio.run(jobs.run("run", "stage", spec, recover=True))
+    receipt = jobs.detail("run", "stage")
+    write_record(
+        jobs.directory("run", "stage") / "job.json",
+        replace(receipt, created_at=time.time() - 7200),
+    )
+    (state / "active").write_text(remote_state)
+    with pytest.raises(execution.JobExecutionError) as caught:
+        asyncio.run(asyncio.wait_for(jobs.run("run", "stage", spec, recover=True), 5))
+    result = caught.value.record
+    assert result.remote_id == "123" and result.state == "timed_out"
+    assert result.resources_released and "observation timeout" in (result.error or "")
+    calls = (state / "calls").read_text().splitlines()
+    assert sum(line.startswith("sbatch ") for line in calls) == 1
+    assert sum(line.startswith("scancel ") for line in calls) == 1
+    assert sum(line.startswith("scontrol release ") for line in calls) == (
+        0 if remote_state == "PENDING" else 1
+    )
+
+
+def test_scheduler_time_limit_is_reported_as_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jobs, spec = scheduler(tmp_path, monkeypatch)
+    (tmp_path / "scheduler/active").write_text("TIMEOUT")
+    with pytest.raises(execution.JobExecutionError) as caught:
+        asyncio.run(jobs.run("run", "stage", spec))
+    assert caught.value.record.state == "timed_out"
+    assert caught.value.record.resources_released
+    assert "Slurm TIMEOUT" in (caught.value.record.error or "")
 
 
 def test_failed_initial_receipt_cancels_only_the_new_held_job(

@@ -40,7 +40,8 @@ Search 使用 `examples.search.problem:SearchProblem`，完整模板见 `example
 字段使用同文件的 `TrainingConfig`。
 
 启动首先打印 `run_id`，再准备冻结协议并执行 valid 基线，然后交接真实 Leader。
-原始 objective 正文会被保存。恢复时沿用绑定、配置和目标，不能同时传入替代配置：
+原始 objective 正文会被保存。恢复时沿用绑定、配置和目标，不能同时传入替代配置。
+恢复会先连接已有会话并沿用待处理的阶段交接，避免重复进入 RSI：
 
 ```bash
 areal-rsi research --root /absolute/runs/tir-001 --resume run-XXXXXXXXXXXX --env-file /absolute/private.env
@@ -96,6 +97,10 @@ Slurm 使用 held submission，远端 ID 和初始回执保存后才 release。�
 普通控制器退出/关闭连接保留已提交 Slurm 作业；暂停会话也不取消外部作业。
 显式 stop 只取消该 run 回执中记录的作业。取消请求与确认资源释放分别记录。
 本地进程中断会清理自己的进程树，恢复时不会盲目重放。
+未结束作业的软件超时从首次提交请求计算，包含排队及控制器断连时间，重连不会重置预算。
+已成功结束的作业仍可复用经过校验的产物。
+取消和超时保留各自终态，确认 Slurm 终态后才记录资源已释放。
+若完成作业已从 scontrol 清理，恢复可通过同一 job ID 的 sacct 终态确认，不重新提交。
 
 `SlurmResources.node` 可指定一个节点，避免在已有异常占用的节点上重放实验。
 GPU 容器入口共用 `infra/worker.sh`；模型加载前保存 `gpu-allocation.json`，核对分配的

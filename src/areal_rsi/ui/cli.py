@@ -54,9 +54,13 @@ async def run(args: argparse.Namespace) -> int:
         )
         print(json.dumps({"run_id": run_id, "data_root": str(system.root)}), flush=True)
         if args.command == "research":
+            if args.resume:
+                await system.open(run_id)
             record = system.detail(run_id)
-            if record.phase == SessionPhase.CHAT:
+            if record.phase == SessionPhase.CHAT and record.next_phase is None:
                 await system.prepare_problem(run_id)
+                if args.resume:
+                    await system.resume(run_id)
                 assert record.problem is not None
                 await system.enter_rsi(
                     run_id,
@@ -64,7 +68,6 @@ async def run(args: argparse.Namespace) -> int:
                     + record.problem.objective,
                 )
             else:
-                await system.open(run_id)
                 await system.resume(run_id)
         else:
             await system.open(run_id)

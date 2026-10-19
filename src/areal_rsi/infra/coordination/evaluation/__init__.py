@@ -95,6 +95,8 @@ class EvaluationService:
             from areal_rsi.infra.artifacts import read_record
 
             result = read_record(saved, EvaluationResult)
+            if result.job_id != job.job_id:
+                raise ValueError("Cached evaluation belongs to a different job")
             read_evaluation_samples(result, task_ids=task_ids, solution_id=solution_id, split=split)
             return result
         path = directory / "samples.jsonl"

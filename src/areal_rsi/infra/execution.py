@@ -1,7 +1,7 @@
-"""Durable local subprocess receipts shared by evaluation and training jobs.
+"""Durable local and Slurm receipts shared by evaluation and training jobs.
 
-The caller owns resource allocation (e.g. an existing Slurm allocation); this is
-not a second GPU scheduler. AReaL owns its workers inside that allocation.
+Slurm owns allocation scheduling; AReaL owns its workers within an allocation.
+Local jobs use the caller's existing resources.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from contextlib import suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from areal_rsi.api.execution import GPUAllocation, GPUDevice, JobRecord, JobSpec
+from areal_rsi.api.execution import GPUAllocation, GPUDevice, JobRecord, JobSpec, JobState
 from areal_rsi.infra.artifacts import read_record, write_record
 
 
@@ -345,24 +345,37 @@ class JobExecutor:
                     raise
             assert record.remote_id is not None
             remote_id = record.remote_id
-            if record.release_pending:
-                status = set(
-                    (await _scheduler_command("scontrol", "show", "job", "-o", remote_id)).split()
-                )
-                if (
-                    f"JobId={remote_id}" not in status
-                    or "Reason=JobHeldAdmin" in status
-                    or not any(item.startswith("JobState=") for item in status)
-                    or not any(item.startswith("Reason=") for item in status)
-                ):
-                    raise RuntimeError("Cannot confirm the submitted Slurm job's release state")
-                if "Reason=JobHeldUser" in status or (
-                    "JobState=PENDING" in status and "Priority=0" in status
-                ):
-                    await _scheduler_command("scontrol", "release", remote_id)
-                record = replace(record, release_pending=False)
-                write_record(path, record)
-            started = time.monotonic()
+            deadline = record.created_at + spec.timeout_seconds if spec.timeout_seconds else None
+            release_error: RuntimeError | None = None
+            if (
+                record.release_pending
+                and not record.terminal
+                and (deadline is None or time.time() < deadline)
+            ):
+                try:
+                    status = set(
+                        (
+                            await _scheduler_command("scontrol", "show", "job", "-o", remote_id)
+                        ).split()
+                    )
+                except RuntimeError as exc:
+                    # Completed jobs can leave scontrol before recovery. Only a terminal
+                    # accounting record may resolve the outstanding release receipt.
+                    release_error = exc
+                else:
+                    if (
+                        f"JobId={remote_id}" not in status
+                        or "Reason=JobHeldAdmin" in status
+                        or not any(item.startswith("JobState=") for item in status)
+                        or not any(item.startswith("Reason=") for item in status)
+                    ):
+                        raise RuntimeError("Cannot confirm the submitted Slurm job's release state")
+                    if "Reason=JobHeldUser" in status or (
+                        "JobState=PENDING" in status and "Priority=0" in status
+                    ):
+                        await _scheduler_command("scontrol", "release", remote_id)
+                    record = replace(record, release_pending=False)
+                    write_record(path, record)
             while True:
                 rows = await _scheduler_command(
                     "sacct",
@@ -399,15 +412,31 @@ class JobExecutor:
                         "REVOKED",
                         "SPECIAL_EXIT",
                     }:
-                        record = replace(record, state="failed", error=f"Slurm {state}: {row[2]}")
+                        terminal_state: JobState = "failed"
+                        if state == "TIMEOUT" or record.state == "timed_out":
+                            terminal_state = "timed_out"
+                        elif state == "CANCELLED" or record.state == "cancelled":
+                            terminal_state = "cancelled"
+                        detail = f"Slurm {state}: {row[2]}"
+                        record = replace(
+                            record,
+                            state=terminal_state,
+                            error=f"{record.error}; {detail}" if record.error else detail,
+                        )
                         break
                     if state == "RUNNING" and record.started_at is None:
-                        record = replace(record, state="running", started_at=time.time())
+                        record = replace(
+                            record,
+                            state=record.state if record.terminal else "running",
+                            started_at=time.time(),
+                        )
                         write_record(path, record)
+                if release_error is not None:
+                    raise release_error
                 if (
-                    spec.timeout_seconds
-                    and time.monotonic() - started >= spec.timeout_seconds
-                    and record.state != "timed_out"
+                    deadline is not None
+                    and time.time() >= deadline
+                    and record.state not in {"timed_out", "cancelled"}
                 ):
                     await _scheduler_command("scancel", remote_id)
                     record = replace(
@@ -419,7 +448,11 @@ class JobExecutor:
                     write_record(path, record)
                 await asyncio.sleep(1)
             record = replace(
-                record, updated_at=time.time(), finished_at=time.time(), resources_released=True
+                record,
+                updated_at=time.time(),
+                finished_at=time.time(),
+                resources_released=True,
+                release_pending=False,
             )
             write_record(path, record)
         except asyncio.CancelledError:

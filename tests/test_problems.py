@@ -26,6 +26,7 @@ from areal_rsi.api.records import (
 from areal_rsi.api.research import (
     CandidateContext,
     CandidatePlan,
+    CandidateSelection,
     CandidateStatus,
     ComparisonContract,
     EvaluationContext,
@@ -404,11 +405,19 @@ def test_bound_tools_authorization_completion_and_async_feedback(
             assert operation is not None
             await operation
             assert system.candidate_status(run_id, "r1")[0].score == 1
-            assert (await client.tool(16, "rsi_select_candidate", {"candidate_id": "r1"}))[
-                "success"
-            ]
-            assert (
-                await client.tool(
+            problem = system._problem(run_id)
+            select = problem.select
+            started, release = threading.Event(), threading.Event()
+
+            def slow_select(candidate_id: str) -> CandidateSelection:
+                started.set()
+                assert release.wait(5), "Integrity checks blocked the event loop"
+                return select(candidate_id)
+
+            monkeypatch.setattr(problem, "select", slow_select)
+            for request_id, name, arguments in (
+                (16, "rsi_select_candidate", {"candidate_id": "r1"}),
+                (
                     17,
                     "rsi_update_goal",
                     dict(
@@ -416,8 +425,18 @@ def test_bound_tools_authorization_completion_and_async_feedback(
                         summary="Verified",
                         evidence=["Validated and selected r1"],
                     ),
-                )
-            )["success"]
+                ),
+            ):
+                started.clear()
+                release.clear()
+                pending_tool = asyncio.create_task(client.tool(request_id, name, arguments))
+                try:
+                    await eventually(started.is_set)
+                    assert not pending_tool.done()
+                    assert system.detail(run_id).status == SessionStatus.RUNNING
+                finally:
+                    release.set()
+                assert (await pending_tool)["success"]
             await client.finish()
             await eventually(lambda: system.detail(run_id).status == SessionStatus.COMPLETED)
             final = await system.finalize_problem(run_id, "r1")

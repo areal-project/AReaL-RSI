@@ -41,7 +41,7 @@ from areal_rsi.api.research import (
 )
 from areal_rsi.infra.codex import CodexClient, CodexError, NativeEvent
 from areal_rsi.infra.config import validate_config
-from areal_rsi.infra.coordination import ProblemRun
+from areal_rsi.infra.coordination import ProblemRun, _local_stage
 from areal_rsi.infra.coordination.policies import goal
 from areal_rsi.infra.coordination.policies.prompts import CONTINUE, HOST, instructions
 from areal_rsi.infra.coordination.store import SessionStore
@@ -529,7 +529,7 @@ class SessionRuntime:
                 if name == "rsi_update_goal" and self.problem is not None:
                     update = decode_record(GoalUpdate, arguments)
                     if update.status == "completed":
-                        self.problem.verify_completion()
+                        await _local_stage(self.problem.verify_completion)
                 receipt = apply_control(updated, key, name, arguments)
             self.store.save(updated)
             self.record = updated
@@ -651,7 +651,9 @@ class SessionRuntime:
             )
         elif name == "rsi_select_candidate":
             request_select = decode_record(SelectCandidate, arguments)
-            result = encode_record(self.select_candidate(request_select.candidate_id))
+            result = encode_record(
+                await _local_stage(self.select_candidate, request_select.candidate_id)
+            )
         else:
             request_query = decode_record(CandidateQuery, arguments)
             result = {

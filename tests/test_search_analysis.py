@@ -15,8 +15,8 @@ from pathlib import Path
 import pytest
 
 from areal_rsi.api.records import DirectorySnapshot
-from areal_rsi.infra.artifacts import read_record, snapshot_directory
-from areal_rsi.infra.execution import ProcessIdentity
+from areal_rsi.infra.execution.jobs import ProcessIdentity
+from areal_rsi.infra.storage.artifacts import read_record, snapshot_directory
 from examples.search.evaluation.analysis import (
     paired_statistics,
     read_official_results,

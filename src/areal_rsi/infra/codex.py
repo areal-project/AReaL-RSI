@@ -17,7 +17,7 @@ from typing import Any, BinaryIO
 
 from areal_rsi.api.control import public_tool_text
 from areal_rsi.api.research import SessionConfig
-from areal_rsi.infra.config import executable
+from areal_rsi.infra.config import executable, runtime_environment
 
 Json = dict[str, Any]
 
@@ -99,7 +99,7 @@ class CodexClient:
     async def start(self) -> None:
         binary = executable(self.config)
         self.home.mkdir(parents=True, exist_ok=True, mode=0o700)
-        environment = {**os.environ, "CODEX_HOME": str(self.home)}
+        environment = {**runtime_environment(self.config), "CODEX_HOME": str(self.home)}
         probe = await asyncio.create_subprocess_exec(
             binary,
             "--version",

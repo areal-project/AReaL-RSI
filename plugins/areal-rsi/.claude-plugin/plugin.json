@@ -1,0 +1,12 @@
+{
+  "name": "areal-rsi",
+  "version": "0.2.0",
+  "description": "Delegate persistent goals to an independent AReaL-RSI runtime.",
+  "author": {"name": "AReaL Team"},
+  "mcpServers": {
+    "areal-rsi": {
+      "command": "python3",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/launch.py", "mcp"]
+    }
+  }
+}

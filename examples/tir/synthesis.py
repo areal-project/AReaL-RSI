@@ -24,7 +24,7 @@ from typing import Literal
 
 from areal_rsi.api.control import decode_record
 from areal_rsi.api.records import ContentRef
-from areal_rsi.infra.artifacts import file_ref, local_path, write_record
+from areal_rsi.infra.storage.artifacts import file_ref, local_path, write_record
 from examples.tir.benchmark import Example, identity, read_examples, write_examples
 
 Family = Literal[
@@ -647,7 +647,7 @@ def build_dataset(
 if __name__ == "__main__":
     import argparse
 
-    from areal_rsi.infra.artifacts import read_record
+    from areal_rsi.infra.storage.artifacts import read_record
     from examples.tir.benchmark import Benchmark
 
     parser = argparse.ArgumentParser(description="Prepare one immutable training mixture")

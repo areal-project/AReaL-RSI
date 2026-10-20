@@ -32,7 +32,7 @@ export function createView(terminal, send, quit) {
   let activePrompt;
   let serial = 0;
   const commandNames = ['rsi', 'start', 'chat', 'pause', 'resume', 'stop', 'status', 'budget', 'model', 'effort', 'learn',
-    'learn-mode', 'docs', 'image', 'sessions', 'open', 'new', 'help', 'quit'];
+    'learn-mode', 'docs', 'image', 'sessions', 'open', 'new', 'config', 'help', 'quit'];
   editor.setAutocompleteProvider(new CombinedAutocompleteProvider(
     commandNames.map(name => ({ name, description: `/${name}` })), process.cwd(),
   ));

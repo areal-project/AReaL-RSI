@@ -1,4 +1,4 @@
-"""Typed experiment coordination shared by task adapters and ResearchSystem."""
+"""Typed experiment coordination shared by task adapters and SessionSystem."""
 
 from __future__ import annotations
 
@@ -38,7 +38,15 @@ from areal_rsi.api.research import (
     ProblemSpec,
     SourceTree,
 )
-from areal_rsi.infra.artifacts import (
+from areal_rsi.infra.coordination.evaluation import (
+    EvaluationService,
+    paired,
+    read_evaluation_samples,
+)
+from areal_rsi.infra.coordination.policies.selection import improvement, metric, select_candidate
+from areal_rsi.infra.execution.jobs import JobExecutor
+from areal_rsi.infra.execution.training import AReaLBackend
+from areal_rsi.infra.storage.artifacts import (
     file_ref,
     local_path,
     read_record,
@@ -46,15 +54,7 @@ from areal_rsi.infra.artifacts import (
     verify_model,
     write_record,
 )
-from areal_rsi.infra.coordination.evaluation import (
-    EvaluationService,
-    paired,
-    read_evaluation_samples,
-)
-from areal_rsi.infra.coordination.policies.selection import improvement, metric, select_candidate
-from areal_rsi.infra.execution import JobExecutor
-from areal_rsi.infra.training import AReaLBackend
-from areal_rsi.infra.trajectories import LocalTrajectoryStore
+from areal_rsi.infra.storage.trajectories import LocalTrajectoryStore
 
 
 def _problem_factory(entrypoint: str) -> tuple[Any, Path]:

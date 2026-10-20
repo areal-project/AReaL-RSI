@@ -16,7 +16,7 @@ import pytest
 
 from areal_rsi.api.control import decode_record
 from areal_rsi.api.records import EvaluationSample
-from areal_rsi.infra.artifacts import write_record
+from areal_rsi.infra.storage.artifacts import write_record
 from examples.search.task.dataset import SearchQuestion
 from examples.search.task.rollouts import (
     Episode,

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "areal-rsi"
-version = "0.1.0"
+version = "0.2.0"
 description = "Native Codex conversations with context-preserving RSI goals."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -13,6 +13,7 @@ license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md", "src/areal_rsi/ui/dsh/upst
 authors = [{ name = "AReaL Team" }]
 dependencies = [
   "jsonschema>=4,<5",
+  "mcp>=2,<3",
   "python-dotenv>=1,<2",
 ]
 

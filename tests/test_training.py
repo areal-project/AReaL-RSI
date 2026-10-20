@@ -25,21 +25,21 @@ from areal_rsi.api.records import (
     TraceEvent,
     TrajectoryQuery,
 )
-from areal_rsi.infra.artifacts import (
+from areal_rsi.infra.coordination.evaluation import (
+    EvaluationService,
+    paired,
+    read_evaluation_samples,
+)
+from areal_rsi.infra.execution.jobs import JobExecutionError, JobExecutor, verify_gpu_allocation
+from areal_rsi.infra.execution.training import AReaLBackend
+from areal_rsi.infra.storage.artifacts import (
     file_ref,
     local_path,
     read_record,
     snapshot_source,
     write_record,
 )
-from areal_rsi.infra.coordination.evaluation import (
-    EvaluationService,
-    paired,
-    read_evaluation_samples,
-)
-from areal_rsi.infra.execution import JobExecutionError, JobExecutor, verify_gpu_allocation
-from areal_rsi.infra.training import AReaLBackend
-from areal_rsi.infra.trajectories import LocalTrajectoryStore
+from areal_rsi.infra.storage.trajectories import LocalTrajectoryStore
 from examples.tir.data import SynthesisConfig, read_problems, synthesize, validate_problem
 from examples.tir.pipeline import ExperimentState, TIRConfig, run
 from examples.tir.reward import integer_reward
@@ -89,7 +89,12 @@ def test_gpu_admission_respects_assigned_devices_and_blocks_busy_worker(
     marker = tmp_path / "payload-ran"
     payload.write_text(f"from pathlib import Path\nPath({str(marker)!r}).touch()\n")
     result = subprocess.run(
-        ["bash", str(root / "src/areal_rsi/infra/worker.sh"), sys.executable, str(payload)],
+        [
+            "bash",
+            str(root / "src/areal_rsi/infra/execution/worker.sh"),
+            sys.executable,
+            str(payload),
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -387,7 +392,13 @@ def test_training_rejects_stale_or_incomplete_checkpoint(
     if condition == "missing_shard":
         index = json.dumps({"weight_map": {"weight": "missing.safetensors"}})
         code += f"; (root/'model.safetensors.index.json').write_text({index!r})"
-    operation = backend.train("run", "train", command(code, tmp_path))
+    worker = tmp_path / "train.py"
+    worker.write_text(
+        "from pathlib import Path\n"
+        "from areal_rsi.infra.storage.artifacts import read_record\n"
+        "assert (Path.cwd() / 'src/areal_rsi').is_dir()\n" + code
+    )
+    operation = backend.train("run", "train", backend.spec(worker, (), timeout=10))
     if condition == "valid":
         result = asyncio.run(operation)
         assert result.global_step == 1

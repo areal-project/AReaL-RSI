@@ -14,7 +14,7 @@ from areal.api import ModelRequest
 from tir_workflow import TIRWorkflow
 
 from areal_rsi.api.records import EvaluationSample, TraceEvent
-from areal_rsi.infra.artifacts import write_record
+from areal_rsi.infra.storage.artifacts import write_record
 
 _events: ContextVar[list[TraceEvent]] = ContextVar("tir_trace")
 

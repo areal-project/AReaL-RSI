@@ -13,9 +13,9 @@ from typing import Any
 import pytest
 
 from areal_rsi.api.execution import JobRecord, JobSpec, SlurmResources
-from areal_rsi.infra import execution
-from areal_rsi.infra.artifacts import read_record, write_record
-from areal_rsi.infra.execution import JobExecutor
+from areal_rsi.infra.execution import jobs as job_runtime
+from areal_rsi.infra.execution.jobs import JobExecutor
+from areal_rsi.infra.storage.artifacts import read_record, write_record
 
 
 def scheduler(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[JobExecutor, JobSpec]:
@@ -139,7 +139,7 @@ def test_release_recovery_keeps_exact_remote_job_and_persisted_plan(
             raise OSError("lost release receipt")
         return write_record(path, value)
 
-    monkeypatch.setattr(execution, "write_record", save)
+    monkeypatch.setattr(job_runtime, "write_record", save)
     with pytest.raises((RuntimeError, OSError)):
         asyncio.run(jobs.run("run", "stage", spec, recover=True))
     receipt = jobs.detail("run", "stage")
@@ -216,7 +216,7 @@ def test_cancel_acknowledgment_can_reconnect_to_confirm_resource_release(
         asyncio.run(jobs.run("run", "stage", spec, recover=True))
     cancelled = asyncio.run(jobs.cancel("run", "stage"))
     assert cancelled.remote_id == "123" and not cancelled.resources_released
-    with pytest.raises(execution.JobExecutionError) as caught:
+    with pytest.raises(job_runtime.JobExecutionError) as caught:
         asyncio.run(jobs.run("run", "stage", spec, recover=True))
     assert caught.value.record.resources_released
     assert caught.value.record.state == "cancelled"
@@ -243,7 +243,7 @@ def test_reconnecting_expired_job_keeps_deadline_and_confirms_release(
         replace(receipt, created_at=time.time() - 7200),
     )
     (state / "active").write_text(remote_state)
-    with pytest.raises(execution.JobExecutionError) as caught:
+    with pytest.raises(job_runtime.JobExecutionError) as caught:
         asyncio.run(asyncio.wait_for(jobs.run("run", "stage", spec, recover=True), 5))
     result = caught.value.record
     assert result.remote_id == "123" and result.state == "timed_out"
@@ -261,7 +261,7 @@ def test_scheduler_time_limit_is_reported_as_timeout(
 ) -> None:
     jobs, spec = scheduler(tmp_path, monkeypatch)
     (tmp_path / "scheduler/active").write_text("TIMEOUT")
-    with pytest.raises(execution.JobExecutionError) as caught:
+    with pytest.raises(job_runtime.JobExecutionError) as caught:
         asyncio.run(jobs.run("run", "stage", spec))
     assert caught.value.record.state == "timed_out"
     assert caught.value.record.resources_released
@@ -278,7 +278,7 @@ def test_failed_initial_receipt_cancels_only_the_new_held_job(
             raise OSError("receipt failed")
         return write_record(path, value)
 
-    monkeypatch.setattr(execution, "write_record", save)
+    monkeypatch.setattr(job_runtime, "write_record", save)
     with pytest.raises(OSError, match="receipt failed"):
         asyncio.run(jobs.run("run", "stage", spec, recover=True))
     calls = (tmp_path / "scheduler/calls").read_text()

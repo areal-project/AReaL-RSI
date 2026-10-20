@@ -13,9 +13,9 @@ from pathlib import Path
 import pytest
 from test_problems import TextConfig, TextRecipe
 
-from areal_rsi.api.research import ProblemBinding, SessionConfig
-from areal_rsi.infra.artifacts import write_record
-from areal_rsi.infra.research import ResearchSystem
+from areal_rsi.api.research import AppConfig, ProblemBinding, SessionConfig
+from areal_rsi.infra.session import SessionSystem
+from areal_rsi.infra.storage.artifacts import write_record
 from areal_rsi.ui.cli import run
 
 
@@ -68,17 +68,17 @@ def test_research_cli_resumes_paused_chat_and_pending_interaction(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pending_interaction: bool
 ) -> None:
     from fake_codex import FakeCodex
-    from test_research import eventually
+    from test_session import eventually
 
     from areal_rsi.api.research import SessionInput, SessionPhase, SessionStatus
 
     FakeCodex.instances.clear()
     FakeCodex.threads.clear()
-    monkeypatch.setattr("areal_rsi.infra.research.CodexClient", FakeCodex)
+    monkeypatch.setattr("areal_rsi.infra.coordination.runtime.CodexClient", FakeCodex)
 
     async def execute() -> None:
-        system = ResearchSystem(tmp_path / "system")
-        monkeypatch.setattr("areal_rsi.ui.cli.ResearchSystem", lambda root: system)
+        system = SessionSystem(tmp_path / "system")
+        monkeypatch.setattr("areal_rsi.ui.cli.SessionSystem", lambda root: system)
         config = write_record(tmp_path / "config.json", TextConfig())
         run_id = await system.create(
             SessionConfig(str(tmp_path), auto_learn=False),
@@ -103,13 +103,17 @@ def test_research_cli_resumes_paused_chat_and_pending_interaction(
             objective=None,
             workspace=tmp_path,
         )
-        task = asyncio.create_task(run(args))
+        task = asyncio.create_task(
+            run(args, AppConfig(SessionConfig(str(tmp_path), auto_learn=False), str(system.root)))
+        )
         try:
             await eventually(
-                lambda: task.done()
-                or (
-                    system.detail(run_id).phase == SessionPhase.INTERACTION
-                    and bool(system.detail(run_id).active_turn_id)
+                lambda: (
+                    task.done()
+                    or (
+                        system.detail(run_id).phase == SessionPhase.INTERACTION
+                        and bool(system.detail(run_id).active_turn_id)
+                    )
                 )
             )
             if task.done():
@@ -131,7 +135,7 @@ def test_research_cli_waits_while_leader_fork_is_pending(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from fake_codex import FakeCodex, Json
-    from test_research import eventually
+    from test_session import eventually
 
     from areal_rsi.api.control import CandidateProposal
     from areal_rsi.api.research import CandidateStatus, SessionPhase
@@ -146,13 +150,9 @@ def test_research_cli_waits_while_leader_fork_is_pending(
                     await release.wait()
                 return await super().request(method, params, timeout=timeout)
 
-        monkeypatch.setattr("areal_rsi.infra.research.CodexClient", SlowForkCodex)
-        system = ResearchSystem(tmp_path / "system")
-        monkeypatch.setattr("areal_rsi.ui.cli.ResearchSystem", lambda root: system)
-        monkeypatch.setattr(
-            "areal_rsi.ui.cli.from_environment",
-            lambda workspace: SessionConfig(str(tmp_path), auto_learn=False),
-        )
+        monkeypatch.setattr("areal_rsi.infra.coordination.runtime.CodexClient", SlowForkCodex)
+        system = SessionSystem(tmp_path / "system")
+        monkeypatch.setattr("areal_rsi.ui.cli.SessionSystem", lambda root: system)
         config = tmp_path / "config.json"
         objective = tmp_path / "objective.txt"
         objective.write_text("Improve text and hand off to Leader")
@@ -168,7 +168,9 @@ def test_research_cli_waits_while_leader_fork_is_pending(
             objective=objective,
             workspace=tmp_path,
         )
-        task = asyncio.create_task(run(args))
+        task = asyncio.create_task(
+            run(args, AppConfig(SessionConfig(str(tmp_path), auto_learn=False), str(system.root)))
+        )
         try:
             await eventually(lambda: bool(system.live))
             run_id = next(iter(system.live))
@@ -230,7 +232,7 @@ def test_status_and_final_evaluation_do_not_open_codex(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     async def execute() -> None:
-        system = ResearchSystem(tmp_path / "system")
+        system = SessionSystem(tmp_path / "system")
         config = write_record(tmp_path / "config.json", TextConfig())
         run_id = await system.create(
             SessionConfig(str(tmp_path)),
@@ -244,12 +246,22 @@ def test_status_and_final_evaluation_do_not_open_codex(
         await problem.evaluate("r1")
         problem.select("r1")
         args = argparse.Namespace(command="status", data_root=system.root, resume=run_id)
-        assert await run(args) == 0
+        assert (
+            await run(
+                args, AppConfig(SessionConfig(str(tmp_path), auto_learn=False), str(system.root))
+            )
+            == 0
+        )
         output = json.loads(capsys.readouterr().out)
         assert output["session"]["thread_id"] == ""
         assert len(output["candidates"]) == 2
         args.command, args.candidate = "finalize", "r1"
-        assert await run(args) == 0
+        assert (
+            await run(
+                args, AppConfig(SessionConfig(str(tmp_path), auto_learn=False), str(system.root))
+            )
+            == 0
+        )
         assert json.loads(capsys.readouterr().out)["target_met"]
         assert not system.detail(run_id).thread_id
         await system.close()

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "areal-rsi",
+  "version": "0.2.0",
+  "description": "Delegate persistent goals to an independent AReaL-RSI runtime.",
+  "author": {"name": "AReaL Team"},
+  "repository": "https://github.com/areal-project/AReaL-RSI",
+  "license": "Apache-2.0",
+  "extensions": {
+    "com.openai": {"onboardingSkill": "./skills/setup/SKILL.md"}
+  }
+}

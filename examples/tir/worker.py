@@ -14,7 +14,7 @@ from typing import Any, Literal
 from areal_rsi.api.control import encode_record
 from areal_rsi.api.execution import TrainingReceipt
 from areal_rsi.api.records import EvaluationSample
-from areal_rsi.infra.artifacts import read_record, write_record
+from areal_rsi.infra.storage.artifacts import read_record, write_record
 from examples.checkpoints import parameter_probe
 from examples.tir.benchmark import evaluation_cases, read_examples
 from examples.tir.data import read_problems

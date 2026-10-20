@@ -12,12 +12,10 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 from areal_rsi.api.control import encode_record
 from areal_rsi.api.research import SessionPhase, SessionStatus
-from areal_rsi.infra.config import from_environment
-from areal_rsi.infra.research import ResearchSystem
+from areal_rsi.infra.config import load_config
+from areal_rsi.infra.session import SessionSystem
 
 HERE = Path(__file__).resolve().parent
 
@@ -28,12 +26,12 @@ async def trial(
     workspace = root / label / "workspace"
     workspace.mkdir(parents=True, exist_ok=False)
     shutil.copy(HERE / "task.md", workspace / "TASK.md")
-    config = from_environment(workspace)
+    config = load_config(workspace, env_file=HERE.parents[1] / ".env").session
     config.effort = "medium"
     config.use_experience = use_docs
     config.auto_learn = False
     config.approval_policy = "never"
-    system = ResearchSystem(root / "data")
+    system = SessionSystem(root / "data")
     started = time.monotonic()
     try:
         run_id = await system.create(config)
@@ -154,7 +152,6 @@ if __name__ == "__main__":
     parser.add_argument("--seconds", type=int, default=300)
     parser.add_argument("--tokens", type=int, default=120000)
     args = parser.parse_args()
-    load_dotenv(HERE.parents[1] / ".env", override=False)
     if not os.environ.get("RSI_API_KEY"):
         raise SystemExit("Configure the project .env before this explicitly paid study")
     asyncio.run(

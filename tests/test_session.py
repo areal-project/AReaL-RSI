@@ -8,14 +8,14 @@ import unittest
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fake_codex import FakeCodex
 
 from areal_rsi.api.control import LessonDraft
 from areal_rsi.api.research import ExperienceRef, SessionConfig, SessionPhase, SessionStatus
 from areal_rsi.infra.codex import NativeEvent
-from areal_rsi.infra.research import ResearchSystem
+from areal_rsi.infra.session import SessionSystem
 
 
 async def eventually(condition: Callable[[], bool]) -> None:
@@ -24,15 +24,15 @@ async def eventually(condition: Callable[[], bool]) -> None:
             await asyncio.sleep(0.01)
 
 
-class ResearchTests(unittest.IsolatedAsyncioTestCase):
+class SessionTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
         FakeCodex.instances.clear()
         FakeCodex.threads.clear()
-        self.patcher = patch("areal_rsi.infra.research.CodexClient", FakeCodex)
+        self.patcher = patch("areal_rsi.infra.coordination.runtime.CodexClient", FakeCodex)
         self.patcher.start()
-        self.system = ResearchSystem(self.root / "data")
+        self.system = SessionSystem(self.root / "data")
         self.run_id = await self.system.create(SessionConfig(str(self.root), auto_learn=False))
 
     async def asyncTearDown(self) -> None:
@@ -97,7 +97,7 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(params["threadId"] == before.thread_id for params in starts))
         await self.system.pause(self.run_id)
         await self.system.close()
-        self.system = ResearchSystem(self.root / "data")
+        self.system = SessionSystem(self.root / "data")
         record = await self.system.open(self.run_id)
         self.assertEqual(record.config.model, "gpt-6-sol")
         self.assertEqual(record.config.effort, "low")
@@ -218,8 +218,6 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.client.awake)
 
     async def test_automatic_learning_failure_preserves_completed_goal_and_can_retry(self) -> None:
-        from unittest.mock import AsyncMock
-
         self.run_id = await self.system.create(
             replace(self.system.detail(self.run_id).config, auto_learn=True)
         )
@@ -244,8 +242,6 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(summarize.await_count, 2, "Duplicate trigger should reuse the result")
 
     async def test_guided_learning_waits_across_reopen_and_uses_human_feedback(self) -> None:
-        from unittest.mock import AsyncMock
-
         await self.system.set_learning_mode(self.run_id, "guided")
         with self.assertRaisesRegex(ValueError, "auto.*guided"):
             await self.system.set_learning_mode(self.run_id, "invalid")
@@ -268,7 +264,7 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(self.client.awake)
             summarize.assert_not_awaited()
         await self.system.close()
-        self.system = ResearchSystem(self.root / "data")
+        self.system = SessionSystem(self.root / "data")
         reopened = await self.system.open(self.run_id)
         self.assertFalse(reopened.config.auto_learn)
         self.assertEqual(reopened.learning.status, "awaiting_feedback")
@@ -305,8 +301,6 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(summarize.await_args.args[0].learning.document, document)
 
     async def test_switch_from_guided_to_auto_starts_pending_summary(self) -> None:
-        from unittest.mock import AsyncMock
-
         await self.leader()
         await self.client.tool(
             99,
@@ -448,7 +442,7 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
             await self.system.set_budget(self.run_id, max_total_tokens=0)
         self.assertEqual(self.system.detail(self.run_id).goal, before.goal)
         await self.system.close()
-        self.system = ResearchSystem(self.root / "data")
+        self.system = SessionSystem(self.root / "data")
         await self.system.open(self.run_id)
         with self.assertRaisesRegex(ValueError, "/budget off"):
             await self.system.resume(self.run_id)
@@ -592,7 +586,7 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_run_owner_is_released_after_close(self) -> None:
         await self.system.open(self.run_id)
-        other = ResearchSystem(self.root / "data")
+        other = SessionSystem(self.root / "data")
         try:
             with self.assertRaisesRegex(ValueError, "already open"):
                 await other.open(self.run_id)
@@ -602,6 +596,51 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(restored.thread_id, thread_id)
         finally:
             await other.close()
+
+    async def test_failed_connection_releases_owner_and_closes_client(self) -> None:
+        with (
+            patch.object(FakeCodex, "start", AsyncMock(side_effect=RuntimeError("cannot connect"))),
+            self.assertRaisesRegex(RuntimeError, "cannot connect"),
+        ):
+            await self.system.open(self.run_id)
+        self.assertTrue(self.client.closed)
+        self.assertNotIn(self.run_id, self.system.live)
+        other = SessionSystem(self.root / "data")
+        try:
+            restored = await other.open(self.run_id)
+            self.assertTrue(restored.thread_id)
+            self.assertEqual(restored.status, SessionStatus.IDLE)
+        finally:
+            await other.close()
+
+    async def test_failed_leader_start_recovers_the_committed_fork(self) -> None:
+        await self.system.enter_rsi(self.run_id, "Prepare the task")
+        await self.active()
+        source = self.client.thread_id
+        await self.client.tool(
+            1,
+            "rsi_set_task",
+            {
+                "objective": "Improve the interface",
+                "instructions": "Keep business semantics",
+                "acceptance": ["Check rendered output"],
+            },
+        )
+        await self.system.start(self.run_id)
+        self.client.fail_method = "turn/start"
+        await self.client.finish()
+        await eventually(lambda: self.system.detail(self.run_id).status == SessionStatus.FAILED)
+        failed = self.system.store.load(self.run_id)
+        self.assertEqual(failed.phase, SessionPhase.LEADER)
+        self.assertEqual(failed.source_thread_id, source)
+        self.assertNotEqual(failed.thread_id, source)
+        self.assertIsNotNone(failed.in_flight)
+        await self.system.resume(self.run_id)
+        await self.active()
+        self.assertEqual(self.system.detail(self.run_id).thread_id, failed.thread_id)
+        self.assertFalse(any(method == "thread/fork" for method, _ in self.client.requests))
+        started = next(params for method, params in self.client.requests if method == "turn/start")
+        self.assertIn("不要重复有副作用", started["input"][0]["text"])
 
     async def test_recovery_recognizes_a_completed_turn_whose_notification_was_lost(self) -> None:
         await self.system.send_message(self.run_id, "Finish the change")

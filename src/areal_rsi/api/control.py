@@ -12,6 +12,8 @@ from typing import Any, Literal, TypeVar, cast, get_args, get_origin, get_type_h
 
 from jsonschema import Draft202012Validator
 
+from areal_rsi.api.research import ProblemBinding, ReasoningEffort
+
 Json = dict[str, Any]
 T = TypeVar("T")
 
@@ -76,6 +78,180 @@ class TerminalInput:
     request_id: int | str | None = None
     approved: bool | None = None
     answers: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class CreateSession:
+    request_id: str
+    workspace: str
+    message: str
+    context: str = ""
+    mode: Literal["rsi", "chat"] = "rsi"
+    config_file: str = ""
+    env_file: str = ""
+    problem: ProblemBinding | None = None
+
+
+@dataclass(slots=True)
+class SendMessage:
+    request_id: str
+    run_id: str
+    text: str
+    images: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class ControlSession:
+    request_id: str
+    run_id: str
+    action: Literal["rsi", "start", "pause", "resume", "stop", "chat", "open"]
+    text: str = ""
+
+
+@dataclass(slots=True)
+class AnswerPrompt:
+    request_id: str
+    run_id: str
+    prompt_id: str
+    approved: bool | None = None
+    answers: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class GoalBudget:
+    max_total_tokens: int | None = None
+    max_wall_seconds: float | None = None
+
+
+@dataclass(slots=True)
+class ConfigureSession:
+    request_id: str
+    run_id: str
+    model: str | None = None
+    effort: ReasoningEffort | None = None
+    learning_mode: Literal["auto", "guided"] | None = None
+    budget: GoalBudget | None = None
+
+
+@dataclass(slots=True)
+class LearnExperience:
+    request_id: str
+    run_id: str
+    feedback: str = ""
+
+
+@dataclass(slots=True)
+class ResearchOperation:
+    request_id: str
+    run_id: str
+    action: Literal["prepare", "finalize"]
+    candidate_id: str = ""
+
+
+@dataclass(slots=True)
+class ObserveSession:
+    run_id: str
+    cursor: int = 0
+    wait_seconds: float = 0
+    include_tools: bool = False
+
+
+@dataclass(slots=True)
+class ReadRequest:
+    request_id: str
+    wait_seconds: float = 0
+
+
+@dataclass(slots=True)
+class ListSessions:
+    pass
+
+
+@dataclass(slots=True)
+class ReadExperience:
+    slug: str = ""
+
+
+@dataclass(slots=True)
+class SessionQuery:
+    run_id: str
+    view: Literal["detail", "models", "candidates"] = "detail"
+
+
+Mutation = (
+    CreateSession
+    | SendMessage
+    | ControlSession
+    | AnswerPrompt
+    | ConfigureSession
+    | LearnExperience
+    | ResearchOperation
+)
+Query = ObserveSession | ReadRequest | ListSessions | ReadExperience | SessionQuery
+
+
+@dataclass(slots=True)
+class ServiceShutdown:
+    force: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class Operation:
+    arguments: type[Any]
+    description: str
+    mutating: bool = False
+
+
+# One public contract powers CLI JSON validation and MCP schemas. Agent-only goal
+# completion/candidate tools deliberately remain in coordination.tools.control.
+OPERATIONS = {
+    "rsi_create": Operation(
+        CreateSession,
+        "Create an independent session from a workspace, "
+        "user request and optional host context summary.",
+        True,
+    ),
+    "rsi_send": Operation(SendMessage, "Forward a user message or steer the current run.", True),
+    "rsi_control": Operation(
+        ControlSession, "Enter RSI, start, pause, resume, stop, or chat.", True
+    ),
+    "rsi_answer": Operation(AnswerPrompt, "Relay the user's answer to a current prompt_id.", True),
+    "rsi_configure": Operation(
+        ConfigureSession,
+        "Set model, effort, learning mode or budget. Omitted settings stay unchanged.",
+        True,
+    ),
+    "rsi_learn": Operation(
+        LearnExperience, "Start experience curation with optional feedback.", True
+    ),
+    "rsi_research": Operation(
+        ResearchOperation,
+        "Prepare a bound research problem or finalize "
+        "a selected candidate; runs in the background.",
+        True,
+    ),
+    "rsi_observe": Operation(
+        ObserveSession,
+        "Replay progress after a cursor and read current "
+        "state/questions. Wait at most 20 seconds; disconnection does not stop work.",
+    ),
+    "rsi_request": Operation(
+        ReadRequest,
+        "Read an accepted request's result. Reuse its ID after "
+        "a timeout; interrupted operations are never automatically replayed.",
+    ),
+    "rsi_list": Operation(ListSessions, "List existing sessions without starting model work."),
+    "rsi_experience": Operation(ReadExperience, "List experience documents, or read one by slug."),
+    "rsi_query": Operation(SessionQuery, "Read session details, available models, or candidates."),
+}
+
+
+@dataclass(slots=True)
+class ServiceRequest:
+    operation: str
+    arguments: Json = field(default_factory=dict)
+    protocol: int = 1
+    client_version: str = ""
 
 
 def record_schema(kind: type[Any]) -> Json:

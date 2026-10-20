@@ -22,9 +22,9 @@ from areal_rsi.api.records import (
     BenchmarkSplit,
 )
 from areal_rsi.api.research import CandidateContext, CandidatePlan, CandidateStatus
-from areal_rsi.infra.artifacts import local_path, read_record, write_record
 from areal_rsi.infra.coordination import ProblemRun
-from areal_rsi.infra.execution import JobExecutionError
+from areal_rsi.infra.execution.jobs import JobExecutionError
+from areal_rsi.infra.storage.artifacts import local_path, read_record, write_record
 from examples.tir.benchmark import (
     Benchmark,
     Example,
@@ -296,7 +296,7 @@ from pathlib import Path
 from areal_rsi.api.control import encode_record
 from areal_rsi.api.execution import TrainingReceipt
 from areal_rsi.api.records import EvaluationSample, TraceEvent
-from areal_rsi.infra.artifacts import read_record, write_record
+from areal_rsi.infra.storage.artifacts import read_record, write_record
 from examples.tir.benchmark import evaluation_cases, read_examples
 from examples.tir.pipeline import WorkerRequest
 request = read_record(Path(sys.argv[1]), WorkerRequest)

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 from fake_codex import FakeCodex
-from test_research import eventually
+from test_session import eventually
 from test_training import git_repository
 
 from areal_rsi.api.control import CandidateProposal, encode_record
@@ -35,10 +35,10 @@ from areal_rsi.api.research import (
     SessionStatus,
     SourceTree,
 )
-from areal_rsi.infra.artifacts import file_ref, snapshot_directory, write_record
 from areal_rsi.infra.coordination import ProblemRun, pin_problem
-from areal_rsi.infra.execution import JobExecutionError
-from areal_rsi.infra.research import ResearchSystem
+from areal_rsi.infra.execution.jobs import JobExecutionError
+from areal_rsi.infra.session import SessionSystem
+from areal_rsi.infra.storage.artifacts import file_ref, snapshot_directory, write_record
 
 
 @dataclass(frozen=True)
@@ -251,7 +251,7 @@ def test_interrupted_evaluation_requires_explicit_attempt_without_duplicate_exec
 def test_recovery_feedback_waits_for_reused_execution_instead_of_reporting_old_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("areal_rsi.infra.research.CodexClient", FakeCodex)
+    monkeypatch.setattr("areal_rsi.infra.coordination.runtime.CodexClient", FakeCodex)
     FakeCodex.instances.clear()
     FakeCodex.threads.clear()
     source = tmp_path / "source"
@@ -262,7 +262,7 @@ def test_recovery_feedback_waits_for_reused_execution_instead_of_reporting_old_f
     gate = tmp_path / "gate"
 
     async def execute() -> None:
-        system = ResearchSystem(tmp_path / "system")
+        system = SessionSystem(tmp_path / "system")
         config = write_record(tmp_path / "config.json", TextConfig(str(gate), source=str(source)))
         run_id = await system.create(
             SessionConfig(str(tmp_path), auto_learn=False),
@@ -295,14 +295,18 @@ def test_recovery_feedback_waits_for_reused_execution_instead_of_reporting_old_f
             await eventually(started.exists)
             policy.write_text("value = 2\n")
             gate.unlink()
+            operation = system.live[run_id].operation
+            assert operation is not None
             with pytest.raises(ValueError, match="Source changed"):
-                await system.operations[run_id]
+                await operation
             assert system.candidate_status(run_id, "r1")[0].status == CandidateStatus.FAILED
 
             policy.write_text("value = 1\n")
             feedback = await system.evaluate_candidate(run_id, "r1")
             assert feedback.status == CandidateStatus.PREPARED and feedback.error == ""
-            result = await system.operations[run_id]
+            operation = system.live[run_id].operation
+            assert operation is not None
+            result = await operation
             assert result.validation is not None and result.validation.report.score == 1
             assert result.validation_attempt == 1
             assert len(list((problem.root / "execution").rglob("job.json"))) == 2
@@ -315,12 +319,12 @@ def test_recovery_feedback_waits_for_reused_execution_instead_of_reporting_old_f
 def test_bound_tools_authorization_completion_and_async_feedback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("areal_rsi.infra.research.CodexClient", FakeCodex)
+    monkeypatch.setattr("areal_rsi.infra.coordination.runtime.CodexClient", FakeCodex)
     FakeCodex.instances.clear()
     FakeCodex.threads.clear()
 
     async def execute() -> None:
-        system = ResearchSystem(tmp_path / "system")
+        system = SessionSystem(tmp_path / "system")
         config = write_record(tmp_path / "config.json", TextConfig())
         run_id = await system.create(
             SessionConfig(str(tmp_path), auto_learn=False),
@@ -356,7 +360,9 @@ def test_bound_tools_authorization_completion_and_async_feedback(
             assert (
                 await client.tool(15, "rsi_submit_candidate", encode_record(proposal))
             ) == response
-            await system.operations[run_id]
+            operation = system.live[run_id].operation
+            assert operation is not None
+            await operation
             assert system.candidate_status(run_id, "r1")[0].score == 1
             assert (await client.tool(16, "rsi_select_candidate", {"candidate_id": "r1"}))[
                 "success"

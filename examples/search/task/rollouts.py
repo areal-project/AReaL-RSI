@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 from areal_rsi.api.control import encode_record
 from areal_rsi.api.records import EvaluationSample, TraceEvent
-from areal_rsi.infra.artifacts import read_record
+from areal_rsi.infra.storage.artifacts import read_record
 from examples.search.task.dataset import SearchQuestion
 
 

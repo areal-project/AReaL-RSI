@@ -19,11 +19,11 @@ from unittest.mock import patch
 from native_model import Json, NativeModel, function
 
 from areal_rsi.api.research import SessionConfig, SessionPhase, SessionStatus
-from areal_rsi.infra.config import from_environment
-from areal_rsi.infra.research import ResearchSystem
+from areal_rsi.infra.config import load_config
+from areal_rsi.infra.session import SessionSystem
 
 
-async def idle(system: ResearchSystem, run_id: str) -> None:
+async def idle(system: SessionSystem, run_id: str) -> None:
     async with asyncio.timeout(20):
         while True:
             record = system.detail(run_id)
@@ -53,7 +53,7 @@ class ProviderCatalogTests(unittest.IsolatedAsyncioTestCase):
                 patch.dict(os.environ, {"RSI_TEST_KEY": "catalog-fixture"}),
             ):
                 root = Path(directory)
-                system = ResearchSystem(root / "data")
+                system = SessionSystem(root / "data")
                 run_id = await system.create(
                     SessionConfig(str(root), base_url=model.url, api_key_env="RSI_TEST_KEY")
                 )
@@ -128,14 +128,16 @@ class NativeContextTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ]
             model = NativeModel(lambda request: steps.pop(0) if steps else "Unexpected call")
-            system = ResearchSystem(root / "data")
+            system = SessionSystem(root / "data")
             try:
                 for name in ("RSI_SANDBOX", "RSI_APPROVAL_POLICY"):
                     os.environ.pop(name, None)
                 os.environ.update(
                     RSI_BASE_URL=model.url, RSI_API_KEY_ENV="RSI_TEST_KEY", RSI_AUTO_LEARN="0"
                 )
-                run_id = await system.create(from_environment(workspace))
+                env_file = root / "empty.env"
+                env_file.write_text("")
+                run_id = await system.create(load_config(workspace, env_file=env_file).session)
                 await system.send_message(run_id, f"Append to {target}")
                 await idle(system, run_id)
                 await system.enter_rsi(run_id, "Append another marker and finish")
@@ -184,7 +186,7 @@ class NativeContextTests(unittest.IsolatedAsyncioTestCase):
                 root = Path(directory)
                 target = root / "protected.txt"
                 target.write_text("original")
-                system = ResearchSystem(root / "data")
+                system = SessionSystem(root / "data")
                 try:
                     run_id = await system.create(
                         SessionConfig(
@@ -242,7 +244,7 @@ class NativeContextTests(unittest.IsolatedAsyncioTestCase):
                 patch.dict(os.environ, {"RSI_TEST_KEY": "fixture"}),
             ):
                 root = Path(directory)
-                system = ResearchSystem(root / "data")
+                system = SessionSystem(root / "data")
                 try:
                     config = SessionConfig(
                         str(root), base_url=model.url, api_key_env="RSI_TEST_KEY", auto_learn=False
@@ -373,7 +375,7 @@ class NativeContextTests(unittest.IsolatedAsyncioTestCase):
                     api_key_env="RSI_TEST_KEY",
                     approval_policy="never",
                 )
-                system = ResearchSystem(root / "data")
+                system = SessionSystem(root / "data")
                 try:
                     run_id = await system.create(config)
                     reference = root / "reference.png"
@@ -492,7 +494,7 @@ class NativeContextTests(unittest.IsolatedAsyncioTestCase):
                 patch.dict(os.environ, {"RSI_TEST_KEY": "offline-fixture"}),
             ):
                 root = Path(directory)
-                system = ResearchSystem(root / "data")
+                system = SessionSystem(root / "data")
                 config = SessionConfig(
                     str(root),
                     auto_learn=False,
@@ -514,7 +516,7 @@ class NativeContextTests(unittest.IsolatedAsyncioTestCase):
                     release.set()
                     thread_id = system.detail(run_id).thread_id
                     await system.close()
-                    system = ResearchSystem(root / "data")
+                    system = SessionSystem(root / "data")
                     await system.open(run_id)
                     await system.resume(run_id)
                     await idle(system, run_id)
@@ -539,7 +541,7 @@ class NativeContextTests(unittest.IsolatedAsyncioTestCase):
                 config = SessionConfig(
                     str(root), auto_learn=False, base_url=model.url, api_key_env="RSI_TEST_KEY"
                 )
-                system = ResearchSystem(root / "data")
+                system = SessionSystem(root / "data")
                 try:
                     run_id = await system.create(config)
                     await system.send_message(
@@ -548,7 +550,7 @@ class NativeContextTests(unittest.IsolatedAsyncioTestCase):
                     await idle(system, run_id)
                     thread_id = system.detail(run_id).thread_id
                     await system.close()
-                    system = ResearchSystem(root / "data")
+                    system = SessionSystem(root / "data")
                     await system.send_message(run_id, "How are shipments linked?")
                     await idle(system, run_id)
                     self.assertEqual(thread_id, system.detail(run_id).thread_id)

@@ -6,7 +6,7 @@ from typing import NoReturn
 
 import pytest
 
-from areal_rsi.infra.artifacts import file_ref, read_record, write_record
+from areal_rsi.infra.storage.artifacts import file_ref, read_record, write_record
 from examples.search.evaluation import publish as output
 from examples.search.evaluation.artifacts import FinalEvalConfig
 

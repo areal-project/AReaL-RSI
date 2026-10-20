@@ -20,7 +20,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from areal_rsi.api.execution import GPUAllocation, GPUDevice, JobRecord, JobSpec, JobState
-from areal_rsi.infra.artifacts import read_record, write_record
+from areal_rsi.infra.storage.artifacts import read_record, write_record
 
 
 class JobExecutionError(RuntimeError):

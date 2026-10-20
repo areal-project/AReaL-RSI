@@ -2,7 +2,8 @@
 
 `make check` 执行全部离线 Python/Node 测试、Ruff 和严格 Mypy。
 
-- `test_research.py`：角色授权、交接、预算、中断、断线、不确定投递、恢复与独占。
+- `test_config.py`：配置优先级、相对路径、错误提示、离线查看与旧会话配置隔离。
+- `test_session.py`：角色授权、交接、预算、中断、断线、不确定投递、恢复与独占。
 - `test_codex_native.py`：启动真实 Codex app-server，模型端使用本地 Responses fixture。
   检查文字、助手回复、工具结果、图片在恢复和角色交接后的实际模型输入；检查真实命令执行、
   自动续行、完成和中断后不重复已完成操作；验证默认跨工作目录写入，以及显式只读权限的继承。
@@ -11,9 +12,9 @@
 - `ui/dsh/test.mjs`：原文件/补丁哈希，xterm 上的原版流式组件、工具展开、输入与权限/问答弹窗。
 - `test_experience.py`：固定快照、并发发布冲突和文档路径边界；原生测试另验证新会话只获取文档。
 - `test_keep_awake.py`：macOS 实际系统休眠断言及退出释放；其他平台跳过这项集成测试。
-- `test_architecture.py`：API/infra/UI 依赖方向和协调状态边界。
+- `test_architecture.py`：API/infra/UI 依赖方向、协调状态，以及 execution/storage 的依赖边界。
 - `test_training.py`：独立 TIR 数据合成与答案校验、真实子进程的失败/超时/中断、
-  评测完整性、轨迹索引、训练产物新鲜性和分片完整性；不模拟训练成绩。
+  评测完整性、轨迹索引、训练入口的工作目录与导入、训练产物新鲜性和分片完整性；不模拟训练成绩。
 - `test_search_layout.py`：在源码目录外运行 Search 各入口的 `--help`，检查迁移后的包路径及 GPU 可选依赖隔离。
 
 本机需安装 Node >= 22 和 Codex >= 0.162.1 才能执行原生协议测试；缺少二进制时会明确跳过。
@@ -41,3 +42,9 @@ GitHub CI 固定 Python 3.12.12、Node 22.14.0、uv 0.9.11 和 Codex 0.162.1，
 在 Linux/macOS 执行 `make check`、构建和源码目录外 wheel 安装检查。CI 拒绝原生测试被跳过；
 只允许对应平台不适用的测试跳过。localhost 通过 `NO_PROXY` / `no_proxy` 直连，
 本地使用代理时也应设置 `localhost,127.0.0.1,::1`，避免离线 HTTP fixture 被代理。
+
+
+`test_service.py` 保留请求去重/中断恢复和 MCP 断开后继续完成 Goal 两个场景。
+恢复场景检查废弃会话暂停、旧问题失效、经验总结中断，以及不修改仍被 TUI 持有的会话。
+后者使用真实 Codex 与本地离线模型端点，覆盖上下文交接、后台执行及游标观察；不调用付费 API。
+缺少 Codex 时明确跳过原生测试。项目配置与密钥隔离由 `test_config.py` 验证。

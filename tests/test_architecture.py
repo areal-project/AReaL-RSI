@@ -1,4 +1,4 @@
-"""API is independent of infra; core research infrastructure is independent of UI."""
+"""API, session runtime and goal policy keep one-way dependency boundaries."""
 
 import ast
 from pathlib import Path
@@ -10,7 +10,24 @@ def test_dependency_and_state_boundaries() -> None:
     forbidden = {
         "api": ("infra", "ui"),
         "infra": ("ui",),
-        "infra.coordination": ("infra.research",),
+        "infra.session": ("infra.service",),
+        "infra.service.handler": ("infra.service.transport",),
+        "infra.storage": (
+            "infra.execution",
+            "infra.coordination",
+            "infra.session",
+            "infra.service",
+        ),
+        "infra.execution": ("infra.coordination", "infra.session", "infra.service"),
+        "infra.coordination": ("infra.session",),
+        "infra.coordination.policies": (
+            "infra.coordination.runtime",
+            "infra.coordination.store",
+            "infra.codex",
+            "infra.storage",
+            "infra.execution",
+        ),
+        "infra.coordination.tools": ("infra.coordination.runtime",),
     }
     errors = []
     source = ROOT / "src/areal_rsi"
@@ -19,7 +36,7 @@ def test_dependency_and_state_boundaries() -> None:
         package = ["areal_rsi", *parts[:-1]]
         for node in ast.walk(ast.parse(path.read_text())):
             # Coordinator state is a data contract, never an untyped JSON bag.
-            if parts[:2] == ("infra", "coordination") or parts == ("infra", "research"):
+            if parts[:2] == ("infra", "coordination") or parts == ("infra", "session"):
                 owner = None
                 if isinstance(node, ast.Subscript):
                     owner = node.value

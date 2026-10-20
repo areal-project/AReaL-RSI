@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Literal
 
 from areal_rsi.api.records import ArtifactFile, DirectorySnapshot
-from areal_rsi.infra.artifacts import file_ref, read_record, write_record
+from areal_rsi.infra.storage.artifacts import file_ref, read_record, write_record
 from examples.search.evaluation.artifacts import FinalEvalConfig
 
 

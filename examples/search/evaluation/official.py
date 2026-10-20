@@ -16,7 +16,7 @@ import urllib.request
 from dataclasses import asdict
 from pathlib import Path
 
-from areal_rsi.infra.execution import terminate_process_tree
+from areal_rsi.infra.execution.jobs import terminate_process_tree
 from examples.search import PROJECT_ROOT
 from examples.search.evaluation.artifacts import (
     FinalEvalConfig,
@@ -350,7 +350,7 @@ def run(config: FinalEvalConfig) -> None:
             raise RuntimeError("; ".join(errors))
     # Preserve counters even when the legacy batch's JSON-only observation
     # check exits nonzero. Only proven local model-action errors may continue.
-    from areal_rsi.infra.artifacts import write_record
+    from areal_rsi.infra.storage.artifacts import write_record
 
     write_record(output / "solver-verification.json", verify_solver_outputs(config))
     judge_environment = {
@@ -414,7 +414,7 @@ def main() -> None:
     elif arguments.verify_runs:
         if arguments.output is None or arguments.source_sha256:
             parser.error("--verify-runs requires --output and does not accept --source-sha256")
-        from areal_rsi.infra.artifacts import read_record, write_record
+        from areal_rsi.infra.storage.artifacts import read_record, write_record
 
         config = read_record(arguments.verify_runs, FinalEvalConfig)
         if arguments.output.exists() or arguments.output.resolve().is_relative_to(

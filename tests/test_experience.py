@@ -13,14 +13,14 @@ from fake_codex import FakeCodex, FakeThread
 from areal_rsi.api.control import LessonDraft, encode_record
 from areal_rsi.api.research import LearningRecord, SessionConfig, SessionRecord
 from areal_rsi.infra.experience import MAX_BODY_CHARS, ExperienceLibrary
-from areal_rsi.infra.research import ResearchSystem
+from areal_rsi.infra.session import SessionSystem
 
 
 class ExperienceTests(unittest.IsolatedAsyncioTestCase):
     async def test_updates_replace_one_document_and_reject_stale_edits(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            system = ResearchSystem(root / "data")
+            system = SessionSystem(root / "data")
             library = system.experience
             source = SessionRecord("source", SessionConfig(str(root)))
             first = library.publish(

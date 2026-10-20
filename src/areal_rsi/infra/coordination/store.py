@@ -7,11 +7,12 @@ import json
 import os
 import re
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 from typing import TextIO
 
-from areal_rsi.api.control import decode_record, encode_record
-from areal_rsi.api.research import SessionEvent, SessionRecord
+from areal_rsi.api.control import decode_record, encode_record, public_tool_text
+from areal_rsi.api.research import EventPage, SessionEvent, SessionRecord
 
 
 class SessionStore:
@@ -77,3 +78,31 @@ class SessionStore:
         return [
             decode_record(SessionEvent, json.loads(line)) for line in path.read_text().splitlines()
         ]
+
+    def read_events(
+        self, run_id: str, cursor: int = 0, *, include_tools: bool = False
+    ) -> EventPage:
+        """Replay a bounded page; each observer owns its independent byte cursor."""
+        path = self.directory(run_id) / "transcript.jsonl"
+        size = path.stat().st_size if path.exists() else 0
+        if cursor < 0 or cursor > size:
+            raise ValueError("Invalid event cursor")
+        if not size:
+            return EventPage(0, [])
+        events: list[SessionEvent] = []
+        with path.open("rb") as source:
+            if cursor:
+                source.seek(cursor - 1)
+                if source.read(1) != b"\n":
+                    raise ValueError("Event cursor must be a record boundary")
+            source.seek(cursor)
+            for _ in range(100):
+                line = source.readline()
+                if not line:
+                    break
+                event = decode_record(SessionEvent, json.loads(line))
+                if include_tools or event.kind != "tool":
+                    events.append(replace(event, text=public_tool_text(event.text, 3000)))
+                if len(events) == 16:
+                    break
+            return EventPage(source.tell(), events, source.tell() < size)

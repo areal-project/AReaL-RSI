@@ -1,7 +1,9 @@
 # RSI Problem Integration and Session API
 
-The system entry point is `infra.research.ResearchSystem`. Without a bound problem, `/rsi` continues to use the existing
+The system entry point is `infra.session.SessionSystem`. Without a bound problem, `/rsi` continues to use the existing
 Interaction → Leader flow. Problem binding adds candidate and evaluation capabilities without changing ownership of native history.
+`SessionSystem` provides public session operations; `SessionRuntime` owns connections, runtime state, and the execution loop.
+`AppConfig` defines startup defaults, while each session persists its own `SessionConfig`.
 
 ## Launching a Problem
 
@@ -127,7 +129,7 @@ Cancellation and timeout retain their respective terminal states; resources are 
 If a completed job has been purged from scontrol, recovery can confirm its terminal state through sacct using the same job ID, without resubmitting.
 
 `SlurmResources.node` can specify a node to avoid rerunning experiments on nodes with unexpected existing GPU usage.
-GPU containers share the `infra/worker.sh` entry point. Before loading a model, it saves `gpu-allocation.json`, checks allocated
+GPU containers share the `infra/execution/worker.sh` entry point. Before loading a model, it saves `gpu-allocation.json`, checks allocated
 devices against CUDA-visible devices, and rejects GPUs with more than 1 GiB of existing memory usage. On failure, it retains device and memory
 records and exits with a failed job; it does not work around occupancy by shrinking training microbatches or dropping samples.
 
@@ -149,5 +151,12 @@ Selection requires complete, comparable valid evidence, satisfaction of minimum-
 The completion tool revalidates the frozen selection; textual evidence cannot replace actual results. Final test evaluation is not exposed as an Agent tool.
 
 API data lives in api/records.py, research.py, and execution.py; protocols in interfaces.py; and control requests in
-control.py. infra does not statically import examples or UI; UI only calls ResearchSystem.
+control.py. infra does not statically import examples or UI. Embedded UI calls SessionSystem; MCP and JSON entry points
+call the same system through the background service.
 Other retained protocols do not imply existing implementations or provide a second problem integration path.
+
+## External Harnesses
+
+Public tool arguments and schemas share `api/control.py:OPERATIONS`. See the [plugin protocol](../plugins.md#请求与能力)
+for the operation list and retry semantics. External controls cannot invoke the internal Agent's rsi_update_goal
+or bypass Leader role checks to submit or select candidates directly. The host can query candidates and run independent final acceptance.

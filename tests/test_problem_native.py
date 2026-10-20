@@ -14,8 +14,8 @@ from test_problems import TextConfig, TextRecipe
 
 from areal_rsi.api.control import CandidateProposal, encode_record
 from areal_rsi.api.research import ProblemBinding, SessionConfig, SessionStatus
-from areal_rsi.infra.artifacts import write_record
-from areal_rsi.infra.research import ResearchSystem
+from areal_rsi.infra.session import SessionSystem
+from areal_rsi.infra.storage.artifacts import write_record
 
 
 @pytest.mark.skipif(shutil.which("codex") is None, reason="Codex >= 0.162.1 is required")
@@ -51,7 +51,7 @@ def test_bound_problem_tools_and_background_feedback_cross_native_handoff(tmp_pa
     model = NativeModel(lambda request: steps.pop(0) if steps else "Unexpected call")
 
     async def execute() -> None:
-        system = ResearchSystem(tmp_path / "system")
+        system = SessionSystem(tmp_path / "system")
         config = write_record(tmp_path / "config.json", TextConfig())
         try:
             run_id = await system.create(

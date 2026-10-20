@@ -60,9 +60,14 @@ class TUITests(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
-                (root / ".env").write_text(
-                    f"RSI_BASE_URL={model.url}\nRSI_API_KEY=offline-fixture\n"
-                    "RSI_AUTO_LEARN=0\nRSI_DATA_ROOT=./data\nRSI_MODEL=gpt-6-astra\n"
+                (root / ".env").write_text("RSI_API_KEY=offline-fixture\n")
+                settings = root / "settings"
+                settings.mkdir()
+                config_file = settings / "session.toml"
+                config_file.write_text(
+                    'data_root = "../data"\n[session]\n'
+                    f'base_url = "{model.url}"\n'
+                    'auto_learn = false\nmodel = "gpt-6-astra"\neffort = "low"\n'
                 )
                 environment = {
                     key: value for key, value in os.environ.items() if not key.startswith("RSI_")
@@ -71,7 +76,14 @@ class TUITests(unittest.TestCase):
 
                 def session(resume: str = "") -> str:
                     master, slave = pty.openpty()
-                    arguments = [sys.executable, "-m", "areal_rsi", "tui"]
+                    arguments = [
+                        sys.executable,
+                        "-m",
+                        "areal_rsi",
+                        "tui",
+                        "--config",
+                        str(config_file),
+                    ]
                     if resume:
                         arguments.extend(["--resume", resume])
                     process = subprocess.Popen(
@@ -117,6 +129,9 @@ class TUITests(unittest.TestCase):
                         until(lambda: b"DSH terminal" in output and bool(state().get("thread_id")))
                         run_id = str(state()["run_id"])
                         if not resume:
+                            os.write(master, b"/config\r")
+                            until(lambda: b"api_key_env" in output)
+                            self.assertNotIn(b"offline-fixture", output)
                             os.write(master, b"/learn\r")
                             until(lambda: "总结经验" in output.decode(errors="replace"))
                             os.write(master, b"BUSINESS_UI_CONTEXT_501\r")

@@ -13,7 +13,7 @@ import pytest
 from areal_rsi.api.control import encode_record
 from areal_rsi.api.execution import AReaLRuntime
 from areal_rsi.api.records import BenchmarkSplit
-from areal_rsi.infra.artifacts import read_record
+from areal_rsi.infra.storage.artifacts import read_record
 from examples.search.evaluation.checkpoints import stage_model
 from examples.search.experiment.config import (
     HarnessConfig,

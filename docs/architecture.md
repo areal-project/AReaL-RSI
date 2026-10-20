@@ -1,112 +1,112 @@
-# 单 Agent 内核
+# Single-Agent Core
 
 ```text
-ui/dsh 原版组件 ← main.mjs ← ui/tui.py、ui/cli.py
-        │ 调用；消费 SessionEvent
+ui/dsh upstream components ← main.mjs ← ui/tui.py, ui/cli.py
+        │ calls; consumes SessionEvent
         ▼
 infra/research.py · ResearchSystem
-        ├── agents.py                  当前角色指令
-        ├── coordination/store.py      原子状态、会话占用锁、UI 记录
-        ├── coordination/policies/goal.py  Goal 继续/完成/等待/预算
-        ├── coordination/tools/control.py  三个 Agent 控制工具
-        ├── experience.py              本地文档与独立总结
-        └── codex.py                   原生 app-server JSON-RPC
-                └── Codex             模型、工具、历史、压缩、沙箱
+        ├── agents.py                     Current role instructions
+        ├── coordination/store.py         Atomic state, session ownership lock, UI records
+        ├── coordination/policies/goal.py Goal continuation/completion/waiting/budget
+        ├── coordination/tools/control.py Three Agent control tools
+        ├── experience.py                 Local documents and independent summarization
+        └── codex.py                      Native app-server JSON-RPC
+                └── Codex                 Model, tools, history, compaction, sandbox
 ```
 
-`api/` 定义具名数据契约和协议，不依赖实现；`infra/` 不依赖 UI。
-未绑定任务的会话保持单 Agent 执行。可选 ResearchProblem 绑定由 ResearchSystem 管理；
-infra/coordination 的 ProblemRun 负责候选、计划、证据与冻结选择，policies/selection 负责比较规则。
-TIR 与 Search 通过三个任务接口提供业务数据、worker 和计划，复用 execution、training、
-evaluation 与 trajectories。绑定任务的 Agent 工具放 coordination/tools，最终评测只由宿主调用。
-任务绑定不增加会话角色或第二套模型上下文。接入与运行命令见 [任务 API](interfaces/README.md)。
+`api/` defines named data contracts and protocols without depending on implementations; `infra/` does not depend on UI.
+Sessions without a bound problem use a single Agent. ResearchSystem manages optional ResearchProblem bindings;
+ProblemRun in infra/coordination manages candidates, plans, evidence, and frozen selections, while policies/selection defines comparison rules.
+TIR and Search provide domain data, workers, and plans through three problem interfaces, reusing execution, training,
+evaluation, and trajectories. Agent tools for bound problems live in coordination/tools; only the host invokes final evaluation.
+Binding a problem adds neither session roles nor a second model context. See the [problem API](interfaces/README.md) for integration and commands.
 
-## 一次会话
+## Session Flow
 
-1. `create(config)` 只保存普通会话。`open(run_id)` 连接独立配置目录中的 Codex。
-2. `send_message()` 开始原生 turn；执行中的补充消息使用 `turn/steer`。
-3. `/rsi` 等当前 turn 结束，在**同一个 thread** 切为 Interaction，继续讨论。
-4. Interaction 用 `rsi_set_task` 保存 `TaskBrief`。用户要求执行时，调用
-   `rsi_start_goal`；用户也能通过 `/start` 交接已准备的任务。
-5. 当前 turn 完整结束后，`thread/fork` 复制原生历史给 Leader。
-   Leader 是唯一执行者，自己读代码、修改、调用工具和验证。
-6. Leader 用 `rsi_update_goal` 保存进展。若 turn 结束但目标仍 active，宿主启动下一 turn。
-7. `/chat` 在当前 Leader thread 回到普通工作，保留刚完成的工作上下文。
+1. `create(config)` only saves a regular session. `open(run_id)` connects to Codex using a separate configuration directory.
+2. `send_message()` starts a native turn; follow-up messages during execution use `turn/steer`.
+3. `/rsi` waits for the current turn to finish, then switches to Interaction in **the same thread** to continue the discussion.
+4. Interaction saves a `TaskBrief` with `rsi_set_task`. When the user requests execution, it calls
+   `rsi_start_goal`; the user can also hand off a prepared task with `/start`.
+5. After the current turn fully ends, `thread/fork` copies the native history to Leader.
+   Leader is the sole executor: it reads code, makes changes, calls tools, and verifies results itself.
+6. Leader saves progress with `rsi_update_goal`. If the turn ends while the goal is still active, the host starts another turn.
+7. `/chat` returns to regular work in the current Leader thread, retaining the context of the work just completed.
 
-角色是同一 Codex 内核的不同阶段，没有额外的 Agent 转发层。执行角色提示词放在
-`infra/agents.py`，总结角色在 `infra/experience.py`，宿主续行/恢复提示词在 `ResearchSystem` 中。
+Roles are phases of the same Codex core, without an additional Agent forwarding layer. Execution role prompts live in
+`infra/agents.py`, the summarization role in `infra/experience.py`, and host continuation/recovery prompts in `ResearchSystem`.
 
-新会话默认 `danger-full-access` / `never`：工作目录是起始目录，不是读写边界；操作受当前系统用户权限约束。
-所有阶段和总结继承同一配置，旧会话恢复时仍使用其已保存权限。角色职责由提示词及 RSI 控制工具授权表达。
+New sessions default to `danger-full-access` / `never`: the working directory is a starting location, not a read/write boundary; operations are limited by the current OS user's permissions.
+All phases and summarization inherit the same configuration. Resumed sessions retain their saved permissions. Prompts and RSI control-tool authorization define role responsibilities.
 
-## 上下文归属
+## Context Ownership
 
-Codex 保存用户和助手消息、工具调用及结果、图片输入和压缩记录。RSI 不重建消息数组，
-不截取最后几条记录，不用任务配置或 UI transcript 替代原生历史。
-角色指令通过每个 turn 的 application context 更新；原生 Codex 基础指令保留。
-Leader fork 是一个新 thread，但保留来源会话已有的上下文；后续工作继续在这个分支上。
+Codex stores user and assistant messages, tool calls and results, image inputs, and compaction records. RSI does not rebuild message arrays,
+truncate history to the last few records, or replace native history with task configuration or the UI transcript.
+Role instructions are updated through each turn's application context; native Codex base instructions remain in place.
+The Leader fork creates a new thread that retains the source session's existing context; subsequent work continues on that branch.
 
-这仍受模型上下文窗口限制。长会话使用 Codex 自己的压缩结果，并不意味着所有原文、
-工具输出、图片像素会永远同时留在模型输入中。原始文件/图片路径和关键业务约束应写入
-任务配置，便于需要时重新读取。RSI 没有实现第二套会话压缩；经验文档是跨任务的通用方法，不替代原生上下文。
+The model's context window still applies. Long sessions use Codex's own compaction results; this does not mean all original text,
+tool output, and image pixels remain in the model input forever. Original file/image paths and key domain constraints should be saved
+in task configuration so they can be read again when needed. RSI does not implement a second session compaction mechanism; experience documents contain reusable methods across tasks and do not replace native context.
 
-## Goal 的停止条件
+## Goal Stop Conditions
 
-- Leader 提交 `completed` 和非空验证证据，且当前 turn 正常结束：完成。
-- Leader 提交 `blocked` 和问题：等待用户；回答后继续。
-- 用户 `/pause`、`/stop` 或退出：中断/保存，不偷偷重新启动。
-- 用户设置的 token 或执行时间预算耗尽：停止；调整或取消预算后再 `/resume`。
-- 原生 turn 失败或断线：保存不确定的执行状态，等待显式恢复。
-- 连续两次自动续行均未使用工作工具：等待用户，避免空转。
+- Leader submits `completed` with nonempty verification evidence, and the current turn ends normally: complete.
+- Leader submits `blocked` with a question: wait for the user, then continue after an answer.
+- The user invokes `/pause`, `/stop`, or exits: interrupt and save, without silently restarting.
+- A user-defined token or execution-time budget is exhausted: stop; adjust or remove the budget, then use `/resume`.
+- A native turn fails or disconnects: save the uncertain execution state and wait for explicit recovery.
+- Two consecutive automatic continuations use no work tools: wait for the user to avoid spinning without progress.
 
-新目标默认不设 token 和时间预算。Interaction 只保存任务，预算由用户通过 `/budget` 控制；
-调整预算保留已用量，解除 `budget_limited` 后进入暂停状态，等待显式 `/resume`。
-token 用量从 Leader 开始计算，使用 Codex 上报的累计用量差值，包含输入上下文。
-它是收到用量通知后的中断上限，单次模型调用可能超出剩余额度。
-`max_wall_seconds` 在本版计 Leader 活跃执行秒数，排除暂停和等待用户的时间。
-普通 Goal 的完成证据由 Leader 提交，宿主校验结构。绑定实验任务时还校验真实候选证据与冻结选择；
-会话完成与最终 test 验收、主指标达标分别记录。
+New goals have no token or time budget by default. Interaction only saves the task; the user controls budgets through `/budget`.
+Budget adjustments retain usage already incurred. Clearing `budget_limited` leaves the session paused until an explicit `/resume`.
+Token usage is counted from the start of Leader using differences in the cumulative usage reported by Codex, including input context.
+The limit triggers interruption after a usage notification arrives; a single model call can exceed the remaining allowance.
+In this version, `max_wall_seconds` counts Leader's active execution seconds, excluding pauses and time spent waiting for the user.
+For ordinary Goals, Leader submits completion evidence and the host validates its structure. Bound experiment tasks also require validation of actual candidate evidence and the frozen selection;
+session completion, final test acceptance, and achievement of the primary metric target are recorded separately.
 
-## 恢复与持久化
+## Recovery and Persistence
 
 ```text
 RSI_DATA_ROOT/
-├── codex/                        独立 CODEX_HOME；原生历史及配置
-├── experience/<topic>.md         每个主题一份文档，直接更新
-├── experience.lock               总结写入锁，不放入经验目录
+├── codex/                        Separate CODEX_HOME; native history and configuration
+├── experience/<topic>.md         One document per topic, updated in place
+├── experience.lock               Summary write lock, outside the experience directory
 └── sessions/<run_id>/
-    ├── session.json              唯一生命周期状态；原子替换
-    ├── owner.lock                同一会话仅一个宿主
-    ├── transcript.jsonl          UI 展示，不作为模型上下文
-    ├── learning.log              独立总结进程诊断
-    └── codex.log                 原生进程诊断
+    ├── session.json              Sole lifecycle state; replaced atomically
+    ├── owner.lock                One host per session
+    ├── transcript.jsonl          UI display, not model context
+    ├── learning.log              Independent summarization process diagnostics
+    └── codex.log                 Native process diagnostics
 ```
 
-投递前记录输入意图；工具控制结果先落盘再回复。重复控制调用按 call ID 复用回执，
-改变参数则拒绝。恢复时核对原生最后一个 turn 的结果；投递结果不明确时，不自动重放命令。
-`/resume` 会让 Agent 先检查历史、文件和进程，再继续未完成工作。这不能保证任意外部副作用
-恰好执行一次，但避免宿主在不知道结果时盲目重试。
+Input intent is recorded before delivery; control-tool results are persisted before replying. Repeated control calls reuse receipts by call ID,
+and changed arguments are rejected. Recovery checks the result of the last native turn; commands are not automatically replayed when delivery is uncertain.
+`/resume` instructs the Agent to inspect history, files, and processes before continuing unfinished work. This cannot guarantee exactly-once
+execution for arbitrary external side effects, but prevents the host from blindly retrying when the outcome is unknown.
 
-后续接入其他 UI 时复用 `ResearchSystem` 的控制方法和事件流。
-本地经验自进化通过独立总结会话实现；Yuque 同步尚未实现。
-`/learn-mode` 选择完成后自动总结或等待人工复盘；等待状态不占用模型，且不会改变任务已完成的状态。
-总结会话收到最新目录和上次总结主题的最新正文；模型按适用场景与方法选择合并或新增。
-同主题输出去重后的完整正文，保留 slug；完全相同的内容不重复写入。正文硬上限 4000 字符。
-经验目录只保存 `experience/<主题>.md` 普通文件，不使用历史版本、哈希名称或软链接。
-普通工作与 Leader 每个新回合刷新经验目录，按需读取最新正文；旧对话内容仍保留。
-Interaction 不接收新的经验目录，且不能把经验建议写成用户约束。此前对话中的原始业务上下文仍完整保留。
-保存时加锁并比较总结开始时的原文，防止并发总结覆盖其他修改；冲突需要重新总结。
-写入临时文件后原子替换正文，锁和临时文件留在数据根目录，不混入经验目录。
+Additional UIs should reuse `ResearchSystem` control methods and its event stream.
+Local experience evolution uses independent summarization sessions; Yuque synchronization is not implemented.
+`/learn-mode` chooses between automatic summarization after completion and waiting for human feedback. Waiting consumes no model calls and does not change the task's completed status.
+The summarization session receives the latest catalog and the latest body of the topic from the previous summary; the model decides whether to merge or create a document based on applicability and method.
+For the same topic, it returns a complete, deduplicated body and preserves the slug; identical content is not written again. The body has a hard limit of 4,000 characters.
+The experience directory contains only regular `experience/<topic>.md` files, without historical versions, hash-based names, or symlinks.
+Regular work and Leader refresh the experience catalog each new turn and read the latest bodies as needed; previous conversation content remains available.
+Interaction receives no new experience catalog and must not turn experience suggestions into user constraints. The original domain context from earlier conversation remains intact.
+Saving acquires a lock and compares against the original content captured when summarization began, preventing concurrent summaries from overwriting other changes; conflicts require another summary.
+The body is written to a temporary file and then replaced atomically. Locks and temporary files stay in the data root, outside the experience directory.
 
-执行期间持有系统闲置休眠抑制，停止/等待时释放。目标续行参考
-[Codex Goals](https://developers.openai.com/cookbook/examples/codex/using_goals_in_codex)，
-休眠范围参考原生 Codex 的 sleep-inhibitor；本版没有后台守护进程或跨机器恢复。
+System idle sleep is inhibited during execution and released when stopped or waiting. Goal continuation follows
+[Codex Goals](https://developers.openai.com/cookbook/examples/codex/using_goals_in_codex),
+and the sleep-inhibition scope follows native Codex's sleep-inhibitor. This version has no background daemon or cross-machine recovery.
 
-## 源码阅读入口
+## Source Reading Guide
 
-从 `api/research.py` 的会话与任务契约开始，沿 `infra/research.py` 的
-`create → open → send_message → enter_rsi → start` 阅读正常路径，再看暂停和恢复。
-目标策略与工具授权分别位于 `coordination/policies` 和 `coordination/tools`；
-经验的读取、整理与并发写入位于 `infra/experience.py`。
-`ui/cli.py` 与 `ui/tui.py` 只负责入口和事件展示。第三方终端组件、补丁及其来源
-见 [第三方声明](../THIRD_PARTY_NOTICES.md)，原文件哈希由 UI 测试核验。
+Start with the session and task contracts in `api/research.py`, then follow the normal
+`create → open → send_message → enter_rsi → start` path in `infra/research.py` before examining pause and recovery.
+Goal policies and tool authorization live in `coordination/policies` and `coordination/tools`, respectively;
+experience reading, curation, and concurrent writes live in `infra/experience.py`.
+`ui/cli.py` and `ui/tui.py` only handle entry points and event display. See [third-party notices](../THIRD_PARTY_NOTICES.md)
+for terminal components, patches, and their sources; UI tests verify the original file hashes.

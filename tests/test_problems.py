@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import threading
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from areal_rsi.api.records import (
     HarnessVersion,
     ModelVersion,
     SolutionVersion,
+    SourceSnapshot,
 )
 from areal_rsi.api.research import (
     CandidateContext,
@@ -244,6 +246,44 @@ def test_interrupted_evaluation_requires_explicit_attempt_without_duplicate_exec
         result = await run.evaluate("base", retry=True)
         assert result.status == CandidateStatus.COMPLETED and result.validation_attempt == 2
         assert run.jobs.detail(run.run_id, "base-valid-1").state == "cancelled"
+
+    asyncio.run(execute())
+
+
+def test_slow_snapshot_keeps_queries_responsive_and_finishes_before_cancellation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = problem_run(tmp_path)
+    started, release = threading.Event(), threading.Event()
+    snapshot = run._snapshot
+
+    def slow_snapshot(
+        trees: tuple[SourceTree, ...], directory: Path
+    ) -> tuple[SourceSnapshot, ...]:
+        started.set()
+        assert release.wait(5), "Event loop did not respond while snapshotting"
+        return snapshot(trees, directory)
+
+    monkeypatch.setattr(run, "_snapshot", slow_snapshot)
+
+    async def execute() -> None:
+        operation = asyncio.create_task(run.evaluate("base"))
+        try:
+            await eventually(started.is_set)
+            assert not operation.done()
+            assert run.feedback("base")[0].candidate_id == "base"
+            operation.cancel()
+            await asyncio.sleep(0)
+            assert not operation.done()  # Keep the lock until the snapshot writer finishes.
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await operation
+            assert run.candidate("base").status == CandidateStatus.INTERRUPTED
+            assert not run.lock.locked()
+        finally:
+            release.set()
+            operation.cancel()
+            await asyncio.gather(operation, return_exceptions=True)
 
     asyncio.run(execute())
 

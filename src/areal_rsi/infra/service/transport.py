@@ -135,6 +135,11 @@ async def call(
         if not response["ok"]:
             raise ValueError(response["error"])
         return dict(response["result"])
+    except TimeoutError:
+        raise TimeoutError(
+            "RSI service request timed out; work may still be running. "
+            "Query the existing request_id before retrying a mutation."
+        ) from None
     finally:
         writer.close()
         with contextlib.suppress(ConnectionError):

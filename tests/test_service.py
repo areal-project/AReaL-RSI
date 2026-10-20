@@ -26,6 +26,30 @@ from areal_rsi.infra.service.transport import call, socket_path
 
 
 class PluginTests(unittest.IsolatedAsyncioTestCase):
+    async def test_timeout_explains_that_work_may_still_be_running(self) -> None:
+        async def unresponsive(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            await reader.read()
+            writer.close()
+            await writer.wait_closed()
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = socket_path(root)
+            server = await asyncio.start_unix_server(unresponsive, path=path)
+            wait_for = asyncio.wait_for
+            try:
+                async with server:
+                    with (
+                        patch(
+                            "areal_rsi.infra.service.transport.asyncio.wait_for",
+                            new=lambda future, timeout: wait_for(future, 0.01),
+                        ),
+                        self.assertRaisesRegex(TimeoutError, "work may still be running"),
+                    ):
+                        await call(root, "rsi_list", autostart=False)
+            finally:
+                path.unlink(missing_ok=True)
+
     async def test_retries_and_restart_do_not_repeat_work(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

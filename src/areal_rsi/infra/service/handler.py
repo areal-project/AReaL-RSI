@@ -335,4 +335,3 @@ class SessionService:
         await asyncio.gather(*tasks, return_exceptions=True)
         await self.system.close()
         self.journal.close()
-

@@ -152,3 +152,8 @@ codex plugin add areal-rsi@areal-rsi
 该变量需要传给启动宿主的进程。默认路径不受 shell 当前目录影响。
 `RSI_CLI_HOME` 可改变私有安装目录；分发测试可用 `RSI_CLI_REPOSITORY` 和 `RSI_CLI_REF`
 指定其他 Git 仓库和分支。修改插件文件后重新安装插件刷新缓存，修改源码后重启内部服务。
+
+Codex 会过滤 MCP 子进程继承的环境变量。插件的 `.codex-plugin/plugin.json` 仅补充
+RSI 配置、Python 路径及下载所需的环境变量透传；启动命令仍由 portable `mcp.json`
+定义。否则宿主中的 `RSI_CLI_REF`、`RSI_CLI_PATH` 等设置不会生效。清单只记录变量名，
+不保存 API Key 的值；个人配置仍优先使用 `.env` 文件。

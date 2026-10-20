@@ -393,7 +393,7 @@ class SessionRuntime:
                 self.save()
         elif method == "turn/completed":
             self._complete_turn(params["turn"])
-        elif method == "error" and not params.get("willRetry", False):
+        elif method == "error":
             self.emit(SessionEvent("error", text=public_tool_text(params.get("error"))))
 
     def _item_event(self, method: str, item: dict[str, Any]) -> None:

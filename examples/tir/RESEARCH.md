@@ -14,9 +14,11 @@ Slurm 在本例中装配到公共 JobSpec 命令，AReaL worker 在 allocation �
 
 `research` 表示一次包含多个候选的研究会话，`pipeline` 是独立的单次训练链路检查。
 研究入口、候选记录和选择机制与 Search 共用。
+Leader 根据运行时提供的 `RoundRecipe` schema 和研究反馈编写候选配方 JSON，再提交文件路径。
+配方中的 `parent` 指定权重父候选。公共协调器将实际提交的配方保存到
+`sessions/<run_id>/problem/candidates/<candidate_id>/recipe.json`，用于恢复和复现。
 缓存评测与候选选择都会核对样本内容哈希、任务覆盖、模型/分区以及汇总指标，不能只相信
 候选 JSON 中的分数。最小 pipeline 只报告 test 上的训练前后对比，不用 test 决定候选。
-历史实验使用其归档源码、协议和数据恢复；入口与字段改名不会迁移或覆盖原始证据。
 
 ## 没有初始训练集时启动
 
@@ -93,8 +95,8 @@ MATH500 子集 134 道各一次、AIME24/25 各 30 道各四次，总计 194 道
 
 任何生成内容都不包含 held-out 题的改写。worker 只传用户题面给模型，answer 只传给 reward；
 数据中的 system 消息由固定的后端 TIR system prompt 替换。ToRL 无完整参考推导，不能用
-参考解中的步骤标记判断难度。初始 recipe 使用官方训练题，再由 Leader 根据
-训练/valid 证据研发合成、筛选和课程。训练数据约15.6%的原始答案不是整数，不能假设整数
+参考解中的步骤标记判断难度。Leader 根据训练/valid 证据研发合成、筛选和课程。
+训练数据约15.6%的原始答案不是整数，不能假设整数
 文字题合成器能直接覆盖竞赛数学。
 
 本次固定 harness：Python/calculator、max_turns=2、max_length=3000、tool_timeout=30，
@@ -107,7 +109,7 @@ MATH500 子集 134 道各一次、AIME24/25 各 30 道各四次，总计 194 道
 每个题族保留题面参数的精确 oracle 和独立验算；混合真实训练题时确定性抽样、去重并限制
 重试次数。新构建数据的 `DataRecipe.gold_format` 可以把 bare 数学答案放入 `$...$` 分隔符，
 以适配原生 MathVerify；它不修改问题、数学目标、官方训练文件或已经保存的数据。
-该字段默认 `preserve`，首轮模板显式选择 `math_delimited`。
+该字段默认 `preserve`；需要数学分隔格式时，Leader 应在候选配方中显式选择 `math_delimited`。
 
 `DataRecipe` 控制真实/合成数量、确切训练题 ID、题型 proposal weight、合成难度、
 难度权重、答案表示和随机种子。难度目前主要改变生成参数的数值范围，并不是已经校准的
@@ -115,7 +117,7 @@ MATH500 子集 134 道各一次、AIME24/25 各 30 道各四次，总计 194 道
 支持范围较小（r2 中只有 23 道不同 committee 题），不能用人名或表面改写冒充数学覆盖。
 不把目前这份初始策略当作最终研究结果：Leader 需要根据 valid 失败模式修改/验证它。
 
-旧的五类整数题仍使用 `Fraction`、逐项累加或十分位 Fraction oracle；新增五类保留非整数
+整数题使用 `Fraction`、逐项累加或十分位 Fraction oracle；其他题型保留非整数
 分数和根式目标，线性约束用代入验算，组合题用枚举，数列用逐项递推。所有生成题的 identity
 由规范化题面计算，数据集确定性抽样、去重并只允许来自 `benchmark.train` 的真实题。复现实验
 时使用 `DataRecipe` 的 seed、计数、family weight、difficulty weights 和范围，并在提交 GPU
@@ -178,24 +180,19 @@ selection = select_mixed_rollout_curriculum(
 write_record(root / "data-audits/new-curriculum-selection.json", selection)
 ```
 
-本次得到 263 道题：192 个完整 mixed 组、71 个部分 mixed 组。`recipes/r2.json`、
-`r3.json`、`r4.json` 保存这次试验的配方；r4 的确切题目 ID 依赖本次训练池与 r3 日志，
+本次得到 263 道题：192 个完整 mixed 组、71 个部分 mixed 组。r4 的确切题目 ID 依赖本次训练池与 r3 日志，
 其他 benchmark 应重新提取。它从 r1 checkpoint 训练，课程证据来自 r3；这两种关系应分别
 记录。这是一项实证课程策略，不保证每种模型或训练阶段都获益，也不能从这次同时变化的
 数据、学习率和训练步数中分离单因果。
 
-本次四轮真实 RSI 及独立最终评测的结果、复现产物入口见 [RESULTS.md](RESULTS.md)。
-recipe 统一为 `recipes/r1.json` 到 `r4.json`，全部面向 ToRL；文件名表示实验轮次，
-权重父候选由 `parent` 指定。新 experiment 的 `r1.json` 显式使用 `math_delimited`；本次历史 r1
-使用 `preserve`。历史实验应使用归档源码、协议和 `rounds/r1/recipe.json` 复现，不能用
-更新后的模板代替。命名与配置清理只影响新实验，不迁移或重写已有冻结协议和数据。
+本次四轮真实 RSI 及独立最终评测的结果见 [RESULTS.md](RESULTS.md)。
 
 ### 数学答案诊断
 
 本次发现所用 AReaL MathVerify 对某些 bare LaTeX gold 的解析有误，因此在最终评测前
 另行冻结了“最后一个完整 boxed 答案 + 数学分隔 gold”的二级诊断，复用同一批生成轨迹。
 它要求显式完整 boxed，与原生主评分不互为无损变换；两个指标都需保留。原生评分器、
-官方评测数据和主结果没有在研究中修补。相关冻结脚本、运行环境与执行限制见结果报告。
+官方评测数据和主结果没有在研究中修补。
 
 宿主 smoke/bootstrap 只验证 pipeline，不能当作由 RSI Leader 执行的轮次。Leader 至少
 研究和训练两轮，保存研发依据，且选择时需与全 experiment 的最佳已完成候选比较。
@@ -216,8 +213,7 @@ r1 从 78/256 降到 69/256；r3 主评分为79/256，但 boxed 数学诊断从8
 | r3 合成 | 120 | 109 | 0 | 11 | 9.17% |
 | r3 官方 | 361 | 35 | 134 | 192 | 53.19% |
 
-数据来自历史 experiment 的 `training-coverage-native-v2/r2.json`、`r3.json`。logger 会跳过
-部分样本，因此这些比例只描述完整日志组，不是完整训练分布或有效梯度的无偏估计。
+logger 会跳过部分样本，因此这些比例只描述完整日志组，不是完整训练分布或有效梯度的无偏估计。
 本次 AReaL 配置按题目组归一化奖励；同组全对或全错时，二值正确性奖励的相对信号为零。
 合成题占用了20%或40%的题目预算，记录到的可区分组却很少，是目前最直接的问题证据。
 [DAPO 的动态采样](https://arxiv.org/html/2503.14476v1#S3.SS2)也针对这类全同奖励组。
@@ -288,8 +284,7 @@ areal-rsi finalize --root /absolute/runs/tir-001 --resume run-ID --candidate r2
 
 finalize 仅针对冻结选择执行独立 test，输出 problem/final.json 与 report.md，包括按独立题目
 聚类的配对统计。所有任务记录位于 sessions/run-ID/problem。完整接入契约、任务工具和恢复语义
-见 [统一接入文档](../../docs/interfaces/README.md)。历史结果章节描述旧实验布局；历史实验必须
-使用其原始归档源码，更新入口不会迁移既有证据。
+见 [统一接入文档](../../docs/interfaces/README.md)。
 
 ## 新集群配置
 
@@ -299,7 +294,6 @@ finalize 仅针对冻结选择执行独立 test，输出 problem/final.json 与 
 
 顶层 `image` 必须显式提供。`binds` 是 Apptainer 挂载字符串列表，例如
 `["/shared:/shared"]`；应覆盖 RSI/AReaL 源码、模型、数据、配置和输出目录，并保持相同
-绝对路径。空列表只使用 Apptainer 自带挂载，不再默认挂载 `/storage`。
+绝对路径。空列表只使用 Apptainer 自带挂载。
 `slurm.reservation` 仅在实际持有时填写，`null` 表示不指定 reservation。
-分区使用集群默认调度策略。已有冻结记录不自动迁移，
-历史实验仍应使用归档的运行时；这些模板只用于新实验。
+分区使用集群默认调度策略。

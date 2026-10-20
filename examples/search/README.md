@@ -35,8 +35,8 @@ areal-rsi research --problem examples.search.problem:SearchProblem \
 不得与冻结的 dev/test 重合。候选数据路径只影响训练，dev/test、评测检索资源和 harness 始终使用
 原研究配置。Leader 用统一工具提交候选和读取 dev 证据。
 
-training.microbatch 分别指定 max_tokens_per_mb 和 n_mbs，默认 131072/8。复放历史 C10 时应显式
-使用 16384/1，历史 C40 使用 131072/8；这属于训练打包参数，不修改固定的推理上下文或预算。
+training.microbatch 分别指定 max_tokens_per_mb 和 n_mbs，默认 131072/8；
+这属于训练打包参数，不修改固定的推理上下文或预算。
 
 ```bash
 areal-rsi status --root /absolute/runs/search-001 --resume run-ID
@@ -114,5 +114,4 @@ python -m examples.search.evaluation.analysis \
 `["/shared:/shared"]`；应覆盖 RSI/AReaL 源码、模型、数据、配置和输出目录，并保持相同
 绝对路径。空列表只使用 Apptainer 自带挂载，不再默认挂载 `/storage`。
 `slurm.reservation` 仅在实际持有时填写，`null` 表示不指定 reservation。
-分区使用集群默认调度策略。已有冻结记录不自动迁移，
-历史实验仍应使用归档的运行时；这些模板只用于新实验。
+分区使用集群默认调度策略。

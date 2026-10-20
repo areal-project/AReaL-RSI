@@ -1,14 +1,14 @@
-# 开发约束
+# Development constraints
 
-- 契约放 `api/`，核心实现放 `infra/`，`ui/` 仅是可选入口；不再增加顶层 base/modules/app 层。
-- `api/records.py`、`research.py`、`execution.py` 放数据契约，`interfaces.py` 放协议，`control.py` 放控制请求。
-- 系统入口是 `infra/research.py` 的 `ResearchSystem`；API 不导入 infra，infra 不导入 UI。
-- 优先删减重复逻辑、合并薄模块；不要为目录对称、潜在扩展或缩短文件新增层次。
-- 不增加单实现注入接口、转发类、空生命周期方法或兼容壳；需要抽象时先说明真实复用点。
-- 固定业务结构使用具名 dataclass/enum，禁止用多层 `dict[str, Any]` 承载内部状态、重试和结果；字典仅用于按 ID 索引、同类型映射或 JSON/插件边界。边界解码后使用类型字段，禁止增加字典兼容壳。
-- JSON 操作共用 `api/control.py` 校验；具名控制方法接收 run_id 并保留领域授权和状态检查。
-- 数据目录、候选摘要、冻结协议和 source-lock 不是源码目录，移动包时不能顺手重写这些记录。
-- Runtime 移动须同步复制包、插件 entrypoint、资源定位和整个源码包的沙箱拒绝范围。
-- 测试覆盖真实行为/故障，不穷举字段和转发层。跨模块修改运行 `make check` 并报告跳过环境。
+- Put contracts in `api/`, core implementations in `infra/`, and optional entry points in `ui/`. Do not add top-level base/modules/app layers.
+- Put data contracts in `api/records.py`, `api/research.py`, and `api/execution.py`; protocols in `api/interfaces.py`; and control requests in `api/control.py`.
+- The system entry point is `ResearchSystem` in `infra/research.py`. API must not import infra, and infra must not import UI.
+- Prefer removing duplicate logic and merging thin modules. Do not add layers for directory symmetry, hypothetical extensions, or shorter files.
+- Do not add injection interfaces with only one implementation, forwarding classes, empty lifecycle methods, or compatibility wrappers. Before introducing an abstraction, explain the concrete reuse it serves.
+- Use named dataclasses and enums for fixed domain structures. Do not use nested `dict[str, Any]` structures for internal state, retries, or results. Dictionaries are only for ID-based indexing, homogeneous mappings, or JSON/plugin boundaries. After decoding at a boundary, use typed fields; do not add dictionary compatibility wrappers.
+- Share JSON validation through `api/control.py`. Named control methods must accept `run_id` and retain domain authorization and state checks.
+- Data directories, candidate digests, frozen protocols, and source-lock records are not source directories. Do not rewrite these records as a side effect of moving packages.
+- When moving the runtime, update package copying, plugin entry points, resource lookup, and the sandbox deny scope covering the entire source package together.
+- Test real behavior and failures, rather than exhaustively checking fields and forwarding layers. For changes across modules, run `make check` and report any environments skipped.
 
-coordination 顶层放状态/调度与记录，策略放 policies，Agent 工具放 tools，研究评测放 evaluation；不要再平铺一次性辅助模块。
+Keep state, scheduling, and records at the top level of `coordination`; put policies in `policies`, Agent tools in `tools`, and research evaluation in `evaluation`. Do not add more one-off helper modules at the top level.

@@ -1,15 +1,15 @@
-# RSI 任务接入与会话 API
+# RSI Problem Integration and Session API
 
-系统入口是 `infra.research.ResearchSystem`。未绑定任务的 `/rsi` 继续使用原来的
-Interaction → Leader 流程；任务绑定增加候选和评测能力，不改变原生历史的归属。
+The system entry point is `infra.research.ResearchSystem`. Without a bound problem, `/rsi` continues to use the existing
+Interaction → Leader flow. Problem binding adds candidate and evaluation capabilities without changing ownership of native history.
 
-## 启动任务
+## Launching a Problem
 
-控制节点需要已有 RSI Python 环境、Codex、可达的研究模型 API 和 Slurm 客户端。
-TIR/Search 的 GPU 依赖在各自的 Apptainer 运行环境内。凭据通过私有 env 文件读取，
-不放入任务配置或 recipe。以下示例在已安装本仓库的源码 checkout 中运行。
+The control node needs an existing RSI Python environment, Codex, a reachable research model API, and a Slurm client.
+TIR/Search GPU dependencies live in their respective Apptainer runtime environments. Credentials are read from a private env file,
+not stored in problem configuration or recipes. Run the following examples from a source checkout with this repository installed.
 
-从仓库根目录运行；启动、恢复和最终评测时均需保留此 `PYTHONPATH`：
+Run from the repository root and retain this `PYTHONPATH` when launching, resuming, and running final evaluation:
 
 ```bash
 export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
@@ -21,11 +21,11 @@ areal-rsi research \
   --env-file /absolute/private.env
 ```
 
-TIR 配置使用 `examples/tir/experiment.json` 的结构，需要实际 AReaL 源码、基模型、
-GPU Python、固定评测 benchmark 和可用镜像。`image`、`binds` 和 `slurm` 在配置顶层。`binds` 显式指定同路径容器挂载；
-`slurm.reservation` 为 `null` 时不指定 reservation；分区使用集群默认调度策略。
-benchmark 必须有独立的 valid/test，初始训练池可选。没有训练集时，先用 `Example` 格式的
-评测 JSONL 创建 benchmark，无需 datasets/pyarrow：
+TIR configuration follows the structure in `examples/tir/experiment.json` and requires actual AReaL source code, a base model,
+a GPU Python environment, a fixed evaluation benchmark, and an available image. `image`, `binds`, and `slurm` are top-level configuration fields. `binds` explicitly specifies container mounts at identical host/container paths;
+when `slurm.reservation` is `null`, no reservation is requested. Partition selection follows the cluster's default scheduling policy.
+The benchmark must have separate valid/test splits; an initial training pool is optional. Without a training set, first create a benchmark
+from evaluation JSONL in `Example` format; datasets/pyarrow are not required:
 
 ```bash
 python -m examples.tir.benchmark \
@@ -33,34 +33,34 @@ python -m examples.tir.benchmark \
   --output /absolute/benchmark/tir-001
 ```
 
-`--train` 可额外提供官方训练题 JSONL；未提供时不会创建空训练文件。
-启动只冻结评测协议和基线，不生成训练集。Leader 首轮提交 `real_count=0`、
-`synthetic_count>0` 的配方，每轮通过 `build_candidate` 生成并冻结自己的训练数据。
-只有请求真实题时才要求提供训练池。纯合成配方和 JSONL 格式见
-`examples/tir/RESEARCH.md` 的“没有初始训练集时启动”。
+Optionally provide official training questions as JSONL through `--train`; omitting it does not create an empty training file.
+Startup freezes only the evaluation protocol and baseline, without generating a training set. In its first round, Leader submits a recipe with `real_count=0`
+and `synthetic_count>0`; each round uses `build_candidate` to generate and freeze its own training data.
+A training pool is required only when real questions are requested. For synthetic-only recipes and the JSONL format, see the section on
+starting without an initial training set in [the TIR research guide](../../examples/tir/RESEARCH.md).
 
-准备原始 ToRL parquet 的入口仍为 `python -m examples.tir.benchmark --source ... --output ...`，
-需在带 datasets/pyarrow 的环境运行；准备好的 benchmark 再交给研究入口。
+The entry point for preparing raw ToRL parquet remains `python -m examples.tir.benchmark --source ... --output ...`;
+run it in an environment with datasets/pyarrow, then pass the prepared benchmark to the research entry point.
 
-Search 使用 `examples.search.problem:SearchProblem`，完整模板见 `examples/search/research.json`。配置结构为：
+Search uses `examples.search.problem:SearchProblem`; see `examples/search/research.json` for the full template. The configuration structure is:
 
 ```json
 {
-  "search": {"...": "SearchConfig 的字段"},
+  "search": {"...": "Fields of SearchConfig"},
   "image": "/absolute/training.sif",
   "slurm": {"reservation": null, "cpus": 32, "memory_gb": 256},
   "min_rounds": 1
 }
 ```
 
-`search` 对象按 `examples/search/experiment/config.py:SearchConfig` 填写，
-包括模型、冻结源码 project、AReaL 环境、数据/索引、embedding 和检索 Python。
-示意对象不是可直接运行的完整配置。Search recipe 是 `{"training": {...}}`，
-字段使用同文件的 `TrainingConfig`。
+Populate the `search` object according to `examples/search/experiment/config.py:SearchConfig`,
+including the model, frozen source project, AReaL environment, data/index, embedding, and retrieval Python environment.
+The illustrative object above is not a complete runnable configuration. A Search recipe is `{"training": {...}}`,
+with fields defined by `TrainingConfig` in the same file.
 
-启动首先打印 `run_id`，再准备冻结协议并执行 valid 基线，然后交接真实 Leader。
-原始 objective 正文会被保存。恢复时沿用绑定、配置和目标，不能同时传入替代配置。
-恢复会先连接已有会话并沿用待处理的阶段交接，避免重复进入 RSI：
+Startup first prints `run_id`, then prepares the frozen protocol and runs the valid baseline before handing off to the actual Leader.
+The original objective body is saved. Resuming reuses the binding, configuration, and goal; replacement configuration cannot be supplied at the same time.
+Recovery first connects to the existing session and preserves any pending phase handoff, avoiding duplicate entry into RSI:
 
 ```bash
 areal-rsi research --root /absolute/runs/tir-001 --resume run-XXXXXXXXXXXX --env-file /absolute/private.env
@@ -68,86 +68,86 @@ areal-rsi status --root /absolute/runs/tir-001 --resume run-XXXXXXXXXXXX
 areal-rsi finalize --root /absolute/runs/tir-001 --resume run-XXXXXXXXXXXX --candidate r2
 ```
 
-status 不启动模型；finalize 不启动研究 Agent，只针对已冻结的候选执行独立 test。
-TIR 保留重复采样，最终结果包含按 question 聚类的配对统计。Search 默认 test 是外部数据
-held-out；提供 `official: FinalEvalConfig` 和 `official_image` 后，finalize 使用固定 H0、
-三 GPU、官方 830 题与 judge，保留原始评分产物及 checkpoint 兼容导出证据。
-最终 `target_met` 只表达配置中的主指标增益目标，不替代 objective 的全部验收项。
+status does not start a model; finalize does not start a research Agent and runs an independent test only for an already frozen candidate.
+TIR retains repeated samples, and final results include paired statistics clustered by question. Search's default test uses held-out external data.
+With `official: FinalEvalConfig` and `official_image` provided, finalize uses fixed H0,
+three GPUs, the official 830 questions, and the judge, retaining raw scoring artifacts and checkpoint compatibility export evidence.
+The final `target_met` expresses only the primary metric improvement target in the configuration, not all acceptance criteria in the objective.
 
-## 任务实现
+## Implementing a Problem
 
-任务类通过 operator 指定的 `module:Class` 加载，不在 infra 中硬编码示例名。
-类声明 `config_type`、`recipe_type`，构造函数接收已解码的配置 dataclass，并实现：
+Problem classes are loaded through an operator-specified `module:Class`; infra does not hardcode example names.
+The class declares `config_type` and `recipe_type`, accepts a decoded configuration dataclass in its constructor, and implements:
 
-| 接口 | 任务职责 |
+| Interface | Problem responsibility |
 | --- | --- |
-| `prepare(root) -> ProblemSpec` | 本地准备资源，声明基线、固定比较条件、锁定文件及源码范围 |
-| `build_candidate(context, recipe) -> CandidatePlan` | 准备候选数据/产物，返回父子 solution 与可选训练作业 |
-| `build_evaluation(context) -> EvaluationPlan` | 返回评测作业、预期样本 ID、输入引用和独立题目分组 |
+| `prepare(root) -> ProblemSpec` | Prepare local resources; declare the baseline, fixed comparison conditions, locked files, and source scope |
+| `build_candidate(context, recipe) -> CandidatePlan` | Prepare candidate data/artifacts; return parent and child solutions and an optional training job |
+| `build_evaluation(context) -> EvaluationPlan` | Return evaluation jobs, expected sample IDs, input references, and independent question groups |
 
-准备和构造计划可以写本地文件，远程作业必须由 infra 执行。任务无需实现会话驱动、
-候选状态机、Slurm 提交回执、结果缓存或选择冻结。三个接口的实际实现见
-`examples/tir/problem.py` 和 `examples/search/problem.py`。
+Preparation and plan construction may write local files; remote jobs must be executed by infra. Problems do not need to implement session driving,
+the candidate state machine, Slurm submission receipts, result caching, or selection freezing. See the implementations of all three interfaces in
+`examples/tir/problem.py` and `examples/search/problem.py`.
 
-训练数据可以在每轮候选准备时生成，无需作为启动输入。固定评测条件与可演化的训练数据
-分别记录；每轮保存 recipe、生成器源码快照、数据内容引用及父模型。恢复已有候选计划时
-复用并校验保存的数据，不重新合成。准备阶段失败或中断保留记录，新配方使用新候选 ID。
-当前 TIR 合成是本地程序生成；独立 GPU 或教师模型生成作业仍需通过 infra 的执行计划接入。
+Training data may be generated during candidate preparation in each round and need not be a startup input. Fixed evaluation conditions and evolvable training data
+are recorded separately; each round saves the recipe, generator source snapshot, data content references, and parent model. Resuming an existing candidate plan
+reuses and validates saved data without synthesizing it again. Failed or interrupted preparation retains its records; a new recipe uses a new candidate ID.
+Current TIR synthesis uses a local program; independent GPU or teacher-model generation jobs still need integration through infra execution plans.
 
-`CandidatePlan` 没有训练作业时直接使用冻结 solution，支持 harness/artifact 演化。
-有训练作业时提供 AReaL runtime 与 JobSpec，worker 仅在真实训练和 checkpoint 写完后发布
-`TrainingReceipt`；infra 校验步数、权重分片和内容摘要。评测 worker 发布完整
-`samples.jsonl`，每行是 `EvaluationSample`。任务错误计分；执行故障使作业失败。
+A `CandidatePlan` without a training job uses the frozen solution directly, supporting harness/artifact evolution.
+With a training job, it provides an AReaL runtime and JobSpec. The worker publishes a `TrainingReceipt` only after actual training and checkpoint writing finish;
+infra validates step counts, weight shards, and content digests. The evaluation worker publishes a complete
+`samples.jsonl`, with one `EvaluationSample` per line. Task errors are scored; execution failures fail the job.
 
-比较条件与允许演化的对象分开保存。模型研究固定 harness；harness 研究将其变化记录为
-solution 内容，并保持外部数据、判分和预算约定一致。主指标及 maximize/minimize 方向
-由 `ComparisonContract` 声明。任务自定义配置不得作为未解码的字典进入内部状态。
+Comparison conditions and the objects allowed to evolve are stored separately. Model research fixes the harness; harness research records harness changes as
+solution content while keeping external data, scoring, and budget agreements consistent. The primary metric and maximize/minimize direction
+are declared by `ComparisonContract`. Custom problem configuration must not enter internal state as an undecoded dictionary.
 
-## 运行与恢复
+## Execution and Recovery
 
-每个 run 的任务记录位于 `sessions/<run_id>/problem/`：配置、protocol/freeze、候选、
-源码归档、执行回执、轨迹、selection、final.json 和 report.md。会话生命周期仍只由
-SessionRecord 管理，进程生命周期由 JobRecord 管理，候选状态由 CandidateRecord 管理。
+Each run's problem records live in `sessions/<run_id>/problem/`: configuration, protocol/freeze, candidates,
+source archives, execution receipts, trajectories, selection, final.json, and report.md. Session lifecycle remains managed solely by
+SessionRecord, process lifecycle by JobRecord, and candidate state by CandidateRecord.
 
-提交候选先保存请求并返回句柄，本地数据准备、训练和验证在后台运行；准备失败也保留可查询记录，
-不自动重放不完整的准备步骤。Leader turn 结束后，宿主等待作业完成再
-自动继续，避免模型空转。使用候选查询工具获取反馈和 valid 证据。失败或控制器重启后，
-显式调用评测工具恢复候选；已完成训练/评测复用经过校验的产物。重试失败的 valid 阶段需
-显式 `retry=true`，创建新的 attempt，保留旧记录。
-接受已有计划的恢复请求后，工具返回待执行状态并清除旧错误；后续故障通过后台反馈报告。
+Candidate submission saves the request and returns a handle first; local data preparation, training, and validation run in the background. Preparation failures also retain queryable records,
+and incomplete preparation steps are not automatically replayed. After the Leader turn ends, the host waits for jobs to complete before
+continuing automatically, avoiding idle model calls. Use the candidate query tool to retrieve feedback and valid evidence. After a failure or controller restart,
+explicitly invoke the evaluation tool to resume a candidate; completed training/evaluation reuses validated artifacts. Retrying a failed valid phase requires
+explicit `retry=true`, creates a new attempt, and preserves old records.
+After a recovery request for an existing plan is accepted, the tool returns a pending execution state and clears the old error; subsequent failures are reported through background feedback.
 
-Slurm 使用 held submission，远端 ID 和初始回执保存后才 release。响应丢失但回执存在时
-重连同一个 job；提交结果未知时保留提交目录并拒绝自动重提，需要按记录中的作业名核查。
-普通控制器退出/关闭连接保留已提交 Slurm 作业；暂停会话也不取消外部作业。
-显式 stop 只取消该 run 回执中记录的作业。取消请求与确认资源释放分别记录。
-本地进程中断会清理自己的进程树，恢复时不会盲目重放。
-未结束作业的软件超时从首次提交请求计算，包含排队及控制器断连时间，重连不会重置预算。
-已成功结束的作业仍可复用经过校验的产物。
-取消和超时保留各自终态，确认 Slurm 终态后才记录资源已释放。
-若完成作业已从 scontrol 清理，恢复可通过同一 job ID 的 sacct 终态确认，不重新提交。
+Slurm uses held submission: the remote ID and initial receipt are saved before release. If the response is lost but a receipt exists,
+reconnect to the same job. If the submission outcome is unknown, retain the submission directory and refuse automatic resubmission; check the job name in the record.
+Normal controller exit or disconnection leaves submitted Slurm jobs running; pausing a session does not cancel external jobs either.
+Explicit stop cancels only jobs recorded in that run's receipts. Cancellation requests and confirmed resource release are recorded separately.
+Local process interruption cleans up its own process tree; recovery does not blindly replay it.
+Software timeouts for unfinished jobs are measured from the first submission request, including queue time and controller disconnection; reconnecting does not reset the budget.
+Successfully completed jobs can still reuse validated artifacts.
+Cancellation and timeout retain their respective terminal states; resources are recorded as released only after confirming a Slurm terminal state.
+If a completed job has been purged from scontrol, recovery can confirm its terminal state through sacct using the same job ID, without resubmitting.
 
-`SlurmResources.node` 可指定一个节点，避免在已有异常占用的节点上重放实验。
-GPU 容器入口共用 `infra/worker.sh`；模型加载前保存 `gpu-allocation.json`，核对分配的
-设备与 CUDA 可见设备，并拒绝已有超过 1 GiB 显存占用的 GPU。检查失败保留设备和显存
-记录，作业失败退出，不通过缩小训练微批或丢弃样本来绕过占用。
+`SlurmResources.node` can specify a node to avoid rerunning experiments on nodes with unexpected existing GPU usage.
+GPU containers share the `infra/worker.sh` entry point. Before loading a model, it saves `gpu-allocation.json`, checks allocated
+devices against CUDA-visible devices, and rejects GPUs with more than 1 GiB of existing memory usage. On failure, it retains device and memory
+records and exits with a failed job; it does not work around occupancy by shrinking training microbatches or dropping samples.
 
-固定评测源码、配置和输入发生变化会拒绝继续。可编辑的任务源码可以在轮次之间修改，
-每个候选记录对应快照，并检查执行阶段前后源码一致。历史实验使用原始冻结运行时，
-不改写旧 protocol、source-lock、候选摘要或产物。
-源码快照始终排除 Python 字节码缓存，不依赖运行目录是否携带 `.gitignore`；公共 worker 禁止写入字节码。
+Changes to fixed evaluation source code, configuration, or inputs prevent continuation. Editable problem source code may change between rounds;
+each candidate records its corresponding snapshot, and source consistency is checked before and after execution stages. Historical experiments use their original frozen runtimes,
+without rewriting old protocols, source-lock records, candidate digests, or artifacts.
+Source snapshots always exclude Python bytecode caches, regardless of whether the run directory contains a `.gitignore`; shared workers disable bytecode writes.
 
-## 用户方法与 Agent 工具
+## User Methods and Agent Tools
 
-原有 create/open/detail、send_message、enter_rsi/start、pause/resume/stop/chat、
-answer、events、set_budget、learn 等方法保持。`create(config, problem=...)` 可选绑定任务。
-新增方法均携带 run_id：prepare_problem、problem_detail、submit_candidate、candidate_status、
-evaluate_candidate、select_candidate、finalize_problem。
+Existing methods remain: create/open/detail, send_message, enter_rsi/start, pause/resume/stop/chat,
+answer, events, set_budget, learn, and others. `create(config, problem=...)` optionally binds a problem.
+All new methods take run_id: prepare_problem, problem_detail, submit_candidate, candidate_status,
+evaluate_candidate, select_candidate, and finalize_problem.
 
-绑定任务才注册 rsi_submit_candidate、rsi_candidate_status、rsi_evaluate_candidate、
-rsi_select_candidate。工具从当前 thread/turn 校验 Leader 身份，JSON 请求复用 api/control.py。
-选择必须有完整且可比较的 valid 证据，满足最低轮次和改进要求，且是已完成候选中的最佳。
-完成工具会重新校验冻结选择；文字 evidence 不能代替实际结果。最终 test 不作为 Agent 工具开放。
+Only bound problems register rsi_submit_candidate, rsi_candidate_status, rsi_evaluate_candidate,
+and rsi_select_candidate. Tools validate the Leader identity against the current thread/turn; JSON requests reuse api/control.py.
+Selection requires complete, comparable valid evidence, satisfaction of minimum-round and improvement requirements, and the best candidate among those completed.
+The completion tool revalidates the frozen selection; textual evidence cannot replace actual results. Final test evaluation is not exposed as an Agent tool.
 
-API 数据放 api/records.py、research.py、execution.py，协议放 interfaces.py，控制请求放
-control.py。infra 不静态导入 examples 或 UI；UI 仅调用 ResearchSystem。
-其余保留协议不代表已有实现，不构成第二条任务接入路径。
+API data lives in api/records.py, research.py, and execution.py; protocols in interfaces.py; and control requests in
+control.py. infra does not statically import examples or UI; UI only calls ResearchSystem.
+Other retained protocols do not imply existing implementations or provide a second problem integration path.

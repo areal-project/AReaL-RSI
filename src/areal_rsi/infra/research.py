@@ -1004,7 +1004,7 @@ class ResearchSystem:
                             "问题或需记住的教训；直接 /learn 可跳过补充，按任务历史总结。",
                         ),
                     )
-        elif method == "error" and not params.get("willRetry", False):
+        elif method == "error":
             self._emit(live, SessionEvent("error", text=public_tool_text(params.get("error"))))
 
     async def _request(self, live: LiveSession, event: NativeEvent) -> None:

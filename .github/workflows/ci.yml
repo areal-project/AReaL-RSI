@@ -44,17 +44,12 @@ jobs:
         if: always() && steps.tests.outcome != 'skipped'
         run: |
           uv run --locked python - <<'PY'
-          import sys
           import xml.etree.ElementTree as ET
           cases = ET.parse('test-results.xml').findall('.//testcase')
-          allowed = ('macOS assertion integration test' if sys.platform == 'linux'
-                     else 'Linux process identity regression')
+          assert cases, 'No tests collected'
           for case in cases:
-              for skip in case.findall('skipped'):
-                  assert skip.get('message') == allowed, ET.tostring(case).decode()
-          for name in ('test_codex_native', 'test_problem_native', 'test_tui'):
-              matched = [c for c in cases if name in c.get('classname', '')]
-              assert matched and all(c.find('skipped') is None for c in matched), name
+              assert case.find('skipped') is None, ET.tostring(case).decode()
+          assert any(c.get('name') == 'test_native_goal_survives_mcp_disconnect' for c in cases)
           PY
       - name: Build and install wheel outside checkout
         run: |

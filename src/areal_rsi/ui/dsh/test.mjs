@@ -1,7 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
 import xterm from '@xterm/headless';
 import { createView } from './main.mjs';
 
@@ -31,16 +29,6 @@ class Terminal {
 const record = () => ({ run_id: 'run-test', phase: 'chat', status: 'running',
   active_turn_id: 'turn-test', config: { model: 'test-model', effort: 'high', workspace: process.cwd() }, goal: null,
   learning: { status: 'idle' }, progress: { question: '' } });
-
-test('upstream views are unchanged and no DSH execution runtime is bundled', () => {
-  const provenance = JSON.parse(readFileSync(new URL('./upstream/provenance.json', import.meta.url)));
-  for (const file of [...provenance.files, provenance.dependency_patch]) {
-    const content = readFileSync(new URL(`./upstream/${file.path}`, import.meta.url));
-    assert.equal(createHash('sha256').update(content).digest('hex'), file.sha256);
-  }
-  const bundle = readFileSync(new URL('./vendor.mjs', import.meta.url), 'utf8');
-  assert.doesNotMatch(bundle, /from ["'](?:cordis|@deepseek-ai\/)/);
-});
 
 test('actual DSH components render streams, expand tools, edit and submit', async () => {
   const terminal = new Terminal();

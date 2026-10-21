@@ -2,7 +2,9 @@
 
 - Put contracts in `api/`, core implementations in `infra/`, and optional entry points in `ui/`. Do not add top-level base/modules/app layers.
 - Put data contracts in `api/records.py`, `api/research.py`, and `api/execution.py`; protocols in `api/interfaces.py`; and control requests in `api/control.py`.
-- The system entry point is `ResearchSystem` in `infra/research.py`. API must not import infra, and infra must not import UI.
+- The system entry point is `SessionSystem` in `infra/session.py`. API must not import infra, and infra must not import UI.
+- `SessionSystem` owns public session operations; `SessionRuntime` in `coordination/runtime.py` owns session state, locks, and the execution loop. Goal policies must not depend on Runtime, storage, or Codex communication.
+- Put subprocess jobs, worker setup, and training integration in `infra/execution/`; shared artifact records, snapshots, and trajectory indexes in `infra/storage/`. These packages must not depend on session orchestration or the service. Session lifecycle persistence stays in `coordination/store.py`; role prompts stay in `coordination/policies/prompts.py`.
 - Prefer removing duplicate logic and merging thin modules. Do not add layers for directory symmetry, hypothetical extensions, or shorter files.
 - Do not add injection interfaces with only one implementation, forwarding classes, empty lifecycle methods, or compatibility wrappers. Before introducing an abstraction, explain the concrete reuse it serves.
 - Use named dataclasses and enums for fixed domain structures. Do not use nested `dict[str, Any]` structures for internal state, retries, or results. Dictionaries are only for ID-based indexing, homogeneous mappings, or JSON/plugin boundaries. After decoding at a boundary, use typed fields; do not add dictionary compatibility wrappers.

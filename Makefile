@@ -10,10 +10,10 @@ test:
 	$(UV) run --locked pytest tests
 
 lint:
-	$(UV) run --locked ruff check src tests examples
+	$(UV) run --locked ruff check src tests examples plugins/areal-rsi/scripts
 
 typecheck:
-	$(UV) run --locked mypy src tests \
+	$(UV) run --locked mypy src tests plugins/areal-rsi/scripts \
 		examples/tir/pipeline.py examples/tir/data.py examples/tir/reward.py \
 		examples/tir/benchmark.py examples/tir/synthesis.py examples/tir/problem.py \
 		examples/search/problem.py examples/search/experiment \

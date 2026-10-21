@@ -1,6 +1,6 @@
 # TIR 多轮训练研究
 
-TIR research 通过 `problem.py:TIRProblem` 接入统一 ResearchSystem，
+TIR research 通过 `problem.py:TIRProblem` 接入统一 SessionSystem，
 公共协调器管理真实数据上的多轮候选、恢复和最终验收。需要先检查训练链路时，可使用
 `pipeline.py`，具体步骤见 [单次 pipeline 接入检查](README.md)。
 训练并不是 `/rsi` 的必选步骤。
@@ -154,7 +154,7 @@ prepare 冻结数据哈希、harness、reward、worker、数据读入和后端�
 
 ```python
 from pathlib import Path
-from areal_rsi.infra.artifacts import local_path, read_record, write_record
+from areal_rsi.infra.storage.artifacts import local_path, read_record, write_record
 from examples.tir.benchmark import read_examples
 from areal_rsi.api.research import CandidateRecord
 from examples.tir.problem import ExperimentConfig
@@ -261,7 +261,7 @@ source .venv/bin/activate
 export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
 ```
 
-TIR 是独立任务实现，数据和 GPU worker 保留在 example，统一入口由 ResearchSystem 提供。
+TIR 是独立任务实现，数据和 GPU worker 保留在 example，统一入口由 SessionSystem 提供。
 先填写 experiment.json 中的真实模型、AReaL 源码、GPU Python、已有 benchmark、image 与 slurm 资源。
 在 objective.md 中写明研究范围、轮次和验收目标，然后运行：
 

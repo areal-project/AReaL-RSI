@@ -1,0 +1,19 @@
+{
+  "name": "areal-rsi",
+  "mcpServers": {
+    "areal-rsi": {
+      "command": "python3",
+      "env_vars": [
+        "RSI_CLI_HOME", "RSI_CLI_REF", "RSI_CLI_PATH", "RSI_CLI_REPOSITORY",
+        "RSI_DATA_ROOT", "RSI_API_KEY", "RSI_MODEL", "RSI_REASONING_EFFORT",
+        "RSI_BASE_URL", "RSI_API_KEY_ENV", "RSI_CODEX_BIN", "RSI_SANDBOX",
+        "RSI_APPROVAL_POLICY", "RSI_KEEP_AWAKE", "RSI_USE_EXPERIENCE", "RSI_AUTO_LEARN",
+        "XDG_CONFIG_HOME", "PYTHONPATH", "PYTHONDONTWRITEBYTECODE",
+        "UV_PYTHON_PREFERENCE", "UV_PYTHON_DOWNLOADS", "UV_FIND_LINKS", "UV_CACHE_DIR", "UV_LINK_MODE",
+        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+        "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+        "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"
+      ]
+    }
+  }
+}

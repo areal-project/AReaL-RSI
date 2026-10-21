@@ -318,7 +318,7 @@ def summarize_evaluation(
 
 def recover_summary(config_path: Path, output: Path) -> Path:
     """CPU-only, separately recorded recovery after solver and official judge finish."""
-    from areal_rsi.infra.artifacts import write_record
+    from areal_rsi.infra.storage.artifacts import write_record
 
     config = FinalEvalConfig(**json.loads(config_path.read_text()))
     source = Path(config.output).resolve()

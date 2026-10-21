@@ -11,7 +11,7 @@ from typing import Literal
 
 from areal_rsi.api.control import decode_record, encode_record
 from areal_rsi.api.records import ContentRef
-from areal_rsi.infra.artifacts import file_ref, write_record
+from areal_rsi.infra.storage.artifacts import file_ref, write_record
 
 
 @dataclass(frozen=True, slots=True)

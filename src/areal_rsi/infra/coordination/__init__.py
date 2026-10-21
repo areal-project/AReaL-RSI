@@ -1,4 +1,4 @@
-"""Typed experiment coordination shared by task adapters and ResearchSystem."""
+"""Typed experiment coordination shared by task adapters and SessionSystem."""
 
 from __future__ import annotations
 
@@ -7,10 +7,11 @@ import fcntl
 import importlib
 import json
 import re
+from collections.abc import Callable
 from dataclasses import is_dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, ParamSpec, TypeVar, cast
 from uuid import uuid4
 
 from areal_rsi.api.control import encode_record, record_schema
@@ -38,7 +39,15 @@ from areal_rsi.api.research import (
     ProblemSpec,
     SourceTree,
 )
-from areal_rsi.infra.artifacts import (
+from areal_rsi.infra.coordination.evaluation import (
+    EvaluationService,
+    paired,
+    read_evaluation_samples,
+)
+from areal_rsi.infra.coordination.policies.selection import improvement, metric, select_candidate
+from areal_rsi.infra.execution.jobs import JobExecutor
+from areal_rsi.infra.execution.training import AReaLBackend
+from areal_rsi.infra.storage.artifacts import (
     file_ref,
     local_path,
     read_record,
@@ -46,15 +55,20 @@ from areal_rsi.infra.artifacts import (
     verify_model,
     write_record,
 )
-from areal_rsi.infra.coordination.evaluation import (
-    EvaluationService,
-    paired,
-    read_evaluation_samples,
-)
-from areal_rsi.infra.coordination.policies.selection import improvement, metric, select_candidate
-from areal_rsi.infra.execution import JobExecutor
-from areal_rsi.infra.training import AReaLBackend
-from areal_rsi.infra.trajectories import LocalTrajectoryStore
+from areal_rsi.infra.storage.trajectories import LocalTrajectoryStore
+
+P = ParamSpec("P")
+T = TypeVar("T")
+
+
+async def _local_stage(function: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T:
+    """Keep blocking local work off the loop; finish writes before propagating cancellation."""
+    task = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await asyncio.gather(task, return_exceptions=True)
+        raise
 
 
 def _problem_factory(entrypoint: str) -> tuple[Any, Path]:
@@ -270,16 +284,7 @@ class ProblemRun:
                     )
                 try:
                     if record.plan is None:
-                        preparing = asyncio.create_task(
-                            asyncio.to_thread(self._build_candidate, record)
-                        )
-                        try:
-                            await asyncio.shield(preparing)
-                        except asyncio.CancelledError:
-                            # Finish bounded local preparation before publishing interruption,
-                            # so a cancelled thread cannot overwrite the durable terminal record.
-                            await asyncio.gather(preparing, return_exceptions=True)
-                            raise
+                        await _local_stage(self._build_candidate, record)
                     plan = record.plan
                     assert plan is not None
                     if record.recipe:
@@ -287,7 +292,7 @@ class ProblemRun:
                     for ref in plan.inputs:
                         local_path(ref)
                     if record.solution is None:
-                        self._check_source(record, "before")
+                        await _local_stage(self._check_source, record, "before")
                         if plan.job is not None:
                             assert plan.runtime is not None
                             record.status = CandidateStatus.TRAINING
@@ -296,7 +301,7 @@ class ProblemRun:
                                 self.run_id, candidate_id + "-train", plan.job
                             )
                             record.training = training
-                            self._check_source(record, "trained")
+                            await _local_stage(self._check_source, record, "trained")
                             model = plan.solution.model
                             created = datetime.now(UTC).isoformat()
                             record.solution = replace(
@@ -345,8 +350,8 @@ class ProblemRun:
 
     async def _evaluate(self, record: CandidateRecord, split: BenchmarkSplit) -> EvaluationResult:
         candidate_id = record.candidate_id
-        spec = self.spec
-        solution = self.solution(candidate_id)
+        spec = await _local_stage(lambda: self.spec)
+        solution = await _local_stage(self.solution, candidate_id)
         attempt = record.test_attempt if split == BenchmarkSplit.TEST else record.validation_attempt
         stem = f"{candidate_id}-{'test' if split == BenchmarkSplit.TEST else 'valid'}-{attempt}"
         plan_path = self.path(candidate_id).parent / f"{stem}-plan.json"
@@ -354,7 +359,8 @@ class ProblemRun:
         if plan_ref is not None:
             plan = read_record(local_path(plan_ref), EvaluationPlan)
         else:
-            plan = self.problem.build_evaluation(
+            plan = await _local_stage(
+                self.problem.build_evaluation,
                 EvaluationContext(
                     self.run_id,
                     str(self.root),
@@ -366,8 +372,10 @@ class ProblemRun:
             )
             plan = replace(
                 plan,
-                sources=self._snapshot(
-                    spec.sources, self.path(candidate_id).parent / (stem + "-source")
+                sources=await _local_stage(
+                    self._snapshot,
+                    spec.sources,
+                    self.path(candidate_id).parent / (stem + "-source"),
                 ),
             )
             plan_ref = write_record(plan_path, plan)
@@ -387,7 +395,7 @@ class ProblemRun:
         if split == BenchmarkSplit.VALIDATE:
             record.status = CandidateStatus.EVALUATING
         write_record(self.path(candidate_id), record)
-        self._check_source(record, stem + "-before", plan.sources)
+        await _local_stage(self._check_source, record, stem + "-before", plan.sources)
         result = await self.evaluator.evaluate(
             self.run_id,
             stem,
@@ -396,7 +404,7 @@ class ProblemRun:
             solution_id=solution.solution_id,
             split=split,
         )
-        self._check_source(record, stem + "-after", plan.sources)
+        await _local_stage(self._check_source, record, stem + "-after", plan.sources)
         if split == BenchmarkSplit.TEST:
             record.test = result
         else:
@@ -473,7 +481,7 @@ class ProblemRun:
         async with self.lock:
             with (self.root / "execution.lock").open("a") as lease:
                 fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                self.select(candidate_id)
+                await _local_stage(self.select, candidate_id)
                 baseline = await self._evaluate(self.candidate("base"), BenchmarkSplit.TEST)
                 candidate = await self._evaluate(self.candidate(candidate_id), BenchmarkSplit.TEST)
                 contract = self.spec.contract

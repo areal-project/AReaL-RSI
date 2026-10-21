@@ -1,0 +1,20 @@
+# All settings are optional. These values match the built-in defaults.
+# Relative paths in this file resolve from its directory.
+data_root = "~/.local/share/areal-rsi"
+
+[session]
+model = "gpt-6.1-sol"
+effort = "xhigh" # low, medium, high, xhigh
+base_url = "https://htnn-gateway.alipay.com/arenaonlinegateway/api"
+
+# Workspace defaults to the launch directory; --workspace overrides it.
+# workspace = "/absolute/path/to/project"
+sandbox = "danger-full-access" # read-only, workspace-write, danger-full-access
+approval_policy = "never" # on-request, never
+keep_awake = true
+use_experience = true
+auto_learn = true # false waits for /learn and optional human feedback
+
+# Advanced settings. Store the key in .env or the environment, never here.
+# codex_bin = "codex"
+# api_key_env = "RSI_API_KEY"

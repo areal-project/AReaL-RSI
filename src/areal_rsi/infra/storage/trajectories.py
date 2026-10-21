@@ -10,7 +10,7 @@ from pathlib import Path
 
 from areal_rsi.api.control import encode_record
 from areal_rsi.api.records import Trajectory, TrajectoryPage, TrajectoryQuery, TrajectoryRef
-from areal_rsi.infra.artifacts import read_record
+from areal_rsi.infra.storage.artifacts import read_record
 
 
 class LocalTrajectoryStore:

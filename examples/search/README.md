@@ -1,10 +1,10 @@
 # Qwen3-8B 搜索训练与自动实验
 
-本例把固定的 BrowseComp-Plus Qwen-Agent ReAct 行为接入 AReaL v1 在线 GRPO，使用外部搜索问答训练，并由原生 `ResearchSystem` Goal 选择后续实验。主目标和15% 的验收门槛见[示例研究目标](OBJECTIVE.md)。一次候选 pipeline 完成不等于整个研究 Goal 完成。
+本例把固定的 BrowseComp-Plus Qwen-Agent ReAct 行为接入 AReaL v1 在线 GRPO，使用外部搜索问答训练，并由原生 `SessionSystem` Goal 选择后续实验。主目标和15% 的验收门槛见[示例研究目标](OBJECTIVE.md)。一次候选 pipeline 完成不等于整个研究 Goal 完成。
 
 ## 标准研究入口
 
-Search 通过 problem.py:SearchProblem 接入统一 ResearchSystem。任务保留检索、reward、
+Search 通过 problem.py:SearchProblem 接入统一 SessionSystem。任务保留检索、reward、
 rollout、训练 worker 和官方评测；候选、Slurm 回执、恢复与选择冻结由 infra 管理。
 experiment/pipeline.py 只执行一个 GPU 阶段，在 allocation 内启动并清理检索服务与 worker。
 

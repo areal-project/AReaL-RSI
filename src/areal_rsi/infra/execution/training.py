@@ -9,13 +9,13 @@ from pathlib import Path
 
 from areal_rsi.api.execution import AReaLRuntime, JobSpec, TrainingReceipt, TrainingResult
 from areal_rsi.api.records import ContentRef
-from areal_rsi.infra.artifacts import (
+from areal_rsi.infra.execution.jobs import JobExecutor
+from areal_rsi.infra.storage.artifacts import (
     read_record,
     snapshot_directory,
     verify_directory,
     write_record,
 )
-from areal_rsi.infra.execution import JobExecutor
 
 
 class AReaLBackend:
@@ -35,7 +35,7 @@ class AReaLBackend:
         python_paths: tuple[Path, ...] = (),
         project: Path | None = None,
     ) -> JobSpec:
-        project = (project or Path(__file__).resolve().parents[3]).resolve(strict=True)
+        project = (project or Path(__file__).resolve().parents[4]).resolve(strict=True)
         search = [
             *(str(path.resolve()) for path in python_paths),
             str(entrypoint.resolve().parent),

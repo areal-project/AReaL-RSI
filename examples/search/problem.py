@@ -29,7 +29,7 @@ from areal_rsi.api.research import (
     ProblemSpec,
     SourceTree,
 )
-from areal_rsi.infra.artifacts import (
+from areal_rsi.infra.storage.artifacts import (
     file_ref,
     local_path,
     read_record,
@@ -137,7 +137,7 @@ class SearchProblem(ResearchProblem[SearchProblemConfig, SearchRecipe]):
                 *sorted((self.project / "src").rglob("*.py")),
                 *sorted((self.project / "examples/search").rglob("*.py")),
                 self.project / "examples/checkpoints.py",
-                self.project / "src/areal_rsi/infra/worker.sh",
+                self.project / "src/areal_rsi/infra/execution/worker.sh",
                 *(backend / entry.path for entry in backend_manifest.files),
             )
         )
@@ -206,7 +206,7 @@ class SearchProblem(ResearchProblem[SearchProblemConfig, SearchRecipe]):
                 *(argument for bind in self.config.binds for argument in ("--bind", bind)),
                 image or self.config.image,
                 "bash",
-                str(self.project / "src/areal_rsi/infra/worker.sh"),
+                str(self.project / "src/areal_rsi/infra/execution/worker.sh"),
                 stage.official.vllm_python if stage.official is not None else config.runtime.python,
                 str(self.project / "examples/search/experiment/pipeline.py"),
                 "--request",

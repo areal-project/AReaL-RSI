@@ -1,4 +1,4 @@
-"""DSH terminal transport. The Node view owns rendering; ResearchSystem owns all work."""
+"""DSH terminal transport. The Node view owns rendering; SessionSystem owns all work."""
 
 from __future__ import annotations
 
@@ -16,9 +16,8 @@ from pathlib import Path
 from typing import Any, get_args
 
 from areal_rsi.api.control import TerminalInput, decode_record, encode_record
-from areal_rsi.api.research import ReasoningEffort, SessionStatus
-from areal_rsi.infra.config import from_environment
-from areal_rsi.infra.research import ResearchSystem
+from areal_rsi.api.research import AppConfig, ReasoningEffort, SessionStatus
+from areal_rsi.infra.session import SessionSystem
 
 HELP = """Enter 发送 · Shift+Enter 换行 · Esc 暂停 · Ctrl+O 展开工具 · Ctrl+Q 保存退出
 /rsi [目标] 沿用上下文讨论 · /start 执行 · /chat 普通模式
@@ -27,6 +26,7 @@ HELP = """Enter 发送 · Shift+Enter 换行 · Esc 暂停 · Ctrl+O 展开工�
 /budget 查看预算 · /budget off 取消限制 · /budget <tokens|off> <秒|off> 设置总上限
 /learn [复盘反馈] 独立总结经验 · /docs 查看经验目录
 /learn-mode [auto|guided] 自动总结或等待人工复盘
+/config 查看当前会话配置（不显示密钥）
 /image 路径 [说明] 附加图片 · /sessions 列出会话 · /open ID · /new · /quit"""
 
 
@@ -46,15 +46,15 @@ def launch(args: argparse.Namespace) -> int:
         )
     subprocess.run([node, str(directory / "patch.mjs")], check=True)
     arguments = [node, str(directory / "main.mjs")]
-    for name in ("workspace", "data_root", "resume", "env_file"):
+    for name in ("workspace", "data_root", "resume", "config", "env_file"):
         if value := getattr(args, name):
             arguments.extend(["--" + name.replace("_", "-"), str(value)])
     return subprocess.run(arguments, env={**os.environ, "RSI_PYTHON": sys.executable}).returncode
 
 
-async def serve(args: argparse.Namespace) -> int:
-    system = ResearchSystem(args.data_root)
-    config = system.detail(args.resume).config if args.resume else from_environment(args.workspace)
+async def serve(args: argparse.Namespace, settings: AppConfig) -> int:
+    system = SessionSystem(Path(settings.data_root))
+    config = system.detail(args.resume).config if args.resume else settings.session
     run_id = args.resume or await system.create(config)
     images: list[Path] = []
     consumer: asyncio.Task[None] | None = None
@@ -272,6 +272,14 @@ async def serve(args: argparse.Namespace) -> int:
                                         else record.config.workspace
                                     )
                                     for record in system.store.list_sessions()[:20]
+                                ),
+                            )
+                        elif name == "/config":
+                            current = AppConfig(system.detail(run_id).config, str(system.root))
+                            send(
+                                "notice",
+                                text=json.dumps(
+                                    encode_record(current), ensure_ascii=False, indent=2
                                 ),
                             )
                         elif name == "/status":

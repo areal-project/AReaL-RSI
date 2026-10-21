@@ -12,6 +12,7 @@ dist/
 .env
 .env.*
 !.env.example
+/rsi.toml
 .rsi/
 runs/
 node_modules/

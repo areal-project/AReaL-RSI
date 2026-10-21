@@ -23,17 +23,17 @@ from areal_rsi.api.records import (
     SolutionVersion,
     SourceSnapshot,
 )
-from areal_rsi.infra.artifacts import (
+from areal_rsi.infra.coordination.evaluation import EvaluationService, paired
+from areal_rsi.infra.execution.jobs import JobExecutor
+from areal_rsi.infra.execution.training import AReaLBackend
+from areal_rsi.infra.storage.artifacts import (
     local_path,
     read_record,
     snapshot_directory,
     snapshot_source,
     write_record,
 )
-from areal_rsi.infra.coordination.evaluation import EvaluationService, paired
-from areal_rsi.infra.execution import JobExecutor
-from areal_rsi.infra.training import AReaLBackend
-from areal_rsi.infra.trajectories import LocalTrajectoryStore
+from areal_rsi.infra.storage.trajectories import LocalTrajectoryStore
 from examples.tir.data import DatasetManifest, SynthesisConfig, read_problems, synthesize
 
 PROJECT = Path(__file__).resolve().parents[2]

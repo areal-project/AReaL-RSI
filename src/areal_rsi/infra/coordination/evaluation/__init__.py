@@ -20,9 +20,9 @@ from areal_rsi.api.records import (
     PairedComparison,
     Trajectory,
 )
-from areal_rsi.infra.artifacts import file_ref, local_path, write_record
-from areal_rsi.infra.execution import JobExecutor
-from areal_rsi.infra.trajectories import LocalTrajectoryStore
+from areal_rsi.infra.execution.jobs import JobExecutor
+from areal_rsi.infra.storage.artifacts import file_ref, local_path, write_record
+from areal_rsi.infra.storage.trajectories import LocalTrajectoryStore
 
 
 def _metrics(samples: tuple[EvaluationSample, ...]) -> dict[str, float]:
@@ -92,7 +92,7 @@ class EvaluationService:
         directory = Path(job.result_path)
         saved = directory / "evaluation.json"
         if saved.exists():
-            from areal_rsi.infra.artifacts import read_record
+            from areal_rsi.infra.storage.artifacts import read_record
 
             result = read_record(saved, EvaluationResult)
             if result.job_id != job.job_id:

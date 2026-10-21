@@ -4,15 +4,23 @@ See the [project README](../README.md#getting-started) for installation and firs
 
 ## Configuration and Permissions
 
-You can specify `--env-file /path/to/.env` and `--data-root /path/to/data` at startup.
+Put ordinary settings in `rsi.toml` and secrets in `.env`. Defaults are model `gpt-6.1-sol`, effort `xhigh`,
+and API endpoint `https://htnn-gateway.alipay.com/arenaonlinegateway/api`.
+See [README configuration](../README.md#configuration) for complete examples, precedence, and migration notes.
+At startup, specify `--config /path/rsi.toml`, `--env-file /path/.env`, or `--data-root /path/to/data` as needed.
+User defaults in `~/.config/areal-rsi/` load before project configuration in the workspace.
+Without `--workspace`, the launch directory is the project directory; explicitly selected configuration files take precedence.
+For `areal-rsi research`, `--config` selects problem JSON; use `--session-config` for session TOML.
+`areal-rsi config` displays effective settings without connecting to a model; `/config` displays current session settings in the TUI.
+Neither command displays secrets.
 API connection settings, history, and Codex settings use RSI's separate data directory; they do not overwrite your regular Codex
 login or `~/.codex/config.toml`. The API key is read only from the child process environment, never written to session JSON or command arguments.
 Project instructions and tool configuration in the working directory still follow native Codex rules.
 
-New sessions default to `RSI_SANDBOX=danger-full-access` and `RSI_APPROVAL_POLICY=never`:
+New sessions default to `sandbox = "danger-full-access"` and `approval_policy = "never"` in `[session]`:
 they can access any directory permitted by the current OS user, without approval prompts. The workspace is a starting directory, not a permission boundary.
 Regular mode, Interaction, Leader, and experience summarization share the same permission configuration; the summarization prompt still requires extracting experience only.
-To restrict access, explicitly set `workspace-write` or `read-only` in `.env`. Existing sessions retain their saved permissions.
+To restrict access, explicitly set `workspace-write` or `read-only` in `rsi.toml`. Existing sessions retain their saved permissions.
 After changing defaults, exit and restart the TUI to create a new session; do not use `--resume` to restore the old configuration.
 
 ## Workflow
@@ -34,13 +42,16 @@ After changing defaults, exit and restart the TUI to create a new session; do no
 | Summarize experience / view documents | `/learn [review feedback]`; `/docs` |
 | View / switch summarization mode | `/learn-mode`; `/learn-mode auto`; `/learn-mode guided` |
 | View the current goal | `/status` |
+| View current configuration without secrets | `/config` |
 | View / remove / set budgets | `/budget`; `/budget off`; `/budget <tokens\|off> <seconds\|off>` |
 | View API models / switch model | `/model`; `/model model-name` |
 | View / set reasoning effort | `/effort`; `/effort low\|medium\|high\|xhigh` |
 | Session history | `/sessions`, `/open run-ID`, or `--resume run-ID` at startup |
 | New session / save and exit | `/new`; Ctrl+Q or `/quit` |
 
-Exiting pauses unfinished work. Reopening does not execute automatically; use `/resume` to continue explicitly.
+Exiting the TUI pauses unfinished work. Reopening does not execute automatically; use `/resume` to continue explicitly.
+Plugin runs are owned by a separate background service and continue when the external harness closes;
+see [plugin usage](plugins.md) for controls.
 New goals have no token or execution-time limits by default, and Interaction does not set budgets. To impose limits after the goal is saved, enter
 `/budget 100000 3600` (total token limit and active execution seconds, including usage already incurred); use `off` for either value to leave it unlimited.
 After exhaustion, use `/budget off` to remove limits, or raise them, then `/resume` to continue the original goal and context. Usage is not reset.
@@ -50,7 +61,7 @@ The TUI remains usable during the query. If listing is unsupported or the connec
 The list may include image or other non-Agent models; it does not imply that every model supports the tool calling Codex requires.
 
 `/model model-name` and `/effort high` preserve the current context and take effect on the next turn; execution or summarization already in progress uses its original settings.
-Settings are saved in the current session and inherited by subsequent `/new` sessions, without changing `.env` or regular Codex configuration.
+Settings are saved in the current session and inherited by subsequent `/new` sessions, without changing `rsi.toml`, `.env`, or regular Codex configuration.
 This version offers four effort levels: low, medium, high, and xhigh. Support depends on the selected model and API service.
 
 Regular conversation → Interaction uses the same native thread; Interaction → Leader uses a native fork,
@@ -65,7 +76,8 @@ browser tools for frontend tasks must be configured in that separate environment
 
 After a Leader turn ends, execution continues if the goal is incomplete. It stops on budget exhaustion, missing user input, failure, or explicit pause.
 System idle sleep is inhibited by default during execution and experience curation, then released when no task is active. macOS uses `caffeinate`; Linux uses
-`systemd-inhibit` when available. This is not a background daemon: closing the terminal pauses work; closing the lid, shutting down, or losing network access can still interrupt it.
+`systemd-inhibit` when available. Closing the embedded TUI pauses work; plugin runs continue in the local service.
+Closing the lid, shutting down, or losing network access can still interrupt execution.
 
 The default, `/learn-mode auto`, starts an independent summarization session after an RSI goal completes.
 `/learn-mode guided` waits for your review feedback after completion without starting the summarization model. After `/learn your feedback`,
@@ -87,7 +99,9 @@ Interaction focuses on requirements and does not promote experience suggestions 
 Summary failures display an error and can be retried with `/learn`; repeated requests for the same task reuse the published result by default.
 New feedback triggers another summary. If the previous one is still running, the UI asks you to wait and submit again after completion, rather than silently dropping the feedback.
 
-`RSI_AUTO_LEARN=0` defaults new sessions to guided mode; `RSI_USE_EXPERIENCE=0` disables experience document use for new sessions;
-`RSI_KEEP_AWAKE=0` disables sleep inhibition. Summarization makes additional API calls, with a maximum wait of 240 seconds for its turn (connection requests have separate timeouts).
+In `rsi.toml` under `[session]`, `auto_learn = false` defaults new sessions to guided mode,
+`use_experience = false` disables experience document use, and `keep_awake = false` disables sleep inhibition.
+Legacy `RSI_AUTO_LEARN`, `RSI_USE_EXPERIENCE`, and `RSI_KEEP_AWAKE` environment variables still override file settings.
+Summarization makes additional API calls, with a maximum wait of 240 seconds for its turn (connection requests have separate timeouts).
 Regular tasks are not automatically summarized after every turn.
 Documents must still be validated against the current task; a single experience does not guarantee correctness.

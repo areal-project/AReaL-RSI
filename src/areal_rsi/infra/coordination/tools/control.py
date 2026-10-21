@@ -26,6 +26,7 @@ from areal_rsi.api.research import (
     TaskBrief,
     ToolReceipt,
 )
+from areal_rsi.infra.coordination.policies import goal
 
 
 def definitions(*, problem: bool = False) -> list[dict[str, Any]]:
@@ -115,9 +116,7 @@ def apply_control(record: SessionRecord, key: str, name: str, arguments: Any) ->
             )
         else:
             decode_record(StartGoal, arguments)
-            if record.goal is None:
-                raise ValueError("Save a task before starting the goal")
-            record.handoff_pending = True
+            goal.start(record)
             text = (
                 "Handoff scheduled after this turn. Finish your reply; the Leader inherits history."
             )

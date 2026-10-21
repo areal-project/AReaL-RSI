@@ -30,7 +30,9 @@ from areal_rsi.api.research import (
     ProblemSpec,
     SourceTree,
 )
-from areal_rsi.infra.artifacts import (
+from areal_rsi.infra.execution.jobs import JobExecutor
+from areal_rsi.infra.execution.training import AReaLBackend
+from areal_rsi.infra.storage.artifacts import (
     file_ref,
     local_path,
     read_record,
@@ -38,8 +40,6 @@ from areal_rsi.infra.artifacts import (
     snapshot_source,
     write_record,
 )
-from areal_rsi.infra.execution import JobExecutor
-from areal_rsi.infra.training import AReaLBackend
 from examples.tir.benchmark import Benchmark, evaluation_cases, read_examples
 from examples.tir.pipeline import (
     BACKEND_PATHS,
@@ -137,7 +137,7 @@ class TIRProblem(ResearchProblem[ExperimentConfig, RoundRecipe]):
                         "problem.py",
                     )
                 ),
-                PROJECT / "src/areal_rsi/infra/worker.sh",
+                PROJECT / "src/areal_rsi/infra/execution/worker.sh",
                 *(repository / entry.path for entry in manifest.files),
                 repository / config.backend_config,
             )
@@ -207,7 +207,7 @@ class TIRProblem(ResearchProblem[ExperimentConfig, RoundRecipe]):
                 *(argument for bind in self.config.binds for argument in ("--bind", bind)),
                 self.config.image,
                 "bash",
-                str(PROJECT / "src/areal_rsi/infra/worker.sh"),
+                str(PROJECT / "src/areal_rsi/infra/execution/worker.sh"),
                 *local.command,
             ),
             slurm=self.config.slurm,

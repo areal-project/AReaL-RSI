@@ -13,7 +13,7 @@ from typing import Any
 
 from areal_rsi.api.control import decode_record
 from areal_rsi.api.execution import TrainingReceipt
-from areal_rsi.infra.artifacts import read_record, write_record
+from areal_rsi.infra.storage.artifacts import read_record, write_record
 from examples.search.experiment.config import WorkerRequest
 from examples.search.task.dataset import SearchQuestion
 from examples.search.task.rollouts import write_evaluation_samples

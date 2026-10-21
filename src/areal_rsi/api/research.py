@@ -39,21 +39,31 @@ class SessionStatus(StrEnum):
 
 
 ReasoningEffort = Literal["low", "medium", "high", "xhigh"]
+DEFAULT_DATA_ROOT = "~/.local/share/areal-rsi"
 
 
 @dataclass(slots=True)
 class SessionConfig:
     workspace: str
-    model: str = "gpt-6-astra"
-    effort: ReasoningEffort = "high"
-    base_url: str = "https://api.openai.com/v1"
+    model: str = "gpt-6.1-sol"
+    effort: ReasoningEffort = "xhigh"
+    base_url: str = "https://htnn-gateway.alipay.com/arenaonlinegateway/api"
     api_key_env: str = "RSI_API_KEY"
     codex_bin: str = "codex"
+    env_files: list[str] = field(default_factory=list)  # Paths only; never persist credentials.
     sandbox: Literal["read-only", "workspace-write", "danger-full-access"] = "danger-full-access"
     approval_policy: Literal["on-request", "never"] = "never"
     keep_awake: bool = True
     use_experience: bool = True
     auto_learn: bool = True  # False waits for an explicit /learn after goal completion.
+
+
+@dataclass(slots=True)
+class AppConfig:
+    """Startup defaults; each conversation persists its own SessionConfig."""
+
+    session: SessionConfig
+    data_root: str = DEFAULT_DATA_ROOT
 
 
 @dataclass(slots=True)
@@ -124,6 +134,7 @@ class SessionRecord:
     receipts: dict[str, ToolReceipt] = field(default_factory=dict)
     experience: list[ExperienceRef] = field(default_factory=list)
     learning: LearningRecord = field(default_factory=LearningRecord)
+    pending_prompts: list[UserPrompt] = field(default_factory=list)
     problem: ProblemBinding | None = None
 
 
@@ -140,6 +151,7 @@ class UserPrompt:
     kind: Literal["approval", "question"]
     text: str
     questions: list[PromptQuestion] = field(default_factory=list)
+    prompt_id: str = ""  # Public identity; native request IDs can repeat after reconnect.
 
 
 @dataclass(slots=True)
@@ -800,3 +812,31 @@ class CoordinationState:
             "cancelled",
         }:
             raise ValueError("Unknown coordination status")
+
+
+@dataclass(slots=True)
+class SessionSummary:
+    run_id: str
+    workspace: str
+    phase: SessionPhase
+    status: SessionStatus
+    objective: str
+    progress: GoalProgress
+    error: str
+    learning: LearningRecord
+    prompts: list[UserPrompt]
+
+
+@dataclass(slots=True)
+class EventPage:
+    cursor: int
+    events: list[SessionEvent]
+    has_more: bool = False
+
+
+@dataclass(slots=True)
+class RequestReceipt:
+    request_id: str
+    status: Literal["running", "completed", "failed", "interrupted"]
+    result: JsonObject = field(default_factory=dict)
+    error: str = ""

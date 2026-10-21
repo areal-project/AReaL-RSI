@@ -9,7 +9,7 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from areal_rsi.infra.artifacts import read_record
+from areal_rsi.infra.storage.artifacts import read_record
 from examples.search.experiment.config import WorkerRequest
 from examples.search.task.rollouts import Episode
 from examples.search.training.worker import dataset, prepare_config, workflow_kwargs

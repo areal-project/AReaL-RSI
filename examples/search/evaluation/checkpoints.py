@@ -22,7 +22,7 @@ def export_checkpoint(source_manifest: Path, output: Path, *, source_sha256: str
     Keep both representations, and retain the original checkpoint unchanged.
     """
     from areal_rsi.api.records import DirectorySnapshot
-    from areal_rsi.infra.artifacts import read_record, snapshot_directory, write_record
+    from areal_rsi.infra.storage.artifacts import read_record, snapshot_directory, write_record
 
     def verify(snapshot: DirectorySnapshot) -> None:
         for entry in snapshot.files:

@@ -1,4 +1,4 @@
-"""One Search GPU stage; candidate coordination belongs to ResearchSystem."""
+"""One Search GPU stage; candidate coordination belongs to SessionSystem."""
 
 from __future__ import annotations
 
@@ -15,8 +15,8 @@ from typing import Literal
 
 from areal_rsi.api.control import decode_record, encode_record
 from areal_rsi.api.records import EvaluationSample, TraceEvent
-from areal_rsi.infra.artifacts import file_ref, read_record, write_record
-from areal_rsi.infra.execution import JobExecutor
+from areal_rsi.infra.execution.jobs import JobExecutor
+from areal_rsi.infra.storage.artifacts import file_ref, read_record, write_record
 from examples.search.problem import StageRequest
 
 

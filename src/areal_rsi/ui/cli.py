@@ -6,20 +6,24 @@ import argparse
 import asyncio
 import json
 import sys
+from importlib.metadata import version
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 from areal_rsi.api.control import encode_record
-from areal_rsi.api.research import ProblemBinding, SessionPhase, SessionStatus
-from areal_rsi.infra.artifacts import file_ref
-from areal_rsi.infra.config import from_environment
-from areal_rsi.infra.research import ResearchSystem
+from areal_rsi.api.research import AppConfig, ProblemBinding, SessionPhase, SessionStatus
+from areal_rsi.infra.config import data_root, load_config
+from areal_rsi.infra.session import SessionSystem
+from areal_rsi.infra.storage.artifacts import file_ref
 
 
-async def run(args: argparse.Namespace) -> int:
-    system = ResearchSystem(args.data_root)
+async def run(args: argparse.Namespace, config: AppConfig) -> int:
+    system = SessionSystem(Path(config.data_root))
     try:
+        if args.command == "config":
+            if args.resume:
+                config.session = system.detail(args.resume).config
+            print(json.dumps(encode_record(config), ensure_ascii=False, indent=2))
+            return 0
         if args.command in {"status", "finalize"}:
             if not args.resume:
                 raise ValueError("Specify --resume run-ID")
@@ -49,9 +53,7 @@ async def run(args: argparse.Namespace) -> int:
             binding = ProblemBinding(
                 args.problem, file_ref(args.config), objective=args.objective.read_text()
             )
-        run_id = args.resume or await system.create(
-            from_environment(args.workspace), problem=binding
-        )
+        run_id = args.resume or await system.create(config.session, problem=binding)
         print(json.dumps({"run_id": run_id, "data_root": str(system.root)}), flush=True)
         if args.command == "research":
             if args.resume:
@@ -135,9 +137,22 @@ async def run(args: argparse.Namespace) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="原生 Codex 对话与 RSI goal")
+    parser.add_argument("--version", action="version", version=version("areal-rsi"))
     commands = parser.add_subparsers(
-        dest="command", required=True, metavar="{tui,run,research,status,finalize,doctor,learn}"
+        dest="command",
+        required=True,
     )
+    for name in ("mcp", "call", "service"):
+        command = commands.add_parser(name)
+        command.add_argument("--data-root", "--root", dest="data_root", type=Path)
+        if name == "call":
+            command.add_argument("operation")
+            command.add_argument(
+                "--input", type=Path, help="JSON arguments file; defaults to stdin"
+            )
+        elif name == "service":
+            command.add_argument("action", choices=("start", "status", "stop", "serve"))
+            command.add_argument("--force", action="store_true")
     for name, description in (
         ("tui", "交互终端（默认）"),
         ("run", "执行并输出 JSON 事件"),
@@ -146,6 +161,7 @@ def main() -> None:
         ("research", "启动或恢复绑定任务的 RSI 研究"),
         ("status", "读取绑定任务的会话与候选状态，不调用模型"),
         ("finalize", "独立验收冻结候选，不启动研究 Agent"),
+        ("config", "查看生效配置，不连接模型、不显示密钥"),
         ("_ui", ""),
     ):
         command = (
@@ -156,7 +172,13 @@ def main() -> None:
         command.add_argument("--data-root", "--root", dest="data_root", type=Path)
         command.add_argument("--workspace", type=Path)
         command.add_argument("--resume")
-        command.add_argument("--env-file", type=Path, default=Path(".env"))
+        command.add_argument("--env-file", type=Path, help="密钥环境文件（默认：启动目录的 .env）")
+        command.add_argument(
+            "--session-config" if name == "research" else "--config",
+            dest="session_config",
+            type=Path,
+            help="会话 TOML 配置（默认：启动目录的 rsi.toml）",
+        )
         command.set_defaults(prompt="", image=[])
         if name == "research":
             command.add_argument("--problem", help="任务实现 module:Class")
@@ -168,11 +190,13 @@ def main() -> None:
             command.add_argument("prompt", nargs="?", default="")
             command.add_argument("--image", action="append", type=Path, default=[])
     argv = sys.argv[1:]
-    if not argv or (argv[0].startswith("-") and argv[0] not in {"--help", "-h"}):
+    if not argv or (argv[0].startswith("-") and argv[0] not in {"--help", "-h", "--version"}):
         argv.insert(0, "tui")
     args = parser.parse_args(argv)
-    load_dotenv(args.env_file, override=False)
     try:
+        if args.command in {"mcp", "call", "service"}:
+            asyncio.run(transport(args))
+            return
         if args.command == "learn" and not args.resume:
             raise ValueError("areal-rsi learn requires --resume run-ID")
         if args.resume and args.workspace:
@@ -180,16 +204,49 @@ def main() -> None:
         if args.command == "tui":
             from areal_rsi.ui.tui import launch
 
+            args.config = args.session_config
             code = launch(args)
-        elif args.command == "_ui":
-            from areal_rsi.ui.tui import serve
-
-            code = asyncio.run(serve(args))
         else:
-            code = asyncio.run(run(args))
+            config = load_config(
+                args.workspace,
+                config_file=args.session_config,
+                env_file=args.env_file,
+                root=args.data_root,
+            )
+            if args.command == "_ui":
+                from areal_rsi.ui.tui import serve
+
+                code = asyncio.run(serve(args, config))
+            else:
+                code = asyncio.run(run(args, config))
     except (OSError, ValueError, RuntimeError) as exc:
         print(str(exc), file=sys.stderr)
         code = 1
     except KeyboardInterrupt:
         code = 130
     raise SystemExit(code)
+
+
+async def transport(args: argparse.Namespace) -> None:
+    """Optional transports do not load project secrets or start the terminal UI."""
+    from areal_rsi.infra.service.transport import call, serve
+
+    root = data_root(args.data_root)
+    if args.command == "mcp":
+        from areal_rsi.ui.mcp import serve as mcp_serve
+
+        await mcp_serve(root)
+    elif args.command == "service" and args.action == "serve":
+        await serve(root)
+    else:
+        if args.command == "call":
+            arguments = json.loads(args.input.read_text() if args.input else sys.stdin.read())
+            result = await call(root, args.operation, arguments)
+        else:
+            result = await call(
+                root,
+                "service_stop" if args.action == "stop" else "service_info",
+                {"force": args.force},
+                autostart=args.action == "start",
+            )
+        print(json.dumps(result, ensure_ascii=False, indent=2), flush=True)

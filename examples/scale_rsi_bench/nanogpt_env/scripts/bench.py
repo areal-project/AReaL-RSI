@@ -1,15 +1,18 @@
 """Standard-library-only submission/status CLI for agent experiments."""
+
 import argparse
-from datetime import datetime, timezone
 import hashlib
 import json
-from pathlib import Path
+import os
 import random
 import subprocess
 import sys
 import uuid
+from datetime import UTC, datetime
+from pathlib import Path
 
 from env_paths import runtime_root
+
 ROOT = runtime_root(__file__)
 DOCS = 182_016
 
@@ -32,27 +35,25 @@ def validate_selection(selection):
 def status(run):
     run = Path(run).resolve()
     config = json.loads((run / "experiment.json").read_text())
-    output = {"run_dir": str(run), "mode": config["mode"], "state": "SUBMITTING",
-              "log": str(run / "job.log"), "result": str(run / "result.json")}
+    output = {
+        "run_dir": str(run),
+        "mode": config["mode"],
+        "state": "SUBMITTING",
+        "log": str(run / "job.log"),
+        "result": str(run / "result.json"),
+    }
     if (run / "submission-error.json").exists():
         output.update(json.loads((run / "submission-error.json").read_text()))
     job_path = run / "job.json"
     if job_path.exists():
         job = json.loads(job_path.read_text())
         output.update(job)
-        query = subprocess.run(["squeue", "-h", "-j", job["job_id"], "-o", "%T|%R"],
-                               capture_output=True, text=True)
-        if query.returncode == 0 and query.stdout.strip():
-            output["state"], output["reason"] = query.stdout.strip().splitlines()[0].split("|", 1)
+        if job.get("backend") == "local":
+            from local_job import process_alive
+
+            output["state"] = "RUNNING" if process_alive(job["pid"], job["start_ticks"]) else "LOST"
         else:
-            query = subprocess.run(["sacct", "-n", "-X", "-j", job["job_id"],
-                                    "--format=State,ExitCode", "-P"], capture_output=True, text=True)
-            rows = query.stdout.strip().splitlines()
-            if query.returncode == 0 and rows:
-                fields = rows[0].split("|")
-                output.update(state=fields[0], slurm_exit_code=fields[1])
-            else:
-                output.update(state="UNKNOWN", reason="Slurm accounting not yet available")
+            slurm_status(job, output)
     if (run / "state.json").exists():
         worker = json.loads((run / "state.json").read_text())
         output["worker"] = worker
@@ -63,7 +64,36 @@ def status(run):
     print(json.dumps(output, indent=2))
 
 
+def slurm_status(job, output):
+    query = subprocess.run(
+        ["squeue", "-h", "-j", job["job_id"], "-o", "%T|%R"], capture_output=True, text=True
+    )
+    if query.returncode == 0 and query.stdout.strip():
+        output["state"], output["reason"] = query.stdout.strip().splitlines()[0].split("|", 1)
+    else:
+        query = subprocess.run(
+            ["sacct", "-n", "-X", "-j", job["job_id"], "--format=State,ExitCode", "-P"],
+            capture_output=True,
+            text=True,
+        )
+        rows = query.stdout.strip().splitlines()
+        if query.returncode == 0 and rows:
+            fields = rows[0].split("|")
+            output.update(state=fields[0], slurm_exit_code=fields[1])
+        else:
+            output.update(state="UNKNOWN", reason="Slurm accounting not yet available")
+
+
 def submit(args):
+    gpu = None
+    if args.backend == "local":
+        from local_job import resolve_gpu
+
+        assignment = ROOT / "assignment.json"
+        assigned = json.loads(assignment.read_text())["gpu_uuid"] if assignment.exists() else None
+        gpu = resolve_gpu(args.gpu or assigned or os.environ.get("CUDA_VISIBLE_DEVICES", ""))
+        if assigned and gpu != assigned:
+            raise ValueError(f"this worker is assigned {assigned}, requested {gpu}")
     if args.baseline:
         selection = list(range(DOCS))
         random.Random(1337).shuffle(selection)
@@ -75,52 +105,162 @@ def submit(args):
         selection = json.loads(source.read_text())
         origin = str(source)
     validate_selection(selection)
-    run = ROOT / "experiments" / (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ-") + uuid.uuid4().hex[:8])
+    run = (
+        ROOT
+        / "experiments"
+        / (datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ-") + uuid.uuid4().hex[:8])
+    )
     run.mkdir(parents=True)
     write_json(run / "selection.json", selection)
-    config = {"mode": "smoke" if args.smoke else "dev", "source": origin,
-              "selection_sha256": hashlib.sha256((run / "selection.json").read_bytes()).hexdigest(),
-              "max_iters": 2 if args.smoke else 3000, "seed": 1337,
-              "time_limit": "02:00:00", "name": args.name}
+    config = {
+        "mode": "smoke" if args.smoke else "dev",
+        "source": origin,
+        "selection_sha256": hashlib.sha256((run / "selection.json").read_bytes()).hexdigest(),
+        "max_iters": 2 if args.smoke else 3000,
+        "seed": 1337,
+        "time_limit": "02:00:00",
+        "name": args.name,
+        "backend": args.backend,
+    }
+    if gpu:
+        config.update(gpu_uuid=gpu, timeout_seconds=7200)
     write_json(run / "experiment.json", config)
-    command = ["sbatch", "--parsable", "--nodes=1", "--ntasks=1", "--gres=gpu:1",
-               "--cpus-per-task=16", "--mem=64G", "--time=02:00:00",
-               "--job-name=" + args.name, "--chdir=" + str(ROOT),
-               "--output=" + str(run / "job.log"), "--error=" + str(run / "job.log"),
-               str(ROOT / "scripts/experiment.sbatch"), str(ROOT), str(run)]
+    if args.backend == "local":
+        submit_local(run, config)
+        return
+    command = [
+        "sbatch",
+        "--parsable",
+        "--nodes=1",
+        "--ntasks=1",
+        "--gres=gpu:1",
+        "--cpus-per-task=16",
+        "--mem=64G",
+        "--time=02:00:00",
+        "--job-name=" + args.name,
+        "--chdir=" + str(ROOT),
+        "--output=" + str(run / "job.log"),
+        "--error=" + str(run / "job.log"),
+        str(ROOT / "scripts/experiment.sbatch"),
+        str(ROOT),
+        str(run),
+    ]
     response = subprocess.run(command, capture_output=True, text=True)
     if response.returncode:
-        write_json(run / "submission-error.json", {"state": "SUBMISSION_FAILED", "error": response.stderr})
+        write_json(
+            run / "submission-error.json", {"state": "SUBMISSION_FAILED", "error": response.stderr}
+        )
         raise RuntimeError(f"sbatch failed; details in {run}: {response.stderr.strip()}")
     job_id = response.stdout.strip().split(";", 1)[0]
     if not job_id.isdigit():
         raise RuntimeError(f"Unrecognized sbatch output: {response.stdout!r}; run directory: {run}")
     write_json(run / "job.json", {"job_id": job_id})
-    print(json.dumps({"job_id": job_id, "run_dir": str(run), "mode": config["mode"],
-                      "time_limit": config["time_limit"], "max_iters": config["max_iters"],
-                      "log": str(run / "job.log"), "result": str(run / "result.json")}, indent=2))
+    print(
+        json.dumps(
+            {
+                "job_id": job_id,
+                "run_dir": str(run),
+                "mode": config["mode"],
+                "time_limit": config["time_limit"],
+                "max_iters": config["max_iters"],
+                "log": str(run / "job.log"),
+                "result": str(run / "result.json"),
+            },
+            indent=2,
+        )
+    )
+
+
+def submit_local(run, config):
+    from local_job import process_start_ticks
+
+    python = ROOT / ".venv/bin/python"
+    if not python.is_file():
+        raise ValueError(f"prepare the local virtualenv first: {python}")
+    assignment = ROOT / "assignment.json"
+    shared = json.loads(assignment.read_text())["shared_root"] if assignment.exists() else str(ROOT)
+    env = {
+        **os.environ,
+        "RSI_ROOT": str(ROOT),
+        "RSI_SHARED_ROOT": shared,
+        "CUDA_VISIBLE_DEVICES": config["gpu_uuid"],
+        "HF_HOME": str(ROOT / "cache/huggingface"),
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "TOKENIZERS_PARALLELISM": "false",
+        "OMP_NUM_THREADS": os.environ.get("OMP_NUM_THREADS", "16"),
+        "TRITON_CACHE_DIR": str(ROOT / "cache/triton"),
+        "TORCHINDUCTOR_CACHE_DIR": str(ROOT / "cache/torch"),
+        "PYTHONNOUSERSITE": "1",
+    }
+    with (run / "job.log").open("wb") as log:
+        process = subprocess.Popen(
+            [str(python), "-u", str(Path(__file__).with_name("local_job.py")), str(run)],
+            cwd=ROOT,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    job = {
+        "backend": "local",
+        "pid": process.pid,
+        "start_ticks": process_start_ticks(process.pid),
+        "gpu_uuid": config["gpu_uuid"],
+    }
+    write_json(run / "job.json", job)
+    print(
+        json.dumps(
+            {
+                **job,
+                "run_dir": str(run),
+                "mode": config["mode"],
+                "max_iters": config["max_iters"],
+                "log": str(run / "job.log"),
+                "result": str(run / "result.json"),
+            },
+            indent=2,
+        )
+    )
 
 
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "status":
-        parser = argparse.ArgumentParser(description="Read worker results and live Slurm status")
+        parser = argparse.ArgumentParser(description="Read local or Slurm experiment status")
         parser.add_argument("run_dir")
         status(parser.parse_args(sys.argv[2:]).run_dir)
         return
-    parser = argparse.ArgumentParser(description="Submit a fixed-recipe nanoGPT DEV experiment (2h job limit).")
+    parser = argparse.ArgumentParser(
+        description="Submit a fixed-recipe nanoGPT DEV experiment (2h job limit)."
+    )
     parser.add_argument("selection", nargs="?", help="ordered document IDs as selection.json")
-    parser.add_argument("--baseline", action="store_true", help="generate a reproducible random baseline")
-    parser.add_argument("--smoke", action="store_true", help="2 training steps and a tiny dev slice; not a benchmark score")
+    parser.add_argument(
+        "--baseline", action="store_true", help="generate a reproducible random baseline"
+    )
+    parser.add_argument(
+        "--smoke",
+        action="store_true",
+        help="2 training steps and a tiny dev slice; not a benchmark score",
+    )
     parser.add_argument("--name", default="wht-rsi-exp", help="Slurm job name")
+    parser.add_argument(
+        "--backend",
+        choices=("slurm", "local"),
+        default=os.environ.get("RSI_NANOGPT_BACKEND", "slurm"),
+    )
+    parser.add_argument("--gpu", help="one physical GPU index or UUID (local backend only)")
     args = parser.parse_args()
     if args.selection and args.baseline:
         parser.error("choose selection.json or --baseline, not both")
+    if args.gpu and args.backend != "local":
+        parser.error("--gpu is only supported by the local backend")
     submit(args)
 
 
 if __name__ == "__main__":
     try:
         main()
-    except (ValueError, OSError, RuntimeError) as error:
+    except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as error:
         print(json.dumps({"error": str(error)}), file=sys.stderr)
         sys.exit(1)

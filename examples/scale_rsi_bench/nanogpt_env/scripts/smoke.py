@@ -29,9 +29,10 @@ with tempfile.TemporaryDirectory(prefix="rsi-smoke-") as tmp:
     np.save(train, rng.integers(0, 50257, 8192, dtype=np.uint16))
     np.save(heldout, rng.integers(0, 50257, 1025, dtype=np.uint16))
     result = root / "logs/smoke-result.json"
-    subprocess.run([sys.executable, "/workspace/train_nano.py", "--train_npy", str(train),
+    workspace = root / "workspace"
+    subprocess.run([sys.executable, str(workspace / "train_nano.py"), "--train_npy", str(train),
                     "--heldout_npy", str(heldout), "--out_json", str(result),
-                    "--max_iters", "2"], check=True, cwd="/workspace")
+                    "--max_iters", "2"], check=True, cwd=workspace)
     output = json.loads(result.read_text())
     assert math.isfinite(output["heldout_ppl"])
     output.update(purpose="synthetic smoke test; not a benchmark score", versions=versions,

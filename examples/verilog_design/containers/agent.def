@@ -1,0 +1,22 @@
+Bootstrap: localimage
+From: {{ BASE_IMAGE }}
+
+%files
+    cache/agent-build/codex /usr/local/bin/codex
+    cache/agent-build/codex-code-mode-host /usr/local/bin/codex-code-mode-host
+    cache/agent-build/rg /usr/local/bin/rg
+    scripts/agent_entry.py /opt/agent_entry.py
+
+%post
+    chmod 755 /usr/local/bin/codex /usr/local/bin/codex-code-mode-host /usr/local/bin/rg
+    mkdir -p /proxy /control /agent-home /workspace
+    sha256sum /usr/local/bin/codex /usr/local/bin/codex-code-mode-host /usr/local/bin/rg /opt/agent_entry.py > /opt/agent-build-inputs.sha256
+    /usr/local/bin/codex --version > /opt/agent-cli-version.txt
+
+%test
+    /usr/local/bin/codex --version
+    /usr/local/bin/rg --version
+    iverilog -V
+
+%runscript
+    exec /opt/venv/bin/python /opt/agent_entry.py "$@"

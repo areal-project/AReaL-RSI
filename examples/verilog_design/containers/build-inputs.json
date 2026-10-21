@@ -1,0 +1,38 @@
+[
+  {
+    "name": "iverilog12",
+    "url": "https://codeload.github.com/steveicarus/iverilog/tar.gz/refs/tags/v12_0",
+    "sha256": "a68cb1ef7c017ef090ebedb2bc3e39ef90ecc70a3400afb4aa94303bc3beaa7d",
+    "bytes": 2995096
+  },
+  {
+    "name": "iverilog13",
+    "url": "https://codeload.github.com/steveicarus/iverilog/tar.gz/refs/tags/v13_0",
+    "sha256": "c897bbfa9848688982c6d5c30529fc29d68df0b9ff22ffa73bad89db73a7ce49",
+    "bytes": 3215392
+  },
+  {
+    "name": "yosys",
+    "url": "https://codeload.github.com/YosysHQ/yosys/tar.gz/refs/tags/yosys-0.40",
+    "sha256": "c1d42ad90d587b587210b40cf3c5584e41e20f656e8630c33b6583322e8b764e",
+    "bytes": 2802706
+  },
+  {
+    "name": "abc",
+    "url": "https://codeload.github.com/YosysHQ/abc/tar.gz/0cd90d0",
+    "sha256": "e461640212b63067fbbd4f76a364363ba2f8a59a42088a41e721ed87aabbbb10",
+    "bytes": 6144924
+  },
+  {
+    "name": "verilator",
+    "url": "https://codeload.github.com/verilator/verilator/tar.gz/refs/tags/v5.038",
+    "sha256": "f8c03105224fa034095ba6c8a06443f61f6f59e1d72f76b718f89060e905a0d4",
+    "bytes": 35611791
+  },
+  {
+    "name": "ubuntu24base",
+    "url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cdimage/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.3-base-amd64.tar.gz",
+    "sha256": "6bc2cde3930ad088b3bb46fa45279e96d25bc3810f209850ecbe4722711874f9",
+    "bytes": 29983772
+  }
+]

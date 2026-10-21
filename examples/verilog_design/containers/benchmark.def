@@ -1,0 +1,92 @@
+Bootstrap: localimage
+From: {{ BASE_IMAGE }}
+
+%arguments
+    BENCH=rtllm
+    ICARUS_REF=v12_0
+    ICARUS_MAJOR=12
+    PYTHON_VERSION=3.11
+    FULL_EDA=0
+    PYTHON_PROFILE=rtl
+    JOBS=8
+    PYPI_INDEX_URL=https://pypi.org/simple
+
+%files
+    cache/direct/iverilog{{ ICARUS_MAJOR }}.tar.gz /opt/iverilog.tar.gz
+    cache/direct/yosys.tar.gz /opt/yosys.tar.gz
+    cache/direct/abc.tar.gz /opt/abc.tar.gz
+    cache/direct/verilator.tar.gz /opt/verilator.tar.gz
+    containers/{{ PYTHON_PROFILE }}-requirements.lock /opt/benchmark-requirements.lock
+
+%post
+    set -eu
+    unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
+    export DEBIAN_FRONTEND=noninteractive
+    export PIP_INDEX_URL={{ PYPI_INDEX_URL }}
+    export UV_INDEX_URL={{ PYPI_INDEX_URL }}
+    # HTTPS also works on cluster nodes where outbound plain HTTP is blocked.
+    if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+        # Bootstrap roots do not yet have CA certificates; apt verifies package signatures.
+        sed -i 's|http://archive.ubuntu.com/ubuntu|http://mirrors.tuna.tsinghua.edu.cn/ubuntu|g; s|http://security.ubuntu.com/ubuntu|http://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
+    else
+        find /etc/apt -type f \( -name '*.sources' -o -name '*.list' \) -exec sed -i 's|http://deb.debian.org|https://mirrors.tuna.tsinghua.edu.cn|g' {} +
+    fi
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        ca-certificates git curl build-essential gperf flex bison autoconf automake \
+        libtool make perl help2man libfl2 libfl-dev zlib1g-dev tcl-dev \
+        libreadline-dev libffi-dev pkg-config python3 python3-dev python3-venv \
+        bsdextrautils verilator patch unzip xz-utils libssl-dev
+    /usr/bin/python3 -m venv /opt/bootstrap
+    /opt/bootstrap/bin/pip install --no-cache-dir uv==0.9.5
+    sha256sum /opt/*.tar.gz > /opt/build-inputs.sha256
+    /opt/bootstrap/bin/uv venv --python /usr/bin/python3 /opt/venv
+    /opt/bootstrap/bin/uv pip install --python /opt/venv/bin/python pip==25.3
+    mkdir -p /opt/build/iverilog
+    tar -xzf /opt/iverilog.tar.gz --strip-components=1 -C /opt/build/iverilog
+    cd /opt/build/iverilog
+    sh autoconf.sh
+    ./configure --prefix=/usr/local
+    make -j{{ JOBS }}
+    make install
+    if [ '{{ FULL_EDA }}' = 1 ]; then
+        mkdir /opt/build/yosys
+        tar -xzf /opt/yosys.tar.gz --strip-components=1 -C /opt/build/yosys
+        cd /opt/build/yosys
+        mkdir -p abc
+        tar -xzf /opt/abc.tar.gz --strip-components=1 -C abc
+        printf '%s\n' 0cd90d0 > abc/.gitcommit
+        make -j{{ JOBS }} PREFIX=/usr/local
+        make install PREFIX=/usr/local
+        mkdir /opt/build/verilator
+        tar -xzf /opt/verilator.tar.gz --strip-components=1 -C /opt/build/verilator
+        cd /opt/build/verilator
+        autoconf
+        ./configure --prefix=/usr/local
+        make -j{{ JOBS }}
+        make install
+    fi
+    /opt/bootstrap/bin/uv pip sync --python /opt/venv/bin/python /opt/benchmark-requirements.lock
+    /opt/bootstrap/bin/uv pip check --python /opt/venv/bin/python
+    mkdir -p /code /src /rundir/harness /workspace
+    /opt/venv/bin/python -m pip freeze > /opt/installed-requirements.txt
+    printf '%s\n' '{{ BENCH }}' > /opt/benchmark-name
+    cd /
+    rm -rf /opt/build/iverilog /opt/build/yosys /opt/build/verilator /opt/*.tar.gz /var/lib/apt/lists/* /root/.cache
+
+%environment
+    export PATH=/opt/venv/bin:/usr/local/bin:$PATH
+    export PYTHONNOUSERSITE=1
+
+%runscript
+    exec "$@"
+
+%test
+    /opt/venv/bin/python --version
+    /usr/local/bin/iverilog -V
+    verilator --version
+
+%labels
+    benchmark {{ BENCH }}
+    iverilog_ref {{ ICARUS_REF }}
+    python_version {{ PYTHON_VERSION }}

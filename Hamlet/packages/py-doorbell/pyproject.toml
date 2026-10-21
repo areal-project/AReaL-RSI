@@ -1,0 +1,10 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+[project]
+name = "hamlet-doorbell"
+version = "0.1.2"
+requires-python = ">=3.9"
+description = "Standard-library-only helpers for Hamlet doorbells"
+[tool.setuptools]
+packages = ["doorbell"]

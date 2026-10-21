@@ -1,0 +1,7 @@
+{
+  "name": "@hamlet/harness-codex",
+  "version": "0.1.2",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js"
+}

@@ -40,6 +40,33 @@ def copy_matches(workspace: Path, output: Path, patterns: tuple[str, ...]) -> li
     return sorted(set(copied))
 
 
+def allocation_job_id(workspace: Path, runtime_root: Path) -> str | None:
+    """Return the preallocated Slurm job assigned to this research run, if active."""
+    routes = runtime_root / ".allocation-routes.json"
+    if not routes.is_file():
+        return None
+    parts = workspace.parts
+    try:
+        run_id = parts[parts.index("runs") + 1]
+    except (ValueError, IndexError):
+        return None
+    value = json.loads(routes.read_text()).get("run_ids", {}).get(run_id)
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, dict):
+        return None
+    try:
+        execution_id = parts[parts.index("execution-inputs") + 1]
+        record = json.loads(
+            (workspace.parents[2] / "jobs" / execution_id / "job.json").read_text()
+        )
+        agent_id = record["spec"]["metadata"]["agent_id"]
+    except (ValueError, IndexError, KeyError, FileNotFoundError, TypeError):
+        return None
+    assigned = value.get("agents", {}).get(agent_id)
+    return str(assigned) if assigned else None
+
+
 def nanogpt(workspace: Path, output: Path, runtime_root: Path) -> dict[str, object]:
     selection = workspace / "submission/selection.json"
     if not selection.is_file():
@@ -81,7 +108,19 @@ def gpu_benchmark(
         "RSI_CANDIDATE_WORKSPACE": str(workspace),
         "RSI_RESTRICTED": "1",
     }
+    if allocation := allocation_job_id(workspace, runtime_root):
+        environment["RSI_SLURM_JOB_ID"] = allocation
+    host_grading: tuple[list[str], dict[str, str]] | None = None
     if benchmark == "opsd":
+        # Keep each training/evaluation attempt within one four-GPU allocation.
+        # OPSD runs directly in the reservation. Keep each four-GPU attempt on
+        # an exclusive node: Apptainer GPU-number remapping is not reliable
+        # when two independent Slurm allocations share an eight-GPU node.
+        environment.update(
+            RSI_EXCLUSIVE="1",
+            RSI_GPUS="4",
+            RSI_RESERVATION="qwen38-27b-align",
+        )
         shell = (
             "set -euo pipefail; rm -rf /workspace/runs/rsi; "
             "SEED=42 OUT_DIR=/workspace/runs/rsi bash /rsi/benchmark/train_capped.sh; "
@@ -89,7 +128,8 @@ def gpu_benchmark(
             "python /rsi/benchmark/eval_official.py --base_model /opt/models/Qwen3-1.7B "
             '--checkpoint_path "$ckpt" --data_file /opt/eval_assets/aime24.json '
             "--output_file /workspace/dev_result.json --seed 20260610 "
-            "--data_parallel_size 4 --val_n 12 --num_problems 30"
+            "--data_parallel_size 4 --gpu_memory_utilization 0.8 "
+            "--val_n 12 --num_problems 30"
         )
         commands = [(["bash", str(root / "run.sh"), "bash", "-lc", shell], environment)]
         patterns = ("dev_result.json", "runs/rsi/**/trainer_state.json", "submission/recipe.env")
@@ -102,12 +142,6 @@ def gpu_benchmark(
             "--data /opt/eval_data/dev_split.jsonl "
             "--output /workspace/dev_result/responses.jsonl --tensor-parallel-size 1"
         )
-        grading = (
-            "set -euo pipefail; python /opt/eval_src/grade.py "
-            "--data /opt/eval_data/dev_split.jsonl "
-            "--responses /workspace/dev_result/responses.jsonl "
-            "--output /workspace/dev_result/score.json"
-        )
         untrusted_environment = {
             key: value
             for key, value in environment.items()
@@ -119,11 +153,35 @@ def gpu_benchmark(
                 "JAILBREAK_JUDGE_CONCURRENCY",
             }
         }
-        judge_environment = {**environment, "RSI_GPUS": "0", "RSI_CPUS": "4", "RSI_MEM": "16G"}
         commands = [
             (["bash", str(root / "run.sh"), "bash", "-lc", generation], untrusted_environment),
-            (["bash", str(root / "run.sh"), "bash", "-lc", grading], judge_environment),
         ]
+        judge_python = root / ".judge-venv/bin/python"
+        if not judge_python.is_file():
+            raise RuntimeError(
+                f"Jailbreak host judge environment is missing: {judge_python}; "
+                "run scripts/install_host_judge.sh first"
+            )
+        judge_environment = {
+            key: value
+            for key, value in environment.items()
+            if key not in {"all_proxy", "ALL_PROXY"}
+        }
+        judge_environment["PYTHONPATH"] = str(root / "eval_src")
+        judge_environment["NLTK_DATA"] = str(root / "nltk_data")
+        host_grading = (
+            [
+                str(judge_python),
+                str(root / "eval_src/grade.py"),
+                "--data",
+                str(root / "workspace/data/dev_split.jsonl"),
+                "--responses",
+                str(workspace / "dev_result/responses.jsonl"),
+                "--output",
+                str(workspace / "dev_result/score.json"),
+            ],
+            judge_environment,
+        )
         patterns = ("dev_result/score.json", "submission/*.json", "train.sh")
     elif benchmark == "swarm":
         shell = (
@@ -138,6 +196,9 @@ def gpu_benchmark(
         raise ValueError(f"Unsupported benchmark: {benchmark}")
     for command, command_environment in commands:
         run(command, env=command_environment)
+    if host_grading is not None:
+        grading_command, grading_environment = host_grading
+        run(grading_command, env=grading_environment)
     return {"state": "COMPLETED", "files": copy_matches(workspace, output, patterns)}
 
 

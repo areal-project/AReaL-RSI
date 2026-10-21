@@ -1,0 +1,65 @@
+Bootstrap: localimage
+From: {{ BASE_IMAGE }}
+
+%arguments
+    BASE_IMAGE=/storage/openpsi/images/pytorch280-1210-v1.sif
+
+%files
+    cache/build-context/mle-bench /opt/mle-bench
+    container/requirements.txt /opt/mlebench-requirements.txt
+    source/UPSTREAM_COMMIT /opt/mlebench-upstream-commit
+
+%post
+    set -eu
+    unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
+    export DEBIAN_FRONTEND=noninteractive
+    # Use the reachable package mirror on the compute nodes of this cluster.
+    sed -i 's|http://archive.ubuntu.com/ubuntu|https://mirrors.aliyun.com/ubuntu|g; s|http://security.ubuntu.com/ubuntu|https://mirrors.aliyun.com/ubuntu|g' /etc/apt/sources.list
+    apt-get update
+    apt-get install -y --no-install-recommends git git-lfs curl wget unzip zip p7zip-full \
+        build-essential ffmpeg libsndfile1 libglib2.0-0 libgl1 libsm6 libxext6 \
+        poppler-utils tesseract-ocr tmux
+    rm -rf /var/lib/apt/lists/*
+    export PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
+    export PIP_DISABLE_PIP_VERSION_CHECK=1
+    export PIP_CACHE_DIR=/mnt/pip
+    python -m pip install uv==0.8.22
+    export UV_CACHE_DIR=/mnt/uv
+    export UV_HTTP_TIMEOUT=180
+    export UV_HTTP_RETRIES=5
+    export UV_CONCURRENT_DOWNLOADS=12
+    export UV_LINK_MODE=copy
+    # Editable installation is deliberate: registry.py resolves task metadata
+    # and experiments/splits relative to the package's source directory.
+    uv pip install --python /opt/conda/bin/python --index-url "$PIP_INDEX_URL" \
+        -r /opt/mlebench-requirements.txt -e /opt/mle-bench
+    python -m pip check
+    python -m pip freeze > /opt/mlebench-installed-requirements.txt
+    mkdir -p /workspace /home/data /home/submission /home/logs /mlebench-data /mlebench-tools /cache
+
+%environment
+    export PATH=/opt/conda/bin:$PATH
+    export PYTHONNOUSERSITE=1
+    export PYTHONDONTWRITEBYTECODE=1
+    export TOKENIZERS_PARALLELISM=false
+    export HF_HOME=/cache/huggingface
+    export TORCH_HOME=/cache/torch
+    export PIP_CACHE_DIR=/cache/pip
+    export MPLCONFIGDIR=/tmp/matplotlib
+    export TF_CPP_MIN_LOG_LEVEL=2
+    export PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
+    export UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
+    unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
+
+%runscript
+    exec "$@"
+
+%test
+    python -c 'import torch, sklearn, xgboost, lightgbm, catboost, transformers, timm; from mlebench.registry import registry; assert len(registry.list_competition_ids()) >= 75; print("MLE-bench runtime imports OK")'
+
+%labels
+    purpose MLE-bench training, preparation and grading; no agent
+    upstream_commit 507f92e1138bb6e40dac5c6ee7a6758e6424bf97
+    base_image pytorch280-1210-v1.sif
+    pytorch 2.8.0+cu129
+    cuda 12.9

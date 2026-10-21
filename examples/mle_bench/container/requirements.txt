@@ -1,0 +1,36 @@
+# PyTorch 2.8.0+cu129 / torchvision 0.23.0 / torchaudio 2.8.0 come from the base.
+# This is an updated runtime, not the paper's PyTorch 2.2 reference environment.
+numpy==1.26.4
+pandas==2.2.2
+scipy==1.14.1
+scikit-learn==1.5.1
+xgboost==2.1.1
+lightgbm==4.5.0
+catboost==1.2.5
+tensorflow==2.17.0
+tf-keras==2.17.0
+tensorflow-hub==0.16.1
+transformers==4.44.2
+datasets==2.21.0
+accelerate==0.33.0
+peft==0.12.0
+evaluate==0.4.2
+sentence-transformers==3.0.1
+sentencepiece==0.2.0
+timm==0.9.7
+albumentations==1.4.14
+albucore==0.0.16
+opencv-python-headless==4.10.0.84
+segmentation-models-pytorch==0.3.4
+librosa==0.10.2.post1
+soundfile==0.12.1
+imagecodecs==2024.6.1
+pydicom==2.4.4
+biopython==1.84
+optuna==4.0.0
+matplotlib==3.9.2
+seaborn==0.13.2
+h5py==3.11.0
+pyarrow==17.0.0
+flask==3.0.3
+pytest==8.3.2

@@ -3,22 +3,25 @@ set -euo pipefail
 source "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/env_root.sh"
 source "$ROOT/config.sh"
 mkdir -p "$ROOT"/{workspace,models,assets,eval_src,nltk_data,cache/huggingface,cache/uv,cache/torch,cache/triton,logs}
-export SINGULARITYENV_RSI_ROOT="$ROOT"
-export SINGULARITYENV_HF_HOME=/opt/hf_cache
-export SINGULARITYENV_UV_CACHE_DIR="$ROOT/cache/uv"
-export SINGULARITYENV_TORCHINDUCTOR_CACHE_DIR="$ROOT/cache/torch"
-export SINGULARITYENV_TRITON_CACHE_DIR="$ROOT/cache/triton"
-export SINGULARITYENV_NLTK_DATA=/opt/nltk_data
-export SINGULARITYENV_PYTHONNOUSERSITE=1
-export SINGULARITYENV_OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-8}"
-export SINGULARITYENV_CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-}"
+export APPTAINERENV_RSI_ROOT="$ROOT"
+export APPTAINERENV_HF_HOME=/opt/hf_cache
+export APPTAINERENV_UV_CACHE_DIR="$ROOT/cache/uv"
+export APPTAINERENV_TORCHINDUCTOR_CACHE_DIR="$ROOT/cache/torch"
+export APPTAINERENV_TRITON_CACHE_DIR="$ROOT/cache/triton"
+export APPTAINERENV_NLTK_DATA=/opt/nltk_data
+export APPTAINERENV_PYTHONNOUSERSITE=1
+export APPTAINERENV_OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-8}"
+# Preserve Slurm's physical GPU allocation inside Apptainer. Using the legacy
+# SINGULARITYENV prefix can make two four-GPU jobs on one node address the same
+# physical devices even though Slurm assigned disjoint GRES indices.
+export APPTAINERENV_CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-}"
 candidate_workspace=${RSI_CANDIDATE_WORKSPACE:-$ROOT/workspace}
 candidate_workspace=$(cd -- "$candidate_workspace" && pwd)
 if [[ ${RSI_RESTRICTED:-0} == 1 ]]; then
-    export SINGULARITYENV_RSI_ROOT=/rsi
-    export SINGULARITYENV_UV_CACHE_DIR=/tmp/uv-cache
-    export SINGULARITYENV_TORCHINDUCTOR_CACHE_DIR=/tmp/torch-cache
-    export SINGULARITYENV_TRITON_CACHE_DIR=/tmp/triton-cache
+    export APPTAINERENV_RSI_ROOT=/rsi
+    export APPTAINERENV_UV_CACHE_DIR=/tmp/uv-cache
+    export APPTAINERENV_TORCHINDUCTOR_CACHE_DIR=/tmp/torch-cache
+    export APPTAINERENV_TRITON_CACHE_DIR=/tmp/triton-cache
     binds=(--bind "$candidate_workspace:/workspace"
            --bind "$(readlink -f -- "$ROOT/scripts/inside.sh"):/rsi/scripts/inside.sh:ro"
            --bind "$(readlink -f -- "$ROOT/config.sh"):/rsi/config.sh:ro"

@@ -189,7 +189,11 @@ async def main():
 
     from openai import AsyncOpenAI
     extra = reasoning_options(a.model)
-    client = AsyncOpenAI(api_key=get_key(), base_url=a.base_url, timeout=180)
+    # Retries are controlled by call() below.  Disable the SDK's implicit two
+    # retries so one logical attempt cannot silently consume three timeouts.
+    client = AsyncOpenAI(
+        api_key=get_key(), base_url=a.base_url, timeout=180, max_retries=0
+    )
     sem = asyncio.Semaphore(a.concurrency)
     usage = {"prompt_tokens": 0, "completion_tokens": 0, "calls": 0}
 

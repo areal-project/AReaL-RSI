@@ -18,13 +18,24 @@ if [[ $RSI_ROOT == /rsi ]]; then
     export VIRTUAL_ENV=/rsi/.venv
     export PATH="/tmp/rsi-bin:/rsi/.venv/bin:$PATH"
     export HF_DATASETS_CACHE=/tmp/hf-datasets
-    mkdir -p /tmp/rsi-bin "$HF_DATASETS_CACHE"
-    # Keep the trusted dataset cache read-only while placing datasets' lock files
-    # in writable job-local storage. Completed cache directories are symlinked in.
-    for dataset_cache in /opt/hf_cache/datasets/*; do
-        [[ -e $dataset_cache ]] || continue
-        ln -s "$dataset_cache" "$HF_DATASETS_CACHE/$(basename -- "$dataset_cache")"
-    done
+    mkdir -p /tmp/rsi-bin "$HF_DATASETS_CACHE" \
+        "${TORCHINDUCTOR_CACHE_DIR:-/tmp/torch-cache}" \
+        "${TRITON_CACHE_DIR:-/tmp/triton-cache}"
+    # Datasets creates temporary files beside cached Arrow files. Recreate the
+    # directory tree in writable job-local storage and link only immutable files.
+    # Lock files must also be writable, so create fresh empty copies for them.
+    while IFS= read -r -d '' cache_dir; do
+        relative=${cache_dir#/opt/hf_cache/datasets/}
+        mkdir -p "$HF_DATASETS_CACHE/$relative"
+    done < <(find /opt/hf_cache/datasets -type d -print0)
+    while IFS= read -r -d '' cache_file; do
+        relative=${cache_file#/opt/hf_cache/datasets/}
+        if [[ $cache_file == *.lock ]]; then
+            : > "$HF_DATASETS_CACHE/$relative"
+        else
+            ln -s "$cache_file" "$HF_DATASETS_CACHE/$relative"
+        fi
+    done < <(find /opt/hf_cache/datasets -type f -print0)
     cat > /tmp/rsi-bin/accelerate <<'EOF'
 #!/bin/sh
 exec /rsi/.venv/bin/python /rsi/.venv/bin/accelerate "$@"

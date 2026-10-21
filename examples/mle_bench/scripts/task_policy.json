@@ -1,0 +1,16 @@
+{
+  "excluded_tasks": {
+    "vinbigdata-chest-xray-abnormalities-detection": {
+      "reason": "Pinned upstream grader gives 0 for a minimal perfect prediction because ground-truth annotation IDs start at 0. Excluded at the user's request; the official metric is not patched.",
+      "evidence": "runs/environment-audit-20261019/vinbigdata-diagnostic.json"
+    }
+  },
+  "runtime_limitations": {
+    "tensorflow": {
+      "gpu": "unavailable",
+      "cpu": "functional_probe_passed",
+      "reason": "TensorFlow 2.17 requires cuDNN 8; libcudnn.so.8 is absent in the SIF, which contains PyTorch's cuDNN 9 package. TensorFlow enumerates no GPU.",
+      "evidence": "runs/environment-audit-20261019/tensorflow-diagnostic.json"
+    }
+  }
+}

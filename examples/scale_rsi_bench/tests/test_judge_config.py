@@ -16,6 +16,18 @@ REQUIRED = ["--data", "data", "--responses", "responses", "--output", "out"]
 
 
 class JudgeConfigTests(unittest.TestCase):
+    def test_sdk_retries_are_disabled(self):
+        tree = ast.parse(SCRIPT.read_text())
+        clients = [
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "AsyncOpenAI"
+        ]
+        self.assertEqual(len(clients), 1)
+        keywords = {keyword.arg: keyword.value for keyword in clients[0].keywords}
+        self.assertEqual(ast.literal_eval(keywords["max_retries"]), 0)
+
     def test_defaults(self):
         with patch.dict(os.environ, {}, clear=True):
             args = grade.build_parser().parse_args(REQUIRED)

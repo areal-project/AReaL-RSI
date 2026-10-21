@@ -1,0 +1,297 @@
+{
+  "status": "enabled_task_checks_passed_with_tensorflow_gpu_unavailable",
+  "created_at": "2026-10-19T08:06:19.160583+00:00",
+  "upstream_commit": "507f92e1138bb6e40dac5c6ee7a6758e6424bf97",
+  "image": {
+    "path": "images/mlebench-h200.sif",
+    "recorded_sha256": "95885db94f869ea8cdd1000cdafe389b697ecc8cafa529c3373e5977d675edc0",
+    "modified_by_audit": false
+  },
+  "coverage": {
+    "upstream_total_tasks": 82,
+    "excluded_task_count": 1,
+    "total_tasks": 81,
+    "evaluation_tasks": 74,
+    "development_tasks": 7,
+    "previously_completed_real_data_task": "spaceship-titanic",
+    "remaining_tasks": 80,
+    "all_tasks": {
+      "split": {
+        "high": 14,
+        "medium": 38,
+        "low": 22,
+        "dev": 7
+      },
+      "registry": {
+        "passed": 81
+      },
+      "metadata": {
+        "passed": 81
+      },
+      "preparation_dependencies": {
+        "passed": 81
+      },
+      "synthetic_grading": {
+        "passed": 81
+      },
+      "real_data": {
+        "not_present": 80,
+        "checksum_verified": 1
+      }
+    },
+    "remaining_tasks_summary": {
+      "registry": {
+        "passed": 80
+      },
+      "metadata": {
+        "passed": 80
+      },
+      "preparation_dependencies": {
+        "passed": 80
+      },
+      "synthetic_grading": {
+        "passed": 80
+      },
+      "real_data": {
+        "not_present": 80
+      }
+    },
+    "runtime": {
+      "passed": 12,
+      "failed": 1
+    }
+  },
+  "findings": [
+    {
+      "id": "tensorflow_gpu_unavailable",
+      "category": "runtime_dependency",
+      "status": "open",
+      "evidence": "runs/environment-audit-20261019/tensorflow-diagnostic.json",
+      "detail": "TensorFlow 2.17.0 build expects CUDA 12.3 and cuDNN 8; libcuda and other probed CUDA libraries load, but libcudnn.so.8 is absent. NVIDIA cuDNN package is 9.10.2.21. No TensorFlow GPU is enumerated; TensorFlow CPU backward passes.",
+      "impact": "Solutions choosing TensorFlow GPU need a compatible runtime. Other tested GPU backends passed."
+    },
+    {
+      "id": "vinbigdata_zero_annotation_id",
+      "category": "pinned_upstream_metric_edge_case",
+      "status": "task_excluded",
+      "task": "vinbigdata-chest-xray-abnormalities-detection",
+      "evidence": "runs/environment-audit-20261019/vinbigdata-diagnostic.json",
+      "detail": "One identical prediction/ground-truth box scores 0 instead of 1. Changing only ground-truth annotation ID 0 to 1 in a diagnostic evaluator gives 0.9999999999999999.",
+      "impact": "Excluded from local task manifests, bulk preparation and audit. Individual preparation, training and grading via local launchers are rejected. Upstream source and SIF remain unchanged."
+    }
+  ],
+  "runtime_cases": {
+    "torch_gpu": {
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 6.82,
+      "log": "runtime-logs/torch_gpu.log",
+      "metrics": {
+        "gpu": "NVIDIA L20X",
+        "capability": [
+          9,
+          0
+        ],
+        "torch": "2.8.0+cu129",
+        "cuda": "12.9",
+        "bf16_backward": true
+      }
+    },
+    "vision_gpu": {
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 6.0,
+      "log": "runtime-logs/vision_gpu.log",
+      "metrics": {
+        "resnet18_backward": true,
+        "torchvision_nms_cuda": true
+      }
+    },
+    "timm_gpu": {
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 4.71,
+      "log": "runtime-logs/timm_gpu.log",
+      "metrics": {
+        "vit_backward": true
+      }
+    },
+    "segmentation_gpu": {
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 5.18,
+      "log": "runtime-logs/segmentation_gpu.log",
+      "metrics": {
+        "unet_backward": true
+      }
+    },
+    "nlp_gpu": {
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 5.56,
+      "log": "runtime-logs/nlp_gpu.log",
+      "metrics": {
+        "bert_backward": true,
+        "pretrained_weights_used": false
+      }
+    },
+    "peft_gpu": {
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 4.19,
+      "log": "runtime-logs/peft_gpu.log",
+      "metrics": {
+        "lora_backward": true
+      }
+    },
+    "xgboost_gpu": {
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 4.08,
+      "log": "runtime-logs/xgboost_gpu.log",
+      "metrics": {
+        "device": "cuda:0",
+        "training": true
+      }
+    },
+    "catboost_gpu": {
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 3.48,
+      "log": "runtime-logs/catboost_gpu.log",
+      "metrics": {
+        "training": true,
+        "backend": "GPU"
+      }
+    },
+    "tabular_cpu": {
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 2.74,
+      "log": "runtime-logs/tabular_cpu.log",
+      "metrics": {
+        "sklearn_training": true,
+        "lightgbm_cpu_training": true
+      }
+    },
+    "tensorflow_cpu": {
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 10.72,
+      "log": "runtime-logs/tensorflow_cpu.log",
+      "metrics": {
+        "version": "2.17.0",
+        "backward": true
+      }
+    },
+    "tensorflow_gpu": {
+      "status": "failed",
+      "exit_code": 1,
+      "seconds": 7.54,
+      "log": "runtime-logs/tensorflow_gpu.log"
+    },
+    "audio": {
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 19.56,
+      "log": "runtime-logs/audio.log",
+      "metrics": {
+        "librosa_mel": true,
+        "torchaudio_cuda_fft": true,
+        "wav_decode": true
+      }
+    },
+    "formats": {
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 1.96,
+      "log": "runtime-logs/formats.log",
+      "metrics": {
+        "parquet_pyarrow": true,
+        "parquet_fastparquet": true,
+        "png": true,
+        "jpeg2000": true,
+        "hdf5": true,
+        "matlab": true,
+        "dicom_uncompressed": true
+      }
+    }
+  },
+  "limitations": [
+    "Real preparation and real-data training were not run by this audit.",
+    "Synthetic metric scores and ranking checks are not benchmark scores or medals.",
+    "No pretrained weights, network downloads, or arbitrary Agent-selected packages were tested.",
+    "3-D grader worker count was bounded to 2; its numerical metric code was unchanged.",
+    "Remaining 80 enabled datasets are absent locally; their real preparation, training and official grading are unverified.",
+    "The local evaluation subset contains 74 tasks, not the original 75. Report its denominator explicitly.",
+    "TensorFlow GPU is unavailable. CPU functional testing passed. The unchanged earlier GPU audit has 12/13 passing probes.",
+    "Upstream commands invoked directly bypass the local task exclusion policy.",
+    "Pretrained weights, arbitrary Agent packages, full dataset resource usage and multi-GPU scaling are unverified."
+  ],
+  "slurm_jobs": [
+    {
+      "job_id": "981651",
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "elapsed": "00:00:15"
+    },
+    {
+      "job_id": "981659",
+      "state": "FAILED",
+      "exit_code": "1:0",
+      "elapsed": "00:01:23"
+    },
+    {
+      "job_id": "981665",
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "elapsed": "00:00:03"
+    },
+    {
+      "job_id": "981695",
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "elapsed": "00:00:06"
+    },
+    {
+      "job_id": "981696",
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "elapsed": "00:00:02"
+    }
+  ],
+  "evidence": {
+    "per_task_json": "runs/environment-audit-20261019-filtered/task-audit.json",
+    "per_task_csv": "runs/environment-audit-20261019-filtered/task-audit.csv",
+    "runtime_json": "runs/environment-audit-20261019/runtime-audit.json",
+    "previous_real_data_verification": "verification.json",
+    "task_policy": "scripts/task_policy.json",
+    "task_manifest": "tasks/all.txt"
+  },
+  "reproduce": "examples/mle_bench/scripts/audit.sh",
+  "excluded_tasks": {
+    "vinbigdata-chest-xray-abnormalities-detection": {
+      "reason": "Pinned upstream grader gives 0 for a minimal perfect prediction because ground-truth annotation IDs start at 0. Excluded at the user's request; the official metric is not patched.",
+      "evidence": "runs/environment-audit-20261019/vinbigdata-diagnostic.json"
+    }
+  },
+  "runtime_limitations": {
+    "tensorflow": {
+      "gpu": "unavailable",
+      "cpu": "functional_probe_passed",
+      "reason": "TensorFlow 2.17 requires cuDNN 8; libcudnn.so.8 is absent in the SIF, which contains PyTorch's cuDNN 9 package. TensorFlow enumerates no GPU.",
+      "evidence": "runs/environment-audit-20261019/tensorflow-diagnostic.json"
+    }
+  },
+  "runtime_evidence_reused_from": "runs/environment-audit-20261019/runtime-audit.json",
+  "selection_verification": {
+    "task_audit_job": "981695",
+    "bulk_preparation_dry_run_job": "981696",
+    "excluded_task_rejected_before_submission": [
+      "prepare.sh",
+      "submit.sh",
+      "run.sh",
+      "grade.sh"
+    ]
+  }
+}

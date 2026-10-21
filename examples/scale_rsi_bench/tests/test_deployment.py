@@ -15,6 +15,112 @@ EVAL = CODE / "opsd_env/scripts/eval_official.py"
 
 
 class DeploymentTests(unittest.TestCase):
+    def test_bridge_routes_a_run_into_its_preallocated_slurm_job(self):
+        job_path = CODE / "sandbox/job.py"
+        spec = importlib.util.spec_from_file_location("scale_sandbox_job_route", job_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        import tempfile
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "lab/runs/research_astra/execution-inputs/job/workspace"
+            workspace.mkdir(parents=True)
+            (root / ".allocation-routes.json").write_text(
+                json.dumps({"run_ids": {"research_astra": "12345"}})
+            )
+            self.assertEqual(module.allocation_job_id(workspace, root), "12345")
+
+    def test_bridge_splits_researchers_across_two_preallocated_jobs(self):
+        job_path = CODE / "sandbox/job.py"
+        spec = importlib.util.spec_from_file_location("scale_sandbox_job_pool", job_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        import tempfile
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "lab/runs/research_astra/execution-inputs/job-a/workspace"
+            workspace.mkdir(parents=True)
+            job = root / "lab/runs/research_astra/jobs/job-a/job.json"
+            job.parent.mkdir(parents=True)
+            job.write_text(json.dumps({"spec": {"metadata": {"agent_id": "research_1"}}}))
+            (root / ".allocation-routes.json").write_text(json.dumps({
+                "run_ids": {"research_astra": {"agents": {"research_1": "12345"}}}
+            }))
+            self.assertEqual(module.allocation_job_id(workspace, root), "12345")
+
+    def test_gpu_launchers_can_reuse_a_preallocated_slurm_job(self):
+        for benchmark in ("opsd", "jailbreak", "swarm"):
+            source = (CODE / f"{benchmark}_env/scripts/slurm.sh").read_text()
+            self.assertIn('--jobid="$RSI_SLURM_JOB_ID"', source)
+
+    def test_opsd_bridge_uses_exclusive_four_gpu_reservation(self):
+        job_path = CODE / "sandbox/job.py"
+        spec = importlib.util.spec_from_file_location("scale_sandbox_job_opsd", job_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        import tempfile
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            output = root / "output"
+            workspace.mkdir()
+            output.mkdir()
+            calls = []
+            with patch.object(
+                module, "run", side_effect=lambda command, *, env=None: calls.append((command, env))
+            ):
+                module.gpu_benchmark("opsd", workspace, output, root / "runtime")
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0][1]["RSI_EXCLUSIVE"], "1")
+            self.assertEqual(calls[0][1]["RSI_GPUS"], "4")
+            self.assertEqual(calls[0][1]["RSI_RESERVATION"], "qwen38-27b-align")
+
+    def test_opsd_launcher_passes_reservation_to_slurm(self):
+        source = (CODE / "opsd_env/scripts/slurm.sh").read_text()
+        self.assertIn('--reservation="$RSI_RESERVATION"', source)
+
+    def test_opsd_container_preserves_slurm_gpu_mapping_for_apptainer(self):
+        source = (CODE / "opsd_env/scripts/container.sh").read_text()
+        self.assertIn("APPTAINERENV_CUDA_VISIBLE_DEVICES", source)
+        self.assertNotIn("export SINGULARITYENV_CUDA_VISIBLE_DEVICES", source)
+
+    def test_opsd_bridge_reserves_eval_memory_headroom(self):
+        source = (CODE / "sandbox/job.py").read_text()
+        self.assertIn('"--data_parallel_size 4 --gpu_memory_utilization 0.8 "', source)
+
+    def test_jailbreak_grading_runs_on_host_without_socks_proxy(self):
+        job_path = CODE / "sandbox/job.py"
+        spec = importlib.util.spec_from_file_location("scale_sandbox_job", job_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        import tempfile
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runtime = root / "runtime"
+            judge = runtime / "jailbreak_env/.judge-venv/bin/python"
+            judge.parent.mkdir(parents=True)
+            judge.touch()
+            workspace = root / "workspace"
+            output = root / "output"
+            workspace.mkdir()
+            output.mkdir()
+            calls = []
+            env = {
+                "OPENAI_API_KEY": "secret",
+                "OPENAI_BASE_URL": "https://example.invalid/v1",
+                "HTTPS_PROXY": "http://127.0.0.1:1081",
+                "ALL_PROXY": "socks5h://127.0.0.1:1081",
+            }
+            with patch.dict(os.environ, env, clear=True), patch.object(
+                module, "run", side_effect=lambda command, *, env=None: calls.append((command, env))
+            ):
+                module.gpu_benchmark("jailbreak", workspace, output, runtime)
+            self.assertEqual(len(calls), 2)
+            self.assertNotIn("OPENAI_API_KEY", calls[0][1])
+            self.assertEqual(calls[1][0][0], str(judge))
+            self.assertEqual(calls[1][1]["HTTPS_PROXY"], env["HTTPS_PROXY"])
+            self.assertNotIn("ALL_PROXY", calls[1][1])
+
     def test_workspace_eval_link_survives_container_bind(self):
         entry = WORK / "opsd_env/workspace/eval_official.py"
         # /workspace is a separate mount, so ../../AReaL-RSI would point at /.

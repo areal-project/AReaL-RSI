@@ -11,7 +11,7 @@ case "$bench" in
   *) exit 2 ;;
 esac
 base="$root/images/$name.sif"
-image="$root/images/$name-codex.sif"
+image="$root/images/$name-${VERILOG_AGENT_IMAGE_TAG:-codex}.sif"
 [[ ! -e "$image" ]] || { printf 'Image already exists: %s\n' "$image" >&2; exit 1; }
 python3 - <<'PY_CHECK'
 import hashlib

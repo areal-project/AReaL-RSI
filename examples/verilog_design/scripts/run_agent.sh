@@ -35,7 +35,8 @@ done
 printf -v command '%q ' env "PYTHONPATH=$PYTHONPATH" "$runner" "$root/scripts/agent.py" \
   --bench "$bench" --codex-home "$CODEX_HOME" \
   --proxy-endpoint "$endpoint" --output "$output" "$@"
-job_id=$(sbatch --parsable --ntasks=1 --cpus-per-task=2 --mem=8G --time=01:10:00 \
+job_id=$(sbatch --parsable --ntasks=1 --cpus-per-task="${VERILOG_AGENT_CPUS:-2}" \
+  --mem="${VERILOG_AGENT_MEMORY:-8G}" --time="${VERILOG_AGENT_TIME:-01:10:00}" \
   --job-name="verilog-$bench-agent" --output="$root/logs/agent-$stamp-%j.log" --wrap="$command")
 job_id=${job_id%%;*}
 printf 'Job %s; output %s\n' "$job_id" "$output"
@@ -53,8 +54,11 @@ summary = json.loads(Path(sys.argv[1]).read_text())
 for result in summary['results']:
     judge = result['judge']
     print(result['task'], 'agent=', result['agent_returncode'],
-          'judge=', judge['status'] if judge else None, 'error=', result['error'])
+          'judge=', judge['status'] if judge else None,
+          'score=', judge.get('score') if judge else None, 'error=', result['error'])
+for score in summary.get('text_scores', []):
+    print('text metric:', score)
 passed = summary.get('complete', False) and all(item['error'] is None and (summary['probe_only'] or
-             (item['judge'] and item['judge']['status'] == 'pass')) for item in summary['results'])
+             (item['judge'] and item['judge']['status'] in {'pass', 'scored'})) for item in summary['results'])
 raise SystemExit(0 if passed else 1)
 PY

@@ -1,0 +1,92 @@
+# CVDP Benchmark Dataset Changelog
+
+## v1.1.0
+
+### Added
+- Added the public heavy agentic code generation dataset (`cvdp_v1.1.0_agentic_heavy_code_generation`) with sanitized Git context bundles in `cvdp_v1.1.0_agentic_heavy_code_generation_public/`.
+
+### Changed
+- Test harness updates for stable cocotb 2.0.1, pytest 8.3.2, Icarus Verilog v13_0, Yosys yosys-0.40, and Verilator v5.038 tooling generally for that release.
+- Split the public heavy agentic code generation dataset into commercial and non-commercial variants.
+- Recalibrated prompt and synthesis thresholds for **3 datapoints**:
+  - cvdp_copilot_fan_controller_0008 (`cvdp_v1.1.0_nonagentic_code_generation_no_commercial`)
+  - cvdp_copilot_vga_controller_0026 (`cvdp_v1.1.0_nonagentic_code_generation_no_commercial`)
+  - cvdp_copilot_gcd_0038 (`cvdp_v1.1.0_nonagentic_code_generation_no_commercial`)
+
+---
+
+## v1.0.4
+
+### Changed
+- Fixed version pinning for correct versions of cocotb, pytest, and docker images
+
+---
+
+## v1.0.3
+
+### Changed
+- Fixed test harness for **1 datapoint**:
+  - cvdp_copilot_piso_0001
+
+
+---
+
+## v1.0.2
+
+### Added
+- Split all datasets into commercial and non-commercial variants
+
+
+---
+
+## v1.0.1
+
+### Added
+- **14 new dataset files** including sanity check variants:
+  - Sanity check datasets for both agentic and non-agentic code generation (commercial and non-commercial)
+  - Sanity check datasets for non-agentic code comprehension
+  - Additional non-agentic code comprehension datasets
+  - Additional agentic code generation datasets
+  
+  *Note: Additional and sanity check datasets are internal only and not publicly available.*
+
+- **9 datapoints** in non-agentic code generation:
+  - cvdp_copilot_perceptron_0019
+  - cvdp_copilot_radix2_div_0001
+  - cvdp_copilot_one_hot_address_0001
+  - cvdp_copilot_icache_controller_0004
+  - cvdp_copilot_cellular_automata_0017
+  - cvdp_copilot_run_length_0007
+  - cvdp_copilot_scrambler_0024
+  - cvdp_copilot_Serial_Line_Converter_0019
+  - cvdp_copilot_caesar_cipher_0001
+
+### Changed
+- Enhanced test harnesses for **6 datapoints**:
+  - cvdp_agentic_event_storing_0001
+  - cvdp_agentic_alu_0003
+  - cvdp_agentic_gf_multiplier_0003
+  - cvdp_agentic_phase_rotation_0004
+  - cvdp_copilot_GFCM_0003
+  - cvdp_copilot_complex_multiplier_0014
+
+### Removed
+- **5 datapoints** removed from additional datasets:
+  - cvdp_agentic_fixed_arbiter_0001
+  - cvdp_agentic_8x3_priority_encoder_0003
+  - cvdp_copilot_barrel_shifter_0031
+  - cvdp_copilot_gf_multiplier_0039
+  - cvdp_copilot_lfsr_0001
+
+
+
+---
+
+## v1.0.0 (Initial Release)
+
+### Added
+- Initial release of CVDP benchmark dataset
+- ore dataset files covering:
+  - Agentic code generation (with and without solutions)
+  - Non-agentic code generation (with and without solutions)
+  - Non-agentic code comprehension (with and without solutions)

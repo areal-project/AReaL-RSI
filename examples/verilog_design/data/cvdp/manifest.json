@@ -1,0 +1,439 @@
+{
+  "dataset": "nvidia/cvdp-benchmark-dataset",
+  "version": "v1.1.0",
+  "revision": "5b807d945f6a99aa645f7e43a64a2115e281b4bf",
+  "source_url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/tree/5b807d945f6a99aa645f7e43a64a2115e281b4bf",
+  "tooling_repository": "https://github.com/NVlabs/cvdp_benchmark",
+  "tooling_commit": "8e894cf74414ab1eaea1e2b4e80a02f123df07b6",
+  "splits": [
+    {
+      "split": "nonagentic_code_generation_no_commercial",
+      "path": "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl",
+      "tasks": 302,
+      "size": 4913773,
+      "sha256": "cbcd81295561ebb16e4d857e096f4d9908d042c33aff3b58abf236e868411857"
+    },
+    {
+      "split": "agentic_code_generation_no_commercial",
+      "path": "cvdp_v1.1.0_agentic_code_generation_no_commercial.jsonl",
+      "tasks": 92,
+      "size": 3505834,
+      "sha256": "2007f4311ed731a985a4ed9187479ad2cfc2462bc4013eba0d72a9f35642fdcf"
+    },
+    {
+      "split": "agentic_heavy_code_generation_no_commercial",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_no_commercial.jsonl",
+      "tasks": 75,
+      "size": 1405895,
+      "sha256": "809916fa3248a4b2597b2a2ac364d3450d24936cad0e25bbe1bf0f1243ad1ea7"
+    },
+    {
+      "split": "nonagentic_code_comprehension",
+      "path": "cvdp_v1.1.0_nonagentic_code_comprehension.jsonl",
+      "tasks": 123,
+      "size": 1051259,
+      "sha256": "1f150413ba2cbbdcd4e48b4c23e6ee6cd0dd91f9f5ead1c1447c39f8095ee054"
+    }
+  ],
+  "bundles": [
+    {
+      "repo": "cvdp_agentic_heavy_2dconv-FPGA",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_2dconv-FPGA.bundle",
+      "size": 15961825,
+      "sha256": "3334c18095e6e9bfc2055b623c504bba271ec7a8a8bbc683b760f4163a59b79d",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_2dconv-FPGA.bundle",
+      "commits": [
+        "f487663529583b03cfd7ff9ac7a1a5507de23a0a"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_802.11a",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_802.11a.bundle",
+      "size": 2333570,
+      "sha256": "a26ac271d966bbd1f9f1aba96e37de9787fa0053e8c98a59f250f2149c69d31b",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_802.11a.bundle",
+      "commits": [
+        "059ec30070a351a10c58f444b01f92b71afc04f7",
+        "e584a65352b6d7ce79b221c0298e200d4b283025",
+        "e9a732281d47bda1b4a346ef2aca6f97a1717f82"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_I2SRV64",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_I2SRV64.bundle",
+      "size": 5170349,
+      "sha256": "4c29e846c28203a6e595b8b43bfeacba4bf458ba3daf439fc542d63e70b60d43",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_I2SRV64.bundle",
+      "commits": [
+        "bf50617ddc94669f8373040b596c7f68e9d0f20d",
+        "d2365d9b6319ed3a642a39c4931eed3184b85e49"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_NoobsCpu-8bit",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_NoobsCpu-8bit.bundle",
+      "size": 13407788,
+      "sha256": "56e05dc3fb07ccac09cefb15b16d060eb0ea760472b76c555de7ff5102fc34ef",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_NoobsCpu-8bit.bundle",
+      "commits": [
+        "586285a152d428474312cee27f492c9db030d414"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_RISC-V",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_RISC-V.bundle",
+      "size": 6618935,
+      "sha256": "234664613476c3d65b268b9f60d2ab3c0fd384caa2f297c18a31ab7002b89c3a",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_RISC-V.bundle",
+      "commits": [
+        "4be3cfbc71a1b465a90fc0ba0da5d18200035f09",
+        "62d7c6a0ba67efc5b8d7de7775e10f4bb6c8bc61"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_SoomRV",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_SoomRV.bundle",
+      "size": 1034308434,
+      "sha256": "14c1ba68045cc151f1cd7407d24791e6dd24bcd616a6f8d1334b87d3ce85d648",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_SoomRV.bundle",
+      "commits": [
+        "53684b28dc2ef19ed3860d394cf353fbe2aab801"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_ULX3S_FPGA_Camera_Streaming",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_ULX3S_FPGA_Camera_Streaming.bundle",
+      "size": 137851,
+      "sha256": "91cebc6767b128e4fee6a40a48f049f328fb733533caffa7bde874bb16b2df95",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_ULX3S_FPGA_Camera_Streaming.bundle",
+      "commits": [
+        "f214c9e4f83672eb83be0933d96bf0cacd9da79c"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_async-fifo",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_async-fifo.bundle",
+      "size": 1035758,
+      "sha256": "cdca16b076dba57a23d0bad06ddedcb6578234d3669d7068e7f33996187cc132",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_async-fifo.bundle",
+      "commits": [
+        "3ebe80fb9a9b6dac011d1bc5a51a3d6172cbdc3e",
+        "edaf2b5f0cf632e94da38223f43db32664857f6a"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_axi4_lite",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_axi4_lite.bundle",
+      "size": 220180,
+      "sha256": "a55aa65c6bc9c1e7e45d4e474d740027dc694537e49d06819c6edac1ff253dc3",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_axi4_lite.bundle",
+      "commits": [
+        "832bf4703a89879f7844832e0fb245c17050d49b"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_axis",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_axis.bundle",
+      "size": 15883,
+      "sha256": "134898deb752820508c4788fce69553f722702239125eb74362506e8d0a9b2a1",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_axis.bundle",
+      "commits": [
+        "8f6b683798cf4367cb0522415a85f2cd9a312db0",
+        "9b4e1b1b2ed6e7bcd937597696487e7372c94431"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_corundum",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_corundum.bundle",
+      "size": 2935390,
+      "sha256": "1951c80caa17f499d487c075c4fe7c4d6d4b8841bb2e948d9ba08408943d4e49",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_corundum.bundle",
+      "commits": [
+        "a55e9c7f186ef53697cde0bcc93f2a0905ea2f60"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_cv32e40p_1",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_cv32e40p_1.bundle",
+      "size": 1806704,
+      "sha256": "f9d7c29a6b303d17e3ad16d1b478d2d4140bdf34e9ae8d745af3a5dddfabfc4f",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_cv32e40p_1.bundle",
+      "commits": [
+        "7311c6e380f081bf377b48a7f5bb466ba9ba6049"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_cva6_riscv_core",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_cva6_riscv_core.bundle",
+      "size": 40075996,
+      "sha256": "1c0aeb5e9edb322f65229d689939c7a64fa4cbe61d997d726430bd691bb2c6c5",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_cva6_riscv_core.bundle",
+      "commits": [
+        "a7d6c965894f1deec7b615d57e93be7117448ad9",
+        "aaf8e4c08c85dea22e5a379b1ded051c052664b5",
+        "af2a030ddc3084eaa16dfa65f95d40eb487ff3eb",
+        "bb2f16653296b048bfa2915f8cec9eeca7b93853"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_ddr4_controller",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_ddr4_controller.bundle",
+      "size": 1308888,
+      "sha256": "a2dbc9827cdffda91ad9eb5ca0dce6bdfe2c98ebc912d7ee6548de193ec8d1dd",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_ddr4_controller.bundle",
+      "commits": [
+        "20c0436beb3a718098db2114c39aa3c5120fbee9",
+        "c16da1dcc1615ef2d118f4158134a30832008934"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_deepfreeze",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_deepfreeze.bundle",
+      "size": 23222946,
+      "sha256": "d0a5d5e46a33b5fbba5024044a30323beb812332a8d11bec441deee7cfef6dd9",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_deepfreeze.bundle",
+      "commits": [
+        "9c63a5dfef677129d5702482aff190ebc642ff49"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_detect_human_faces",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_detect_human_faces.bundle",
+      "size": 5820569,
+      "sha256": "22723d5400300f74ce03ef0a42a222758045c548dbf087c0bf2e27b68173c7ad",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_detect_human_faces.bundle",
+      "commits": [
+        "dd8bf0c5777fffeae2d053d0d2f0e9bada8b9c90"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_dual_core",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_dual_core.bundle",
+      "size": 2537447,
+      "sha256": "f282352f15a2101cdd8c01bb5e97b5d4216a5e69f3a69c7686313de153450ef5",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_dual_core.bundle",
+      "commits": [
+        "7c7949ca788aabdc3d4278f7d6396aecc9b0318f"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_edma",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_edma.bundle",
+      "size": 31809,
+      "sha256": "9202f04bb5996a06325d5a4a034c466bfeea3968a1fa26fe01c9344516b490a4",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_edma.bundle",
+      "commits": [
+        "2365a703f4aae8c2051704bbe3cac2102f1bf37e",
+        "3db01f510dbb2e9bcc34b5729a1c6e930343c7a6"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_enso",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_enso.bundle",
+      "size": 335068,
+      "sha256": "2fdc7de30c4f7da59591d51ee26ff7127387f9065db4c967e352ea6285cc0bf1",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_enso.bundle",
+      "commits": [
+        "5f20e897b95feed9f35eff1228b1bc2526febfee",
+        "7253c1db09d8a345705bd9b600e817ae4fecb80d",
+        "b1f2738c983a95ff95e5a7c1c25039fbd9a13d65",
+        "ff6c14adfc765ac16a09e882cc56da67b7d1240a"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_ext_cheriot-ibex",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_ext_cheriot-ibex.bundle",
+      "size": 2412529,
+      "sha256": "42dec742704825e14b68bbe9a0e461cca9ed001cb88a8d00ec2f113ce48701aa",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_ext_cheriot-ibex.bundle",
+      "commits": [
+        "82e57c18e5ea0af32807bae348bc4823c8645e75",
+        "a7236105d696172e61aa00f6220e5a782bdf4be8"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_fabulous_fabric",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_fabulous_fabric.bundle",
+      "size": 504021,
+      "sha256": "73a5780be90441176d5eaf76f602f6f45b5480fa2dd5c5fb74162f9deb38fe55",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_fabulous_fabric.bundle",
+      "commits": [
+        "c8483411d01e521ea3178fd6f86f71df4365ca22",
+        "e9e4cfe9e695307723c16abf8179655cd7ced171"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_fpga_nes",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_fpga_nes.bundle",
+      "size": 1302283,
+      "sha256": "3119b8c47aa22ac6eb5714a4e869d014e8f85173cc746570d4d9029cc77d0de7",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_fpga_nes.bundle",
+      "commits": [
+        "44aabb0d719ecb7fba80257157c3e18ad2bb1ffa",
+        "96e3e448d17cd6152ff8b28c52641e28495c8684",
+        "cfa9853eb6b87ea6b9f702e26abaa8112e1b7ff2"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_fpu_wrappers",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_fpu_wrappers.bundle",
+      "size": 463837,
+      "sha256": "683159640ff464469ae3d2342c256ced7dd8f14edb0f5335e6cc9e7736ce8693",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_fpu_wrappers.bundle",
+      "commits": [
+        "460cb560ae3ed20f378575a907169bce33e9de41",
+        "5a86d8fb3a378438fffa3127f529790030931309"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_friscv",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_friscv.bundle",
+      "size": 888766,
+      "sha256": "c0a690c0c93c22c47bb260421f200924f8ba59f99bfe78f4c11cf4c6f1eea6e7",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_friscv.bundle",
+      "commits": [
+        "1aae318d20a2cd353b035d38dd4db260c2beafd7",
+        "d54102505b0d9d152a3f39ce6998529e30c87527",
+        "e33599f7431cee508b4d2038a8a2cc25ceefa19c"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_i2c",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_i2c.bundle",
+      "size": 86965,
+      "sha256": "73dfcdabf2c484b3565daf8f2152d281fad8881152cf224cd5866a3c66c4cd61",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_i2c.bundle",
+      "commits": [
+        "31b1cdaa68e298d1dd29597267d6f021bc7d0e6f",
+        "e7f2f34ecf03d1715b9694bb943fea7341f999f8",
+        "f405033eb95d92d5a1e0471fe1dc6e9691600396"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_learn_fpga",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_learn_fpga.bundle",
+      "size": 114252748,
+      "sha256": "e59d3a2c88b1b3fb1a3e79e5c5b94c2bd2578a83ce4c4fe279256599156d9cee",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_learn_fpga.bundle",
+      "commits": [
+        "93d4ff76d6c0d605268818428b4b682e445ca3f1"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_opene902",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_opene902.bundle",
+      "size": 26817375,
+      "sha256": "48017b2b1195420cbeff34e909664f5352370cc4f8954a8e880dc41336fe46a6",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_opene902.bundle",
+      "commits": [
+        "366ff4712262bdeab9c70f2c94ca055b03b08b44",
+        "4072d45f125c956208b2148803477361b2a478b9",
+        "7f4a20dadad2bd849bb6c5e2ca41e19967717616",
+        "8ffc6be51493f484d08fb21768fdcf800e3d46aa"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_polyphony",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_polyphony.bundle",
+      "size": 22574536,
+      "sha256": "add1dc2bcb03835b6d6529421864f67f58ee035937aa9d4cd1ef6d66db81035b",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_polyphony.bundle",
+      "commits": [
+        "d24cf69c2452f2158bfbce8245adc3dc448eae60"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_pulpino",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_pulpino.bundle",
+      "size": 112983,
+      "sha256": "c42c3bb085d6f21b72e47ff910a38915ab8fa44bf1bbf990212cf026bc29f505",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_pulpino.bundle",
+      "commits": [
+        "f0aa3cf681e2e8fc39d630b5e30b66026ebb73d0"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_rvx",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_rvx.bundle",
+      "size": 544966,
+      "sha256": "e07e08d6273faf276a2c4bc120b084a5289d9b1c82ff567b49d3dc63ec0e8d49",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_rvx.bundle",
+      "commits": [
+        "14a1148fc11175c191f770f6eb07f2ac0e61fbe6",
+        "44d5040e26bd2da5d3ccbe9c6a5b15d2d37e8ad9",
+        "941d71dd5c96c64379abd8485c4ba6bc70429415",
+        "bbb5d0b48acf017c694a1b79a7db18366aadb6b0"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_schoolMIPS",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_schoolMIPS.bundle",
+      "size": 9848,
+      "sha256": "6678ed1708d5b19954014f876091f5015b5d30c395976825792e41c07e9a76cb",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_schoolMIPS.bundle",
+      "commits": [
+        "20883aff71ffe2f95972cb67791911530d5beaad",
+        "f3177e2e8a7ddcf9ea82dbf156f0f4e1688421fc"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_usb_cdc",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_usb_cdc.bundle",
+      "size": 2774406,
+      "sha256": "984bbe04d15cc337ac77c5b8a3f3381cf443cd053a233213aa287b74b6e7a04a",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_usb_cdc.bundle",
+      "commits": [
+        "138c72837a65cb2c2b31d21c9bb6d5a692b94e6b",
+        "748f6c7f638e591d34e75bd6357b9b95f798d718",
+        "c92c93f82040b31049129811696dd9363c55b629",
+        "dea0c0d89244ec5c80d79ee76ed5235525884d0f"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_verilog_axi",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_verilog_axi.bundle",
+      "size": 169877,
+      "sha256": "76dbd89bbbb7cdc62c904f4ee397bd6c2e2f7a07fe28f9349628f13c8d9e04b3",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_verilog_axi.bundle",
+      "commits": [
+        "c07e9bbff2e0731e0ee4ba180766e5e94058943c"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_verilog_ethernet",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_verilog_ethernet.bundle",
+      "size": 314867,
+      "sha256": "640a387df05b97dbab3a3c5907118d9c6ddb9f825c02b18206f10087b4ed7695",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_verilog_ethernet.bundle",
+      "commits": [
+        "67cd9cada7bb0943ab94b45657be392da5bbf0e6",
+        "737483d0b50eabd4e5f95b25a36fbe577d077446",
+        "92f1d56a18742d57a63f051cfc0d76d744e196f9"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_verilog_pcie",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_verilog_pcie.bundle",
+      "size": 577226,
+      "sha256": "9cc2d27756b8bb20d93d76a9cba117532801956a57172cdf8ff592f335010d8f",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_verilog_pcie.bundle",
+      "commits": [
+        "3cdfc2eb1228fc9d631fedc48192e853c31f7798",
+        "4b21dcc60023592285a945809de5221985b83ad8",
+        "a1f6143fe5aaefb7b97e1f6f69d5d5d30444c684",
+        "b29e8dc5a956678148e7ba2164e930a72666acd4",
+        "c0ef1da43b3cffcce908abc1b90bb2d73cfac2ff"
+      ]
+    },
+    {
+      "repo": "cvdp_agentic_heavy_wifi_ldpc_codec",
+      "path": "cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_wifi_ldpc_codec.bundle",
+      "size": 163843,
+      "sha256": "cb0d984910f42633b15334a4f2c37540da8d38e84fa8c4dcbf6e7ad301f9aa5d",
+      "url": "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/5b807d945f6a99aa645f7e43a64a2115e281b4bf/cvdp_v1.1.0_agentic_heavy_code_generation_public/cvdp_agentic_heavy_wifi_ldpc_codec.bundle",
+      "commits": [
+        "18c77c3af0ff66e2cdda23fc62ea1b2013c20207"
+      ]
+    }
+  ]
+}

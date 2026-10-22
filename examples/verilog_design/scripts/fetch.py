@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import http.client
 import json
+import re
 import shutil
 import subprocess
 import urllib.request
@@ -34,6 +35,29 @@ class FileDigest:
     sha256: str
 
 
+@dataclass(frozen=True)
+class LFSFile:
+    size: int
+    sha256: str
+
+
+def lfs_file(name: str) -> LFSFile:
+    url = f"https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/raw/{HF_REVISION}/{name}"
+    with urllib.request.urlopen(url, timeout=120) as response:
+        pointer = response.read().decode()
+    match = re.fullmatch(
+        r"version https://git-lfs.github.com/spec/v1\noid sha256:([a-f0-9]{64})\nsize ([0-9]+)\n?",
+        pointer,
+    )
+    if match is None:
+        raise ValueError(f"Invalid upstream LFS pointer: {name}")
+    return LFSFile(int(match[2]), match[1])
+
+
+def matches_lfs(path: Path, expected: LFSFile) -> bool:
+    return path.stat().st_size == expected.size and digest(path).sha256 == expected.sha256
+
+
 def digest(path: Path) -> FileDigest:
     hasher = hashlib.sha256()
     with path.open("rb") as stream:
@@ -46,21 +70,52 @@ def digest(path: Path) -> FileDigest:
 def download(name: str) -> None:
     target = ROOT / "data/cvdp" / name
     target.parent.mkdir(parents=True, exist_ok=True)
+    expected = lfs_file(name) if name.endswith(".bundle") else None
     if target.is_file():
-        return
+        if expected is None or matches_lfs(target, expected):
+            return
+        # Preserve evidence of a truncated/corrupt prior download, outside data/.
+        quarantine = ROOT / "cache/invalid-bundles" / (target.name + "." + digest(target).sha256)
+        quarantine.parent.mkdir(parents=True, exist_ok=True)
+        target.replace(quarantine)
     url = (
         "https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/resolve/"
         f"{HF_REVISION}/{name}"
     )
     temporary = target.with_suffix(target.suffix + ".part")
+    if expected is not None and temporary.exists():
+        if matches_lfs(temporary, expected):
+            temporary.replace(target)
+            return
+        if temporary.stat().st_size >= expected.size:
+            temporary.unlink()
     for attempt in range(3):
         try:
             offset = temporary.stat().st_size if temporary.exists() else 0
             request = urllib.request.Request(url, headers={"Range": f"bytes={offset}-"})
             with urllib.request.urlopen(request, timeout=120) as src:
                 mode = "ab" if offset and src.status == 206 else "wb"
+                received_from = offset if mode == "ab" else 0
+                content_length = src.headers.get("Content-Length")
+                remote_size = expected.size if expected is not None else None
+                if src.status == 206:
+                    content_range = src.headers.get("Content-Range", "")
+                    bounds = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", content_range)
+                    if bounds is None or int(bounds[1]) != offset:
+                        raise OSError(f"Unexpected resumed response range: {name}: {content_range}")
+                    remote_size = int(bounds[3])
                 with temporary.open(mode) as dst:
                     shutil.copyfileobj(src, dst, 4 * 1024 * 1024)
+            if content_length is not None and temporary.stat().st_size - received_from != int(
+                content_length
+            ):
+                raise OSError(f"Truncated HTTP response: {name}")
+            if remote_size is not None and temporary.stat().st_size != remote_size:
+                raise OSError(f"Incomplete HTTP file: {name}")
+            if expected is not None and not matches_lfs(temporary, expected):
+                if temporary.stat().st_size >= expected.size:
+                    temporary.unlink()
+                raise OSError(f"Incomplete or corrupt bundle download: {name}")
             temporary.replace(target)
             print(f"Downloaded {name}: {target.stat().st_size} bytes", flush=True)
             return

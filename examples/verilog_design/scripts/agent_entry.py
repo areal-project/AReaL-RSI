@@ -10,7 +10,17 @@ import socket
 import socketserver
 import subprocess
 import threading
+from dataclasses import dataclass
 from pathlib import Path
+
+
+@dataclass(frozen=True)
+class ModelSettings:
+    model: str
+    effort: str
+    base_url: str | None = None
+    context_window: int | None = None
+    auto_compact_limit: int | None = None
 
 
 def relay(left: socket.socket, right: socket.socket) -> None:
@@ -86,6 +96,12 @@ def main() -> None:
     parser.add_argument("--effort", default="high")
     args = parser.parse_args()
     os.environ["HOME"] = "/agent-home"
+    settings_file = Path("/control/model.json")
+    settings = (
+        ModelSettings(**json.loads(settings_file.read_text()))
+        if settings_file.exists()
+        else ModelSettings(args.model, args.effort)
+    )
     with Server(("127.0.0.1", 1081), Handler) as server:
         threading.Thread(target=server.serve_forever, daemon=True).start()
         probe()
@@ -106,9 +122,9 @@ def main() -> None:
             "--sandbox",
             "danger-full-access",
             "--model",
-            args.model,
+            settings.model,
             "--config",
-            f'model_reasoning_effort="{args.effort}"',
+            f'model_reasoning_effort="{settings.effort}"',
             "--config",
             'web_search="disabled"',
             "--config",
@@ -123,6 +139,23 @@ def main() -> None:
             "/workspace",
             "-",
         ]
+        if settings.base_url is not None:
+            for setting in (
+                'model_provider="benchmark"',
+                'model_providers.benchmark.name="Benchmark inference"',
+                "model_providers.benchmark.base_url=" + json.dumps(settings.base_url),
+                'model_providers.benchmark.wire_api="responses"',
+                "model_providers.benchmark.requires_openai_auth=false",
+                "model_providers.benchmark.supports_websockets=false",
+                'model_providers.benchmark.capabilities.remote_compaction="unsupported"',
+            ):
+                command.extend(["--config", setting])
+        if settings.context_window is not None:
+            command.extend(["--config", f"model_context_window={settings.context_window}"])
+        if settings.auto_compact_limit is not None:
+            command.extend(
+                ["--config", f"model_auto_compact_token_limit={settings.auto_compact_limit}"]
+            )
         for feature in (
             "apps",
             "plugins",

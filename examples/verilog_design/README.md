@@ -12,10 +12,17 @@
 | CVDP v1.1.0 | `data/cvdp/` | `images/cvdp-v1.1.0-oss.sif`，约 528 MiB | Python 3.12.3、Icarus 13.0、Verilator 5.038、Yosys 0.40、cocotb 2.0.1、pytest 8.3.2 |
 
 CVDP 已下载普通生成 302 题、agentic 92 题、heavy agentic 75 题、代码理解 123 题，
-以及 heavy 非商业题所需的 36 个 Git bundles。全部 75 个 heavy context commit 均在对应
-bundle 的 advertised refs 中。未下载商业 JSONL，也不执行商业分类 cid012/cid013/cid014。
+共 592 题，均已连接 Agent 与独立判卷入口；heavy 非商业题所需的 36 个 Git bundles
+已按固定上游版本的 Git LFS 大小和 SHA-256 校验，全部 75 个 context commit 均成功导出。
+未下载商业 JSONL，也不执行商业分类 cid012/cid013/cid014。
 
 `data/manifest.json` 记录文件 SHA-256、上游 Git commit 和 Hugging Face revision。
+Git 中的 `data/cvdp/manifest.json` 另固定四个 CVDP 子集的题数、大小和 SHA-256，
+以及 36 个 heavy bundle 的下载地址、大小、SHA-256 和全部 75 个 context commit。
+2026-10-22 修复了 17 个截断的 heavy bundle，旧文件保留在 `cache/invalid-bundles/`。
+历史 manifest 保留；当前 bundle 的校验收据见
+`runs/cvdp-coverage-984625/bundle-integrity.json`。`fetch.py` 现在检查 HTTP 响应长度、
+续传起点和上游 LFS 哈希，已有损坏 bundle 也会重新下载，避免仅检查 ref 列表而漏掉截断。
 每个 SIF 附带 `.sha256`、`.inspect.json`、`.requirements.txt` 和 `.environment.txt`。
 `containers/build-inputs.json` 固定构建源码归档的 URL、大小和 SHA-256；两个依赖锁记录
 实际验证过的完整 Python 包版本。RTLLM 和 VerilogEval 复用 `rtl-requirements.lock`。
@@ -27,7 +34,11 @@ bundle 的 advertised refs 中。未下载商业 JSONL，也不执行商业分�
 - [CVDP tooling](https://github.com/NVlabs/cvdp_benchmark)：`8e894cf74414ab1eaea1e2b4e80a02f123df07b6`。
 - [CVDP dataset](https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset)：`5b807d945f6a99aa645f7e43a64a2115e281b4bf`。
 
-原始许可证和 NOTICE 随数据、源码保留。源码、数据、镜像、缓存和运行日志不进入 Git。
+原始许可证和 NOTICE 随数据、源码保留。四个 CVDP JSONL（592 题）、官方小样例、
+许可证、NOTICE 和校验清单纳入 Git；heavy bundle 二进制仍从固定版本的上游下载。
+源码 checkout、其他 benchmark 数据、镜像、缓存、运行日志和 `.local/` 本机配置不进入 Git。
+克隆仓库后运行 `python3 examples/verilog_design/scripts/fetch.py` 补齐 bundle 和官方工具源码，
+下载时验证响应长度及上游 LFS SHA-256；不需要把约 1.3 GB 的 bundle 写进 Git 历史。
 
 ## 参考解检查结果
 
@@ -112,6 +123,25 @@ CVDP 的 Apptainer 入口从原始 Compose 配置解析各服务命令和 `.env`
 参考补丁使用上游 `merge_in_memory.diff_apply` 应用；不调用 Docker，不改写测试源码。
 未知服务选项、镜像或额外 Dockerfile 构建步骤会明确报错。
 
+### CVDP 工作目录修复与历史成绩更正
+
+2026-10-22 扫描了已有运行的 1,551 份评测执行日志，确认 12 题的 lint 步骤因
+`/src/rundir/` 不存在而未启动。`/src` 的 harness 挂载会遮住镜像原有目录，
+因此仅在 SIF 内创建目录不足以解决；评测入口现在为每个步骤在对应的题目挂载副本中
+创建工作目录，并拒绝未映射或越界的目录。缺失依赖、容器挂载等已识别的环境错误
+单独记为 `error`，不与 RTL 测试失败混为一类。官方测试源码和判定条件不变。
+
+对这 12 题原冻结 RTL 使用同一 SIF 重判，11 题通过，1 题仍因 Verilator 的位宽及
+不完整 case 警告未通过 lint。没有重新生成答案或向 Agent 反馈评测结果。
+CVDP 全量运行 `qwen35-cvdp-984265` 的通过数由 85 更正为 96；另有 86 题官方评测
+失败、72 题 Agent 超时、4 题评测超时、2 题缺少提交、42 题因模型服务中断失败。
+接口中断仍未补测，因此这不是一次完整无故障的模型测评。
+
+原始运行记录保持不变。更正后的结果及逐题重判证据位于
+`runs/environment-integrity-audit-984331/corrected-cvdp-summary.json` 和
+`runs/environment-integrity-audit-984331/rejudge/`；综合环境与轨迹审计见同目录的
+`REPORT.md`。这些运行产物不进入 Git。
+
 ## Codex Agent 盲测
 
 现已接通：公开输入导出 → SIF 内 Codex 自测/调试 → 冻结提交 → 独立进程运行官方测试。
@@ -139,7 +169,7 @@ Codex SIF 内重新评测，仍为 9/9，并且三个 benchmark 的故意损坏�
 ### 隔离方式
 
 - SIF 仅包含 CLI、运行时和 EDA 工具；题目、官方测试、golden 均在镜像外。
-- Agent 只收到题目描述和官方允许公开的 `input.context`；RTLLM 仅导出
+- Agent 只收到题目描述和官方允许公开的 `input.context` / agentic `context`；RTLLM 仅导出
   `design_description.txt`，VerilogEval 仅导出对应格式的 `*_prompt.txt`。
 - 容器内 `CODEX_HOME` 使用启动时指定的同一路径，但挂载的是每题独立目录。
   **只从宿主指定目录读取并复制 `auth.json`**；不挂载宿主整个 CODEX_HOME，
@@ -157,7 +187,7 @@ Codex SIF 内重新评测，仍为 9/9，并且三个 benchmark 的故意损坏�
   GitHub、Hugging Face 等源站被拒绝，Agent 看不到转发凭证。
 - 每题模型调用前，实际检查隐藏路径及符号链接、非特权 UID/capabilities、直连阻断、
   GitHub 代理拒绝，以及自写 RTL 的编译/仿真；任一检查失败就不调用模型。
-- Agent 退出后只收集指定 RTL 文件；拒绝符号链接、非普通文件和超大文件，独立复制、
+- Agent 退出后只收集指定提交文件；拒绝符号链接、非普通文件和超大文件，独立复制、
   哈希并设为只读。Judge 随后才挂载官方测试/参考实现；它的目录和日志不提供给 Agent。
 
 ### 运行 Agent
@@ -185,10 +215,105 @@ bash examples/verilog_design/scripts/run_agent.sh cvdp \
 限时 120 秒。`--probe-only` 只检查隔离和 EDA，不调用模型、不评测。启动脚本退出时
 关闭自己的转发，取消尚未结束的作业；成功返回必须包含全部所选题目。
 
-VerilogEval 另支持 `--task-format code-complete-iccad2023`。当前 CVDP Agent 入口只连接
-普通非商业 RTL 生成任务；agentic、heavy 和代码理解暂未连接此入口。
+VerilogEval 另支持 `--task-format code-complete-iccad2023`。CVDP 的完整入口见下一节。
 CVDP 抽测通过的是官方测试，未将空 golden 当成通过，也没有使用上述官方有解样例代答。
 镜像和这些文件/网络检查不构成独立虚拟机，也不声称防御宿主内核或容器运行时漏洞。
+
+### CVDP 完整题目入口
+
+四个子集使用同一个 CVDP SIF，无需逐题构建镜像：
+
+| `--cvdp-split` | 题数 | Agent 输入与提交 | 判卷 |
+| --- | ---: | --- | --- |
+| `nonagentic`（默认） | 302 | prompt、公开 context；指定输出文件 | 原始官方 harness |
+| `agentic` | 92 | prompt、公开源码；修改指定文件 | 原始官方 harness |
+| `heavy` | 75 | prompt、bundle 指定 commit 的完整公开源码树；修改指定文件 | 原始官方 harness |
+| `comprehension` | 123 | prompt、公开源码；答案写入 `subjective.txt` | 63 题官方 BLEU-2，60 题官方 LLM rubric |
+| `all` | 592 | 合并以上四个子集，ID 不重复 | 按题型选择 |
+
+Agentic/heavy 的 `/code` 与 `/workspace` 挂载同一工作区，兼容官方题目中的绝对路径。
+Heavy 按官方规则导出 wrapper 的 `external/`，`*_ext_*` 仓库则直接导出根目录，避免
+源码多套一层而导致 `/code/...` 缺依赖。导出不包含 `.git`、其他 commit、refs、remotes 或 bundle；公开源码树中原本存在的
+测试属于官方公开上下文，独立的评测 harness、参考答案、评分日志不导出给 Agent。
+按官方 `output.context` / `patch` 的路径收集最终文件，支持多文件、Markdown、新增和删除；
+这些字段的值不向 Agent 导出。其他路径的修改不提交，自测应放在 `selftest/`。
+补丁题同时保存冻结文件、manifest 和相对于公开初始文件的 `changes.patch`，判卷重新准备
+原始源码后应用冻结提交；不采信 Agent 提供的 Git 状态或评分报告。
+
+```bash
+# 全量运行需按并发和模型速度申请资源；这三个变量可放在 .local/ 启动脚本。
+export VERILOG_AGENT_CPUS=32 VERILOG_AGENT_MEMORY=96G VERILOG_AGENT_TIME=12:00:00
+
+bash examples/verilog_design/scripts/run_agent.sh cvdp --cvdp-split agentic --all
+bash examples/verilog_design/scripts/run_agent.sh cvdp --cvdp-split heavy --all
+
+# 独立 Judge 使用 Chat Completions 接口；密钥通过环境变量提供。
+# API 地址、模型和本机凭据仍应放在 Git 忽略的 .local/ 启动配置中。
+bash examples/verilog_design/scripts/run_agent.sh cvdp --cvdp-split comprehension --all \
+  --judge-model YOUR_JUDGE_MODEL --judge-base-url http://YOUR_JUDGE_HOST/v1
+
+# 全部 592 题；并发数按所申请的 CPU/内存调整。
+bash examples/verilog_design/scripts/run_agent.sh cvdp --cvdp-split all --all \
+  --jobs 8 \
+  --judge-model YOUR_JUDGE_MODEL --judge-base-url http://YOUR_JUDGE_HOST/v1
+```
+
+理解题 cid006/cid008 直接调用固定版本的官方 BLEU/ROUGE 函数，BLEU-2 为正式分数，
+ROUGE-2 为附带诊断。cid009/cid010 复用官方 `SubjectiveScoreModel_Instance` 的
+评分提示词及解析器，用 `--judge-model` 选择独立评分模型；`--judge-base-url` 可省略以使用
+OpenAI 默认地址，`--judge-api-key-env` 默认为 `OPENAI_API_KEY`。
+Judge 使用指定地址直连，不继承启动器注入的 SOCKS/HTTP 代理；该地址需能从计算节点访问。
+它在 Agent 结束后运行，参考答案和临时 API 凭据只挂载给 Judge，凭据不会写入运行记录。
+
+按官方默认 score 模式保存 0–1 分数，状态为 `scored`，不把连续分数伪装成通过率。
+`summary.json.text_scores` 分别汇总 BLEU 和 LLM 的已评分题数、均分。
+缺少 LLM Judge 配置/凭据时为 `unscored`；API、解析或进程失败分别记 `error` / `timeout`，
+不会退回 BLEU 或默认为通过。理解题退出成功表示完成评分，零分也属于已评分；有未评分、
+评测错误或生成题未通过时整体退出非零。
+
+已有冻结提交可直接重新判卷，无需再次调用 Agent：
+
+```bash
+python examples/verilog_design/scripts/evaluate.py --bench cvdp --cvdp-split heavy \
+  --candidate-root /path/to/previous-agent-run --output /path/to/new-judge-output --timeout 600
+```
+
+本次最终验证记录在 `runs/cvdp-coverage-984625/final/`：592/592 公开工作区导出及
+非提交 HDL 依赖路径检查、469 道生成题的
+520 个服务配置解析成功；新增三个子集各 3 题，9/9 通过真实 SIF 隔离/EDA 预检。
+官方有解样例 2/2 通过、损坏版本 2/2 被拒绝；3 道 agentic、3 道 heavy 的损坏提交也均被
+官方 harness 拒绝。63 道客观理解题经真实提交/私有评分路径，用参考答案作为环境正例
+均得 1，用无关答案作负例均得 0；另外 60 道在未配置 Judge 时均正确记录为 `unscored`。
+LLM 评分链路用本地模拟 API 验证了官方 rubric、正常解析和错误处理，未作为模型成绩。
+这验证了数据与运行路径；469 道生成题没有公开完整 golden，仍不能声称全量题目已答对。
+
+### 自托管 Responses API 与全量并发测试
+
+`agent.py --all` 选择对应 benchmark 的全部基础任务；`--jobs 32` 在该 benchmark 内
+启动最多 32 个独立 Agent。三个 benchmark 应按顺序逐个执行。`--all` 对应 RTLLM 50 题、
+VerilogEval 当前任务格式 156 题，以及 CVDP 默认子集 302 题；CVDP 加
+`--cvdp-split all` 为 592 题。
+
+自托管 Qwen/SGLang 使用 `scripts/sglang_proxy.py` 作为只允许模型接口的转发入口。
+实际服务地址通过 `--base-url` 传入；本机启动配置仍放在被忽略的 `.local/` 中。
+该入口显式固定 top-p 0.95、temperature 0.6、top-k 20、输出上限 81920，并设置
+`chat_template_kwargs.enable_thinking=true`，逐请求保存实际参数和响应审计记录。
+它拒绝网页搜索/fetch 工具及非模型路由，不通过放开 Agent 外网来连接自托管服务。
+
+Agent 入口增加 `--model-base-url`、`--context-window`、`--auto-compact-limit` 和
+`--image-tag`。容器内模型地址使用转发入口 `http://127.0.0.1:1081/v1`，由外部转发连接
+实际服务。自托管服务不要求复制 OpenAI 登录凭据；可以使用新的空 CODEX_HOME，仍为
+每题创建独立视图。CODEX_HOME 路径应位于仓库外，以免与宿主仓库隐藏路径预检冲突。
+
+Qwen3.5 的部署模板以 `enable_thinking` 控制思考开关，没有更细的 effort/budget 档位。
+Codex 可传 `--effort max`，但不能仅凭这个标签认定模型采用了更高思考等级；应检查实际
+模板、请求与思考 token。本地验证关闭时为 0，开启时正常产生思考 token；未设独立思考
+预算。`--context-window 262144 --auto-compact-limit 172032` 为长输出保留空间。
+单次输出上限包含思考和答案，仍可能出现只思考到达上限而没有提交的失败。
+
+修改容器入口后用新的镜像标签保留旧实验：构建时指定
+`VERILOG_AGENT_IMAGE_TAG=codex-qwen35-v2`，运行时指定相同 `--image-tag`。
+服务端实际并发能力需单独核实；32 个 Agent 不等于服务端同时解码 32 个请求。
 
 ### 构建与检查
 
@@ -209,7 +334,17 @@ bash examples/verilog_design/scripts/build_agent.sh cvdp
 ```bash
 PYTHONPATH=examples/verilog_design/cache/runner-deps \
   python examples/verilog_design/scripts/test_agent.py -v
+
+# 在有 Apptainer 的 CPU allocation 中，另测真实 SIF 的客观评分和 LLM API 链路。
+PYTHONPATH=examples/verilog_design/cache/runner-deps \
+  VERILOG_TEST_SIF=/absolute/path/to/cvdp-v1.1.0-oss-codex.sif \
+  python examples/verilog_design/scripts/test_agent.py CVDPScoringTests -v
 ```
+
+本次 CVDP 补齐验证为 19 项普通测试、2 项真实 SIF 评分集成测试全部通过，记录分别在
+`logs/cvdp-coverage-boundary-984625.log`、`logs/cvdp-coverage-scoring-984625.log`。
+Linux 上完整 `make check` 通过：UI 构建及 2 项测试、7 项 pytest、全仓库 Ruff、62 文件 Mypy；
+记录在 `logs/cvdp-coverage-make-check-final-984625.log`。未在 macOS 运行。
 
 新增 7 项测试覆盖公开导出、提交冻结、符号链接、FIFO、路径逃逸、超时杀死后代进程
 和控制器中断清理。记录为 `logs/agent-boundary-tests.log`。启动脚本完整提交路径另通过

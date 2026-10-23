@@ -122,7 +122,9 @@ sglang:
   chunked_prefill_size: 8192
   max_running_requests: 8
   mem_fraction_static: 0.6
-  disable_cuda_graph: false
+  # The selected SGLang build's breakable prefill graph rejects memory saver.
+  # This existing AReaL switch disables both prefill and decode graphs.
+  disable_cuda_graph: true
   cuda_graph_max_bs: 8
   disable_radix_cache: false
   mamba_ssm_dtype: bfloat16

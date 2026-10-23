@@ -18,6 +18,7 @@ Slurm scheduler 再申请一个 8 GPU 节点。actor 使用 8 个 worker，rollo
 | 上下文 | 262144（256K）；请求总 token 上限 262143，预留一个 token |
 | CPU-staged optimizer offload | 开启，2 个 buffer，每个 128 MiB |
 | Chunked logits / loss | 开启，loss chunk size 1024 |
+| SGLang CUDA graph | prefill 和 decode 均关闭，保留 memory saver |
 | Arena 路由 | `gateway` |
 | R3 / MTP | 关闭 |
 | controller / actor 镜像 | `/storage/openpsi/images/areal-dev-sglang-1014.sif` |
@@ -196,6 +197,12 @@ harness 为 `areal-harness@0.2.0-oss-rc.6-swe-mm-256k`。
 CP4 所需 Megatron Core ≥0.18.2 / Megatron Bridge ≥0.5.1，以及 Arena Stream/Harness/reward。
 复用原实验的 SIF、AWEX/Transformers/proxy overlays 和 GDN 只读补丁；不重建镜像。
 这些路径位于 base，可以在另一个环境中显式替换。
+
+当前 rollout 镜像的 breakable prefill CUDA graph 不支持 `enable_memory_saver=true`，
+会在启动推理服务时报 `Breakable CUDA graph is not compatible with memory saver mode`。
+默认设置 `sglang.disable_cuda_graph: true`；已经核对镜像接受该参数，且该参数会同时关闭
+prefill 和 decode graph。AWEX 的 memory saver 保持开启；代价是暂不使用 CUDA graph 的
+性能优化。将来启用 graph 前，应确认所选 backend 与 memory saver 兼容。
 
 256K、CP4、双镜像的完整 Qwen3.5 RL 组合尚未由本入口执行 GPU 验证，不能从 dry-run
 或 CPU preflight 推断训练峰值、收敛、权重同步和恢复已验证。

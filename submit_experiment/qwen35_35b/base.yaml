@@ -1,0 +1,197 @@
+# Fixed model/runtime/topology. Editable experiment settings live in params.yaml.
+# launch is consumed by submit.py; it is removed from the AReaL training YAML.
+launch:
+  areal_dir: ../../../AReaL
+  actor_image: /storage/openpsi/images/areal-dev-sglang-1014.sif
+  rollout_image: /storage/openpsi/images/deepep-base-119b5ffe.sif
+  actor_python: python3
+  rollout_python: /opt/sglang/bin/python3
+  # Reuse the referenced experiment's AWEX and Transformers overlays, not its
+  # Qwen4-specific training entry point or proxy configuration patch.
+  actor_pythonpath:
+    - /storage/openpsi/users/chucai.dzq/areal-experiment-scripts/qwen38-flash-next/swemm-rl64/main-r3-20261016/runtime/awex-0.9.0
+    - /storage/openpsi/users/chucai.dzq/areal-experiment-scripts/qwen38-flash-next/swemm-rl64/main-r3-20261016/runtime/transformers-5.16.1
+  rollout_pythonpath:
+    - /storage/openpsi/users/chucai.dzq/areal-experiment-scripts/qwen38-flash-next/swemm-rl64/main-r3-20261016/runtime/awex-0.9.0
+    - /storage/openpsi/users/chucai.dzq/areal-experiment-scripts/qwen38-27b/graybox19/q27-bs8gs12-1012-2/runtime/proxy-deps
+    - /storage/openpsi/users/public/codes/areal-rollout-runtime-py312-sglang0518
+  controller_binds: /storage:/storage,/etc/slurm:/etc/slurm,/run/munge:/run/munge,/etc/passwd:/etc/passwd,/etc/group:/etc/group,/usr/bin/sbatch:/usr/bin/sbatch,/usr/bin/srun:/usr/bin/srun,/usr/bin/squeue:/usr/bin/squeue,/usr/bin/scontrol:/usr/bin/scontrol,/usr/bin/sacct:/usr/bin/sacct,/usr/bin/scancel:/usr/bin/scancel,/usr/lib64/slurm:/usr/lib64/slurm,/usr/lib64/libmunge.so.2.0.0:/usr/lib/x86_64-linux-gnu/libmunge.so.2
+  actor_binds: /storage:/storage
+  rollout_binds: /storage:/storage,/storage/openpsi/users/chucai.dzq/areal-experiment-scripts/qwen38-flash-next/swemm-rl64/main-r3-20261016/patches/sglang-0.5.19-gdn/gdn_flashinfer.py:/opt/sglang/lib/python3.12/site-packages/sglang/srt/layers/attention/linear/kernels/gdn_flashinfer.py:ro
+  slurm:
+    partition: all
+    controller_cpus: 4
+    controller_mem_gb: 64
+    controller_time: "24:00:00"
+    worker_time: "24:00:00"
+  preflight_min_terminal_tasks: 1
+
+experiment_name: qwen35-35b-arena
+trial_name: ${oc.env:EXPERIMENT_TRIAL}
+tokenizer_path: ${actor.path}
+enable_offload: false  # AWEX handles phase handover; independent of CPU staging.
+cluster:
+  n_nodes: 1
+  n_gpus_per_node: 8
+  fileroot: /storage/openpsi/experiments
+  name_resolve:
+    type: nfs
+    nfs_record_root: ${cluster.fileroot}/name_resolve
+scheduler:
+  type: slurm
+
+actor:
+  _version: v1
+  # Attention: DP2 x TP1 x CP4 = 8. FFN: EDP1 x EP8 x ETP1 = 8.
+  backend: "megatron:(attn:d2p1t1c4|ffn:d1p1t1e8)"
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  path: /storage/openpsi/models/Qwen__Qwen3.5-35B-A3B
+  dtype: bfloat16
+  grad_reduce_dtype: float32
+  init_from_scratch: false
+  weight_update_mode: awex
+  temperature: ${gconfig.temperature}
+  max_new_tokens: ${gconfig.max_new_tokens}
+  megatron:
+    bridge_type: megatron-bridge
+    wrap_with_ddp: true
+    enable_router_replay: false
+    enable_mtp: false
+    enable_mtp_training: false
+    ddp:
+      use_distributed_optimizer: true
+  scheduling_spec:
+    - task_type: worker
+      gpu: 1
+      port_count: 2
+      image: ${oc.env:AREAL_ACTOR_IMAGE}
+      cmd: ${oc.env:AREAL_ACTOR_PYTHON} -m areal.infra.rpc.rpc_server
+      reservation: ${oc.env:EXPERIMENT_RESERVATION,null}
+      exclusive: false
+      mount: ${oc.env:AREAL_ACTOR_BINDS}
+      srun_additional_args: --distribution=block:block --unbuffered --mpi=pmi2 -K --chdir ${oc.env:AREAL_DIR} --export=ALL,SINGULARITY_BINDPATH=${oc.env:AREAL_ACTOR_BINDS}
+      env_vars:
+        PYTHONPATH: ${oc.env:AREAL_ACTOR_PYTHONPATH}
+        PYTHONNOUSERSITE: "1"
+        TMS_INIT_ENABLE: "0"
+        TMS_INIT_ENABLE_CPU_BACKUP: "0"
+        PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+        CUDA_DEVICE_MAX_CONNECTIONS: "1"
+      additional_bash_cmds:
+        - set -euo pipefail
+        - set -a; source "$CREDENTIALS_FILE"; set +a
+        - unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
+
+rollout:
+  _version: v1
+  backend: sglang:d1t8p1
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  fileroot: ${cluster.fileroot}
+  tokenizer_path: ${tokenizer_path}
+  consumer_batch_size: ${train_dataset.batch_size}
+  return_routed_experts: false
+  scheduling_strategy:
+    type: colocation
+    target: actor
+    fork: true
+  scheduling_spec:
+    - task_type: worker
+      gpu: 1
+      port_count: 2
+      image: ${oc.env:AREAL_ROLLOUT_IMAGE}
+      cmd: ${oc.env:AREAL_ROLLOUT_PYTHON} -m areal.infra.rpc.rpc_server
+      reservation: ${oc.env:EXPERIMENT_RESERVATION,null}
+      exclusive: false
+      mount: ${oc.env:AREAL_ROLLOUT_BINDS}
+      srun_additional_args: --unbuffered --mpi=pmi2 -K --chdir ${oc.env:AREAL_DIR} --export=ALL,SINGULARITY_BINDPATH=${oc.env:AREAL_ROLLOUT_BINDS}
+      env_vars:
+        PYTHONPATH: ${oc.env:AREAL_ROLLOUT_PYTHONPATH}
+        PYTHONNOUSERSITE: "1"
+        TMS_INIT_ENABLE: "0"
+        TMS_INIT_ENABLE_CPU_BACKUP: "0"
+        PYTORCH_CUDA_ALLOC_CONF: expandable_segments:False
+        CUDA_DEVICE_MAX_CONNECTIONS: "1"
+      additional_bash_cmds:
+        - set -euo pipefail
+        - set -a; source "$CREDENTIALS_FILE"; set +a
+        - export PATH=/opt/sglang/bin:$PATH
+        - unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
+  agent:
+    mode: inline
+    admin_api_key: ${oc.env:SWE_RL_ADMIN_API_KEY}
+    tool_call_parser: qwen3_coder
+    reasoning_parser: qwen3
+    chat_template_type: concat
+    engine_max_tokens: ${gconfig.max_tokens}
+    export_style: concat
+    message_preprocessors:
+      - examples.swe.preprocessors.MergeSystemMessages
+      - examples.swe.preprocessors.StripAnthropicBillingHeader
+      - examples.swe.preprocessors.StripAllSystemReminders
+      - examples.swe.preprocessors.StripAnthropicCacheFields
+      - examples.swe.preprocessors.NormalizeToolCallArguments
+    prefix_matcher: examples.swe.prefix_matchers.swe_prefix_matcher
+
+ref:
+  # submit.py expands container references after merging params, so native
+  # OmegaConf structured loading receives dictionaries/lists rather than strings.
+  _version: v1
+  backend: ${actor.backend}
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  path: ${actor.path}
+  dtype: ${actor.dtype}
+  init_from_scratch: false
+  disable_dropout: true
+  optimizer: null
+  megatron: ${actor.megatron}
+  mb_spec: ${actor.mb_spec}
+  scheduling_strategy:
+    type: colocation
+    target: actor
+    fork: true
+  scheduling_spec: ${actor.scheduling_spec}
+
+sglang:
+  model_path: ${actor.path}
+  random_seed: ${seed}
+  skip_tokenizer_init: true
+  dtype: ${actor.dtype}
+  enable_memory_saver: true
+  enable_multimodal: true
+  ep_size: 1
+
+train_dataset:
+  path: arena
+  type: rl
+  max_length: ${gconfig.max_tokens}
+valid_dataset: null
+
+econfig:
+  dataset_source: arena
+  arena_base_url: ${oc.env:ARENA_OPENAPI_BASE}
+  arena_llm_route_mode: gateway
+  arena_result_dump_dir: ${oc.env:EXPERIMENT_RUN_DIR}/arena_results
+
+saver:
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  fileroot: ${cluster.fileroot}
+recover:
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  fileroot: ${cluster.fileroot}
+evaluator:
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  fileroot: ${cluster.fileroot}
+stats_logger:
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  fileroot: ${cluster.fileroot}
+perf_tracer:
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  fileroot: ${cluster.fileroot}

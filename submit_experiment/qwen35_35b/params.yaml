@@ -110,7 +110,7 @@ rollout:
   pause_grace_period: 60
   scheduling_spec:
     - cpu: 8
-      mem: 128
+      mem: 64  # Per GPU: TP8 requests 8 x 64 = 512 GiB on the actor node.
   agent:
     turn_discount: 1.0
     drop_retry_orphans: true

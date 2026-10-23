@@ -14,6 +14,7 @@ Slurm scheduler 再申请一个 8 GPU 节点。actor 使用 8 个 worker，rollo
 | 模型 | `/storage/openpsi/models/Qwen__Qwen3.5-35B-A3B` |
 | 训练并行 | Attention DP2 × CP4，TP1、PP1；FFN EP8、ETP1、EDP1 |
 | 推理并行 | SGLang DP1 × TP8 |
+| 主机内存申请 | actor 每卡 128 GiB、整节点 1024 GiB；rollout 每卡 64 GiB、TP8 实例 512 GiB |
 | 上下文 | 262144（256K）；请求总 token 上限 262143，预留一个 token |
 | CPU-staged optimizer offload | 开启，2 个 buffer，每个 128 MiB |
 | Chunked logits / loss | 开启，loss chunk size 1024 |
@@ -37,6 +38,16 @@ Slurm scheduler 再申请一个 8 GPU 节点。actor 使用 8 个 worker，rollo
 合并，因此在 params 中改 CPU/主机内存不会丢失镜像和启动命令。其他列表整体替换。
 合并后会展开 `ref.megatron`、`ref.mb_spec` 和 `ref.scheduling_spec` 的容器引用，使 ref
 跟随 actor 的最终设置，并兼容 AReaL 的 OmegaConf 结构化配置加载；容器内部的环境变量引用保留。
+
+`scheduling_spec.mem` 的单位为 GiB。rollout 会先按 `TP × PP` 放大单实例申请，再按
+该节点的 DP 实例数汇总；训练侧的 CP 不参与 rollout 资源计算。默认 actor 与 rollout
+在 GPU 节点上合计申请 1536 GiB，正好用满当前节点的 Slurm 内存额度。CPU controller
+另需 64 GiB，应调度到其他节点；GPU 节点若已有其他作业占用内存，可能无法同时启动两者。
+
+2026-10-23 已在 `rsi` reservation 实测资源分配：actor `985277`（32 CPU、1 TiB、8 GPU）
+与 rollout `985278`（64 CPU、512 GiB、不重复申请 GPU）同时运行在 `slurmd-67`，
+controller `985276`（4 CPU、64 GiB）位于另一节点；三个作业均 `COMPLETED / 0:0`。
+该测试只验证资源能同时申请，不加载模型、不执行训练；测试资源和临时文件已清理。
 
 ## 使用
 

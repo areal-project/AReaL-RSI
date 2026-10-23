@@ -6,7 +6,7 @@ dynamic_bs: false
 should_accept_fn: examples.swe.filter_function.filter_function
 
 gconfig:
-  n_samples: 12
+  n_samples: 8
   min_new_tokens: 0
   max_new_tokens: 65536
   max_tokens: 262143  # SGLang requires one token of context headroom.
@@ -26,7 +26,7 @@ gconfig:
   use_beam_search: false
 
 eval_gconfig:
-  n_samples: 12
+  n_samples: 8
   min_new_tokens: 0
   max_new_tokens: 65536
   max_tokens: 262143
@@ -121,8 +121,8 @@ actor:
       mem: 128  # Per rank: actor requests 8 x 128 GiB of host RAM.
 
 rollout:
-  max_concurrent_rollouts: 16
-  queue_size: 32  # Must exceed train_dataset.batch_size to leave dispatch capacity.
+  max_concurrent_rollouts: 64
+  queue_size: 128  # Must exceed train_dataset.batch_size to leave dispatch capacity.
   max_head_offpolicyness: 1
   enable_rollout_tracing: true
   dump_to_file: true
@@ -149,7 +149,7 @@ sglang:
   # Keep decode graphs enabled; disable only the incompatible prefill phase.
   disable_cuda_graph: false
   disable_prefill_cuda_graph: true
-  cuda_graph_max_bs: 16
+  cuda_graph_max_bs: 512
   attention_backend: null
   sampling_backend: null
   log_level: info
@@ -157,7 +157,7 @@ sglang:
   mamba_ssm_dtype: bfloat16
 
 train_dataset:
-  batch_size: 8
+  batch_size: 64
   shuffle: true
   pin_memory: true
   num_workers: 0

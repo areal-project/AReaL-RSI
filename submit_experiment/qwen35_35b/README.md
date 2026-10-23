@@ -45,6 +45,11 @@ RL、过滤、优化器超参、微批、SGLang 显存比例（0.7）及保存�
 optimizer，chunked loss 不计算 entropy 梯度，prefill graph 关闭，请求总 token 上限
 比 256K 上下文少 1。评估采样配置也沿用示例，并保留同样的 1-token 上下文余量。
 
+`cuda_graph_max_bs=512` 是配置上限；当前 `sglang.max_running_requests=16`，所用 SGLang
+会按请求池大小截断实际 capture batch。rollout workflow 并发 64 与 SGLang 同时执行请求数
+是两个独立参数。当前 Megatron 路径还会将 `n_mbs_divisor` 按 PP 大小重设：本模板保留配置
+值 8，但 PP1 下该路径实际使用 1。
+
 参数文件不能覆盖 base 的固定字段。字典深度合并；`scheduling_spec` 按现有单条列表项
 合并，因此在 params 中改 CPU/主机内存不会丢失镜像和启动命令。其他列表整体替换。
 合并后会展开 `ref.megatron`、`ref.mb_spec` 和 `ref.scheduling_spec` 的容器引用，使 ref

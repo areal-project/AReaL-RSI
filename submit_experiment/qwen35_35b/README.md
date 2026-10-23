@@ -71,6 +71,12 @@ actor `985297`、rollout `985300`；actor 和 rollout 同驻 `slurmd-67`。训�
 graph=`disabled`、memory saver 开启。调度器已提交 16 个并发 rollout，Arena 模型路由
 注册成功并发起任务请求。该结果验证启动与任务提交，尚不代表首个训练 step 或完整训练通过。
 
+随后以当前 batch64 / queue128 / 采样8 / rollout并发64 / graph上限512 配置启动
+`qwen35-try/trial08`：controller `985305`、actor `985308`、rollout `985310`。本次显式允许
+历史健康率异常，覆盖记录见该轮 `preflight.json`。actor、SGLang、proxy 均就绪，已提交
+64 个并发 rollout 并发起 Arena 任务；接口确认 graph 配置上限 512，实际 capture 最大 16。
+首个训练 step 及完整训练仍未验证。
+
 ## 使用
 
 提交端需要 Python 3 和 PyYAML；不安装新依赖。训练依赖来自已有 SIF 和源码 overlay。

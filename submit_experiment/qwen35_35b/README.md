@@ -18,8 +18,10 @@ Slurm scheduler 再申请一个 8 GPU 节点。actor 使用 8 个 worker，rollo
 | 上下文 | 262144（256K）；请求总 token 上限 262143，预留一个 token |
 | CPU-staged optimizer offload | 开启，2 个 buffer，每个 128 MiB |
 | Chunked logits / loss | 开启，loss chunk size 1024 |
-| SGLang CUDA graph | decode 开启、prefill 关闭，保留 memory saver；max batch size 8 |
+| SGLang CUDA graph | decode 开启、prefill 关闭，保留 memory saver；max batch size 16 |
 | Rollout 队列 | `queue_size=32`，必须大于 `train_dataset.batch_size`（默认 8）以留出任务提交空间 |
+| 采样 / 过滤 | `n_samples=12`，最小有效组 8，使用示例的 `filter_function` 过滤同奖励组 |
+| 并发 / 微批 | rollout 并发 16，SGLang 最大请求数 16；`n_mbs=128`、`n_mbs_divisor=8` |
 | Arena 路由 | `gateway` |
 | R3 / MTP | 关闭 |
 | controller / actor 镜像 | `/storage/openpsi/images/areal-dev-sglang-1014.sif` |
@@ -35,6 +37,12 @@ Slurm scheduler 再申请一个 8 GPU 节点。actor 使用 8 个 worker，rollo
   W&B 等可调参数。`launch.slurm` 也可以在这里覆盖，例如 CPU、内存和时限。
 - `arena.yaml` 仅放 `econfig` 中的数据选择：Streams、Harness、reward 版本、混合权重、
   数据集级环境变量。凭据单独保管。
+
+采样、RL、过滤、优化器超参、微批、并发、队列、SGLang 显存比例（0.7）及保存恢复策略
+默认沿用参考实验 `main-r3-20261016/train.yaml`。差异限于约定的模型、单机并行、R3/MTP
+关闭、主机内存、W&B 自动发现及 Qwen3.5 兼容设置：CPU staging 使用 precision-aware
+optimizer，chunked loss 不计算 entropy 梯度，prefill graph 关闭，请求总 token 上限
+比 256K 上下文少 1。评估采样配置也沿用示例，并保留同样的 1-token 上下文余量。
 
 参数文件不能覆盖 base 的固定字段。字典深度合并；`scheduling_spec` 按现有单条列表项
 合并，因此在 params 中改 CPU/主机内存不会丢失镜像和启动命令。其他列表整体替换。
@@ -205,7 +213,7 @@ CP4 所需 Megatron Core ≥0.18.2 / Megatron Bridge ≥0.5.1，以及 Arena Str
 只关闭 prefill graph，保留 decode CUDA graph 和 AWEX memory saver。当前 rollout 镜像
 已确认支持 `--disable-prefill-cuda-graph`；所选 AReaL 源码还需包含对应的可选配置字段，
 旧版源码会将该字段视为未知配置。参考实验使用 `disable_cuda_graph: false`、
-`cuda_graph_max_bs: 16` 和 `enable_memory_saver: true`；本模板 max batch size 保持为 8。
+`cuda_graph_max_bs: 16` 和 `enable_memory_saver: true`；本模板保留这三个值。
 同一镜像的模型兼容规则会为未进入 breakable 白名单的多模模型自动关闭 prefill graph；
 Qwen4-Exp 被明确排除，而 Qwen3.5 MoE 在白名单中。因此参考实验中的全局 graph 开关开启，
 不代表它启用了 breakable prefill；换到 Qwen3.5 后需要显式关闭这一阶段。

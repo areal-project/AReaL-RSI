@@ -3,10 +3,10 @@ seed: 1234
 total_train_epochs: 100
 total_train_steps: 100
 dynamic_bs: false
-should_accept_fn: null
+should_accept_fn: examples.swe.filter_function.filter_function
 
 gconfig:
-  n_samples: 4
+  n_samples: 12
   min_new_tokens: 0
   max_new_tokens: 65536
   max_tokens: 262143  # SGLang requires one token of context headroom.
@@ -20,16 +20,39 @@ gconfig:
   reward_normalization: true
   reward_normalization_use_std: false
   drop_incomplete_group: false
+  stop_token_ids: []
+  stop: null
+  lora_name: ""
+  use_beam_search: false
+
+eval_gconfig:
+  n_samples: 12
+  min_new_tokens: 0
+  max_new_tokens: 65536
+  max_tokens: 262143
+  greedy: false
+  top_p: 1.0
+  top_k: 1000000
+  temperature: 1.0
+  stop_token_ids: []
+  ignore_eos: false
+  skip_special_tokens: true
+  stop: null
+  frequency_penalty: 0.0
+  lora_name: ""
+  use_beam_search: false
+  reward_normalization: false
+  drop_incomplete_group: false
 
 actor:
   disable_dropout: true
   gradient_checkpointing: true
-  min_usable_group_size: 2
+  min_usable_group_size: 8
   mb_spec:
-    n_mbs: 8
+    n_mbs: 128
     granularity: 1
     max_tokens_per_mb: 262144
-    n_mbs_divisor: 1
+    n_mbs_divisor: 8
   optimizer:
     type: adam
     lr: 3.0e-6
@@ -49,7 +72,7 @@ actor:
     lm_head_loss_chunk_size: 1024
     entropy_requires_grad: false
     async_save: false
-    use_precision_aware_optimizer: true
+    use_precision_aware_optimizer: true  # Required by the enabled staged optimizer.
     main_params_dtype: float32
     main_grads_dtype: float32
     exp_avg_dtype: float32
@@ -60,7 +83,7 @@ actor:
     recompute_granularity: full
     recompute_method: uniform
     recompute_num_layers: 1
-    moe_router_dtype: fp32
+    moe_router_dtype: null
     moe_token_dispatcher_type: alltoall
     ddp:
       grad_reduce_in_fp32: true
@@ -98,7 +121,7 @@ actor:
       mem: 128  # Per rank: actor requests 8 x 128 GiB of host RAM.
 
 rollout:
-  max_concurrent_rollouts: 4
+  max_concurrent_rollouts: 16
   queue_size: 32  # Must exceed train_dataset.batch_size to leave dispatch capacity.
   max_head_offpolicyness: 1
   enable_rollout_tracing: true
@@ -109,7 +132,7 @@ rollout:
   request_retries: 0
   pause_grace_period: 60
   scheduling_spec:
-    - cpu: 8
+    - cpu: 4
       mem: 64  # Per GPU: TP8 requests 8 x 64 = 512 GiB on the actor node.
   agent:
     turn_discount: 1.0
@@ -120,13 +143,16 @@ sglang:
   context_length: 262144
   max_prefill_tokens: 8192
   chunked_prefill_size: 8192
-  max_running_requests: 8
-  mem_fraction_static: 0.6
+  max_running_requests: 16
+  mem_fraction_static: 0.7
   # The selected SGLang build's breakable prefill graph rejects memory saver.
   # Keep decode graphs enabled; disable only the incompatible prefill phase.
   disable_cuda_graph: false
   disable_prefill_cuda_graph: true
-  cuda_graph_max_bs: 8
+  cuda_graph_max_bs: 16
+  attention_backend: null
+  sampling_backend: null
+  log_level: info
   disable_radix_cache: false
   mamba_ssm_dtype: bfloat16
 

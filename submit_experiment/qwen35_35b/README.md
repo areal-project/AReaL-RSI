@@ -105,6 +105,12 @@ reservation。controller、actor、rollout 同步使用所选 reservation。
 controller 与 GPU workers 是独立 Slurm job，“单机”指一个 GPU 节点。
 不要将 actor 设置为 `exclusive: true`，共卡 rollout 还需要同节点 CPU/内存资源。
 
+停止旧轮次后，旧 sandbox 任务可能因推理服务结束而失败，使 stream 最近的健康率检查
+拦住重启。核实历史失败原因后，可在本次使用的参数副本中设置
+`launch.preflight_allow_unhealthy: true`；默认是 `false`。这只允许历史终态任务数量/失败率
+异常，Stream、Harness、reward 和数据可用性校验仍然执行。覆盖状态写入 `preflight.json`
+的 `unhealthy_override` 并打印到 controller 日志，不会修改 Arena 的任务记录。
+
 `--experiment-name` 是实验组名，默认使用 `base.yaml` 的 `experiment_name`（`qwen35-35b-arena`）；
 `--trial-name` 是组内单次运行的名称，默认 `trial-YYYYMMDD-HHMMSS`。两者分别写入
 AReaL 的 `experiment_name`、`trial_name`，并用于 Slurm controller 名称和产物目录。

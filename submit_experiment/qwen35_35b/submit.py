@@ -65,6 +65,7 @@ class Runtime:
     rollout_binds: str
     slurm: SlurmSettings
     preflight_min_terminal_tasks: int
+    preflight_allow_unhealthy: bool = False
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
@@ -241,6 +242,7 @@ def environment(
         "EXPERIMENT_NAME": experiment_name,
         "EXPERIMENT_TRIAL": trial_name,
         "ARENA_PREFLIGHT_MIN_TASKS": str(runtime.preflight_min_terminal_tasks),
+        "ARENA_PREFLIGHT_ALLOW_UNHEALTHY": "1" if runtime.preflight_allow_unhealthy else "0",
         "SBATCH_PARTITION": runtime.slurm.partition,
         "SBATCH_TIMELIMIT": runtime.slurm.worker_time,
         "SLURM_EXPORT_ENV": "ALL",

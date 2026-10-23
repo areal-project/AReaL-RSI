@@ -92,8 +92,18 @@ def main() -> None:
         streams_yaml_b64=base64.b64encode(payload.encode()).decode(),
         base_url=config.econfig.arena_base_url,
         min_terminal_tasks=int(os.environ["ARENA_PREFLIGHT_MIN_TASKS"]),
+        allow_unhealthy=os.environ.get("ARENA_PREFLIGHT_ALLOW_UNHEALTHY", "0") == "1",
     )
     (root / "preflight.json").write_text(json.dumps({"streams": summary}, indent=2) + "\n")
+    for stream in summary:
+        if stream.get("unhealthy_override"):
+            print(
+                "Arena historical health override: "
+                f"stream={stream['stream_id']}, "
+                f"terminal={stream['recent_terminal_tasks']}, "
+                f"failures={stream['recent_failures']}",
+                flush=True,
+            )
     if args.check_only:
         print("Runtime and Arena preflights passed; no GPU workers submitted.", flush=True)
         return

@@ -1,0 +1,345 @@
+{
+  "recorded_at": "2026-10-21T09:02:55.833335+00:00",
+  "kind": "agent_blind_evaluation_smoke_test",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "codex_cli": {
+    "version": "codex-cli 0.163.0",
+    "files": [
+      {
+        "name": "codex",
+        "source": "/opt/node-v24.22.0-linux-x64/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex",
+        "size": 296865480,
+        "sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215"
+      },
+      {
+        "name": "codex-code-mode-host",
+        "source": "/opt/node-v24.22.0-linux-x64/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex-code-mode-host",
+        "size": 74277776,
+        "sha256": "8724d73ec190536233ab4628d24a071bfbcf27e5124f08fe35129f26fe48b916"
+      },
+      {
+        "name": "rg",
+        "source": "/opt/node-v24.22.0-linux-x64/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex-path/rg",
+        "size": 5408904,
+        "sha256": "e62198eb19b136b88c330af83647b5a962cb99b6b1f066758568f12de1974849"
+      }
+    ]
+  },
+  "codex_home": "$CODEX_HOME (configured by the ignored local launcher)",
+  "codex_home_policy": "per-task isolated view at the specified path; auth.json copied only; deleted after run",
+  "upstream_proxy": "http://127.0.0.1:1081",
+  "network": "isolated namespace, allowlisted CONNECT relay",
+  "protocol": "self-authored tests only, freeze allowed RTL, private official judge after Agent exit",
+  "initial_judge": "existing EDA SIFs",
+  "final_judge": "same final Codex SIFs used for Agent; frozen RTL unchanged",
+  "sampling": "three deliberately chosen RTL generation tasks per benchmark; not full-benchmark accuracy",
+  "results": [
+    {
+      "benchmark": "rtllm",
+      "image": "images/rtllm-v2.1-icarus-codex.sif",
+      "image_sha256": "d95edff446167c8215ded9d7cf67924abdc33467fa7130adab627419f42df772",
+      "image_bytes": 657264640,
+      "passed": 3,
+      "total": 3,
+      "tasks": [
+        {
+          "id": "accu",
+          "agent_returncode": 0,
+          "agent_seconds": 92.87798032164574,
+          "isolation_checked": true,
+          "selftest_sources": [
+            "selftest/tb_accu.sv"
+          ],
+          "submission": [
+            {
+              "path": "submission.sv",
+              "sha256": "53961e3055aedfa522b6a25272b027a91130840f8ca1c36f06a75eee2bd24890",
+              "size": 989
+            }
+          ],
+          "usage": {
+            "input_tokens": 51930,
+            "cached_input_tokens": 28288,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 2441,
+            "reasoning_output_tokens": 431
+          },
+          "judge_status": "pass",
+          "run": "runs/rtllm-agent-v2-984065/accu"
+        },
+        {
+          "id": "adder_8bit",
+          "agent_returncode": 0,
+          "agent_seconds": 72.16195409744978,
+          "isolation_checked": true,
+          "selftest_sources": [
+            "selftest/tb_adder_8bit.sv"
+          ],
+          "submission": [
+            {
+              "path": "submission.sv",
+              "sha256": "f7ca0e624cfd353074979fad433ee1ad33eba8d4f9ea850a8216813bfddfa3db",
+              "size": 777
+            }
+          ],
+          "usage": {
+            "input_tokens": 64318,
+            "cached_input_tokens": 50304,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 1900,
+            "reasoning_output_tokens": 207
+          },
+          "judge_status": "pass",
+          "run": "runs/rtllm-agent-v2-984065/adder_8bit"
+        },
+        {
+          "id": "counter_12",
+          "agent_returncode": 0,
+          "agent_seconds": 69.6587937399745,
+          "isolation_checked": true,
+          "selftest_sources": [
+            "selftest/tb_counter_12.sv"
+          ],
+          "submission": [
+            {
+              "path": "submission.sv",
+              "sha256": "c00483cdc849a92159bbe361c904dafe697f0a279572cff6785ffd740dfedc18",
+              "size": 417
+            }
+          ],
+          "usage": {
+            "input_tokens": 50206,
+            "cached_input_tokens": 33920,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 1395,
+            "reasoning_output_tokens": 59
+          },
+          "judge_status": "pass",
+          "run": "runs/rtllm-agent-v2-984065/counter_12"
+        }
+      ],
+      "final_judge": "runs/agent-final-judge-984065/rtllm/summary.json",
+      "negative_control": "compile_error"
+    },
+    {
+      "benchmark": "verilogeval",
+      "image": "images/verilogeval-v2-codex.sif",
+      "image_sha256": "7ac0ee71675cc92e699aea31d8a17550fe85bffaf82704db5c3085d11d6be35c",
+      "image_bytes": 657264640,
+      "passed": 3,
+      "total": 3,
+      "tasks": [
+        {
+          "id": "Prob009_popcount3",
+          "agent_returncode": 0,
+          "agent_seconds": 51.0328136831522,
+          "isolation_checked": true,
+          "selftest_sources": [
+            "selftest/tb.sv"
+          ],
+          "submission": [
+            {
+              "path": "submission.sv",
+              "sha256": "38509d5bae34fb0dc1ba3c5e8383a565b6de3e00ebc0a4ae784b67e8b20372b2",
+              "size": 148
+            }
+          ],
+          "usage": {
+            "input_tokens": 48139,
+            "cached_input_tokens": 35840,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 667,
+            "reasoning_output_tokens": 12
+          },
+          "judge_status": "pass",
+          "run": "runs/verilogeval-agent-v2-984065/Prob009_popcount3"
+        },
+        {
+          "id": "Prob047_dff8ar",
+          "agent_returncode": 0,
+          "agent_seconds": 61.996768318116665,
+          "isolation_checked": true,
+          "selftest_sources": [
+            "selftest/tb.sv"
+          ],
+          "submission": [
+            {
+              "path": "submission.sv",
+              "sha256": "c52e459cde40b0092034c415cda76d862c05d7b73155a85c9a405bae94c388cd",
+              "size": 256
+            }
+          ],
+          "usage": {
+            "input_tokens": 48722,
+            "cached_input_tokens": 41984,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 970,
+            "reasoning_output_tokens": 12
+          },
+          "judge_status": "pass",
+          "run": "runs/verilogeval-agent-v2-984065/Prob047_dff8ar"
+        },
+        {
+          "id": "Prob110_fsm2",
+          "agent_returncode": 0,
+          "agent_seconds": 73.4135727584362,
+          "isolation_checked": true,
+          "selftest_sources": [
+            "selftest/tb.sv"
+          ],
+          "submission": [
+            {
+              "path": "submission.sv",
+              "sha256": "93e7c4037588794359ac75fe9072f97d7e4923c9b5d795c594079c052b589a9f",
+              "size": 350
+            }
+          ],
+          "usage": {
+            "input_tokens": 49846,
+            "cached_input_tokens": 43904,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 1553,
+            "reasoning_output_tokens": 242
+          },
+          "judge_status": "pass",
+          "run": "runs/verilogeval-agent-v2-984065/Prob110_fsm2"
+        }
+      ],
+      "final_judge": "runs/agent-final-judge-984065/verilogeval/summary.json",
+      "negative_control": "compile_error"
+    },
+    {
+      "benchmark": "cvdp",
+      "image": "images/cvdp-v1.1.0-oss-codex.sif",
+      "image_sha256": "d8ef33faa9f38201c21203d2072565fc9267a2c5eea383c1c7f21691c68ab1d8",
+      "image_bytes": 696680448,
+      "passed": 3,
+      "total": 3,
+      "tasks": [
+        {
+          "id": "cvdp_copilot_bcd_adder_0001",
+          "agent_returncode": 0,
+          "agent_seconds": 73.11191643029451,
+          "isolation_checked": true,
+          "selftest_sources": [
+            "selftest/tb.sv"
+          ],
+          "submission": [
+            {
+              "path": "rtl/bcd_adder.sv",
+              "sha256": "1b460048422e9fce23d509a440997d8792cd306c323dc769c708dd5943cb4b8d",
+              "size": 1411
+            }
+          ],
+          "usage": {
+            "input_tokens": 39949,
+            "cached_input_tokens": 30336,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 1889,
+            "reasoning_output_tokens": 86
+          },
+          "judge_status": "pass",
+          "run": "runs/cvdp-agent-v2-984065/cvdp_copilot_bcd_adder_0001"
+        },
+        {
+          "id": "cvdp_copilot_bcd_counter_0001",
+          "agent_returncode": 0,
+          "agent_seconds": 78.31955777108669,
+          "isolation_checked": true,
+          "selftest_sources": [
+            "selftest/bcd_counter_tb.sv"
+          ],
+          "submission": [
+            {
+              "path": "rtl/bcd_counter.sv",
+              "sha256": "5e11f00ccaec49cd8964663d12c2c9129341ed3fe82920f2017079f5761daaae",
+              "size": 1675
+            }
+          ],
+          "usage": {
+            "input_tokens": 78479,
+            "cached_input_tokens": 72704,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 1832,
+            "reasoning_output_tokens": 73
+          },
+          "judge_status": "pass",
+          "run": "runs/cvdp-agent-v2-984065/cvdp_copilot_bcd_counter_0001"
+        },
+        {
+          "id": "cvdp_copilot_signed_adder_0001",
+          "agent_returncode": 0,
+          "agent_seconds": 177.64817465096712,
+          "isolation_checked": true,
+          "selftest_sources": [
+            "selftest/run.sh",
+            "selftest/signedadder_tb.sv"
+          ],
+          "submission": [
+            {
+              "path": "rtl/signedadder.v",
+              "sha256": "e2a9f6a519b08d79fd12ce346d76e04745dccf265919524e5b5fb01c8c8adb71",
+              "size": 2963
+            }
+          ],
+          "usage": {
+            "input_tokens": 102676,
+            "cached_input_tokens": 92672,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 5267,
+            "reasoning_output_tokens": 1200
+          },
+          "judge_status": "pass",
+          "run": "runs/cvdp-agent-v2-984065/cvdp_copilot_signed_adder_0001"
+        }
+      ],
+      "final_judge": "runs/agent-final-judge-984065/cvdp/summary.json",
+      "negative_control": "fail"
+    }
+  ],
+  "checks": {
+    "boundary_tests": {
+      "passed": 7,
+      "log": "logs/agent-boundary-tests.log"
+    },
+    "launcher_probe_jobs": [
+      984080,
+      984083
+    ],
+    "make_check": {
+      "status": "timeout",
+      "timeout_seconds": 180,
+      "ui_tests_passed": 3,
+      "pytest_passed_before_interrupt": 45,
+      "log": "logs/agent-make-check-984065.log"
+    },
+    "remaining_checks": {
+      "pytest_passed": 179,
+      "subtests_passed": 5,
+      "skipped": 1,
+      "deselected": 1,
+      "ruff": "pass",
+      "mypy_files": 70,
+      "log": "logs/agent-check-rest-984065.log"
+    }
+  },
+  "limitations": [
+    "CVDP Agent entry supports nonagentic noncommercial RTL generation only",
+    "existing research-session restore test remains excluded after full-check timeout",
+    "filesystem/network isolation is not a VM or a defense against kernel/runtime vulnerabilities"
+  ],
+  "setup_attempt": {
+    "path": "runs/{rtllm,verilogeval,cvdp}-agent-984065",
+    "status": "interrupted during CLI setup; no completed submission",
+    "issues": [
+      "missing codex-code-mode-host companion",
+      "srun task count not explicitly set"
+    ],
+    "corrections": [
+      "companion bundled in final SIF",
+      "subsequent srun uses --ntasks=1"
+    ]
+  },
+  "publication_note": "Local CODEX_HOME path redacted; original receipt retained locally. Scores and hashes unchanged."
+}

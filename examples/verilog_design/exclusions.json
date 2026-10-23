@@ -1,0 +1,42 @@
+[
+  {
+    "benchmark": "rtllm",
+    "task": "clkgenerator",
+    "task_format": null,
+    "evaluation_profile": "icarus",
+    "reason": "Icarus golden reports 20 failures; possible testbench sampling race.",
+    "upstream_revision": "51ed553d0ffd32797a1a0a13e051656bf302c81f",
+    "golden_status": "fail",
+    "validation_command": "python scripts/evaluate.py --bench rtllm --task clkgenerator --include-excluded --output /new/golden-check --icarus-compat"
+  },
+  {
+    "benchmark": "rtllm",
+    "task": "radix2_div",
+    "task_format": null,
+    "evaluation_profile": "icarus",
+    "reason": "Icarus golden produces mismatched division results.",
+    "upstream_revision": "51ed553d0ffd32797a1a0a13e051656bf302c81f",
+    "golden_status": "fail",
+    "validation_command": "python scripts/evaluate.py --bench rtllm --task radix2_div --include-excluded --output /new/golden-check --icarus-compat"
+  },
+  {
+    "benchmark": "rtllm",
+    "task": "ring_counter",
+    "task_format": null,
+    "evaluation_profile": "icarus",
+    "reason": "Icarus golden exits without terminal success marker.",
+    "upstream_revision": "51ed553d0ffd32797a1a0a13e051656bf302c81f",
+    "golden_status": "fail",
+    "validation_command": "python scripts/evaluate.py --bench rtllm --task ring_counter --include-excluded --output /new/golden-check --icarus-compat"
+  },
+  {
+    "benchmark": "verilogeval",
+    "task": "Prob099_m2014_q6c",
+    "task_format": "spec-to-rtl",
+    "evaluation_profile": "icarus",
+    "reason": "Official reference/prompt ports Y1/Y3 disagree with testbench ports Y2/Y4.",
+    "upstream_revision": "c498220d0a52248f8e3fdffe279075215bde2da6",
+    "golden_status": "compile_error",
+    "validation_command": "python scripts/evaluate.py --bench verilogeval --task Prob099_m2014_q6c --include-excluded --output /new/golden-check --task-format spec-to-rtl"
+  }
+]

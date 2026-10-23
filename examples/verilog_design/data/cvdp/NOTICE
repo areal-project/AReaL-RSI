@@ -1,0 +1,286 @@
+The datapoints in this dataset are licensed under CC BY 4.0 except for code.
+
+
+This dataset incorporates derivative code of various open-source repositories along with original code.
+
+Original code is licensed under Apache License 2.0. The below listed datapoints contain derivative work under the following licenses.
+
+# cvdp_agentic_cic_decimator
+
+Originally from https://github.com/alexforencich/verilog-dsp/blob/master/rtl/cic_decimator.v
+MIT License
+
+# cvdp_agentic_custom_fifo
+
+Originally from https://github.com/lowRISC/ibex/blob/master/rtl/ibex_fetch_fifo.sv
+Apache 2.0 License
+
+# cvdp_agentic_byte_enable_ram
+
+Originally from https://github.com/tsmk94/Taiga/blob/master/core/intel/intel_byte_enable_ram.sv
+Apache 2.0 License
+
+# cvdp_agentic_crypto
+
+Originally from https://github.com/secworks/blake2s
+BSD-2-Claude License
+
+# cvdp_copilot_static_branch_predict
+
+Originally from https://github.com/lowRISC/ibex/blob/master/rtl/ibex_branch_predict.sv
+Apache 2.0 License
+
+# cvdp_copilot_ahb_lite_srom
+
+Originally from https://github.com/chipsalliance/caliptra-rtl/blob/main/src/libs/rtl/caliptra_ahb_srom.sv
+Apache 2.0 License
+
+# cvdp_copilot_vga_controller
+
+Originally from https://vanhunteradams.com/DE1/VGA_Driver/Driver.html
+License not specified
+
+# cvdp_copilot_32_bit_Brent_Kung_PP_adder
+
+Originally from https://github.com/faizaan22/32-bit-Brent-Kung-Adder/blob/main/brent_kung_adder.v
+License not specified
+
+# cvdp_copilot_MSHR
+
+Originally from https://github.com/vortexgpgpu/vortex
+Apache-2.0 License
+
+# cvdp_copilot_leading_zero_cnt
+
+Originally from https://github.com/vortexgpgpu/vortex
+Apache-2.0 License
+
+# cvdp_copilot_load_store_unit
+
+Originally from https://github.com/embecosm/ri5cy
+Apache 2.0 License
+
+# cvdp_copilot_mem_allocator
+
+Originally from https://github.com/vortexgpgpu/vortex
+Apache-2.0 License
+
+# cvdp_copilot_crypto
+
+Originally from https://github.com/secworks/sha1 and https://github.com/secworks/prince
+BSD-2-Claude License
+
+# cvdp_copilot_word_reducer
+
+Originally from https://fpgacpu.ca/fpga/
+MIT License
+
+# cvdp_copilot_word_change_detector
+
+Originally from https://fpgacpu.ca/fpga/
+MIT License
+
+
+The following notices apply to bundle files in cvdp_v1.1.0_agentic_heavy_code_generation_public.
+
+# cvdp_agentic_heavy_2dconv-FPGA
+
+Originally from https://github.com/ivanvig/2dconv-FPGA
+MIT License
+
+# cvdp_agentic_heavy_802.11a
+
+Originally from https://github.com/sadrasabouri/802.11a
+MIT License
+
+# cvdp_agentic_heavy_I2SRV64
+
+Originally from https://github.com/RClabiisc/I2SRV64-SS-v1
+Apache-2.0 License
+
+# cvdp_agentic_heavy_NoobsCpu-8bit
+
+Originally from https://github.com/supratimdas/NoobsCpu-8bit
+Apache-2.0 License
+
+# cvdp_agentic_heavy_RISC-V
+
+Originally from https://github.com/AngeloJacobo/RISC-V
+MIT License
+
+# cvdp_agentic_heavy_SoomRV
+
+Originally from https://github.com/mathis-s/CaravelSoomRV-7
+Apache-2.0 License
+
+# cvdp_agentic_heavy_ULX3S_FPGA_Camera_Streaming
+
+Originally from https://github.com/AngeloJacobo/ULX3S_FPGA_Camera_Streaming
+MIT License
+
+# cvdp_agentic_heavy_ULX3S_FPGA_Sobel_Edge_Detection_OV7670
+
+Originally from https://github.com/AngeloJacobo/ULX3S_FPGA_Sobel_Edge_Detection_OV7670
+MIT License
+
+# cvdp_agentic_heavy_async-fifo
+
+Originally from https://github.com/dpretet/async_fifo
+MIT License
+
+# cvdp_agentic_heavy_axi4_lite
+
+Originally from https://github.com/alexforencich/verilog-axi
+MIT License
+
+# cvdp_agentic_heavy_axis
+
+Originally from https://github.com/alexforencich/verilog-axis
+MIT License
+
+# cvdp_agentic_heavy_caliptra-rtl
+
+Originally from https://github.com/chipsalliance/caliptra-rtl
+Apache-2.0 License
+
+# cvdp_agentic_heavy_corundum
+
+Originally from https://github.com/alexforencich/corundum
+BSD-3-Clause License
+
+# cvdp_agentic_heavy_cv32e40p_1
+
+Originally from https://github.com/openhwgroup/cv32e40p
+Solderpad Hardware License v0.51 (SHL-0.51)
+
+# cvdp_agentic_heavy_cva6_riscv_core
+
+Originally from https://github.com/openhwgroup/cva6
+Solderpad Hardware License v0.51 (SHL-0.51);
+BSD-3-Clause and Apache-2.0 for specific sub-components
+
+# cvdp_agentic_heavy_ddr4_controller
+
+Originally from https://github.com/oprecomp/DDR4_controller
+Apache-2.0 License
+
+# cvdp_agentic_heavy_deepfreeze
+
+Originally from https://github.com/ARM-software/DeepFreeze
+MIT License
+
+# cvdp_agentic_heavy_detect_human_faces
+
+Originally from https://github.com/WalkerLau/DetectHumanFaces
+MIT License
+
+# cvdp_agentic_heavy_dual_core
+
+Originally from https://github.com/stanley108/openlane-setting-up
+Apache-2.0 License
+
+# cvdp_agentic_heavy_edma
+
+Originally from https://github.com/aolofsson/oh (edma/ subdirectory)
+MIT License
+
+# cvdp_agentic_heavy_enso
+
+Originally from https://github.com/crossroadsfpga/enso
+BSD-3-Clause-Clear License
+
+# cvdp_agentic_heavy_ext_cheriot-ibex
+
+Originally from https://github.com/turing-genai-hw/ext_cheriot-ibex
+Origin: https://github.com/microsoft/cheriot-ibex
+Apache-2.0 License
+
+# cvdp_agentic_heavy_fabulous_fabric
+
+Originally from https://github.com/mole99/fabulous_fabric
+Apache-2.0 License
+
+# cvdp_agentic_heavy_fpga_nes
+
+Originally from https://github.com/brianbennett/fpga_nes
+BSD-2-Clause License
+
+# cvdp_agentic_heavy_fpu_wrappers
+
+Originally from https://github.com/jiegec/fpu-wrappers
+MIT License
+
+# cvdp_agentic_heavy_friscv
+
+Originally from https://github.com/dpretet/friscv
+MIT License
+
+# cvdp_agentic_heavy_i2c
+
+Originally from https://github.com/alexforencich/verilog-i2c
+MIT License
+
+# cvdp_agentic_heavy_learn_fpga
+
+Originally from https://github.com/BrunoLevy/learn-fpga
+BSD-3-Clause License
+
+# cvdp_agentic_heavy_opene902
+
+Originally from https://github.com/XUANTIE-RV/opene902
+Apache-2.0 License
+
+# cvdp_agentic_heavy_pequeno_riscv
+
+Originally from https://github.com/iammituraj/pequeno_riscv
+Apache-2.0 License
+
+# cvdp_agentic_heavy_polyphony
+
+Originally from https://github.com/Kenji-Ishimaru/polyphony
+MIT License
+
+# cvdp_agentic_heavy_pulpino
+
+Originally from https://github.com/pulp-platform/pulpino
+Solderpad Hardware License v0.51 (SHL-0.51)
+
+# cvdp_agentic_heavy_rvx
+
+Originally from https://github.com/rafaelcalcada/rvx
+MIT License
+
+# cvdp_agentic_heavy_schoolMIPS
+
+Originally from https://github.com/MIPSfpga/schoolMIPS
+MIT License
+
+# cvdp_agentic_heavy_usb_cdc
+
+Originally from https://github.com/ulixxe/usb_cdc
+MIT License
+
+# cvdp_agentic_heavy_verilog_axi
+
+Originally from https://github.com/alexforencich/verilog-axi
+MIT License
+
+# cvdp_agentic_heavy_verilog_ethernet
+
+Originally from https://github.com/alexforencich/verilog-ethernet
+MIT License
+
+# cvdp_agentic_heavy_verilog_pcie
+
+Originally from https://github.com/alexforencich/verilog-pcie
+MIT License
+
+# cvdp_agentic_heavy_vortexgpu
+
+Originally from https://github.com/vortexgpgpu/vortex
+Apache-2.0 License
+
+# cvdp_agentic_heavy_wifi_ldpc_codec
+
+Originally from https://github.com/liuguangxi/wifi_ldpc_codec
+MIT License

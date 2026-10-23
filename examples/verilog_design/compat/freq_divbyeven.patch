@@ -1,0 +1,11 @@
+--- testbench.v
++++ testbench.v
+@@ -21,7 +21,7 @@
+                 .clk_div(clk_div[i])
+             );
+ 
+-            freq_divbyeven_checker #(.NUM_DIV(DIV_VALUE)) checker (
++            freq_divbyeven_checker #(.NUM_DIV(DIV_VALUE)) checker_inst (
+                 .clk(clk),
+                 .rst_n(rst_n),
+                 .clk_div(clk_div[i]),

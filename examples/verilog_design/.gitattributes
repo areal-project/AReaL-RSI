@@ -1,0 +1,3 @@
+compat/*.patch -whitespace
+# Preserve byte-identical upstream data, licenses and release notes.
+data/cvdp/** -whitespace

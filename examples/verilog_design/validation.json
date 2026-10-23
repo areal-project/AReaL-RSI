@@ -1,0 +1,265 @@
+{
+  "date": "2026-10-21",
+  "sources": [
+    {
+      "name": "rtllm",
+      "repository": "hkust-zhiyao/RTLLM",
+      "commit": "51ed553d0ffd32797a1a0a13e051656bf302c81f"
+    },
+    {
+      "name": "verilog-eval",
+      "repository": "NVlabs/verilog-eval",
+      "commit": "c498220d0a52248f8e3fdffe279075215bde2da6"
+    },
+    {
+      "name": "cvdp",
+      "repository": "NVlabs/cvdp_benchmark",
+      "commit": "8e894cf74414ab1eaea1e2b4e80a02f123df07b6"
+    }
+  ],
+  "cvdp_dataset_revision": "5b807d945f6a99aa645f7e43a64a2115e281b4bf",
+  "data_manifest": {
+    "path": "data/manifest.json",
+    "sha256": "0f939f55fc7ac317f5c51c5a789045509357bde16fa3d4eded20b7c4aab58a53",
+    "files": 1360,
+    "all_files_verified": true
+  },
+  "images": [
+    {
+      "path": "images/cvdp-v1.1.0-oss.sif",
+      "sha256": "ed3b0c788c70f83e782a38be73fc317074975ec1ad7d08eee7d9bbbb5b9a66bf",
+      "bytes": 553095168
+    },
+    {
+      "path": "images/rtllm-v2.1-icarus.sif",
+      "sha256": "035c6a6a349231a4349a351867bb7273e1f0a05d2c4111e2368cc6c97606c7d5",
+      "bytes": 513671168
+    },
+    {
+      "path": "images/verilogeval-v2.sif",
+      "sha256": "cf5678a56efdccca2a932bd71ece0a38ba970e7377cfdc6608c986554333c32a",
+      "bytes": 513671168
+    }
+  ],
+  "checks": [
+    {
+      "summary": "runs/rtllm-golden-984003/summary.json",
+      "sha256": "d5fb29f2641ffd62c8032a402a00ecef9474b47e56e4c39221d184b90db9b271",
+      "counts": {
+        "pass": 47,
+        "fail": 3,
+        "compile_error": 0,
+        "timeout": 0,
+        "error": 0,
+        "no_golden": 0
+      },
+      "negative_control": false,
+      "comprehension_metric_check": false
+    },
+    {
+      "summary": "runs/verilogeval-golden-983997/summary.json",
+      "sha256": "1ef2e93acf1ac5a5f74fed76545202d776409e022bec4e86d4863f5c9aaff77b",
+      "counts": {
+        "pass": 155,
+        "fail": 0,
+        "compile_error": 1,
+        "timeout": 0,
+        "error": 0,
+        "no_golden": 0
+      },
+      "negative_control": false,
+      "comprehension_metric_check": false
+    },
+    {
+      "summary": "runs/verilogeval-golden-984002/summary.json",
+      "sha256": "e97826450447ad83787de9efc9982539a39040c89b20136eb8be04d155a232f6",
+      "counts": {
+        "pass": 156,
+        "fail": 0,
+        "compile_error": 0,
+        "timeout": 0,
+        "error": 0,
+        "no_golden": 0
+      },
+      "negative_control": false,
+      "comprehension_metric_check": false
+    },
+    {
+      "summary": "runs/cvdp-golden-983999/summary.json",
+      "sha256": "1e40e68ab3f870d271f477f9ca1c9c295f2d96a6695d87e36bf1700b5dbc7838",
+      "counts": {
+        "pass": 2,
+        "fail": 0,
+        "compile_error": 0,
+        "timeout": 0,
+        "error": 0,
+        "no_golden": 0
+      },
+      "negative_control": false,
+      "comprehension_metric_check": false
+    },
+    {
+      "summary": "runs/cvdp-golden-984012/summary.json",
+      "sha256": "c3518c2bd8dc0b4ca756a332670daf7765d5ebca4172f8b09130173658c4da2e",
+      "counts": {
+        "pass": 123,
+        "fail": 0,
+        "compile_error": 0,
+        "timeout": 0,
+        "error": 0,
+        "no_golden": 0
+      },
+      "negative_control": false,
+      "comprehension_metric_check": true
+    },
+    {
+      "summary": "runs/rtllm-golden-984006/summary.json",
+      "sha256": "718576148ac5a7db3cf3fdd0ee50e2b19efba0928e09bb34e512e38530e5c137",
+      "counts": {
+        "pass": 0,
+        "fail": 0,
+        "compile_error": 1,
+        "timeout": 0,
+        "error": 0,
+        "no_golden": 0
+      },
+      "negative_control": true,
+      "comprehension_metric_check": false
+    },
+    {
+      "summary": "runs/verilogeval-golden-984000/summary.json",
+      "sha256": "ee68dabbc18e0ee4b7a1f8088edad9a9a4a60701218c8ad6b31230a806b486d0",
+      "counts": {
+        "pass": 0,
+        "fail": 0,
+        "compile_error": 1,
+        "timeout": 0,
+        "error": 0,
+        "no_golden": 0
+      },
+      "negative_control": true,
+      "comprehension_metric_check": false
+    },
+    {
+      "summary": "runs/cvdp-golden-984007/summary.json",
+      "sha256": "a458ae7a01d29321bbc99a955630147195f188a9ce2ade79574403e34ac9564e",
+      "counts": {
+        "pass": 0,
+        "fail": 2,
+        "compile_error": 0,
+        "timeout": 0,
+        "error": 0,
+        "no_golden": 0
+      },
+      "negative_control": true,
+      "comprehension_metric_check": false
+    }
+  ],
+  "cvdp_public_generation": {
+    "tasks": 469,
+    "services_audited": 520,
+    "golden_solutions_available": 0,
+    "heavy_context_commits_verified": 75,
+    "heavy_bundles": 36
+  },
+  "repository_check": {
+    "status": "not_fully_passing",
+    "full_check_job": 984005,
+    "isolated_timeout_job": 984015,
+    "remaining_check_job": 984017,
+    "ui_tests_passed": 3,
+    "pytest_passed": 179,
+    "pytest_subtests_passed": 5,
+    "pytest_skipped": 1,
+    "pytest_skip_reason": "macOS assertion integration test on Linux",
+    "pytest_deselected": 1,
+    "pytest_deselected_test": "tests/test_research.py::ResearchTests::test_model_switch_preserves_active_turn_and_survives_reopen",
+    "mypy_files_passed": 70,
+    "ruff_existing_mle_bench_errors": 1466,
+    "ruff_verilog_design_errors": 0
+  },
+  "known_issues": [
+    {
+      "benchmark": "rtllm",
+      "tasks": [
+        "radix2_div",
+        "ring_counter",
+        "clkgenerator"
+      ],
+      "kind": "official_golden_test_did_not_pass_on_icarus"
+    },
+    {
+      "benchmark": "verilogeval-spec-to-rtl",
+      "tasks": [
+        "Prob099_m2014_q6c"
+      ],
+      "kind": "official_reference_and_testbench_ports_disagree"
+    },
+    {
+      "benchmark": "cvdp",
+      "tasks_without_public_generation_golden": 469,
+      "kind": "empty_official_output_or_patch"
+    }
+  ],
+  "source_files": [
+    {
+      "path": "scripts/build.sh",
+      "sha256": "2a7872b81966bb0737256297509259cbf567312f33b816b3da42c2cc73869e7e"
+    },
+    {
+      "path": "scripts/evaluate.py",
+      "sha256": "ad936beaaa92668d1e28882478e91e1fc90f72c3c67d3ea91ea34f0254c916a7"
+    },
+    {
+      "path": "scripts/fetch.py",
+      "sha256": "162f002b2041ecb955ebd3919c83bece2cc1eac25c1a9a2e310a8636aad51e42"
+    },
+    {
+      "path": "scripts/prepare_build.py",
+      "sha256": "c2231156c0a994cb2a29464eff014e088c4fea5723148cafa4356ddb6f2f9d84"
+    },
+    {
+      "path": "scripts/verify.sh",
+      "sha256": "cd82d64013301c4f3655c0d3e0bd991dbfaa494f66993879330e619abc6b48df"
+    },
+    {
+      "path": "containers/benchmark.def",
+      "sha256": "63a2e071855e8f9ec1a334e75515f97929b104960e1f80e5295471a597385218"
+    },
+    {
+      "path": "containers/build-inputs.json",
+      "sha256": "153d65603b23ab7f0c51702f9ab09fbfadb33aef1d719a273f9c6bc68cbd49eb"
+    },
+    {
+      "path": "containers/cvdp-requirements.lock",
+      "sha256": "04debab89d91134f014c7daeecef04bbe6b6caca7cfe58b653f4d306d58d0c02"
+    },
+    {
+      "path": "containers/rtl-requirements.lock",
+      "sha256": "be8f26c433a1d8a12b3675972fda3cd2e5d4c2d2f625b39826025204e232f098"
+    },
+    {
+      "path": "compat/asyn_fifo.patch",
+      "sha256": "94e4e8ad64e84a2252fdbe5c7385a03bfcdb924df9b1017e6791dbc9f7105a9d"
+    },
+    {
+      "path": "compat/freq_divbyeven.patch",
+      "sha256": "e3d4ef999e6d8a9ab3c25210ce6a1b755138dc484cc9dcf1c220dd5b089bc8b1"
+    },
+    {
+      "path": "compat/ring_counter.patch",
+      "sha256": "1baa920418b188c0445d598c4fab63dbdaddf1cd26e75c0268067cd9a58529be"
+    }
+  ],
+  "timeout_check": {
+    "result": "passed",
+    "record": "cache/timeout-check/result.json"
+  },
+  "eda_smoke": {
+    "status": "passed",
+    "job": 984020,
+    "reference": "official CVDP fixed_priority_arbiter golden RTL",
+    "yosys": "logs/yosys-golden-smoke.log",
+    "verilator": "logs/verilator-golden-smoke.log"
+  }
+}

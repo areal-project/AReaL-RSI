@@ -1,0 +1,7 @@
+{
+  "tenant": "arcaarealagent",
+  "environment": "stable",
+  "template_id": "ARCA-TEMPLATE-0000000028cba9db",
+  "control_url": "https://sandboxconsole.alipay.com",
+  "runtime_url": "http://arca-sandbox.stable.alipay.net:8080"
+}

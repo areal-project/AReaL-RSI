@@ -92,6 +92,99 @@ class FetchIntegrityTests(unittest.TestCase):
 
 
 class AgentBoundaryTests(unittest.TestCase):
+    def test_golden_failures_are_filtered_per_task_format_and_auditable(self) -> None:
+        self.assertEqual(len(task_list("rtllm", None, "spec-to-rtl")), 47)
+        self.assertEqual(len(task_list("rtllm", None, "spec-to-rtl", include_excluded=True)), 50)
+        self.assertEqual(len(task_list("verilogeval", None, "spec-to-rtl")), 155)
+        self.assertEqual(len(task_list("verilogeval", None, "code-complete-iccad2023")), 156)
+        with self.assertRaisesRegex(ValueError, "Golden-failing task excluded"):
+            task_list("rtllm", ["ring_counter"], "spec-to-rtl")
+
+    def test_only_null_python_cache_placeholders_are_ignored(self) -> None:
+        row = {
+            "id": "cache-placeholder",
+            "categories": [],
+            "input": {"context": {}},
+            "output": {"context": {"rtl/dut.sv": ""}},
+            "harness": {"files": {"src/__pycache__/runner.pyc": None, "src/test.py": "test"}},
+        }
+        task = CVDPTask.decode(row)
+        self.assertEqual(task.harness, {"src/test.py": "test"})
+        self.assertEqual(task.ignored_harness_files, ("src/__pycache__/runner.pyc",))
+        row["harness"]["files"]["src/test.py"] = None
+        with self.assertRaisesRegex(ValueError, "Non-text required harness file"):
+            CVDPTask.decode(row)
+
+    def test_heavy_compose_external_alias_uses_frozen_candidate_tree(self) -> None:
+        task = CVDPTask(
+            "external-alias",
+            [],
+            {},
+            {"rtl/dut.sv": "module dut; endmodule"},
+            False,
+            {
+                "docker-compose.yml": (
+                    "services:\n  test:\n    volumes: ['../../external/:/code/external/:ro']\n"
+                    "    command: ['true']\n"
+                )
+            },
+            "bundle-repo",
+            "a" * 40,
+            "external",
+        )
+
+        def on_host(image, binds, cwd, command, env):
+            source = next(bind.source for bind in binds if bind.target == "/code/external/")
+            return (
+                [
+                    sys.executable,
+                    "-c",
+                    "from pathlib import Path; "
+                    "assert 'endmodule' in Path('rtl/dut.sv').read_text()",
+                ]
+                if source.is_dir()
+                else ["false"]
+            )
+
+        def prepare(official, directory):
+            directory.mkdir()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            with (
+                mock.patch("evaluate.prepare_cvdp_code", prepare),
+                mock.patch("evaluate.container_command", on_host),
+            ):
+                # A real host child checks the mapped candidate content.
+                def execute_mapped(command, cwd, log, timeout):
+                    return execute(command, cwd / "code", log, timeout)
+
+                with mock.patch("evaluate.execute", execute_mapped):
+                    result = cvdp_evaluate(task, Path(temporary), 5, False)
+            self.assertEqual(result.status, Status.PASS)
+
+    def test_invalid_service_mount_is_judge_error_not_agent_failure(self) -> None:
+        task = CVDPTask(
+            "invalid-mount",
+            [],
+            {},
+            {"rtl/dut.sv": "module dut; endmodule"},
+            False,
+            {
+                "docker-compose.yml": (
+                    "services:\n  test:\n    volumes: ['../../secret:/secret']\n"
+                    "    command: ['true']\n"
+                )
+            },
+            None,
+            None,
+            None,
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            result = cvdp_evaluate(task, Path(temporary), 5, False)
+        self.assertEqual(result.status, Status.ERROR)
+        self.assertIn("volume escapes harness", result.detail)
+        self.assertEqual(result.executions, [])
+
     def test_all_cvdp_subsets_are_selectable_without_solutions(self) -> None:
         expected = {"nonagentic": 302, "agentic": 92, "heavy": 75, "comprehension": 123}
         identifiers = set()
@@ -448,6 +541,77 @@ class AgentBoundaryTests(unittest.TestCase):
     "Set VERILOG_TEST_SIF to run private scoring integration in a CPU allocation",
 )
 class CVDPScoringTests(unittest.TestCase):
+    def test_boolean_parameter_and_sva_keep_real_compilation_and_assertions(self) -> None:
+        runner = (
+            "import os\nfrom cocotb_tools.runner import get_runner\n"
+            "def test_run():\n"
+            "    runner = get_runner(os.environ['SIM'])\n"
+            "    runner.build(sources=['/code/rtl/dut.sv'], hdl_toplevel='dut', "
+            "parameters=PARAMETERS, always=True)\n"
+            "    runner.test(hdl_toplevel='dut', test_module='test_dut')\n"
+        )
+        test = (
+            "import cocotb\nfrom cocotb.triggers import Timer\n"
+            "@cocotb.test()\nasync def smoke(dut):\n"
+            "    dut.clk.value = 0\n"
+            "    for _ in range(3):\n"
+            "        await Timer(5, unit='ns')\n"
+            "        dut.clk.value = 1\n"
+            "        await Timer(5, unit='ns')\n"
+            "        dut.clk.value = 0\n"
+            "    assert int(dut.enabled.value) == 0\n"
+        )
+        cases = (
+            ("bool-parameter", "", "{'KEEP_ENABLE': False}", Status.PASS),
+            (
+                "cvdp_agentic_heavy_cv32e40p_1_0001",
+                "property p; @(posedge clk) 1'b1; endproperty\nassert property(p);\n",
+                "{}",
+                Status.PASS,
+            ),
+            (
+                "cvdp_agentic_heavy_cv32e40p_1_0001",
+                "property p; @(posedge clk) 1'b0; endproperty\nassert property(p);\n",
+                "{}",
+                Status.FAIL,
+            ),
+        )
+        for identifier, assertion, parameters, expected in cases:
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as temporary:
+                task = CVDPTask(
+                    identifier,
+                    [],
+                    {},
+                    {
+                        "rtl/dut.sv": (
+                        "`timescale 1ns/1ps\nmodule dut #(parameter KEEP_ENABLE=0) "
+                            "(input logic clk, output logic enabled);\n"
+                            "assign enabled = KEEP_ENABLE;\n" + assertion + "endmodule\n"
+                        )
+                    },
+                    False,
+                    {
+                        "docker-compose.yml": (
+                            "services:\n  test:\n    volumes: ['./src:/src:ro']\n"
+                            "    env_file: './src/.env'\n"
+                            "    command: ['pytest', '-s', '/src/test_runner.py']\n"
+                        ),
+                        "src/.env": "SIM=icarus\nPYTHONPATH=/src\n",
+                        "src/test_runner.py": runner.replace("PARAMETERS", parameters),
+                        "src/test_dut.py": test,
+                    },
+                    None,
+                    None,
+                    None,
+                )
+                result = cvdp_evaluate(
+                    task, Path(temporary), 120, False, image=Path(os.environ["VERILOG_TEST_SIF"])
+                )
+                diagnostics = "\n".join(Path(item.log).read_text() for item in result.executions)
+                self.assertEqual(result.status, expected, diagnostics[-4000:])
+                if expected == Status.FAIL:
+                    self.assertIn("Assertion failed", diagnostics)
+
     def test_real_objective_metrics_and_missing_subjective_judge(self) -> None:
         reference = "the clocked module increments a counter on each rising clock edge"
         cases = (

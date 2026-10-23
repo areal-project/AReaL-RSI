@@ -1,4 +1,4 @@
-"""Run golden or submitted RTL in SIFs; keep official tests and record failures."""
+"""Run golden or submitted RTL; keep official tests and record failures."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from enum import Enum
@@ -40,6 +41,38 @@ class Status(str, Enum):
     NO_GOLDEN = "no_golden"
     SCORED = "scored"
     UNSCORED = "unscored"
+
+
+class Runtime(str, Enum):
+    APPTAINER = "apptainer"
+    DOCKER = "docker"
+    NATIVE = "native"
+
+
+@dataclass(frozen=True)
+class TaskExclusion:
+    benchmark: str
+    task: str
+    task_format: str | None
+    evaluation_profile: str
+    reason: str
+    upstream_revision: str
+    golden_status: str
+    validation_command: str
+
+
+def task_exclusions(benchmark: str, task_format: str | None = None) -> list[TaskExclusion]:
+    records = json.loads((ROOT / "exclusions.json").read_text())
+    exclusions = [TaskExclusion(**record) for record in records]
+    if len({(item.benchmark, item.task_format, item.task) for item in exclusions}) != len(
+        exclusions
+    ):
+        raise ValueError("Duplicate task exclusion")
+    return [
+        item
+        for item in exclusions
+        if item.benchmark == benchmark and item.task_format in (None, task_format)
+    ]
 
 
 class CVDPSplit(str, Enum):
@@ -138,6 +171,7 @@ class CVDPTask:
     root_dir: str | None
     prompt: str = ""
     reference: str | None = None
+    ignored_harness_files: tuple[str, ...] = ()
 
     @classmethod
     def decode(cls, row: dict) -> CVDPTask:
@@ -149,6 +183,19 @@ class CVDPTask:
         golden = row["patch"] if agentic else row.get("output", {}).get("context", {})
         harness = row.get("harness", {})
         harness = harness.get("files", harness)
+        ignored = []
+        text_harness = {}
+        for name, content in harness.items():
+            if (
+                content is None
+                and "__pycache__" in PurePosixPath(name).parts
+                and name.endswith(".pyc")
+            ):
+                ignored.append(name)
+            elif not isinstance(content, str):
+                raise ValueError(f"Non-text required harness file: {row['id']}/{name}")
+            else:
+                text_harness[name] = content
         repo = context.get("repo")
         root_dir = context.get("root_dir") if repo else None
         # Match upstream AgenticDatasetProcessor.create_repo: CVDP wrapper
@@ -166,7 +213,7 @@ class CVDPTask:
             {} if repo else context,
             golden,
             agentic,
-            harness,
+            text_harness,
             repo,
             context.get("commit") if repo else None,
             root_dir,
@@ -174,6 +221,7 @@ class CVDPTask:
             row.get("output", {}).get("response")
             if set(categories) & {"cid006", "cid008", "cid009", "cid010"}
             else None,
+            tuple(ignored),
         )
 
 
@@ -267,12 +315,53 @@ def execute(command: list[str], cwd: Path, log: Path, timeout: int) -> Execution
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait()
             raise
+        finally:
+            # Killing the Docker client alone does not terminate its container.
+            if command[:2] == ["docker", "run"] and "--name" in command:
+                name = command[command.index("--name") + 1]
+                cleanup = subprocess.run(
+                    ["docker", "rm", "--force", name],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                if cleanup.returncode and "no such container" not in cleanup.stderr.lower():
+                    raise RuntimeError(f"Docker cleanup failed for {name}: {cleanup.stderr}")
     return Execution(command, returncode, time.monotonic() - start, timed_out, str(log))
 
 
 def container_command(
-    image: Path, binds: list[Bind], cwd: str, command: list[str], env: dict[str, str] | None = None
+    image: Path | str,
+    binds: list[Bind],
+    cwd: str,
+    command: list[str],
+    env: dict[str, str] | None = None,
+    runtime: Runtime = Runtime.APPTAINER,
 ) -> list[str]:
+    if runtime == Runtime.NATIVE:
+        if env:
+            return ["env", *(f"{key}={value}" for key, value in env.items()), *command]
+        return command
+    if runtime == Runtime.DOCKER:
+        args = [
+            "docker",
+            "run",
+            "--rm",
+            "--name",
+            "verilogeval-" + uuid.uuid4().hex,
+            "--network",
+            "none",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
+        ]
+        for bind in binds:
+            mount = f"type=bind,src={bind.source.resolve()},dst={bind.target}"
+            args.extend(["--mount", mount + (",readonly" if bind.readonly else "")])
+        for key, value in (env or {}).items():
+            args.extend(["--env", f"{key}={value}"])
+        return [*args, "--workdir", cwd, str(image), *command]
     args = ["apptainer", "exec", "--cleanenv", "--containall", "--no-mount", "hostfs,cwd"]
     for bind in binds:
         mode = "ro" if bind.readonly else "rw"
@@ -290,7 +379,8 @@ def rtl_evaluate(
     negative: bool,
     icarus_compat: bool,
     candidate: Path | None = None,
-    image: Path | None = None,
+    image: Path | str | None = None,
+    runtime: Runtime = Runtime.APPTAINER,
 ) -> Result:
     identifier = task.name if bench == "rtllm" else task.name.removesuffix("_ref.sv")
     work = out / identifier
@@ -329,8 +419,14 @@ def rtl_evaluate(
                 [Bind(files, "/workspace")],
                 "/workspace",
                 ["patch", "--batch", "-p0", "-i", "icarus-compat.patch"],
+                runtime=runtime,
             )
-            patched = execute(patch_command, work, work / "compat.log", timeout)
+            patched = execute(
+                patch_command,
+                files if runtime == Runtime.NATIVE else work,
+                work / "compat.log",
+                timeout,
+            )
             preparation_runs.append(patched)
             if patched.returncode:
                 raise ValueError(f"Icarus syntax patch failed: {patched.log}")
@@ -368,19 +464,27 @@ def rtl_evaluate(
         binds,
         "/workspace",
         ["iverilog", "-Wall", "-g2012", "-s", top, "-o", "simulation", *sources],
+        runtime=runtime,
     )
-    compile_run = execute(compile_cmd, work, work / "compile.log", timeout)
+    execution_cwd = files if runtime == Runtime.NATIVE else work
+    compile_run = execute(compile_cmd, execution_cwd, work / "compile.log", timeout)
     runs = [*preparation_runs, compile_run]
     if compile_run.timed_out:
         return Result(identifier, Status.TIMEOUT, "Compilation timeout", runs)
+    if runtime == Runtime.DOCKER and compile_run.returncode in (125, 126, 127):
+        return Result(identifier, Status.ERROR, "Docker could not start the compiler", runs)
     if compile_run.returncode:
         return Result(identifier, Status.COMPILE_ERROR, "Compilation failed", runs)
-    sim_cmd = container_command(image, binds, "/workspace", ["vvp", "-n", "simulation"])
-    simulation = execute(sim_cmd, work, work / "simulation.log", timeout)
+    sim_cmd = container_command(
+        image, binds, "/workspace", ["vvp", "-n", "simulation"], runtime=runtime
+    )
+    simulation = execute(sim_cmd, execution_cwd, work / "simulation.log", timeout)
     runs.append(simulation)
     log = (work / "simulation.log").read_text(errors="replace")
     if simulation.timed_out:
         return Result(identifier, Status.TIMEOUT, "Simulation timeout", runs)
+    if runtime == Runtime.DOCKER and simulation.returncode in (125, 126, 127):
+        return Result(identifier, Status.ERROR, "Docker could not start the simulator", runs)
     if simulation.returncode:
         return Result(identifier, Status.FAIL, "Simulation returned nonzero", runs)
     if bench == "verilogeval":
@@ -456,103 +560,153 @@ def cvdp_evaluate(
 ) -> Result:
     if candidate is None and (not task.golden or not all(task.golden.values())):
         return Result(task.identifier, Status.NO_GOLDEN, "Official public solution is empty", [])
-    work = out / task.identifier
-    work.mkdir()
-    code = work / "code"
-    prepare_cvdp_code(task, code)
-    deleted = []
-    if candidate is not None and task.is_patch and (candidate / "manifest.json").exists():
-        manifest = json.loads((candidate / "manifest.json").read_text())
-        deleted = [record["path"] for record in manifest if record.get("deleted", False)]
-        if set(deleted) - task.golden.keys():
-            raise ValueError("Deletion outside declared patch targets")
-    solution = (
-        task.golden
-        if candidate is None
-        else {name: (candidate / name).read_text() for name in task.golden if name not in deleted}
-    )
-    if task.is_patch and candidate is None:
-        spec = importlib.util.spec_from_file_location(
-            "official_diff", ROOT / "source/cvdp/src/merge_in_memory.py"
+    runs: list[Execution] = []
+    try:
+        work = out / task.identifier
+        work.mkdir()
+        code = work / "code"
+        prepare_cvdp_code(task, code)
+        deleted = []
+        if candidate is not None and task.is_patch and (candidate / "manifest.json").exists():
+            manifest = json.loads((candidate / "manifest.json").read_text())
+            deleted = [record["path"] for record in manifest if record.get("deleted", False)]
+            if set(deleted) - task.golden.keys():
+                raise ValueError("Deletion outside declared patch targets")
+        solution = (
+            task.golden
+            if candidate is None
+            else {
+                name: (candidate / name).read_text() for name in task.golden if name not in deleted
+            }
         )
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        solution = {}
-        for name, patch in task.golden.items():
-            original = (code / name).read_text() if (code / name).exists() else ""
-            solution[name] = module.diff_apply(original, patch)
-    write_files(code, solution)
-    for name in deleted:
-        target = (code / name).resolve()
-        if not target.is_relative_to(code.resolve()):
-            raise ValueError(f"Deletion escapes code directory: {name}")
-        target.unlink()
-    if negative:
-        write_files(code, {next(iter(solution)): "deliberately invalid Verilog;\n"})
-    harness = work / "harness"
-    harness.mkdir()
-    write_files(harness, task.harness)
-    for directory in ("rtl", "verif", "docs", "rundir", "src"):
-        (code / directory).mkdir(exist_ok=True)
-    runs = []
-    for service in services(task):
-        environment = dict(service.environment)
-        for name in service.env_files:
-            for line in (harness / name).read_text().splitlines():
-                line = line.strip()
-                if line and not line.startswith("#"):
-                    key, value = line.split("=", 1)
-                    environment[key.strip()] = value.strip().strip("\"'")
-        binds = [Bind(code, "/code"), Bind(code / "rundir", "/rundir")]
-        for volume in service.volumes:
-            parts = volume.split(":")
-            source = (harness / parts[0]).resolve()
-            if not source.exists():
-                raise ValueError(f"Missing service volume: {source}")
-            binds.append(Bind(source, parts[1], len(parts) > 2 and parts[2] == "ro"))
-        # A /src bind hides directories supplied by the base image. Compose lint
-        # steps use /src/rundir, so prepare the cwd in this task's mounted copy.
-        cwd = PurePosixPath(service.cwd)
-        if not cwd.is_absolute() or ".." in cwd.parts:
-            return Result(task.identifier, Status.ERROR, f"Invalid service cwd: {cwd}", runs)
-        for bind in sorted(
-            binds, key=lambda item: len(PurePosixPath(item.target).parts), reverse=True
-        ):
-            target = PurePosixPath(bind.target)
-            if cwd.is_relative_to(target):
-                directory = bind.source.joinpath(*cwd.relative_to(target).parts)
-                if not directory.resolve().is_relative_to(bind.source.resolve()):
-                    return Result(
-                        task.identifier, Status.ERROR, f"Service cwd escapes bind: {cwd}", runs
+        if task.is_patch and candidate is None:
+            spec = importlib.util.spec_from_file_location(
+                "official_diff", ROOT / "source/cvdp/src/merge_in_memory.py"
+            )
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            solution = {}
+            for name, patch in task.golden.items():
+                original = (code / name).read_text() if (code / name).exists() else ""
+                solution[name] = module.diff_apply(original, patch)
+        write_files(code, solution)
+        for name in deleted:
+            target = (code / name).resolve()
+            if not target.is_relative_to(code.resolve()):
+                raise ValueError(f"Deletion escapes code directory: {name}")
+            target.unlink()
+        if negative:
+            write_files(code, {next(iter(solution)): "deliberately invalid Verilog;\n"})
+        harness = work / "harness"
+        harness.mkdir()
+        write_files(harness, task.harness)
+        adaptations = [
+            f"Ignore null bytecode cache placeholder: {name}" for name in task.ignored_harness_files
+        ]
+        compatibility = ROOT / "compat/cvdp_sitecustomize.py"
+        for directory in ("rtl", "verif", "docs", "rundir", "src"):
+            (code / directory).mkdir(exist_ok=True)
+        for service in services(task):
+            environment = dict(service.environment)
+            for name in service.env_files:
+                for line in (harness / name).read_text().splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        key, value = line.split("=", 1)
+                        environment[key.strip()] = value.strip().strip("\"'")
+            environment["PYTHONPATH"] = "/opt/cvdp-compat:" + environment.get("PYTHONPATH", "/src")
+            environment["PYTHONDONTWRITEBYTECODE"] = "1"
+            # This task's unchanged baseline includes concurrent SVA properties.
+            # Icarus cannot parse them; retain assertions with Verilator --assert.
+            if task.identifier == "cvdp_agentic_heavy_cv32e40p_1_0001":
+                environment["SIM"] = "verilator"
+                environment["CVDP_ENABLE_SVA"] = "1"
+                adaptations.append("Use Verilator with --assert for inherited concurrent SVA")
+            binds = [
+                Bind(code, "/code"),
+                Bind(code / "rundir", "/rundir"),
+                Bind(compatibility, "/opt/cvdp-compat/sitecustomize.py", readonly=True),
+            ]
+            for volume in service.volumes:
+                parts = volume.split(":")
+                relative_source = PurePosixPath(parts[0])
+                external = PurePosixPath("../../external")
+                if task.repo and relative_source.is_relative_to(external):
+                    suffix = relative_source.relative_to(external)
+                    source = code.joinpath(*suffix.parts).resolve()
+                    if not source.is_relative_to(code.resolve()):
+                        raise ValueError(f"External repository volume escapes code: {volume}")
+                    adaptations.append(
+                        f"Map repository volume {parts[0]} to exported code/{suffix}"
                     )
-                directory.mkdir(parents=True, exist_ok=True)
-                break
-        else:
-            return Result(task.identifier, Status.ERROR, f"Unmapped service cwd: {cwd}", runs)
-        command = container_command(
-            image or ROOT / "images" / IMAGES["cvdp"],
-            binds,
-            service.cwd,
-            service.command,
-            environment,
-        )
-        run = execute(command, work, work / (service.name + ".log"), timeout)
-        runs.append(run)
-        if run.timed_out:
-            return Result(task.identifier, Status.TIMEOUT, service.name, runs)
-        if run.returncode:
-            log = Path(run.log).read_text(errors="replace")
-            if re.search(
-                r"^FATAL:.*(?:failed to set working directory|mount.*failed)|"
-                r"^ModuleNotFoundError:|^/bin/(?:ba)?sh:.*: (?:command )?not found$",
-                log,
-                re.MULTILINE,
+                else:
+                    source = (harness / parts[0]).resolve()
+                    if not source.is_relative_to(harness.resolve()):
+                        raise ValueError(f"Service volume escapes harness: {volume}")
+                if not source.exists():
+                    raise ValueError(f"Missing service volume: {source}")
+                binds.append(Bind(source, parts[1], len(parts) > 2 and parts[2] == "ro"))
+            # A /src bind hides directories supplied by the base image. Compose lint
+            # steps use /src/rundir, so prepare the cwd in this task's mounted copy.
+            cwd = PurePosixPath(service.cwd)
+            if not cwd.is_absolute() or ".." in cwd.parts:
+                return Result(task.identifier, Status.ERROR, f"Invalid service cwd: {cwd}", runs)
+            for bind in sorted(
+                binds, key=lambda item: len(PurePosixPath(item.target).parts), reverse=True
             ):
-                return Result(
-                    task.identifier, Status.ERROR, f"Environment failure: {service.name}", runs
+                target = PurePosixPath(bind.target)
+                if cwd.is_relative_to(target):
+                    directory = bind.source.joinpath(*cwd.relative_to(target).parts)
+                    if not directory.resolve().is_relative_to(bind.source.resolve()):
+                        return Result(
+                            task.identifier, Status.ERROR, f"Service cwd escapes bind: {cwd}", runs
+                        )
+                    directory.mkdir(parents=True, exist_ok=True)
+                    break
+            else:
+                return Result(task.identifier, Status.ERROR, f"Unmapped service cwd: {cwd}", runs)
+            command = container_command(
+                image or ROOT / "images" / IMAGES["cvdp"],
+                binds,
+                service.cwd,
+                service.command,
+                environment,
+            )
+            (work / "evaluation-adaptations.json").write_text(
+                json.dumps(
+                    {
+                        "adaptations": list(dict.fromkeys(adaptations)),
+                        "boolean_parameters": "Serialize bool as Verilog integer 0/1",
+                        "compatibility_source": str(compatibility),
+                        "service": service.name,
+                        "environment": environment,
+                        "binds": [asdict(bind) for bind in binds],
+                    },
+                    indent=2,
+                    default=str,
                 )
-            return Result(task.identifier, Status.FAIL, service.name, runs)
-    return Result(task.identifier, Status.PASS, "All official harness services passed", runs)
+            )
+            run = execute(command, work, work / (service.name + ".log"), timeout)
+            runs.append(run)
+            if run.timed_out:
+                return Result(task.identifier, Status.TIMEOUT, service.name, runs)
+            if run.returncode:
+                log = Path(run.log).read_text(errors="replace")
+                if re.search(
+                    r"^FATAL:.*(?:failed to set working directory|mount.*failed)|"
+                    r"^ModuleNotFoundError:|^/bin/(?:ba)?sh:.*: (?:command )?not found$",
+                    log,
+                    re.MULTILINE,
+                ):
+                    return Result(
+                        task.identifier, Status.ERROR, f"Environment failure: {service.name}", runs
+                    )
+                return Result(task.identifier, Status.FAIL, service.name, runs)
+        return Result(task.identifier, Status.PASS, "All official harness services passed", runs)
+    except (OSError, ValueError, TypeError, yaml.YAMLError) as exc:
+        return Result(
+            task.identifier, Status.ERROR, f"Judge preparation/execution error: {exc}", runs
+        )
 
 
 def cvdp_audit(out: Path) -> None:
@@ -755,6 +909,15 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--jobs", type=int, default=4)
     parser.add_argument("--timeout", type=int, default=120)
+    parser.add_argument("--runtime", type=Runtime, choices=list(Runtime), default=Runtime.APPTAINER)
+    parser.add_argument("--image", help="SIF path or Docker image reference")
+    parser.add_argument(
+        "--dataset-dir", type=Path, help="VerilogEval directory containing *_ref.sv"
+    )
+    parser.add_argument(
+        "--expected-tasks", type=int, help="Reject incomplete or unexpected task sets"
+    )
+    parser.add_argument("--candidate", type=Path, help="RTL candidate for a single --task")
     parser.add_argument("--task", help="Run just one task ID")
     parser.add_argument("--cvdp-split", choices=[item.value for item in CVDPSplit] + ["all"])
     parser.add_argument(
@@ -766,6 +929,9 @@ def main() -> None:
     parser.add_argument("--judge-base-url")
     parser.add_argument("--judge-api-key-env", default="OPENAI_API_KEY")
     parser.add_argument("--negative-control", action="store_true")
+    parser.add_argument(
+        "--include-excluded", action="store_true", help="Audit known golden failures"
+    )
     parser.add_argument(
         "--comprehension",
         action="store_true",
@@ -780,8 +946,23 @@ def main() -> None:
         "--task-format", default="spec-to-rtl", choices=("spec-to-rtl", "code-complete-iccad2023")
     )
     args = parser.parse_args()
+    exclusions = [] if args.include_excluded else task_exclusions(args.bench, args.task_format)
+    if args.task and any(item.task == args.task for item in exclusions):
+        parser.error(
+            "Task excluded because its official golden fails; use --include-excluded to audit"
+        )
     if args.jobs < 1 or args.timeout < 1:
         parser.error("--jobs and --timeout must be positive")
+    if args.bench == "cvdp" and (args.runtime != Runtime.APPTAINER or args.image):
+        parser.error("CVDP currently requires its configured Apptainer images")
+    if args.dataset_dir is not None and args.bench != "verilogeval":
+        parser.error("--dataset-dir requires --bench verilogeval")
+    if args.candidate is not None and (
+        args.bench == "cvdp" or not args.task or args.negative_control
+    ):
+        parser.error("--candidate requires one RTL --task and no --negative-control")
+    if args.candidate is not None:
+        args.candidate = args.candidate.resolve()
     if args.comprehension and (args.bench != "cvdp" or args.negative_control or args.task):
         parser.error("--comprehension requires --bench cvdp and no task/negative control")
     if args.candidate_root is not None and (args.bench != "cvdp" or not args.cvdp_split):
@@ -792,8 +973,11 @@ def main() -> None:
         args.candidate_root = args.candidate_root.resolve()
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=False)
-    if not (ROOT / "images" / IMAGES[args.bench]).is_file():
-        parser.error(f"Missing image: {IMAGES[args.bench]}")
+    image = args.image or str(ROOT / "images" / IMAGES[args.bench])
+    if args.runtime == Runtime.APPTAINER and not Path(image).is_file():
+        parser.error(f"Missing image: {image}")
+    if args.runtime == Runtime.DOCKER and not args.image:
+        parser.error("--runtime docker requires --image")
     results = []
     if args.comprehension:
         results = comprehension_checks(args.output)
@@ -840,9 +1024,14 @@ def main() -> None:
         if args.bench == "rtllm":
             tasks = sorted(p.parent for p in (ROOT / "data/rtllm").rglob("testbench.v"))
         else:
-            tasks = sorted((ROOT / "data/verilogeval" / args.task_format).glob("*_ref.sv"))
+            dataset = args.dataset_dir or ROOT / "data/verilogeval" / args.task_format
+            tasks = sorted(dataset.resolve().glob("*_ref.sv"))
         if args.task:
             tasks = [p for p in tasks if p.name.removesuffix("_ref.sv") == args.task]
+        excluded_ids = {item.task for item in exclusions}
+        tasks = [task for task in tasks if task.name.removesuffix("_ref.sv") not in excluded_ids]
+        if args.expected_tasks is not None and len(tasks) != args.expected_tasks:
+            parser.error(f"Expected {args.expected_tasks} tasks, found {len(tasks)}")
 
         def run(task: Path) -> Result:
             try:
@@ -853,9 +1042,13 @@ def main() -> None:
                     args.timeout,
                     args.negative_control,
                     args.icarus_compat,
+                    candidate=args.candidate,
+                    image=image,
+                    runtime=args.runtime,
                 )
             except Exception as exc:
-                return Result(task.name, Status.ERROR, str(exc), [])
+                identifier = task.name.removesuffix("_ref.sv")
+                return Result(identifier, Status.ERROR, str(exc), [])
 
         with ThreadPoolExecutor(max_workers=args.jobs) as pool:
             for result in pool.map(run, tasks):
@@ -870,7 +1063,10 @@ def main() -> None:
         "icarus_compat": args.icarus_compat,
         "task_format": args.task_format if args.bench == "verilogeval" else None,
         "cvdp_split": args.cvdp_split,
-        "image": str(ROOT / "images" / IMAGES[args.bench]),
+        "image": image if args.runtime != Runtime.NATIVE else None,
+        "runtime": args.runtime.value,
+        "include_excluded": args.include_excluded,
+        "excluded_tasks": [asdict(item) for item in exclusions],
         "counts": {status.value: sum(r.status == status for r in results) for status in Status},
         "results": [asdict(result) for result in results],
         "text_scores": [asdict(score) for score in summarize_scores(results)],

@@ -34,6 +34,7 @@ from evaluate import (
     prepare_cvdp_code,
     rtl_evaluate,
     summarize_scores,
+    task_exclusions,
 )
 
 
@@ -68,7 +69,11 @@ class AgentResult:
 
 
 def task_list(
-    bench: str, identifiers: list[str] | None, task_format: str, cvdp_split: str = "nonagentic"
+    bench: str,
+    identifiers: list[str] | None,
+    task_format: str,
+    cvdp_split: str = "nonagentic",
+    include_excluded: bool = False,
 ) -> list[Task]:
     if identifiers is not None and len(identifiers) != len(set(identifiers)):
         raise ValueError("Duplicate task selection")
@@ -124,6 +129,14 @@ def task_list(
                 )
     if identifiers is not None and {task.identifier for task in tasks} != set(identifiers):
         raise ValueError("Unknown, duplicate or unsupported task selection")
+    if not include_excluded:
+        excluded = {item.task: item for item in task_exclusions(bench, task_format)}
+        if identifiers is not None and (blocked := set(identifiers) & excluded.keys()):
+            reasons = "; ".join(f"{name}: {excluded[name].reason}" for name in sorted(blocked))
+            raise ValueError(
+                f"Golden-failing task excluded ({reasons}); use --include-excluded to audit"
+            )
+        tasks = [task for task in tasks if task.identifier not in excluded]
     return tasks
 
 
@@ -475,12 +488,17 @@ def main() -> None:
     parser.add_argument("--judge-timeout", type=int, default=120)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--probe-only", action="store_true")
+    parser.add_argument(
+        "--include-excluded", action="store_true", help="Audit known golden failures"
+    )
     args = parser.parse_args()
     if args.timeout < 1 or args.judge_timeout < 1 or args.jobs < 1:
         parser.error("Timeouts and --jobs must be positive")
     clean_environment()
     args.output = args.output.resolve()
-    tasks = task_list(args.bench, args.task, args.task_format, args.cvdp_split)
+    tasks = task_list(
+        args.bench, args.task, args.task_format, args.cvdp_split, args.include_excluded
+    )
     args.output.mkdir(parents=True, exist_ok=False)
     endpoint = ProxyEndpoint.read(args.proxy_endpoint)
     started = time.time()
@@ -531,6 +549,12 @@ def main() -> None:
                 "jobs": args.jobs,
                 "probe_only": args.probe_only,
                 "expected_tasks": len(tasks),
+                "include_excluded": args.include_excluded,
+                "excluded_tasks": (
+                    []
+                    if args.include_excluded
+                    else [asdict(item) for item in task_exclusions(args.bench, args.task_format)]
+                ),
                 "complete": len(results) == len(tasks),
                 "started": started,
                 "results": [asdict(item) for item in sorted(results, key=lambda item: item.task)],

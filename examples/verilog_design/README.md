@@ -42,7 +42,8 @@ Git 中的 `data/cvdp/manifest.json` 另固定四个 CVDP 子集的题数、大�
 
 ## 参考解检查结果
 
-以下是环境验证结果，不是模型成绩。失败题保留在分母中，检查发现失败时返回非零。
+以下是完整原始数据集的环境验证结果，不是模型成绩。完整审计保留全部题目；
+默认运行已按下述排除清单屏蔽确定的 golden 失败项。
 
 | 检查 | 结果 | 原始记录 |
 | --- | --- | --- |
@@ -61,7 +62,7 @@ Git 中的 `data/cvdp/manifest.json` 另固定四个 CVDP 子集的题数、大�
 ### 未通过 golden 的题目
 
 以下 4 个检查项需要单独排查。表中现象来自实际运行；时序竞争是根据源码提出的
-排查方向，尚未通过修改后复测确认为根因。原始题目和参考实现保持不变，失败题仍计入总数。
+排查方向，尚未通过修改后复测确认为根因。原始题目和参考实现保持不变。
 
 | Benchmark / 题目 | 实际失败现象 | 已确认的问题或排查方向 | 原始日志 |
 | --- | --- | --- | --- |
@@ -72,6 +73,20 @@ Git 中的 `data/cvdp/manifest.json` 另固定四个 CVDP 子集的题数、大�
 
 RTLLM 上述三题属于 **Icarus 环境下 golden 未通过**，尚不能据此断言在其他仿真器下
 也会失败。VerilogEval 的端口不一致则是本次固定版本中的数据问题。
+
+`exclusions.json` 固定上述 4 个排除项的 benchmark、任务格式、上游版本、golden 状态、
+原因和复现命令。Agent 和 `evaluate.py` 默认启用：RTLLM 为 **47 题**，VerilogEval
+spec-to-RTL 为 **155 题**，code-completion 仍为 **156 题**。明确选择被排除题会报错；
+只有加 `--include-excluded` 才运行完整诊断，并在汇总中记录该开关和排除项。
+排除只适用于记录的任务格式，不会屏蔽同名的 code-completion 题目。
+创建控制器快照时，需要同时复制 `scripts/`、`compat/` 和 `exclusions.json`，
+并按排除后的题数记录预期数量；Agent 只挂载公开题目工作区。
+
+2026-10-23 在最终 Agent SIF 中重验全部参考实现，完整结果仍为 RTLLM 47/50、
+VerilogEval spec 155/156、completion 156/156；排除后的参考解分别为
+47/47、155/155、156/156。证据在 `runs/eval-repair-985228/golden-*/summary.json`。
+历史实验及原始分母不改写；本次完整重测的有效分母汇总另存
+`runs/eval-repair-985228/filtered-experiment-summary.json`。
 
 RTLLM 的部分参考模块名带 `verified_` 前缀，验证时在独立工作副本中改为测试台使用的
 模块名。`--icarus-compat` 额外应用 `compat/` 下三个补丁：将 unpacked array 初始化
@@ -84,8 +99,34 @@ SystemVerilog 关键字。补丁不修改 DUT 逻辑、输入向量或判定条�
 `cvdp-audit.json` 逐题记录全部 469 题的原始服务命令、环境文件、挂载及缺失参考解情况，
 这属于配置检查，不等同于这些题全部通过。代码理解数据的 123 个参考答案可用，
 `--comprehension` 仅用参考答案自身检查官方 BLEU/ROUGE 函数，不代替正式 LLM 主观评分。
+缺少公开 golden 本身不构成排除理由；CVDP 592 题仍全部保留。
+
+### CVDP heavy 评测适配修复
+
+2026-10-23 修复真实运行暴露的评测问题：将 Compose `../../external/` 映射到该题
+已经应用冻结提交的公开源码树；只忽略官方 JSON 中值为 `null` 的 Python 字节码缓存占位，
+其他非文本必需文件仍报错。输入数据文件及测试源码不改写。
+
+Judge 单独只读挂载 `compat/cvdp_sitecustomize.py`，将 cocotb 的 Python bool 参数
+序列化为 Verilog 的 `0/1`。`cvdp_agentic_heavy_cv32e40p_1_0001` 的基线包含 Icarus
+无法解析的并发 SVA，因此明确切换为 Verilator 并启用 `--assert`；不关闭断言，也不
+放宽 Verilator 的警告判定。每题 `evaluation-adaptations.json` 保存实际调整、挂载和环境。
+评测准备异常记为 Judge `error`，保留 Agent 的真实退出码、耗时及冻结文件，避免误报
+Agent 失败。Agent 的输入和运行环境不加载该 Judge 兼容模块。
+
+使用全量实验 `qwen35-all-20261022-154141` 的原冻结提交重判 9 个受影响的 heavy 题，
+8 个暴露功能断言失败，1 个在 Verilator 下触发 `CASEINCOMPLETE` 警告；heavy 通过数仍为
+27/75，但原来 7 个错误归入 Agent 的记录已更正为评测后的失败。原始记录保留，
+更正结果及源文件哈希证据在 `runs/eval-repair-985228/`。
+
+修复通过真实 SIF 的 bool 参数编译、SVA 正例与故意失败断言反例；官方 CVDP 有解样例
+2/2 通过，故意损坏版本 2/2 被拒绝。CVDP 没有公开完整 golden，以上不能证明其全部
+题目都可通过，也不会将候选失败自动认定为题目损坏。
 
 ## 运行
+
+VerilogEval 的 Docker 构建、ARCA 上传及全量验收见
+[Docker / ARCA 指引](containers/verilogeval-arca.md)。下列命令继续使用原有 Apptainer 路径。
 
 提交端/调度脚本使用 Python >=3.10 和 PyYAML 6.0.2；计算节点原生 Python 3.6 不满足要求。
 可以用自己的共享 Python 环境，通过 `VERILOG_RUNNER_PYTHON` 指定。
@@ -290,8 +331,8 @@ LLM 评分链路用本地模拟 API 验证了官方 rubric、正常解析和错�
 ### 自托管 Responses API 与全量并发测试
 
 `agent.py --all` 选择对应 benchmark 的全部基础任务；`--jobs 32` 在该 benchmark 内
-启动最多 32 个独立 Agent。三个 benchmark 应按顺序逐个执行。`--all` 对应 RTLLM 50 题、
-VerilogEval 当前任务格式 156 题，以及 CVDP 默认子集 302 题；CVDP 加
+启动最多 32 个独立 Agent。三个 benchmark 应按顺序逐个执行。`--all` 默认对应 RTLLM
+47 题、VerilogEval spec 155 题或 completion 156 题，以及 CVDP 默认子集 302 题；CVDP 加
 `--cvdp-split all` 为 592 题。
 
 自托管 Qwen/SGLang 使用 `scripts/sglang_proxy.py` 作为只允许模型接口的转发入口。
@@ -341,20 +382,10 @@ PYTHONPATH=examples/verilog_design/cache/runner-deps \
   python examples/verilog_design/scripts/test_agent.py CVDPScoringTests -v
 ```
 
-本次 CVDP 补齐验证为 19 项普通测试、2 项真实 SIF 评分集成测试全部通过，记录分别在
-`logs/cvdp-coverage-boundary-984625.log`、`logs/cvdp-coverage-scoring-984625.log`。
-Linux 上完整 `make check` 通过：UI 构建及 2 项测试、7 项 pytest、全仓库 Ruff、62 文件 Mypy；
-记录在 `logs/cvdp-coverage-make-check-final-984625.log`。未在 macOS 运行。
-
-新增 7 项测试覆盖公开导出、提交冻结、符号链接、FIFO、路径逃逸、超时杀死后代进程
-和控制器中断清理。记录为 `logs/agent-boundary-tests.log`。启动脚本完整提交路径另通过
-两个不调用模型的 Slurm 作业检查（984080、984083）。
-
-整合最新 main 前再次执行完整 `make check`：UI 构建与 3 个测试通过；pytest 在已有会话恢复测试
-处再次停住，180 秒后中断，记录为 `logs/agent-make-check-984065.log`。排除此前已确认
-超时的同一测试后，其余 179 个测试及 5 个 subtests 通过，1 个仅 macOS 支持的测试在 Linux 跳过，
-1 个测试 deselect；仓库全量 Ruff 和 70 文件 Mypy 通过，记录为
-`logs/agent-check-rest-984065.log`。历史 `validation.json` 未改写；整合后完整检查结果见下文。
+2026-10-23 评测修复后，21 项边界测试及 3 项真实 SIF 集成测试通过；后者覆盖 bool 参数、
+SVA 正例、故意失败断言反例和原有理解题评分链路。Linux 完整 `make check` 再次通过
+（UI 构建及 2 项测试、7 项 pytest、全量 Ruff、62 文件 Mypy），记录在
+`runs/eval-repair-985228/`；未在 macOS 运行。
 
 ## 重新准备与构建
 
@@ -386,28 +417,10 @@ bash examples/verilog_design/scripts/build.sh cvdp
 
 ## 仓库开发检查
 
-PR 分支整合到 `origin/main` 的 `b3d2c0a` 后重新执行完整 `make check`，全部通过：
-UI 构建与 2 个测试、7 个仓库测试、全量 Ruff、62 文件 Mypy 均通过，没有跳过测试。
-记录为 `logs/pr-make-check-984091.log`。新增 7 项 Agent 边界测试也再次通过，记录为
-`logs/pr-rebase-boundary-tests.log`；本地隐藏启动脚本通过 Slurm 作业 984090 的实际隔离预检。
-本地仅验证 Linux，macOS 由仓库 CI 覆盖。实际 CODEX_HOME 与凭据未加入 Git。
+从仓库根目录运行 `make check`，覆盖 UI 构建/测试、仓库单元测试、Ruff 和 Mypy。
+本例的边界及真实 SIF 集成检查使用上文的 `test_agent.py` 命令；Docker/ARCA 验收使用
+独立的 [golden 流程](containers/verilogeval-arca.md)。
 
-以下为整合前的历史检查记录，保留用于追溯，不代表当前 PR 检查状态。
-当时完整执行过 `make check`，未得到全绿结果：
-
-- UI 构建和 3 个 UI 测试通过。
-- 单元测试停在已有的
-  `ResearchTests::test_model_switch_preserves_active_turn_and_survives_reopen`，隔离复跑 70 秒仍超时。
-  原记录为 `logs/make-check-984005.log`，隔离诊断为 `logs/check-isolated-984015.log`。
-- 排除这一个超时测试后，179 个测试及 5 个 subtests 通过；1 个 macOS assertion 测试在
-  Linux 跳过。记录为 `logs/check-rest-984017.log`。
-- Mypy 的 70 个源文件通过。首次仓库全量 Ruff 报告 1466 条问题，均来自此前
-  `examples/mle_bench/source/` 或其 `cache/` 下的上游源码。
-  随后已将整个 `mle_bench` 目录移至仓库外的
-  `../mle_bench`，目录内容和历史记录保留。
-  移出后重新执行 `ruff check src tests examples` 全量通过，记录为
-  `logs/ruff-after-mle-move.log`。此前 `make check` 和 `validation.json` 保留原始检查结果，
-  不将新的 Ruff 结果写回历史记录；完整 `make check` 仍受上述会话恢复测试超时影响。
-- `ruff check examples/verilog_design`、Python 语法检查和两个 shell 入口的语法检查通过。
-
-上述检查使用本例缓存中的独立开发虚拟环境，没有重建仓库现有的共享 `.venv`。
+当前通过记录见 `runs/eval-repair-985228/`。此前检查记录仍保留在本机 `logs/` 和
+`runs/`，不覆盖历史报告。检查使用本例独立缓存环境，不重建仓库共享 `.venv`；
+本机 CODEX_HOME、凭据、构建缓存及运行产物不进入 Git。

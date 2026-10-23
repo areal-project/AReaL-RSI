@@ -59,6 +59,12 @@ optimizer，chunked loss 不计算 entropy 梯度，prefill graph 关闭，请�
 controller `985276`（4 CPU、64 GiB）位于另一节点；三个作业均 `COMPLETED / 0:0`。
 该测试只验证资源能同时申请，不加载模型、不执行训练；测试资源和临时文件已清理。
 
+2026-10-23，使用对齐后的默认配置实际启动 `qwen35-try/trial06`：controller `985296`、
+actor `985297`、rollout `985300`；actor 和 rollout 同驻 `slurmd-67`。训练引擎、SGLang
+和 proxy 均完成初始化；运行接口报告 decode graph=`full`、max batch=16、prefill
+graph=`disabled`、memory saver 开启。调度器已提交 16 个并发 rollout，Arena 模型路由
+注册成功并发起任务请求。该结果验证启动与任务提交，尚不代表首个训练 step 或完整训练通过。
+
 ## 使用
 
 提交端需要 Python 3 和 PyYAML；不安装新依赖。训练依赖来自已有 SIF 和源码 overlay。

@@ -225,15 +225,16 @@ CP4 所需 Megatron Core ≥0.18.2 / Megatron Bridge ≥0.5.1，以及 Arena Str
 默认设置 `sglang.disable_cuda_graph: false` 和 `sglang.disable_prefill_cuda_graph: true`，
 只关闭 prefill graph，保留 decode CUDA graph 和 AWEX memory saver。当前 rollout 镜像
 已确认支持 `--disable-prefill-cuda-graph`；所选 AReaL 源码还需包含对应的可选配置字段，
-旧版源码会将该字段视为未知配置。参考实验使用 `disable_cuda_graph: false`、
+旧版源码会将该字段视为未知配置。该字段与多模 chunked loss 准入修复见
+[AReaL PR #1821](https://github.com/areal-project/AReaL/pull/1821)。参考实验使用 `disable_cuda_graph: false`、
 `cuda_graph_max_bs: 16` 和 `enable_memory_saver: true`；本模板保留开启状态，graph 上限改为 512。
 同一镜像的模型兼容规则会为未进入 breakable 白名单的多模模型自动关闭 prefill graph；
 Qwen4-Exp 被明确排除，而 Qwen3.5 MoE 在白名单中。因此参考实验中的全局 graph 开关开启，
 不代表它启用了 breakable prefill；换到 Qwen3.5 后需要显式关闭这一阶段。
 将来启用 prefill graph 前，应确认所选 backend 与 memory saver 兼容。
 
-256K、CP4、双镜像的完整 Qwen3.5 RL 组合尚未由本入口执行 GPU 验证，不能从 dry-run
-或 CPU preflight 推断训练峰值、收敛、权重同步和恢复已验证。
+先前的 `trial06` 已验证 256K、CP4、双镜像的服务初始化与实际推理；完整 RL 训练、峰值、
+收敛、权重同步和恢复仍需验证。更改容量参数后也应重新确认启动与采样行为。
 
 默认 `arena.yaml` 保留所给实验的 SWE-MM 数据选择。Qwen3.5 的 Megatron-Bridge
 `MODEL_THD` 路径在视觉编码、embedding 融合和 mRoPE/CP 切分后返回 hidden states，再执行

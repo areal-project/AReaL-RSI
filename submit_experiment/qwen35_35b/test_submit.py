@@ -82,6 +82,8 @@ def test_fixed_runtime_cannot_be_overridden_from_params(tmp_path, update):
         ({"actor": {"megatron": {"entropy_requires_grad": True}}}, "Chunked loss"),
         ({"total_train_steps": 1}, "warmup"),
         ({"actor": {"reward_norm": {"mean_level": "group"}}}, "not both"),
+        ({"rollout": {"queue_size": 8}}, "queue_size must exceed"),
+        ({"rollout": {"queue_size": 7}}, "queue_size must exceed"),
     ],
 )
 def test_incompatible_tuning_fails_before_submission(tmp_path, update, message):

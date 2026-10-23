@@ -180,6 +180,10 @@ def validate(config: dict[str, Any]) -> None:
         raise ValueError("Require 0 <= optimizer.warmup_steps < total_train_steps")
     if config["train_dataset"]["batch_size"] < 1 or rollout["max_concurrent_rollouts"] < 1:
         raise ValueError("Batch size and rollout concurrency must be positive")
+    if rollout["queue_size"] <= config["train_dataset"]["batch_size"]:
+        raise ValueError(
+            "rollout.queue_size must exceed train_dataset.batch_size to allow dispatch"
+        )
     data = config["econfig"]
     sources = [
         data.get(key)

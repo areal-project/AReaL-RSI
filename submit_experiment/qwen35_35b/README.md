@@ -19,6 +19,7 @@ Slurm scheduler 再申请一个 8 GPU 节点。actor 使用 8 个 worker，rollo
 | CPU-staged optimizer offload | 开启，2 个 buffer，每个 128 MiB |
 | Chunked logits / loss | 开启，loss chunk size 1024 |
 | SGLang CUDA graph | decode 开启、prefill 关闭，保留 memory saver；max batch size 8 |
+| Rollout 队列 | `queue_size=32`，必须大于 `train_dataset.batch_size`（默认 8）以留出任务提交空间 |
 | Arena 路由 | `gateway` |
 | R3 / MTP | 关闭 |
 | controller / actor 镜像 | `/storage/openpsi/images/areal-dev-sglang-1014.sif` |

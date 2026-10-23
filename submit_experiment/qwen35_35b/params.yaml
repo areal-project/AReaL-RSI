@@ -99,7 +99,7 @@ actor:
 
 rollout:
   max_concurrent_rollouts: 4
-  queue_size: 8
+  queue_size: 32  # Must exceed train_dataset.batch_size to leave dispatch capacity.
   max_head_offpolicyness: 1
   enable_rollout_tracing: true
   dump_to_file: true

@@ -1,0 +1,58 @@
+{
+  "name": "hamlet",
+  "version": "0.1.2",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.28.2",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "hamlet": "bin/hamlet.js",
+    "detached": "bin/detached.js",
+    "doorbell": "bin/doorbell.js",
+    "doorbell-python": "packages/py-doorbell/bin/doorbell-python"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "test:python": "python3 -m unittest discover -s tests -p '*_test.py'",
+    "start": "node packages/cli/dist/index.js start",
+    "ui:dev": "vite packages/ui --host 127.0.0.1",
+    "test:ui": "playwright test",
+    "format": "prettier --write packages/*/src scripts tests playwright.config.ts tsconfig.json package.json",
+    "check": "node scripts/check.mjs"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.0.2",
+    "@fastify/static": "^8.2.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "better-sqlite3": "^12.6.2",
+    "fastify": "^5.7.1",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1",
+    "@tailwindcss/vite": "^4.1.18",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.19.7",
+    "@types/react": "^19.2.8",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^4.7.0",
+    "esbuild": "^0.27.2",
+    "prettier": "^3.9.10",
+    "tailwindcss": "^4.1.18",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vite": "^6.4.1"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild"
+    ]
+  },
+  "description": "A quiet village of detached agents, woken by a doorbell."
+}

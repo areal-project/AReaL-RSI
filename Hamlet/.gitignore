@@ -1,0 +1,43 @@
+# Dependencies and generated output; retain source, tests, and pnpm-lock.yaml.
+node_modules/
+dist/
+coverage/
+test-results/
+playwright-report/
+artifacts/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Local daemon state, run history, logs, and credentials.
+.hamlet/
+.detached/
+/daemon.json
+/daemon.lock
+/secret
+/runs/
+/doorbells/
+*.log
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+.env
+.env.*
+!.env.example
+.codex/
+.claude/
+
+# Local editor files and design archives are not part of the source release.
+.DS_Store
+.idea/
+.vscode/
+/*设计文档*.md
+/docs/design/

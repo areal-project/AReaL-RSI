@@ -1,0 +1,4 @@
+#!/bin/sh
+DOORBELL_PACKAGE_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+export PYTHONPATH="$DOORBELL_PACKAGE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 "$@"

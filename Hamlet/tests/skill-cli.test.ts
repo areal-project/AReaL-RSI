@@ -38,6 +38,12 @@ test("Skill 安装到显式目录，完整复制引用并拒绝覆盖", async ()
       readFileSync("skills/hamlet/SKILL.md", "utf8"),
     );
     assert.ok(existsSync(join(target, "references/api.md")));
+    const launched = await exec(
+      "bash",
+      [join(target, "scripts/hamlet"), "--help"],
+      { cwd: dir },
+    );
+    assert.match(launched.stdout, /hamlet call/);
     await assert.rejects(
       exec(process.execPath, [cli, "skill", "install", "--path", target]),
       /目标已存在/,
@@ -104,8 +110,30 @@ test("Codex 命令环境检查失败时拒绝启动且不回显诊断中的凭�
   );
 });
 
+test("Codex 命令环境检查允许超过七秒的冷启动并保留身份校验", () => {
+  const o = {
+    cwd: process.cwd(),
+    prompt: "unused",
+    systemPrompt: "unused",
+    env: {
+      ...instanceEnvironment("http://127.0.0.1:1", "test-secret", "test-1"),
+      HAMLET_NODE: process.execPath,
+      HAMLET_CLI: cli,
+      HAMLET_SKILL_DIR: resolve("skills/hamlet"),
+      FAKE_APP_SERVER_INITIALIZE_DELAY_MS: "8000",
+    },
+  };
+  assert.doesNotThrow(() =>
+    assertCodexShellEnvironment(
+      resolve("tests/fixtures/fake-codex.mjs"),
+      codexArgs(o),
+      o,
+    ),
+  );
+});
+
 for (const harness of ["codex", "claude"]) {
-  test(`${harness} 无 MCP 子进程通过 CLI 验证实例身份、同组消息、拒绝 Owner/提权/跨坊，fork/resume`, async () => {
+  test(`${harness} 子进程通过 CLI 验证实例身份、同组消息、拒绝 Owner/提权/跨坊，fork/resume`, async () => {
     const dir = mkdtempSync(join(tmpdir(), `hamlet-cli-${harness}-`));
     const harnesses = {
       [harness]:
@@ -201,7 +229,10 @@ for (const harness of ["codex", "claude"]) {
         const run = s.store
           .all("runs")
           .find((r) => r.instance_id === `${a.id}-1`)!;
-        assert.ok(run.prompt.includes("[Hamlet runtime]"));
+        assert.equal(
+          run.prompt.includes("需要查询或管理同组 Agent"),
+          identity === "admin",
+        );
         assert.ok(!run.prompt.includes(s.auth.ownerToken));
         assert.ok(
           !readFileSync(run.events_path, "utf8").includes(s.auth.ownerToken),

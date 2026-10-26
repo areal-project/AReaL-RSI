@@ -13,10 +13,25 @@ export function claudeArgs(o: StartOptions | ResumeOptions) {
     "stream-json",
     "--verbose",
     "--dangerously-skip-permissions",
-    // Child collaboration uses CLI/HTTP; do not inherit server registrations.
+    // Register only the instance-bound Hamlet tools in this child.
     "--strict-mcp-config",
     "--mcp-config",
-    '{"mcpServers":{}}',
+    JSON.stringify({
+      mcpServers: o.env.HAMLET_AGENT_TOOLS
+        ? {
+            hamlet: {
+              type: "stdio",
+              command: o.env.HAMLET_NODE || process.execPath,
+              args: [o.env.HAMLET_AGENT_TOOLS],
+              env: {
+                HAMLET_URL: "${HAMLET_URL}",
+                HAMLET_TOKEN: "${HAMLET_TOKEN}",
+                HAMLET_INSTANCE_ID: "${HAMLET_INSTANCE_ID}",
+              },
+            },
+          }
+        : {},
+    }),
   ];
   if ("sessionId" in o) args.push("--resume", o.sessionId);
   else args.push("--append-system-prompt", o.systemPrompt);

@@ -1062,7 +1062,23 @@ function App() {
                               重试
                             </button>
                           )}
-                          {m.status === "queued" && (
+                          {m.status === "rejected" && (
+                            <button
+                              onClick={() => {
+                                if (
+                                  confirm(
+                                    `${m.error}\n确认将这条消息加入队尾？`,
+                                  )
+                                )
+                                  void act(() =>
+                                    api("message_force_push", { id: m.id }),
+                                  );
+                              }}
+                            >
+                              确认推送
+                            </button>
+                          )}
+                          {["queued", "rejected"].includes(m.status) && (
                             <button
                               onClick={() =>
                                 void act(() =>

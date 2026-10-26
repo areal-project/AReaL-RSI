@@ -5,7 +5,13 @@ export async function fakeAppServer() {
   const reply = (id, result) => console.log(JSON.stringify({ id, result }));
   for await (const line of lines) {
     const r = JSON.parse(line);
-    if (r.method === "initialize") reply(r.id, {});
+    if (r.method === "initialize") {
+      const delay = Number(
+        process.env.FAKE_APP_SERVER_INITIALIZE_DELAY_MS || 0,
+      );
+      if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+      reply(r.id, {});
+    }
     if (r.method === "command/exec" && process.env.FAKE_APP_SERVER_ERROR) {
       console.error(process.env.FAKE_APP_SERVER_ERROR);
       console.log(

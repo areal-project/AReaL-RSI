@@ -160,7 +160,9 @@ test("真实子进程适配：stdin 安全传参、session/resume、事件和原
     );
     assert.match(invoke.prompt, /换行/);
     assert.equal(invoke.token, true);
-    assert.ok(!invoke.args.some((x: string) => x.includes("mcp_servers")));
+    assert.ok(
+      invoke.args.some((x: string) => x.startsWith("mcp_servers.hamlet=")),
+    );
     const resume = s.ring(OWNER, { target: i.id, prompt: "followup" });
     await until(() => s.store.get("messages", resume.id)?.status === "done");
     assert.equal(s.store.all("runs")[1].kind, "resume");

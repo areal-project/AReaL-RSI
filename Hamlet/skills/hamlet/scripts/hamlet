@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+hamlet_source_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+exec node "$hamlet_source_root/bin/hamlet.js" "$@"

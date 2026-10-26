@@ -48,7 +48,9 @@ const finish = (ok) => {
     clearTimeout(force); process.exit(1);
   }
 };
-const timer = setTimeout(() => finish(false), 7000);
+// Shared storage can make app-server/config startup exceed seven seconds.
+// Keep the same identity/hash checks while allowing bounded startup latency.
+const timer = setTimeout(() => finish(false), 30000);
 process.on("SIGTERM", () => finish(false));
 child.on("error", () => finish(false));
 child.on("exit", () => { if (!finished) finish(false); });
@@ -70,7 +72,7 @@ lines.on("line", (line) => {
         'keys.map(k=>[k,process.env[k]??null]))).digest("hex"));';
       send({ id: 2, method: "command/exec", params: {
         command: [process.execPath, "-e", script], cwd,
-        sandboxPolicy: { type: "dangerFullAccess" }, timeoutMs: 3000,
+        sandboxPolicy: { type: "dangerFullAccess" }, timeoutMs: 10000,
       } });
     } else if (value.id === 2) {
       finish(!value.error && value.result?.exitCode === 0 &&
@@ -115,7 +117,7 @@ export function assertCodexShellEnvironment(
         expected,
       }),
       encoding: "utf8",
-      timeout: 9000,
+      timeout: 35000,
       maxBuffer: 64 * 1024,
     },
   );

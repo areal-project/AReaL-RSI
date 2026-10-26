@@ -20,7 +20,7 @@ test("direct 并发约束在创建/查询/入队中可见，原因与调度一�
     assert.equal(b.execution.concurrency, "serial_workdir");
     assert.equal(b.execution.workdir, root);
     assert.equal(b.execution.shared_with[0].logical_id, a.id);
-    assert.match(b.execution.description, /不要.*等待/);
+    assert.equal(b.execution.message_delivery, "queued_turn");
     const m1 = await f.s.call(
         "message_to",
         { target: a.id, prompt: "first" },

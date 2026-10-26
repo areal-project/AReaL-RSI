@@ -33,11 +33,32 @@ export async function createDaemon(
     cliPath?: string;
     skillDir?: string;
     root?: string;
+    publicUrl?: string;
   } = {},
 ) {
   const root =
     options.root ||
     resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+  const configuredUrl = options.publicUrl ?? process.env.HAMLET_PUBLIC_URL;
+  let publicUrl: URL | undefined;
+  if (configuredUrl) {
+    try {
+      publicUrl = new URL(configuredUrl);
+      if (
+        !["http:", "https:"].includes(publicUrl.protocol) ||
+        publicUrl.username ||
+        publicUrl.password ||
+        publicUrl.pathname !== "/" ||
+        publicUrl.search ||
+        publicUrl.hash
+      )
+        throw new Error();
+    } catch {
+      throw new Error(
+        "HAMLET_PUBLIC_URL 必须是 http(s) 根地址，不含账号、密码、路径前缀、查询参数或片段",
+      );
+    }
+  }
   const dir = options.dir || dataDir();
   const service = new Service(
     dir,
@@ -46,8 +67,9 @@ export async function createDaemon(
       claude: new ClaudeHarness(),
     },
     options.cliPath || join(root, "bin/hamlet.js"),
-    options.skillDir || join(root, "skills/hamlet"),
+    options.skillDir || join(root, "skills/hamlet-agent"),
   );
+  service.uiUrl = publicUrl?.origin || "";
   const app = Fastify({ logger: false, bodyLimit: 2 * 1024 * 1024 });
   await app.register(cookie);
   let closing = false;
@@ -58,14 +80,20 @@ export async function createDaemon(
       .send({ error: e.message, details: e.details });
   });
   app.addHook("onRequest", async (req, reply) => {
-    const host = req.headers.host || "";
-    if (
-      !/^127\.0\.0\.1(?::\d+)?$/.test(host) &&
-      !/^localhost(?::\d+)?$/.test(host)
-    )
+    const host = (req.headers.host || "").toLowerCase();
+    const localHost =
+      /^127\.0\.0\.1(?::\d+)?$/.test(host) || /^localhost(?::\d+)?$/.test(host);
+    if (!localHost && host !== publicUrl?.host)
       throw new AppError("无效 Host", 403);
     const origin = req.headers.origin;
-    if (origin && origin !== `http://${host}`)
+    // Some port proxies replace Host with the loopback upstream, while keeping
+    // the browser's Origin. Accept only the explicitly configured public origin.
+    const expectedOrigin = localHost ? `http://${host}` : publicUrl!.origin;
+    if (
+      origin &&
+      origin !== expectedOrigin &&
+      !(localHost && origin === publicUrl?.origin)
+    )
       throw new AppError("禁止跨源请求", 403);
     if (req.url === "/health") return;
     const query = req.query as any;
@@ -76,6 +104,7 @@ export async function createDaemon(
         httpOnly: true,
         sameSite: "strict",
         path: "/",
+        secure: publicUrl?.protocol === "https:",
       });
       return reply.redirect("/");
     }

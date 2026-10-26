@@ -2,6 +2,7 @@ import { build } from "esbuild";
 import { execFileSync } from "node:child_process";
 for (const name of [
   "core",
+  "agent-tools",
   "harness-codex",
   "harness-claude",
   "daemon",

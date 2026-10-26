@@ -7,6 +7,7 @@ import {
   existsSync,
   unlinkSync,
   cpSync,
+  chmodSync,
 } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { homedir } from "node:os";
@@ -65,7 +66,19 @@ async function main() {
       errorOnExist: true,
       force: false,
     });
-    print({ path: destination, installed: true });
+    const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
+    const launcher = join(destination, "scripts/hamlet");
+    mkdirSync(dirname(launcher), { recursive: true });
+    const cli = resolve(
+      dirname(fileURLToPath(import.meta.url)),
+      "../../../bin/hamlet.js",
+    );
+    writeFileSync(
+      launcher,
+      `#!/usr/bin/env bash\nexec ${quote(process.execPath)} ${quote(cli)} "$@"\n`,
+    );
+    chmodSync(launcher, 0o755);
+    print({ path: destination, installed: true, cli: launcher });
     return;
   }
   if (cmd === "serve") {

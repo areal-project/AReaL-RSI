@@ -12,7 +12,7 @@ const schemas: Record<string, string> = {
   instances:
     "id TEXT PRIMARY KEY, logical_id TEXT, seq INTEGER, harness_session_id TEXT, worktree_path TEXT, branch TEXT, status TEXT, config_snapshot TEXT, created_at TEXT, last_active_at TEXT, archived_at TEXT",
   messages:
-    "id TEXT PRIMARY KEY, target_id TEXT, from_id TEXT, from_role TEXT, source TEXT, prompt TEXT, system_prompt TEXT, vars TEXT, dedup_key TEXT, status TEXT, resolved_instance_id TEXT, run_id TEXT, error TEXT, created_at TEXT, dedup_until TEXT, force_fork INTEGER DEFAULT 0, queued_at TEXT",
+    "id TEXT PRIMARY KEY, target_id TEXT, from_id TEXT, from_role TEXT, source TEXT, prompt TEXT, system_prompt TEXT, vars TEXT, dedup_key TEXT, status TEXT, resolved_instance_id TEXT, run_id TEXT, error TEXT, created_at TEXT, dedup_until TEXT, force_fork INTEGER DEFAULT 0, queued_at TEXT, queue_seq INTEGER, rejection TEXT",
   runs: "id TEXT PRIMARY KEY, instance_id TEXT, message_id TEXT, kind TEXT, status TEXT, started_at TEXT, ended_at TEXT, final_output TEXT, usage TEXT, events_path TEXT, prompt TEXT, system_prompt TEXT, error TEXT, pid INTEGER, trigger_snapshot TEXT, queue_wait_ms INTEGER",
   doorbells:
     "logical_id TEXT PRIMARY KEY, pid INTEGER, status TEXT, restart_count INTEGER DEFAULT 0, last_ring_at TEXT, log_path TEXT, error TEXT",
@@ -24,6 +24,7 @@ const json = new Set([
   "vars",
   "usage",
   "trigger_snapshot",
+  "rejection",
 ]);
 export class Store {
   db: Database.Database;
@@ -43,7 +44,7 @@ export class Store {
         "ALTER TABLE messages ADD COLUMN force_fork INTEGER DEFAULT 0",
       );
     for (const [table, columns] of Object.entries({
-      messages: { queued_at: "TEXT" },
+      messages: { queued_at: "TEXT", queue_seq: "INTEGER", rejection: "TEXT" },
       runs: { trigger_snapshot: "TEXT", queue_wait_ms: "INTEGER" },
     })) {
       const present = new Set(
@@ -55,6 +56,9 @@ export class Store {
         if (!present.has(name))
           this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
     }
+    this.db.exec(
+      "UPDATE messages SET queue_seq=rowid WHERE queue_seq IS NULL AND status!='rejected'",
+    );
     this.db.exec(
       "CREATE UNIQUE INDEX IF NOT EXISTS roles ON logical_agents(group_id, role_name) WHERE deleted_at IS NULL; CREATE INDEX IF NOT EXISTS message_queue ON messages(status,created_at); CREATE INDEX IF NOT EXISTS message_dedup ON messages(target_id,dedup_key,dedup_until); CREATE UNIQUE INDEX IF NOT EXISTS instance_seq ON instances(logical_id,seq)",
     );

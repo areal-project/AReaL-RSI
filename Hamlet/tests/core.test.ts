@@ -62,6 +62,63 @@ test("fork 并行、来源头、自动提交、指定实例 resume、快照不�
   }
 });
 
+test("message_to 提示真实回复地址，Worker 用长 ID 返回同一 Leader 会话", async () => {
+  const f = await fixture();
+  try {
+    const leader = await f.agent({ role_name: "Leader", worktree: false });
+    const worker = await f.agent({
+      role_name: "Worker",
+      workdir: join(f.dir, "worker"),
+      worktree: false,
+    });
+    await f.s.call(
+      "message_to",
+      { target: leader.id, prompt: "new task" },
+      OWNER,
+    );
+    f.s.tick();
+    await until(() => f.h.calls.length === 1);
+    const leaderInstance = f.s.store.all("instances")[0];
+    const task = await f.s.call(
+      "message_to",
+      { target: worker.id, prompt: "assigned work" },
+      { kind: "instance", id: leaderInstance.id },
+    );
+    assert.equal(task.next_action, "fork");
+    f.s.tick();
+    await until(() => f.h.calls.length === 2);
+    const workerInstance = f.s.store
+      .all("instances")
+      .find((i) => i.logical_id === worker.id)!;
+    const guidance = f.h.calls[1].options.prompt;
+    assert.equal(
+      guidance,
+      `[来自 Leader#1 (${leaderInstance.id})]\nassigned work`,
+    );
+    assert.ok(!guidance.includes(f.s.auth.ownerToken));
+    const result = await f.s.call(
+      "message_to",
+      { target: leaderInstance.id, prompt: "DONE assigned work" },
+      { kind: "instance", id: workerInstance.id },
+    );
+    assert.equal(result.next_action, "resume");
+    assert.equal(result.planned_instance_id, leaderInstance.id);
+    assert.equal(result.queue_reason.code, "instance_busy");
+    f.h.calls[0].finish();
+    f.h.calls[1].finish();
+    await until(() => f.s.active.size === 0);
+    f.s.tick();
+    await until(() => f.h.calls.length === 3);
+    assert.equal(f.h.calls[2].kind, "resume");
+    assert.equal(f.s.store.all("instances").length, 2);
+    assert.match(f.h.calls[2].options.prompt, /DONE assigned work/);
+    f.h.calls[2].finish();
+    await until(() => f.s.active.size === 0);
+  } finally {
+    await f.close();
+  }
+});
+
 test("常驻首次触发创建、FIFO、失败后继续、归档后换新与序号不复用", async () => {
   const f = await fixture();
   try {
@@ -127,11 +184,49 @@ test("缺模板变量不创建实例；显式空 prompt 与 system prompt 分别
     f.s.ring(OWNER, { target: l.id, prompt: "", system_prompt: "" });
     f.s.tick();
     await until(() => f.h.calls.length === 1);
-    assert.match(
-      f.h.calls[0].options.prompt,
-      /ring 调用方 \(owner\)\]\n\n\n\[Hamlet runtime\]/,
-    );
+    assert.equal(f.h.calls[0].options.prompt, "[来自 ring 调用方 (owner)]\n");
     assert.throws(() => render("{{toString}}", {}), /缺少/);
+  } finally {
+    await f.close();
+  }
+});
+
+test("prompt 模板使用真实内置身份，显式消息保持原文且替代模板", async () => {
+  const f = await fixture();
+  try {
+    const l = await f.agent({
+      worktree: false,
+      prompt_tpl: "任务 {{task}} / {{agent_id}}",
+      system_prompt_tpl: "职责 {{role}} / {{agent_id}}",
+    });
+    f.s.ring(OWNER, {
+      target: l.id,
+      vars: { task: "A", agent_id: "spoofed", role: "spoofed" },
+    });
+    f.s.tick();
+    await until(() => f.h.calls.length === 1);
+    const first = f.s.store.all("runs")[0];
+    assert.ok(first.prompt.includes(`任务 A / ${first.instance_id}`));
+    assert.equal(
+      first.system_prompt,
+      `职责 ${l.role_name} / ${first.instance_id}`,
+    );
+    assert.ok(!first.prompt.includes("spoofed"));
+    f.h.calls[0].finish();
+    await until(() => f.s.active.size === 0);
+
+    f.s.ring(OWNER, {
+      target: l.id,
+      prompt: "原文 {{missing}}",
+      system_prompt: "覆盖 {{missing}}",
+    });
+    f.s.tick();
+    await until(() => f.h.calls.length === 2);
+    const second = f.s.store.all("runs").at(-1)!;
+    assert.equal(second.system_prompt, "覆盖 {{missing}}");
+    assert.ok(second.prompt.includes("原文 {{missing}}"));
+    assert.equal(second.prompt, "[来自 ring 调用方 (owner)]\n原文 {{missing}}");
+    assert.notEqual(second.instance_id, first.instance_id);
   } finally {
     await f.close();
   }
@@ -393,7 +488,12 @@ test("重启恢复：running 标 interrupted、消息不重放，queued 继续�
     f.s.store.update("instances", l.id + "-1", { status: "running" });
     f.s.store.close();
     const h = new Controlled();
-    recovered = new Service(join(f.dir, "data"), { codex: h }, "/inner.js");
+    recovered = new Service(
+      join(f.dir, "data"),
+      { codex: h },
+      "/inner.js",
+      process.cwd() + "/skills/hamlet-agent",
+    );
     recovered.start();
     assert.equal(recovered.store.get("runs", r.id)?.status, "interrupted");
     assert.equal(recovered.store.get("messages", m.id)?.status, "failed");

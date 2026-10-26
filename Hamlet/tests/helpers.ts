@@ -71,7 +71,12 @@ export class Controlled implements Harness {
 export async function fixture() {
   const dir = mkdtempSync(join(tmpdir(), "detached-test-"));
   const h = new Controlled(),
-    s = new Service(join(dir, "data"), { codex: h }, "/inner.js");
+    s = new Service(
+      join(dir, "data"),
+      { codex: h },
+      "/inner.js",
+      process.cwd() + "/skills/hamlet-agent",
+    );
   s.url = "http://127.0.0.1:1234";
   const g = await s.call("group_create", { name: "开发" }, OWNER);
   const agent = async (p: any = {}) =>
@@ -93,6 +98,8 @@ export async function fixture() {
   };
 }
 export async function until(fn: () => boolean, timeout = 4000) {
+  const configured = Number(process.env.HAMLET_TEST_WAIT_MS);
+  if (Number.isFinite(configured) && configured > timeout) timeout = configured;
   const start = Date.now();
   while (!fn()) {
     if (Date.now() - start > timeout) throw Error("等待超时");

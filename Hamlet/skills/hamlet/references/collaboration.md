@@ -1,56 +1,50 @@
-# 事件驱动的并行研究示例
+# Leader / Worker 协作
 
-用户希望 4 个研究员 + Leader。此示例是**用户已明确全部配置并批准该协作协议之后**的流程；若只给人数/模型/任务，先按 SKILL.md 询问缺项，不能自行选择下述模式/目录/权限。
+Leader/Worker 是本例的任务分工名称，不是系统身份；权限仍由 admin/worker 配置。本例使用一个 Leader 和若干 Worker，同组、fork 模式、各有独立目录，以消息通知完成。人数、模型、资源和工作目录按实际任务配置；Worker 的本次分工由 Leader 决定。
 
-示例选择：Owner 创建 5 个 worker，共用一个 group；Codex、指定模型及 high 强度、fork；各自独立 direct 目录（无迁移/Git 初始化）；无 GPU、extra_env={}；不用 doorbell；通过完成通知继续任务。绝对共享目录已由用户指定，不是 daemon 自动分配，五个角色只写各自文件。每个 Agent 的 system_prompt_tpl 写明职责、共享路径、角色名和下述协议；prompt_tpl 明确为 ""，任务通过 prompt 发送。全部创建后才一次性提交任务。保留研究成果，结束停运行/归档 Agent，保留 group 记录。此处的 task_id/version 是任务约定，不是 daemon 新增字段。
+## 任务与交接
 
-## 共享状态
+Leader 负责拆分、派发和验收。每项任务说明目标、输入、输出路径、验收标准、任务版本和真实回复地址；按任务需要安排派发与后续处理。
 
-Owner/Leader 在共享目录维护 manifest.json：
+共享记录至少包含 task_id、version、状态、结果路径，以及以下地址：
 
-```json
-{"task_id":"research-2026-01","version":1,"status":"active",
- "assignments":{"R1":"主题 A","R2":"主题 B","R3":"主题 C","R4":"主题 D"},
- "expected":["R1","R2","R3","R4"],"consumed":[]}
-```
+| 字段 | 来源与用途 |
+| --- | --- |
+| logical_id | 创建 Agent 返回的短 ID，用于派发新任务 |
+| working_instance_id | 接收者从 whoami / HAMLET_INSTANCE_ID 读取的长 ID，用于继续该任务 |
+| reply_to_instance_id | 派发者自己的真实长 ID，用于返回结果 |
 
-每个研究员仅写 results/Rn-v1.json，先写临时文件再原子替换，不共同修改 manifest。示例结果：`{task_id,version,assignee,status:"done",summary,evidence_paths}`。Leader 唯一写 manifest 和最终报告。fork 回合必须先读当前共享记录；不能依赖上次会话上下文。
-
-Owner 一次创建角色并记录真实 ID，随后给每个研究员发一次任务（R2–R4 同理）：
-
-```bash
-hamlet call message_to --stdin <<'JSON'
-{"target":"R1","group":"g-实际ID","prompt":"task research-2026-01 v1，研究主题 A。先读约定共享目录 manifest，仅处理当前有效版本。把进度写自己的状态文件；完成写 results/R1-v1.json 后只给 Leader 发一次 DONE 通知；不要发 RUNNING/ACK/自我提醒。真正阻塞时发一次 BLOCKED 并写原因。","dedup_key":"research-2026-01-v1-R1-submit","dedup_window":"7d"}
-JSON
-```
-
-Owner 结束当前回合。创建/提交成功无需广播“已提交”“开始了”等新执行消息。
-
-## 研究员完成一次后通知
-
-写入结果成功后调用：
+例如任务 research-01 v1，Leader 是 `aaaaaa-1`，Worker 的逻辑 ID 是 `bbbbbb`。Leader 用实例 CLI 派发：
 
 ```bash
 "$HAMLET_NODE" "$HAMLET_CLI" call message_to --stdin <<'JSON'
-{"target":"Leader","prompt":"DONE research-2026-01 v1 R1；结果见约定共享目录 results/R1-v1.json","dedup_key":"research-2026-01-v1-R1-done","dedup_window":"7d"}
+{"target":"bbbbbb","prompt":"research-01 v1：验证方案 A 的吞吐。输入 /shared/input.json；输出 /shared/results/R1-v1.json，包含测量条件、结果和复现命令。登记 working_instance_id；完成或阻塞时通知 reply_to_instance_id=aaaaaa-1。","dedup_key":"research-01-v1-R1-submit","dedup_window":"7d"}
 JSON
 ```
 
-然后结束本回合。真正阻塞用独立 blocked 键并记录需要何种决策；不要用“RUNNING/继续等待/收到”通知。给自己发“90 秒后检查”只会立即排队，可能不断 fork，不能替代定时器。
+这是向逻辑节点派发，创建新的 Worker 会话。以下假设 Worker 实际登记为 `bbbbbb-1`，不是预先猜测的序号。Worker 写好结果后通知：
 
-## Leader 每次被结果唤醒
+```bash
+"$HAMLET_NODE" "$HAMLET_CLI" call message_to --stdin <<'JSON'
+{"target":"aaaaaa-1","prompt":"DONE research-01 v1 R1；working_instance_id=bbbbbb-1；结果 /shared/results/R1-v1.json。","dedup_key":"research-01-v1-R1-done","dedup_window":"7d"}
+JSON
+```
 
-1. 读取 manifest，若 task 已结束、version 过期或通知已 consumed，直接结束，不回复确认。
-2. 集中读取当前版本所有已存在的结果，即使此次只收到一名研究员通知。校验 task_id/version/assignee，记录已处理通知，防止重复提交。
-3. 结果不全且无阻塞：保存状态并结束回合，等待其他研究员约定的完成通知；不自发查询消息。
-4. 有真正阻塞：只给需要行动的角色分配一次明确任务，或向有决策权的调用者报告。新一轮使用 version=2、新键；旧指令到来先读 manifest 后结束。
-5. 四份结果齐备：写报告和 status=complete；按授权约定只发送一次最终结果。若需外部提醒，由已配置脚本/外部宿主提供，不假设存在可寻址的 Owner 会话。
+这是向真实实例回复，resume 原 Leader。需修复时，Leader 将修复任务发给 `bbbbbb-1`，附新的请求版本和去重键；独立新任务才发给 `bbbbbb`。目标归档后不能 resume，先核实任务状态，不自动改发逻辑 ID。
 
-每份完成通知仍各自触发一个回合；后续已入队的通知不能自动合并，Leader 可读到齐备结果后让后续回合无动作结束。目标是少量有用的在途消息，当前 daemon 不保证每 Agent 至多一条 pending。
+## 汇总与失败处理
 
-## doorbell 方案（仅在用户选择时）
+Worker 各写自己的状态和结果文件，Leader 写汇总 manifest，避免并发覆盖。新 fork 从持久记录恢复任务背景，不继承旧会话。
 
-如果工作依赖外部异步事件，可按用户明确脚本/条件/计时起点配置 doorbell。脚本读取外部源，变化时用稳定事件键 ring 一次；state 保存已提交位置。不要每 60 秒无条件生成新 ID 并唤醒 Agent。脚本的轮询和 Agent 自发消息链不同：脚本只在发现新事件时排队。
+Leader 被唤醒后检查当前版本的全部结果，而非只处理通知中提到的一份。可结合结果文件和通知判断进展，结果齐备后验收并安排下一步。每条被接受的消息都会触发一轮执行，包括给自己的消息；消息不会插入正在执行的回合。
+
+可恢复的阻塞由 Worker 发送一次 BLOCKED，包含失败步骤、证据和需要的决策。模型调用或进程失败可能让 Worker 无法发送通知；Owner 或预先配置的监控应检查失败 run，查看已有产物后决定恢复。同一任务恢复使用已登记的真实实例 ID，避免重复派发。
+
+消息按 target + dedup_key 在窗口内去重，业务文件和消费记录仍需按任务版本保证重复执行安全。入队回执只确认提交，不能当作结果或等待中的实时 ACK。
+
+## 外部事件：doorbell
+
+需要等待外部作业或事件时，可启用 doorbell。脚本负责检测外部变化并发送消息，触发条件由任务需要决定。
 
 ```python
 #!/usr/bin/env doorbell-python
@@ -60,16 +54,16 @@ from doorbell import ring, state, every
 
 @every(seconds=60)
 def check():
-    path = Path(os.environ['EVENT_FILE'])  # 用户指定的外部事件 JSON 文件
+    path = Path(os.environ['EVENT_FILE'])
     if not path.exists():
         return
     event = json.loads(path.read_text())
     if event['id'] != state.get('last_event'):
-        ring(prompt=f"处理事件 {event['id']}，先读共享记录验证版本",
+        ring(prompt=f"处理事件 {event['id']}，读取共享记录核对任务版本",
              dedup_key=f"external-{event['id']}", dedup_window="7d")
         state.set('last_event', event['id'])
 ```
 
-计时从脚本顶层结束后进入循环，首次检查立即发生，此后每轮完成后间隔 60 秒。若用户要从任务提交起 90 秒提醒一次，持久化 submitted_at/目标时间，在脚本中到点 ring 一次并持久化已提醒标记；没有原生 delayed-message 参数。脚本到点入队到 Agent 真正读取仍可能等待 FIFO/目录锁。
+本例首次立即检查，此后每轮完成再等 60 秒。需要延迟提醒时，在脚本中保存提交时间、到期时间和已提醒标记；prompt 中写“稍后执行”不会延迟入队。脚本的绑定目标也遵循 fork/resume 规则：逻辑 fork 目标会启动新会话。
 
-结束任务先写 complete，停止 doorbell（防止新触发），由 Owner 查询/取消过期 queued 消息，按批准策略归档/删除 Agent/group。Worker 可写完成记录并通知，不能假设自己有 Owner 清理权限。不对 LGTM/ACK/完成回执反复回复，从而形成循环。
+收尾先写终态，再停止 doorbell；Owner 查询并取消过期 queued 消息，按约定保留或归档资源。Worker 通知完成即可，不假设自己拥有清理权限。

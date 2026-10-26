@@ -1,25 +1,16 @@
 # CLI / HTTP API
 
-## 安装、发现、启动
+## 服务连接
 
-从仓库构建：`corepack pnpm install --frozen-lockfile && corepack pnpm build`。需要 Node 20+、Git、Python 3.9+，以及已安装/登录的 codex 或 claude。Skill 位于 `skills/hamlet`，完整目录可复制到所用宿主的 skills 目录；安装命令见仓库 README。子 Agent 直接读取 daemon 提供的源 Skill 路径，不依赖宿主安装或 MCP 工具发现。
+构建、安装及服务管理见仓库 README。以下调用以连接已选定、认证已配置为前提。下文的 hamlet 可替换为 `bash "$hamlet_cli"`，hamlet_cli 按主 skill 定位 scripts/hamlet。
 
-```bash
-node /absolute/Hamlet/bin/hamlet.js --help
-node /absolute/Hamlet/bin/hamlet.js skill path
-node /absolute/Hamlet/bin/hamlet.js status  # 不启动 daemon
-node /absolute/Hamlet/bin/hamlet.js start   # 明确授权启动后
-```
+- Owner 连接已有服务：成对设置 HAMLET_URL/HAMLET_TOKEN。凭据来自已配置环境或授权数据目录；从本机目录读取时核对 daemon.json 的 URL，令牌仅在进程内使用。
+- Owner 启动本机服务：在授权的 HAMLET_HOME 执行 `hamlet start`。同目录已有健康服务时会复用；实际 URL 以返回值为准。`status` 不启动服务，`call`/`ring`/`ui` 在未绑定连接时可能自动启动。
+- 后台 Agent：直接使用注入的 HAMLET_URL/HAMLET_TOKEN、HAMLET_NODE/HAMLET_CLI 和 HAMLET_SKILL_DIR，不重新选择服务或读取本机 Owner secret。
 
-Skill 的连接前提是：**用户提供或明确选定现有服务 URL 与凭据来源，或明确授权 Owner 现场启动。** 没有这两者之一时先询问，不能用业务调用顺便启动服务。文中的 `call`、`ring`、`ui` 示例均以服务已选定、连接已绑定为前提。
+使用本 skill 的 `scripts/hamlet` 入口；`skill path` 查询源 skill，`skill install --path /absolute/target` 安装完整目录，目标已存在时拒绝覆盖。Owner 安装副本需随源码更新；后台 hamlet-agent skill 由服务安装到工作目录。
 
-连接现有服务时，通过环境成对提供 `HAMLET_URL` 与 `HAMLET_TOKEN`，或向选定 URL 发认证 HTTP 请求。凭据可来自用户已配置的环境，或用户授权使用的本机数据目录；使用后者时，先核对该目录 `daemon.json` 中的 URL 与用户选定的服务一致，在进程内读取和使用凭据，不打印密钥或令牌。不要把令牌字面量写入命令参数、Skill、prompt 或共享记录。指定连接认证失败或不可达时停止并报告，不清除变量后改连本机 Owner，也不另起服务。
-
-用户授权本机启动后，在获授权的数据目录（`HAMLET_HOME`，或用户允许的默认目录）执行 `start`；返回的 `url` 才是本次实际服务地址，告知用户并用于后续调用。`start` 是“发现或启动”：同一目录已有健康 daemon 时会复用；如需全新服务，先明确独立数据目录。服务重启后重新读取地址，不能把示例端口、上次地址或安装目录当作当前连接配置。只有获授权的本机连接才可读取该目录的 `daemon.json` 解析或核对地址；发现文件不构成使用服务或启动服务的许可。
-
-本地状态目录默认 ~/.hamlet（仅有旧 ~/.detached 时复用旧目录），HAMLET_HOME 指定目录；daemon.json 含 url/pid。daemon 只监听 127.0.0.1 随机端口。Owner CLI 从该目录的 0600 secret 派生凭据，不需显示 token。显式 HAMLET_URL/HAMLET_TOKEN 成对设置时，CLI 连接该服务；子 Agent 已由 daemon 设置实例身份，不能读取 secret 或删除这些变量回退 Owner。DETACHED_* 是兼容别名，HAMLET_* 优先。daemon 保留身份变量，extra_env 中的 HAMLET/DETACHED URL/TOKEN/INSTANCE_ID/RUN_ID 和 DOORBELL_* 不会覆盖子 Agent 的身份。DOORBELL_URL/TOKEN 只能 ring 自己，不可查询工具。
-
-CLI `call` 自动发现或启动服务；`status` 仅查健康，不证明凭据有效，用 `call whoami '{}'` 验证权限。`start` 返回 `{url,status:"running"}`；`status` 返回健康 JSON 或 `{status:"stopped"}`。`stop` 仅 Owner，影响全部坊；服务安装/卸载用 `install-service`/`uninstall-service`（Linux/macOS）。
+本机状态目录由 HAMLET_HOME 指定，默认 ~/.hamlet。daemon.json 保存 URL/PID，0600 secret 用于派生 Owner 凭据。服务绑定 127.0.0.1，实际端口读取启动结果。
 
 ## 调用格式与错误
 
@@ -32,7 +23,7 @@ JSON
 hamlet ring abcdef --prompt '已批准的首次任务' --dedup-key R1-v1-submit --dedup-window 7d
 ```
 
-未将 bin 加入 PATH 时以 `node /absolute/Hamlet/bin/hamlet.js` 替代 hamlet。子 Agent 使用 `"$HAMLET_NODE" "$HAMLET_CLI"`。JSON 文件/stdin 避免 shell 引号/多行模板损坏。call 成功在 stdout 输出 JSON；失败 stderr 输出 `{error,details?}`，退出码 1。不要把自然语言拼接成 shell 代码。
+后台 Agent 使用 `"$HAMLET_NODE" "$HAMLET_CLI"`。JSON 文件/stdin 避免 shell 引号/多行模板损坏。call 成功在 stdout 输出 JSON；失败 stderr 输出 `{error,details?}`，退出码 1。不要把自然语言拼接成 shell 代码。
 
 HTTP `POST /api/tools/<name>`，body 是同一 JSON 对象；`POST /api/ring` 和 CLI ring 对应；头部为 `Authorization: Bearer <token>`、`Content-Type: application/json`。返回 JSON，HTTP 非 2xx 时 `{error,details?}`。常见 400 参数/模板错误、401 认证失败、403 无权限、404 不存在/跨坊隐藏、409 迁移/状态冲突。needs_migration 的 details 有 root/entries/count，读取摘要后按用户已授权策略处理；未授权不重试 migrate=true。网络失败且提交结果未知时，使用同一个 dedup_key 重试，不能换键重复提交。
 
@@ -48,38 +39,38 @@ with urllib.request.urlopen(req, timeout=30) as r:
     print(json.dumps(json.load(r), ensure_ascii=False))
 ```
 
-`GET /health` 无认证，只返回进程健康；`GET /api/identity` 返回 whoami。`GET /api/events` 是认证 SSE（ready/change/agent）；agent 事件按身份过滤，change 只是状态变化提醒，不能当作原生任务终态回调。`POST /api/shutdown` 仅 Owner。跨源及非本机 Host 拒绝。UI 的 ui_open 返回临时登录 URL，含凭据，不放共享记录；UI 会换成 HttpOnly/SameSite=Strict cookie 后清除查询参数。
+`GET /health` 无认证，只返回进程健康；`GET /api/identity` 返回 whoami。`GET /api/events` 是认证 SSE（ready/change/agent）；agent 事件按身份过滤，change 只是状态变化提醒，不能当作原生任务终态回调。`POST /api/shutdown` 仅 Owner。Host/Origin 校验只允许本机地址及显式配置的公开地址。UI 的 ui_open 返回临时登录 URL，含凭据，不放共享记录；UI 会换成 HttpOnly/SameSite=Strict cookie 后清除查询参数。
 
 ## 创建请求
 
-以下是**全部配置已由用户选定后**的 direct 示例，不是让调用 Agent自行套用默认值。先替换 group、目录、模型和职责等为配置表的明确值。CLI/HTTP 当前仍为旧调用方保留默认值，Skill 必须主动把适用值传全。
+以下为独立 direct 目录的示例；替换 group、模型、目录和任务内容。选项语义及 prompt 覆盖规则见 [配置](configuration.md)。
 
 ```json
 {
   "group":"g-xxxx", "role_name":"Research1", "identity":"worker",
-  "harness":"codex", "model":"用户明确指定的模型",
+  "harness":"codex", "model":"用户指定的模型",
   "harness_options":{"model_reasoning_effort":"high"},
   "run_mode":"fork", "workdir":"/absolute/research/r1", "worktree":false,
   "prompt_tpl":"处理任务 {{task}}；版本 {{version}}",
-  "system_prompt_tpl":"研究主题 A。先读共享记录，仅写自己的结果；完成后按约定通知 Leader 一次。",
+  "system_prompt_tpl":"完成分配的研究任务，按验收标准提交证据与结果；完成或阻塞时通知任务中指定的真实回复实例。",
   "extra_env":{}, "doorbell_script":"", "doorbell_enabled":false
 }
 ```
 
-git_init/base_ref/migrate 已在配置表记为 direct 不适用，故不传。worktree 模式需明确 git_init、migrate；Git 模式明确 base_ref（用户授权使用 HEAD 时可传 "HEAD"）。model 可以是字符串或用户明确授权 CLI 模型的 null。空模板用 ""；不使用 doorbell 用空脚本串和 false。不能传 duration、GPU、start、callback 等不存在的字段。
+direct 不传 git_init/base_ref/migrate；worktree 模式按目录现状设置，迁移已有内容需授权。空模板用 ""，沿用 CLI 模型用 null。GPU、duration、callback、start 不是创建参数。
 
 agent_create 返回 `{id,group_id,role_name,identity,harness,model,harness_options,extra_env,run_mode,workdir,execution,...}`；workdir 是对象，包含 id/root/mode 和适用的 main_path/shared_path/base_ref。execution 解释实际并发限制。resident_instance_id 初始为 null，首次触发才分配。agent_list/group_agents 返回逻辑 Agent 数组及其 instances；instance_get 返回 config_snapshot、状态、会话、pending_messages 和 runs（含结果）。
 
 ## 工具清单
 
-下表列出 CLI/HTTP 真实参数；`?` 表示协议可选，不代表 Skill 可以静默依赖默认。参数名用下划线。所有实例调用限本坊。Admin 管理只限本坊 worker，不能创建/提升为 admin 或管理其他 admin。
+下表列出 CLI/HTTP 真实参数；`?` 表示可选。参数名用下划线。所有实例调用限本坊。Admin 管理只限本坊 worker，不能创建/提升为 admin 或管理其他 admin。
 
 | 工具 | 参数 | 结果/权限 |
 | --- | --- | --- |
 | whoami | {} | id/role_name/group/identity/shared_dir；Owner 或实例 |
 | group_create / group_list | {name} / {} | group 对象/数组；Owner |
 | group_update / group_delete | {id,name?,paused?} / {id} | group/ok；Owner；暂停保留队列 |
-| agent_create | 上述全部适用配置 | 逻辑 Agent；Owner/admin |
+| agent_create | 上述创建配置 | 逻辑 Agent；Owner/admin |
 | agent_get / agent_list | {id} / {group?} | 对象/数组；本坊可读 |
 | group_agents | {} | 本坊 Agent 数组，实例使用 |
 | agent_update | {id,role_name?,identity?,harness?,model?,harness_options?,extra_env?,prompt_tpl?,system_prompt_tpl?,run_mode?,workdir?,worktree?,git_init?,migrate?,base_ref?,doorbell_script?,doorbell_enabled?} | 更新逻辑配置；Owner/admin；目录相关选项只在传 workdir 时使用，已有目录元数据不改写 |
@@ -89,8 +80,9 @@ agent_create 返回 `{id,group_id,role_name,identity,harness,model,harness_optio
 | instance_renew_resident | {logical_id} | ok；Owner/admin，下次触发创建新实例 |
 | instance_fork | {logical_id,prompt?,vars?} | 入队消息；Owner，强制新实例 |
 | run_stop | {instance_id} | ok；Owner/admin，终止当前运行 |
-| message_to | {target,group?,prompt?,system_prompt?,vars?,dedup_key?,dedup_window?} | 入队消息；Owner/本坊实例 |
-| message_list | {group?,logical_id?,instance_id?,target?,source?,from_id?,status?,since?,until?,limit?,offset?,order?} | 消息数组；Owner |
+| message_to | {target,group?,prompt?,system_prompt?,vars?,dedup_key?,dedup_window?} | 入队消息；短 ID=fork 模式逻辑节点新建实例，长 ID=resume 指定实例；resident 逻辑节点按常驻规则处理；Owner/本坊实例 |
+| message_force_push | {id} | 原拒绝消息入队；Owner 或原发送实例，仅 rejected 状态可用 |
+| message_list | {group?,logical_id?,instance_id?,target?,source?,from_id?,status?,since?,until?,limit?,offset?,order?} | 消息数组；Owner 或本组实例 |
 | message_get | {id} | 消息和所有运行尝试；Owner |
 | message_retry / message_cancel | {id} | ok；Owner；失败/已取消可重试，仅 queued 可取消 |
 | run_list | {group?,logical_id?,instance_id?,message_id?,source?,from_id?,status?,since?,until?,limit?,offset?,order?} | run 数组；Owner |
@@ -107,12 +99,45 @@ agent_create 返回 `{id,group_id,role_name,identity,harness,model,harness_optio
 
 `/api/ring` 与 message_to 参数一致；CLI ring 用 `--group`、`--prompt`、`--system-prompt`、重复 `--var k=v`、`--dedup-key`、`--dedup-window`。target 可为逻辑短 ID、实例长 ID、角色名或角色名#序号；Owner 用角色名时传 group 避免歧义。
 
+### message_to
+
+签名：`{target,group?,prompt?,system_prompt?,vars?,dedup_key?,dedup_window?}`。**没有 mode 参数**，目标决定路由：
+
+| target | 路由 |
+| --- | --- |
+| 逻辑短 ID，例如 abcdef，run_mode=fork | fork 新实例 |
+| 真实长 ID，例如 abcdef-1，任意 run_mode | resume 指定实例 |
+| 逻辑短 ID，run_mode=resident | 首次创建，之后复用常驻实例 |
+
+角色名解析为逻辑目标，角色名#序号解析为指定实例；任务交接优先使用已记录的 ID。忙碌实例的消息排在后续回合，已归档实例不能 resume。具体派发和回复见 [协作示例](collaboration.md)。
+
+回执中的 next_action / planned_instance_id 表示计划动作，非完成结果。去重命中或消息已派发时，这些字段可能缺省；保留消息 id，按需查询 message_get 或实例状态。
+
+### 积压拒绝与强制推送
+
+积压按目标真实实例统计；resident 的逻辑 ID 与常驻实例共用队列（首次创建前也如此）。fork 逻辑 ID 和 instance_fork 创建新会话，不汇总其他实例的积压。提交前该队列已有 > 5 条 queued 消息时，保存 rejected 记录并返回 HTTP 409；已有 5 条仍接受第六条。dispatched、rejected 和终态消息不计入。检查和写入在同一同步操作内完成。
+
+CLI 错误退出码为 1，stderr 与 HTTP 错误正文均为 `{error,details}`。error 说明“目标 Agent 已有 X 条排队消息，本次消息已拒绝。是否确认继续推送？”，details 包含：
+
+```json
+{
+  "code":"target_queue_overloaded", "message_id":"被拒绝消息的 ID",
+  "target_id":"解析后的目标 ID", "queued_count":6, "threshold":5,
+  "status":"rejected",
+  "confirmation":{"tool":"message_force_push","params":{"id":"被拒绝消息的 ID"}}
+}
+```
+
+调用方确认继续时执行 `message_force_push {"id":"拒绝 ID"}`。服务只将原消息加入队尾，保留发送者、目标及内容；拒绝数量和强推者/时间保存在 rejection 中。未知 ID 返回 404；非 rejected（包括已推送）返回 409；其他发送实例调用返回 403，跨组目标仍不可见。Owner 可强推所有拒绝消息，doorbell 凭据不能调用该工具。目标已删除或实例已归档时仍拒绝推送。
+
+同一发送者的相同 target/dedup_key 在窗口内命中 rejected 消息时，再次返回同一拒绝 ID。队列缩短或 daemon 重启不会自动接纳 rejected 消息；它不能通过 message_retry 入队，可以用 message_cancel 放弃。message_retry 同样检查目标队列积压，超过阈值时将原消息改为 rejected 并返回其 ID。强推并发或重复调用只有第一次成功，之后报错。
+
 ## 消息、运行与去重
 
-message 状态 queued/dispatched/done/failed/cancelled；run 状态 running/succeeded/failed/stopped/interrupted。message_to 返回 id/status/queue_reason/next_action/sender 等；`queue_reason.code` 为 workdir_busy、instance_busy、group_paused、fifo、awaiting_dispatch 或 target_unavailable，可能带阻塞 run/实例。它是当前快照，不能承诺起跑时间。
+message 状态 queued/dispatched/done/failed/cancelled/rejected；run 状态 running/succeeded/failed/stopped/interrupted。message_to 返回 id/status/queue_reason/next_action/sender 等；`queue_reason.code` 为 workdir_busy、instance_busy、group_paused、fifo、awaiting_dispatch 或 target_unavailable，可能带阻塞 run/实例。它是当前快照，不能承诺起跑时间。
 
-message_get 的 runs 保留重试历史；run_get 的 prompt 是实际投递内容，final_output/usage/error 为结果。触发来源 host/ui/ring/message_to/doorbell_script；Owner 来源不证明用户亲自输入。旧记录 trigger_is_snapshot=false，不能推断未保存的触发数据。since/until 是 ISO 时间，消息按 created_at、运行按 started_at；order=asc/desc。显式 limit 1–500、offset≥0；HTTP/CLI 不传分页时部分接口返回全量，建议明确分页。查询不会启动模型回合。
+message_get 的 runs 保留重试历史；run_get 的 prompt 是实际投递内容，final_output/usage/error 为结果。触发来源 host/ui/ring/message_to/doorbell_script；Owner 来源不证明用户亲自输入。trigger_is_snapshot=false 时不能推断未保存的触发数据。since/until 是 ISO 时间，消息按 created_at、运行按 started_at；order=asc/desc。显式 limit 1–500、offset≥0；HTTP/CLI 不传分页时部分接口返回全量，建议明确分页。查询不会启动模型回合。
 
-去重范围是 target_id + dedup_key，在 dedup_window（如 24h、7d）内返回旧消息并标 deduplicated=true；不同实例/逻辑目标不是同一范围，不同发送者共用目标也共享键空间。缺 key 不去重。不要用相同键表示修改后的任务；新 version 用新键。重试/崩溃不提供 exactly-once；业务结果写入和消费仍需任务版本/已处理记录。
+去重范围是 from_id + target_id + dedup_key，在 dedup_window（如 24h、7d）内返回旧消息并标 deduplicated=true；不同实例/逻辑目标不是同一范围，不同发送者的键空间相互独立。缺 key 不去重。不要用相同键表示修改后的任务；新 version 用新键。重试/崩溃不提供 exactly-once；业务结果写入和消费仍需任务版本/已处理记录。
 
 daemon 重启把正在运行的 run 标 interrupted、对应消息 failed，不自动重放；queued 继续调度。先查询失败记录和输出，再决定是否重试，不能把入队响应当结果。

@@ -21,6 +21,7 @@ import {
   type RunHandle,
 } from "./types.js";
 import * as wd from "./workdirs.js";
+import { agentSkillPath, installAgentSkill } from "./skills.js";
 import {
   instanceEnvironment,
   workdirMetadataDir,
@@ -37,6 +38,7 @@ export class Service extends EventEmitter {
   auth: Auth;
   observer: Observer;
   url = "";
+  uiUrl = "";
   stopping = false;
   active = new Map<
     string,
@@ -44,11 +46,13 @@ export class Service extends EventEmitter {
   >();
   onDoorbellChange?: (id: string, action: string) => Promise<unknown>;
   private timer?: NodeJS.Timeout;
+  private deletingGroups = new Set<string>();
+  private stopRequests = new Map<string, "stopped" | "interrupted">();
   constructor(
     public dir: string,
     public harnesses: Record<string, Harness>,
     public cliPath: string,
-    public skillDir = join(dirname(cliPath), "../skills/hamlet"),
+    public skillDir = join(dirname(cliPath), "../skills/hamlet-agent"),
   ) {
     super();
     this.store = new Store(dir);
@@ -58,19 +62,29 @@ export class Service extends EventEmitter {
   }
   start() {
     // A fresh daemon never replays an in-flight message.
-    for (const r of this.store
-      .all("runs")
-      .filter((r) => r.status === "running")) {
-      this.store.update("runs", r.id, {
-        status: "interrupted",
-        ended_at: now(),
-        error: "daemon 重启中断了运行",
-      });
-      this.store.update("messages", r.message_id, {
-        status: "failed",
-        error: "daemon 重启中断；可手动重试",
-      });
-    }
+    this.store.db.transaction(() => {
+      for (const run of this.store
+        .all("runs")
+        .filter((r) => r.status === "running"))
+        this.store.update("runs", run.id, {
+          status: "interrupted",
+          ended_at: now(),
+          pid: null,
+          error: "daemon 重启中断了运行",
+        });
+      for (const message of this.store
+        .all("messages")
+        .filter((m) => m.status === "dispatched")) {
+        const run = message.run_id && this.store.get("runs", message.run_id);
+        this.store.update("messages", message.id, {
+          status: run?.status === "succeeded" ? "done" : "failed",
+          error:
+            run?.status === "succeeded"
+              ? null
+              : run?.error || "daemon 在执行或准备实例时中断；可手动重试",
+        });
+      }
+    })();
     for (const i of this.store
       .all("instances")
       .filter((i) => ["preparing", "running"].includes(i.status))) {
@@ -89,13 +103,8 @@ export class Service extends EventEmitter {
           });
       } else this.store.update("instances", i.id, { status: "idle" });
     }
-    for (const m of this.store
-      .all("messages")
-      .filter((m) => m.status === "dispatched" && !m.run_id))
-      this.store.update("messages", m.id, {
-        status: "failed",
-        error: "daemon 在准备实例时中断；可手动重试",
-      });
+    for (const instance of this.store.all("instances"))
+      this.releaseUnstartedResident(instance.id);
     this.timer = setInterval(() => this.tick(), 100);
     this.tick();
   }
@@ -198,17 +207,22 @@ export class Service extends EventEmitter {
       throw new AppError("不存在", 404);
     if (p.force_fork) this.owner(a);
     const target = i?.id || l.id;
+    const fromId = a.kind === "owner" ? "owner" : a.id;
     const window = duration(p.dedup_window ?? "24h");
     if (p.dedup_key) {
       const old = this.store
         .all("messages")
         .find(
           (m) =>
+            m.from_id === fromId &&
             m.target_id === target &&
             m.dedup_key === p.dedup_key &&
             m.dedup_until > now(),
         );
-      if (old) return { ...this.observer.message(old, a), deduplicated: true };
+      if (old) {
+        if (old.status === "rejected") this.rejectMessage(old);
+        return { ...this.observer.message(old, a), deduplicated: true };
+      }
     }
     const c = this.context(a),
       from =
@@ -217,10 +231,15 @@ export class Service extends EventEmitter {
           : a.kind === "doorbell"
             ? `doorbell: ${l.role_name}`
             : `${c.role_name}#${this.store.get("instances", a.id)!.seq}`;
+    const rejection = this.queueRejection({
+      target_id: target,
+      force_fork: !!p.force_fork,
+    });
+    const rejected = !!rejection;
     const m = {
       id: randomUUID(),
       target_id: target,
-      from_id: a.kind === "owner" ? "owner" : a.id,
+      from_id: fromId,
       from_role: from,
       source: a.kind === "doorbell" ? "doorbell_script" : source,
       prompt: p.prompt ?? null,
@@ -228,16 +247,105 @@ export class Service extends EventEmitter {
       vars: p.vars || {},
       dedup_key: p.dedup_key || null,
       dedup_until: new Date(Date.now() + window).toISOString(),
-      status: "queued",
+      status: rejected ? "rejected" : "queued",
+      rejection,
+      error: rejection ? this.rejectionText(rejection.queued_count) : null,
       created_at: now(),
-      queued_at: now(),
+      queued_at: rejected ? null : now(),
+      queue_seq: rejected ? null : this.nextQueueSeq(),
       force_fork: !!p.force_fork,
     };
     this.store.insert("messages", m);
     if (a.kind === "doorbell")
       this.store.update("doorbells", a.id, { last_ring_at: now() });
     this.changed();
+    if (rejected) this.rejectMessage(m);
     return this.observer.message(m, a);
+  }
+  private rejectionText(count: number) {
+    return `目标 Agent 已有 ${count} 条排队消息，本次消息已拒绝。是否确认继续推送？`;
+  }
+  private queueRejection(m: Row) {
+    const queue = this.pressureQueue(m);
+    const count = queue
+      ? this.queuedMessages().filter(
+          (other) => this.pressureQueue(other) === queue,
+        ).length
+      : 0;
+    return count > 5
+      ? {
+          code: "target_queue_overloaded",
+          queued_count: count,
+          threshold: 5,
+          rejected_at: now(),
+        }
+      : null;
+  }
+  private pressureQueue(m: Row): string | null {
+    try {
+      const { l, i } = this.route(m);
+      if (i) return `instance:${i.id}`;
+      // Before first dispatch, resident messages share the future session queue.
+      if (l.run_mode === "resident" && !m.force_fork) return `resident:${l.id}`;
+      return null; // A fork logical target creates a separate session per message.
+    } catch {
+      return null; // Invalid queued targets are handled by the scheduler.
+    }
+  }
+  private nextQueueSeq(): number {
+    return (
+      this.store.db
+        .prepare("SELECT COALESCE(MAX(queue_seq),0)+1 AS n FROM messages")
+        .get() as { n: number }
+    ).n;
+  }
+  private queuedMessages() {
+    return this.store
+      .all("messages")
+      .filter((m) => m.status === "queued")
+      .sort((a, b) => a.queue_seq - b.queue_seq);
+  }
+  private rejectMessage(m: Row): never {
+    throw new AppError(m.error, 409, {
+      ...m.rejection,
+      message_id: m.id,
+      target_id: m.target_id,
+      status: "rejected",
+      confirmation: { tool: "message_force_push", params: { id: m.id } },
+    });
+  }
+  private forcePush(p: Row, a: Actor) {
+    this.context(a);
+    if (typeof p.id !== "string" || !p.id)
+      throw new AppError("id 必须是被拒绝消息的 ID");
+    const m = this.store.get("messages", p.id);
+    if (!m) throw new AppError("消息不存在", 404);
+    const t = this.resolve(m.target_id, a);
+    if (
+      a.kind !== "owner" &&
+      (m.from_id !== a.id || senderInfo(m).kind !== "instance")
+    )
+      throw new AppError("只能强推自己被拒绝的消息", 403);
+    if (m.status !== "rejected")
+      throw new AppError(
+        "只能强推被拒绝的消息；此消息已推送或不是 rejected 状态",
+        409,
+      );
+    if (t.instance?.archived_at) throw new AppError("目标实例已归档", 409);
+    // No await between checking status and updating: concurrent calls cannot enqueue twice.
+    this.store.update("messages", m.id, {
+      status: "queued",
+      error: null,
+      queued_at: now(),
+      queue_seq: this.nextQueueSeq(),
+      rejection: {
+        ...m.rejection,
+        forced_at: now(),
+        forced_by: a.kind === "owner" ? "owner" : a.id,
+      },
+    });
+    this.changed();
+    return this.observer.message(this.store.get("messages", m.id)!, a);
   }
   async call(name: string, p: Row, a: Actor): Promise<any> {
     if (a.kind === "doorbell") throw new AppError("无权限", 403);
@@ -269,6 +377,8 @@ export class Service extends EventEmitter {
       case "group_update": {
         this.owner(a);
         if (!this.store.get("groups", p.id)) throw new AppError("不存在", 404);
+        if (this.deletingGroups.has(p.id))
+          throw new AppError("Group 正在删除", 409);
         this.store.update("groups", p.id, {
           ...(p.name !== undefined ? { name: p.name } : {}),
           ...(p.paused !== undefined ? { paused: !!p.paused } : {}),
@@ -278,13 +388,21 @@ export class Service extends EventEmitter {
       }
       case "group_delete": {
         this.owner(a);
-        for (const l of this.store
-          .all("logical_agents")
-          .filter((l) => l.group_id === p.id && !l.deleted_at))
-          await this.deleteAgent(l.id, a);
-        this.store.db.prepare("DELETE FROM groups WHERE id=?").run(p.id);
-        this.changed();
-        return { ok: true };
+        if (this.deletingGroups.has(p.id))
+          throw new AppError("Group 正在删除", 409);
+        this.deletingGroups.add(p.id);
+        this.store.update("groups", p.id, { paused: true });
+        try {
+          for (const l of this.store
+            .all("logical_agents")
+            .filter((l) => l.group_id === p.id && !l.deleted_at))
+            await this.deleteAgent(l.id, a);
+          this.store.db.prepare("DELETE FROM groups WHERE id=?").run(p.id);
+          this.changed();
+          return { ok: true };
+        } finally {
+          this.deletingGroups.delete(p.id);
+        }
       }
       case "agent_create":
         return this.createAgent(p, a);
@@ -339,16 +457,8 @@ export class Service extends EventEmitter {
             a,
             i.config_snapshot.workdir,
           ),
-          pending_messages: this.store
-            .all("messages")
-            .filter(
-              (m) =>
-                m.status === "queued" &&
-                (m.target_id === i.id ||
-                  (m.target_id === i.logical_id &&
-                    this.store.get("logical_agents", i.logical_id)
-                      ?.resident_instance_id === i.id)),
-            )
+          pending_messages: this.queuedMessages()
+            .filter((m) => this.pressureQueue(m) === `instance:${i.id}`)
             .map((m) => this.observer.message(m, a)),
           runs: this.store
             .all("runs")
@@ -382,6 +492,8 @@ export class Service extends EventEmitter {
       }
       case "message_to":
         return this.ring(a, p, a.kind === "owner" ? "host" : "message_to");
+      case "message_force_push":
+        return this.forcePush(p, a);
       case "message_list":
         return this.observer.messages(p, a);
       case "message_get":
@@ -396,24 +508,35 @@ export class Service extends EventEmitter {
         this.owner(a);
         const m = this.store.get("messages", p.id);
         if (!m) throw new AppError("不存在", 404);
-        if (name === "message_cancel" && m.status !== "queued")
-          throw new AppError("只能取消排队消息");
-        if (
-          name === "message_retry" &&
-          !["failed", "cancelled"].includes(m.status)
-        )
-          throw new AppError("只能重试失败或已取消的消息");
-        if (name === "message_retry") {
+        if (name === "message_cancel") {
+          if (!["queued", "rejected"].includes(m.status))
+            throw new AppError("只能取消排队或被拒绝的消息");
+          this.store.update("messages", m.id, {
+            status: "cancelled",
+            error: null,
+          });
+        } else {
+          if (!["failed", "cancelled"].includes(m.status))
+            throw new AppError("只能重试失败或已取消的消息");
           const t = this.resolve(m.target_id, a);
           if (t.instance?.archived_at) throw new AppError("实例已归档");
+          const rejection = this.queueRejection(m);
+          this.store.update("messages", m.id, {
+            status: rejection ? "rejected" : "queued",
+            error: rejection
+              ? this.rejectionText(rejection.queued_count)
+              : null,
+            rejection: rejection || m.rejection,
+            run_id: null,
+            resolved_instance_id: null,
+            queued_at: rejection ? null : now(),
+            queue_seq: rejection ? null : this.nextQueueSeq(),
+          });
+          if (rejection) {
+            this.changed();
+            this.rejectMessage(this.store.get("messages", m.id)!);
+          }
         }
-        this.store.update("messages", m.id, {
-          status: name === "message_retry" ? "queued" : "cancelled",
-          error: null,
-          run_id: null,
-          resolved_instance_id: null,
-          ...(name === "message_retry" ? { queued_at: now() } : {}),
-        });
         this.changed();
         return { ok: true };
       }
@@ -521,7 +644,9 @@ export class Service extends EventEmitter {
       }
       case "ui_open":
         this.owner(a);
-        return { url: `${this.url}/?token=${this.auth.ownerToken}` };
+        return {
+          url: `${this.uiUrl || this.url}/?token=${this.auth.ownerToken}`,
+        };
       case "state": {
         this.owner(a);
         return {
@@ -569,6 +694,8 @@ export class Service extends EventEmitter {
     if (a.kind !== "owner" && group !== c.group_id)
       throw new AppError("不存在", 404);
     if (!this.store.get("groups", group)) throw new AppError("不存在", 404);
+    if (this.deletingGroups.has(group))
+      throw new AppError("Group 正在删除", 409);
     const cfg: Row = {
       identity: "worker",
       harness: "codex",
@@ -602,6 +729,13 @@ export class Service extends EventEmitter {
       w = wd.setupWorkdir(p);
       this.store.insert("workdirs", w);
     }
+    installAgentSkill(
+      this.skillDir,
+      w.mode === "direct" ? w.root : w.main_path,
+      cfg.harness,
+    );
+    if (w.mode === "plain")
+      installAgentSkill(this.skillDir, w.base_path, cfg.harness);
     const id = short(6);
     const l = {
       id,
@@ -672,6 +806,21 @@ export class Service extends EventEmitter {
       }
       changes.workdir_id = w.id;
     }
+    const workdir = this.store.get(
+      "workdirs",
+      changes.workdir_id || l.workdir_id,
+    )!;
+    installAgentSkill(
+      this.skillDir,
+      workdir.mode === "direct" ? workdir.root : workdir.main_path,
+      changes.harness || l.harness,
+    );
+    if (workdir.mode === "plain")
+      installAgentSkill(
+        this.skillDir,
+        workdir.base_path,
+        changes.harness || l.harness,
+      );
     this.store.update("logical_agents", l.id, {
       ...changes,
       updated_at: now(),
@@ -690,11 +839,6 @@ export class Service extends EventEmitter {
       deleted_at: now(),
       doorbell_enabled: 0,
     });
-    await this.onDoorbellChange?.(id, "stop");
-    for (const i of this.store
-      .all("instances")
-      .filter((i) => i.logical_id === id && !i.archived_at))
-      await this.archiveInternal(i);
     for (const m of this.store
       .all("messages")
       .filter(
@@ -706,6 +850,11 @@ export class Service extends EventEmitter {
         status: "cancelled",
         error: "逻辑 Agent 已删除",
       });
+    await this.onDoorbellChange?.(id, "stop");
+    for (const i of this.store
+      .all("instances")
+      .filter((i) => i.logical_id === id && !i.archived_at))
+      await this.archiveInternal(i);
     this.changed();
   }
   async archive(id: string, a: Actor) {
@@ -717,11 +866,6 @@ export class Service extends EventEmitter {
       status: "archived",
       archived_at: now(),
     });
-    await this.stop(i.id);
-    wd.cleanup(i.config_snapshot.workdir, i);
-    const l = this.store.get("logical_agents", i.logical_id);
-    if (l && l.resident_instance_id === i.id)
-      this.store.update("logical_agents", l.id, { resident_instance_id: null });
     for (const m of this.store
       .all("messages")
       .filter((m) => m.status === "queued" && m.target_id === i.id))
@@ -729,21 +873,25 @@ export class Service extends EventEmitter {
         status: "cancelled",
         error: "实例已归档",
       });
+    await this.stop(i.id);
+    wd.cleanup(i.config_snapshot.workdir, i);
+    const l = this.store.get("logical_agents", i.logical_id);
+    if (l && l.resident_instance_id === i.id)
+      this.store.update("logical_agents", l.id, { resident_instance_id: null });
     this.changed();
   }
   async stop(id: string) {
     const active = this.active.get(id);
     if (!active) return;
-    this.store.update("runs", active.run, { status: "stopped" });
+    if (!this.stopRequests.has(active.run))
+      this.stopRequests.set(active.run, "stopped");
     await Promise.resolve();
     if (active.handle) await active.harness.stop(active.handle);
     await active.task;
   }
   tick() {
     if (this.stopping) return;
-    for (const m of this.store
-      .all("messages")
-      .filter((m) => m.status === "queued")) {
+    for (const m of this.queuedMessages()) {
       try {
         this.dispatch(m);
       } catch (e) {
@@ -791,6 +939,23 @@ export class Service extends EventEmitter {
           group_id: l.group_id,
         },
       };
+    // Renewing a resident must finish stopping the old session before its replacement runs.
+    const retiring =
+      !i &&
+      !m.force_fork &&
+      l.run_mode === "resident" &&
+      l.resident_instance_id &&
+      this.active.get(l.resident_instance_id);
+    if (retiring)
+      return {
+        ...result,
+        queue_reason: {
+          code: "instance_busy",
+          description: "等待旧常驻实例结束并完成归档",
+          blocking_instance_id: l.resident_instance_id,
+          blocking_run_id: retiring.run,
+        },
+      };
     const active = i && this.active.get(i.id);
     if (active)
       return {
@@ -821,7 +986,7 @@ export class Service extends EventEmitter {
             },
           };
       }
-    for (const earlier of this.store.all("messages")) {
+    for (const earlier of this.queuedMessages()) {
       if (earlier.id === m.id) break;
       if (earlier.status !== "queued") continue;
       try {
@@ -858,6 +1023,9 @@ export class Service extends EventEmitter {
     };
   }
   private dispatch(m: Row) {
+    const current = this.store.get("messages", m.id);
+    if (!current || current.status !== "queued") return;
+    m = current;
     const decision = this.scheduling(m);
     if (decision.queue_reason.code !== "awaiting_dispatch") return;
     const { l, i: instance, w } = this.route(m);
@@ -892,12 +1060,14 @@ export class Service extends EventEmitter {
     const prompt = m.prompt ?? render(config.prompt_tpl, vars);
     const system = fresh
       ? (m.system_prompt ?? render(config.system_prompt_tpl, vars)) +
-        (w.shared_path
-          ? `\n共享知识目录: ${w.shared_path}。可在此读写并沉淀组内知识。`
-          : "")
+        (w.shared_path ? `\n共享目录: ${w.shared_path}` : "")
       : "";
     const sender = senderInfo(m);
-    const actual = `[来自 ${sender.label}${sender.kind === "owner" ? " (owner)" : sender.kind === "doorbell" ? "" : ` (${m.from_id})`}]\n${prompt}\n\n[Hamlet runtime]\nUse CLI/HTTP with your existing instance identity. Before Hamlet operations read the Skill at ${JSON.stringify(join(this.skillDir, "SKILL.md"))}. CLI: "$HAMLET_NODE" "$HAMLET_CLI" call whoami '{}'. Never print credentials, read Owner secrets, or change authentication environment. HAMLET_URL/HAMLET_TOKEN are provided only via environment. Every message triggers execution immediately; no self-message polling.`;
+    const adminHint =
+      l.identity === "admin"
+        ? `\n\n需要查询或管理同组 Agent 时，参考 hamlet-agent skill：${join(agentSkillPath(path, config.harness), "SKILL.md")}。`
+        : "";
+    const actual = `[来自 ${sender.label}${sender.kind === "owner" ? " (owner)" : sender.kind === "doorbell" ? "" : ` (${m.from_id})`}]\n${prompt}${adminHint}`;
     if (fresh) {
       i = {
         id,
@@ -966,16 +1136,18 @@ export class Service extends EventEmitter {
       ),
     };
     run.events_path = join(this.dir, "runs", run.id + ".jsonl");
-    this.store.insert("runs", run);
-    this.store.update("messages", m.id, {
-      status: "dispatched",
-      resolved_instance_id: id,
-      run_id: run.id,
-    });
-    this.store.update("instances", id, {
-      status: "running",
-      last_active_at: now(),
-    });
+    this.store.db.transaction(() => {
+      this.store.insert("runs", run);
+      this.store.update("messages", m.id, {
+        status: "dispatched",
+        resolved_instance_id: id,
+        run_id: run.id,
+      });
+      this.store.update("instances", id, {
+        status: "running",
+        last_active_at: now(),
+      });
+    })();
     const emit = (e: Row) => {
       const event = { timestamp: now(), ...e };
       appendFileSync(run.events_path, JSON.stringify(event) + "\n");
@@ -1019,6 +1191,7 @@ export class Service extends EventEmitter {
       h = this.harnesses[config.harness];
     try {
       if (
+        this.stopRequests.has(run.id) ||
         ["stopped", "interrupted"].includes(
           this.store.get("runs", run.id)?.status,
         )
@@ -1026,6 +1199,11 @@ export class Service extends EventEmitter {
         throw new AppError("运行已终止");
       if (!fresh && !i.harness_session_id)
         throw new AppError("harness 会话不可用，请换新实例");
+      const localSkill = installAgentSkill(
+        this.skillDir,
+        i.worktree_path,
+        config.harness,
+      );
       const token = this.auth.sign({ kind: "instance", id: i.id }),
         innerEnv = instanceEnvironment(this.url, token, i.id);
       const opts = {
@@ -1038,8 +1216,12 @@ export class Service extends EventEmitter {
           ...childEnvironment(config.extra_env, {}),
           ...innerEnv,
           HAMLET_CLI: this.cliPath,
+          HAMLET_AGENT_TOOLS: join(
+            dirname(this.cliPath),
+            "hamlet-agent-tools.js",
+          ),
           HAMLET_NODE: process.execPath,
-          HAMLET_SKILL_DIR: this.skillDir,
+          HAMLET_SKILL_DIR: localSkill,
           HAMLET_RUN_ID: run.id,
           DETACHED_RUN_ID: run.id,
         },
@@ -1079,43 +1261,52 @@ export class Service extends EventEmitter {
         error = `自动提交失败: ${String(e)}`;
         emit({ type: "error", message: error });
       }
-      const finalStatus = this.store.get("runs", run.id)?.status;
+      const finalStatus =
+        this.stopRequests.get(run.id) || this.store.get("runs", run.id)?.status;
       const stopped =
         finalStatus === "stopped" || finalStatus === "interrupted";
       const success = !stopped && result.exitCode === 0 && !error;
-      this.store.update("runs", run.id, {
-        status: stopped ? finalStatus : success ? "succeeded" : "failed",
-        ended_at: now(),
-        final_output: result.finalOutput,
-        usage: result.usage,
-        error: error || null,
-        pid: null,
-      });
-      this.store.update("messages", m.id, {
-        status: success ? "done" : "failed",
-        error: success
-          ? null
-          : error ||
-            (stopped ? "运行已终止" : `harness 退出码 ${result.exitCode}`),
-      });
+      this.store.db.transaction(() => {
+        this.store.update("runs", run.id, {
+          status: stopped ? finalStatus : success ? "succeeded" : "failed",
+          ended_at: now(),
+          final_output: result.finalOutput,
+          usage: result.usage,
+          error: error || null,
+          pid: null,
+        });
+        this.store.update("messages", m.id, {
+          status: success ? "done" : "failed",
+          error: success
+            ? null
+            : error ||
+              (stopped ? "运行已终止" : `harness 退出码 ${result.exitCode}`),
+        });
+      })();
     } catch (e) {
       emit({ type: "error", message: String(e) });
-      this.store.update("runs", run.id, {
-        status: ["stopped", "interrupted"].includes(
-          this.store.get("runs", run.id)?.status,
-        )
-          ? this.store.get("runs", run.id)!.status
-          : "failed",
-        ended_at: now(),
-        error: String(e),
-        pid: null,
-      });
-      this.store.update("messages", m.id, {
-        status: "failed",
-        error: String(e),
-      });
+      this.store.db.transaction(() => {
+        this.store.update("runs", run.id, {
+          status:
+            this.stopRequests.get(run.id) ||
+            (["stopped", "interrupted"].includes(
+              this.store.get("runs", run.id)?.status,
+            )
+              ? this.store.get("runs", run.id)!.status
+              : "failed"),
+          ended_at: now(),
+          error: String(e),
+          pid: null,
+        });
+        this.store.update("messages", m.id, {
+          status: "failed",
+          error: String(e),
+        });
+      })();
     } finally {
       this.active.delete(i.id);
+      this.stopRequests.delete(run.id);
+      this.releaseUnstartedResident(i.id);
       if (!this.store.get("instances", i.id)?.archived_at)
         this.store.update("instances", i.id, {
           status: "idle",
@@ -1124,12 +1315,25 @@ export class Service extends EventEmitter {
       this.changed();
     }
   }
+  private releaseUnstartedResident(id: string) {
+    const instance = this.store.get("instances", id);
+    const logical =
+      instance && this.store.get("logical_agents", instance.logical_id);
+    if (
+      instance &&
+      !instance.harness_session_id &&
+      logical?.resident_instance_id === id
+    )
+      this.store.update("logical_agents", logical.id, {
+        resident_instance_id: null,
+      });
+  }
   async close() {
     this.stopping = true;
     clearInterval(this.timer);
     await Promise.all(
       [...this.active.entries()].map(async ([id, v]) => {
-        this.store.update("runs", v.run, { status: "interrupted" });
+        this.stopRequests.set(v.run, "interrupted");
         await Promise.resolve();
         if (v.handle) await v.harness.stop(v.handle);
         await v.task;

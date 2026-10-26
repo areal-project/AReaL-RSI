@@ -33,6 +33,21 @@ export function codexArgs(o: StartOptions | ResumeOptions): string[] {
     if (!/^[a-zA-Z0-9_.-]+$/.test(k)) throw Error("无效的 harness 配置键");
     args.push("-c", `${k}=${toml(v)}`);
   }
+  if (o.env.HAMLET_AGENT_TOOLS) {
+    args.push(
+      "-c",
+      `mcp_servers.hamlet=${toml({
+        command: o.env.HAMLET_NODE || process.execPath,
+        args: [o.env.HAMLET_AGENT_TOOLS],
+        env_vars: ["HAMLET_URL", "HAMLET_TOKEN", "HAMLET_INSTANCE_ID"],
+        enabled: true,
+        required: true,
+        startup_timeout_sec: 30,
+        tool_timeout_sec: 90,
+        enabled_tools: ["message_to", "message_force_push"],
+      })}`,
+    );
+  }
   args.push("-");
   return args;
 }

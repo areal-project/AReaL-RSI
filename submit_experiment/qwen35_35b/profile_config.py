@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import copy
+import os
 import re
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -65,3 +67,29 @@ def protect_base(base: Any, patch: Any, prefix: str = "") -> None:
             protect_base(old, new, f"{prefix}.{index}")
     else:
         raise ValueError(f"{prefix} is fixed in base.yaml; change the base profile deliberately")
+
+
+def resolve_areal_dir(credentials: str = "") -> str:
+    """Read the source path without executing a credentials file as shell code."""
+    source = os.environ.get("AREAL_DIR", "").strip()
+    relative_to = Path.cwd()
+    if not source and credentials:
+        path = Path(credentials).expanduser().resolve()
+        if path.is_file():
+            relative_to = path.parent
+            for line in path.read_text().splitlines():
+                match = re.fullmatch(r"\s*(?:export\s+)?AREAL_DIR\s*=\s*(.*)", line)
+                if match is None:
+                    continue
+                try:
+                    words = shlex.split(match[1], comments=True)
+                except ValueError:
+                    raise ValueError("AREAL_DIR in credentials.env has invalid quoting") from None
+                if len(words) > 1:
+                    raise ValueError("AREAL_DIR in credentials.env must be one quoted path")
+                source = words[0].strip() if words else ""
+    if not source:
+        raise ValueError("Set AREAL_DIR in the environment or credentials.env before submitting")
+    if "$" in source or "`" in source or "\n" in source or "\r" in source:
+        raise ValueError("AREAL_DIR must be a literal path; shell expressions are not supported")
+    return str((relative_to / Path(source).expanduser()).resolve())

@@ -90,15 +90,25 @@ graph=`disabled`、memory saver 开启。调度器已提交 16 个并发 rollout
 ## 使用
 
 提交端需要 Python 3 和 PyYAML；不安装新依赖。训练依赖来自已有 SIF 和源码 overlay。
-AReaL 源码路径只读取本目录 `base.yaml` 的 `launch.areal_dir`，默认 `../../../../AReaL`，
-相对路径以本目录为基准，也支持绝对路径和 `~`。修改源码位置时直接编辑此配置；
-入口不读取外部 `AREAL_DIR`，也不提供 `--areal-dir` 覆盖。解析后的路径通过内部
-`AREAL_DIR` 传给 controller / workers，并用于 PYTHONPATH、Slurm chdir 和源码校验。
+AReaL 源码路径优先读取非空的环境变量 `AREAL_DIR`；未设置时，从按下述规则发现的
+`credentials.env` 中解析 `AREAL_DIR`。base.yaml 不再保存源码路径，也不提供 `--areal-dir`。
+环境变量中的相对路径以提交命令的工作目录为基准；文件中的相对路径以凭据文件所在目录为基准，
+两者均支持绝对路径和 `~`。解析后的路径用于 PYTHONPATH、Slurm chdir 和源码校验，
+并固定传给容器；环境变量优先级在容器内保持一致。
+
+例如在 `credentials.env` 中添加（或在提交 shell 中 export）：
+
+```bash
+export AREAL_DIR='/absolute/path/to/AReaL'
+```
+
+提交端仅解析该路径赋值，支持 `export`、引号及行尾注释，不执行凭据文件中的 shell 命令，
+也不展开 `$VAR`、`$(...)` 等 shell 表达式。两处都未设置时，在提交 Slurm 前报错。
 
 ```bash
 cd /storage/openpsi/users/wanghaitao.wht/project/rsi/AReaL-RSI/submit_experiment/qwen35_35b/rl
 
-# 只输出合并配置和计划提交命令，不创建目录、不调用 Slurm / Arena、不读取凭据内容。
+# 解析源码路径并显示配置/提交命令；不创建目录、不调用 Slurm / Arena、不执行凭据文件。
 ./submit.sh --dry-run --experiment-name qwen35-arena --trial-name inspect
 
 # 私有文件由 controller 和 workers 加载，内容不会复制到提交目录。
@@ -117,7 +127,7 @@ chmod 600 credentials.env
 # 需要 reservation 时，预检和训练命令都加此选项。
 ./submit.sh --experiment-name qwen35-arena --trial-name exp02 --reservation YOUR_RESERVATION
 
-# 自定义参数、数据、产物目录；源码位置在 base.yaml 的 launch.areal_dir 中修改。
+# 自定义参数、数据、产物目录；源码位置由 AREAL_DIR 或 credentials.env 指定。
 ./submit.sh --experiment-name another-experiment --trial-name trial01 \
   --params /shared/params.yaml --arena /shared/arena.yaml \
   --fileroot /shared/experiments
@@ -143,7 +153,7 @@ AReaL 的 `experiment_name`、`trial_name`，并用于 Slurm controller 名称�
 
 `credentials.env.example` 是可提交的凭据模板，真实的 `credentials.env` 已加入本目录
 `.gitignore`。默认依次查找脚本同目录及模型父目录的 `credentials.env`，从其他工作目录调用入口也能找到。
-路径优先级为 `--credentials-file` → 非空的 `CREDENTIALS_FILE` 环境变量 → 默认文件；
+凭据文件路径优先级为 `--credentials-file` → 非空的 `CREDENTIALS_FILE` 环境变量 → 默认文件；
 显式提供的相对路径按提交时的工作目录解析，最终保存绝对路径供 Slurm 作业使用。
 需要使用其他共享路径时，例如：
 

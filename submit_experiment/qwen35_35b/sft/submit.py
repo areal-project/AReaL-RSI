@@ -21,7 +21,13 @@ import yaml
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent))
-from profile_config import SAFE_NAME, load_yaml, merge, protect_base  # noqa: E402
+from profile_config import (  # noqa: E402
+    SAFE_NAME,
+    load_yaml,
+    merge,
+    protect_base,
+    resolve_areal_dir,
+)
 
 
 @dataclass(frozen=True)
@@ -108,12 +114,11 @@ def compose(params_path: Path, data_path: Path) -> dict:
     return config
 
 
-def runtime_from_config(config: dict, args: argparse.Namespace) -> Runtime:
+def runtime_from_config(config: dict, args: argparse.Namespace, credentials: str = "") -> Runtime:
     raw = config.pop("launch")
-    source = raw["areal_dir"]
-    if not isinstance(source, str) or not source.strip():
-        raise ValueError("launch.areal_dir must be a nonempty source path in base.yaml")
-    raw["areal_dir"] = str((ROOT / Path(source).expanduser()).resolve())
+    if "areal_dir" in raw:
+        raise ValueError("Move launch.areal_dir out of YAML and set AREAL_DIR instead")
+    raw["areal_dir"] = resolve_areal_dir(credentials)
     settings = raw.pop("slurm")
     settings.update(partition=args.partition or settings["partition"], reservation=args.reservation)
     for key in ("partition", "reservation"):
@@ -237,11 +242,11 @@ def main() -> None:
         if not SAFE_NAME.fullmatch(value):
             raise ValueError("Experiment/trial names allow only letters, digits, '.', '_' and '-'")
     config.update(experiment_name=experiment, trial_name=trial)
-    runtime = runtime_from_config(config, args)
+    credentials = credentials_file(args.credentials_file)
+    runtime = runtime_from_config(config, args, credentials)
     fileroot = (args.fileroot or Path(config["cluster"]["fileroot"])).expanduser().resolve()
     config["cluster"]["fileroot"] = str(fileroot)
     root = fileroot / "logs" / getpass.getuser() / experiment / trial
-    credentials = credentials_file(args.credentials_file)
     if args.dry_run:
         print("Dry run: no files created; no Slurm or network calls.")
         print(

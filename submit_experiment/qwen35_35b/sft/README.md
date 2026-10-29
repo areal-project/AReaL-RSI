@@ -131,13 +131,24 @@ checkpoint 位于同一 fileroot 的 `checkpoints/<user>/<experiment>/<trial>/`�
 已有正式 trial 不被覆盖，需要新 trial 名称。取消训练只需 `scancel <jobid>`。
 
 可用 `--params`、`--data`、`--fileroot`、`--partition` 和 `--credentials-file`。
-AReaL 源码路径只读取本目录 `base.yaml` 的 `launch.areal_dir`，默认 `../../../../AReaL`；
-相对路径以本目录为基准，也支持绝对路径和 `~`。修改源码位置时直接编辑此配置。
-入口不读取外部 `AREAL_DIR`，也不提供 `--areal-dir` 覆盖；解析后的路径通过内部
-`AREAL_DIR` 传给容器，并用于 PYTHONPATH、Slurm chdir 和源码校验。
+AReaL 源码路径优先读取非空的环境变量 `AREAL_DIR`；未设置时，从按下述规则发现的
+`credentials.env` 中解析 `AREAL_DIR`。base.yaml 不再保存源码路径，也不提供 `--areal-dir`。
+环境变量中的相对路径以提交命令的工作目录为基准；文件中的相对路径以凭据文件所在目录为基准，
+两者均支持绝对路径和 `~`。解析后的路径用于 PYTHONPATH、Slurm chdir 和源码校验，
+并固定传给容器；环境变量优先级在容器内保持一致。
+
+例如在 `credentials.env` 中添加（或在提交 shell 中 export）：
+
+```bash
+export AREAL_DIR='/absolute/path/to/AReaL'
+```
+
+提交端仅解析该路径赋值，支持 `export`、引号及行尾注释，不执行凭据文件中的 shell 命令，
+也不展开 `$VAR`、`$(...)` 等 shell 表达式。两处都未设置时，在提交 Slurm 前报错。
+
 凭据优先级为 CLI > CREDENTIALS_FILE > sft/credentials.env > ../credentials.env；
 缺少凭据时可离线训练，W&B 关闭。模板为 `credentials.env.example`，真实文件已忽略。
-凭据在容器内读取，内容不会放进命令行、manifest 或快照。
+除提交端解析 AREAL_DIR 外，训练凭据在容器内加载；key/token 不会放进命令行、manifest 或快照。
 
 ## 检查
 

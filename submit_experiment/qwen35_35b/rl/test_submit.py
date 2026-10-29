@@ -42,13 +42,31 @@ def write_params(tmp_path, update):
     return path
 
 
-@pytest.mark.parametrize("source", ["../../../../AReaL", "/configured/areal", "~/configured-areal"])
-def test_source_directory_comes_only_from_config(monkeypatch, source):
-    monkeypatch.setenv("AREAL_DIR", "/stale/source/from/environment")
+@pytest.fixture(autouse=True)
+def configured_areal_dir(monkeypatch):
+    monkeypatch.setenv("AREAL_DIR", str(ROOT.parents[3] / "AReaL"))
+
+
+@pytest.mark.parametrize("source", ["../AReaL", "/configured/areal", "~/configured-areal"])
+@pytest.mark.parametrize("origin", ["environment", "credentials"])
+def test_source_directory_comes_from_environment_or_credentials(
+    monkeypatch, tmp_path, source, origin
+):
+    monkeypatch.chdir(tmp_path)
+    credentials = tmp_path / "private" / "credentials.env"
+    credentials.parent.mkdir()
+    if origin == "environment":
+        monkeypatch.setenv("AREAL_DIR", source)
+        credentials.write_text("export AREAL_DIR='unclosed quote\n")
+        relative_to = tmp_path
+    else:
+        monkeypatch.delenv("AREAL_DIR")
+        credentials.write_text(f"export AREAL_DIR={shlex.quote(source)} # local source\n")
+        relative_to = credentials.parent
     config = configuration()
-    config["launch"]["areal_dir"] = source
-    runtime = submit.runtime_from_config(config, PROFILE, arguments())
-    expected = str((ROOT / Path(source).expanduser()).resolve())
+    assert "areal_dir" not in config["launch"]
+    runtime = submit.runtime_from_config(config, arguments(), str(credentials))
+    expected = str((relative_to / Path(source).expanduser()).resolve())
     assert runtime.areal_dir == expected
     values = submit.environment(runtime, ROOT, "experiment", "trial", "")
     assert values["AREAL_DIR"] == expected
@@ -111,7 +129,7 @@ def test_reservation_reaches_controller_workers_and_can_be_cleared(monkeypatch, 
     monkeypatch.setenv("SBATCH_NODELIST", "unwanted-node")
     monkeypatch.setenv("AREAL_SPMD_MODE", "1")
     config = configuration()
-    runtime = submit.runtime_from_config(config, PROFILE, arguments(reservation="new-pool"))
+    runtime = submit.runtime_from_config(config, arguments(reservation="new-pool"))
     env = submit.environment(runtime, tmp_path, "experiment", "trial", "/private/credentials.env")
     command = submit.sbatch_command(runtime, tmp_path, "experiment", "trial", False)
     assert command[command.index("--reservation") + 1] == "new-pool"
@@ -123,7 +141,7 @@ def test_reservation_reaches_controller_workers_and_can_be_cleared(monkeypatch, 
         )
     stale_config = configuration()
     stale_config["launch"]["slurm"]["reservation"] = "profile-pool"
-    cleared = submit.runtime_from_config(stale_config, PROFILE, arguments())
+    cleared = submit.runtime_from_config(stale_config, arguments())
     env = submit.clean_submission_environment(
         submit.environment(cleared, tmp_path, "experiment", "trial", "")
     )
@@ -147,7 +165,7 @@ def test_dry_run_prints_config_without_files_sourcing_credentials_or_submitting(
         os.environ,
         ARENA_OPENAPI_TOKEN="private-test-value",
         SBATCH_NODELIST="stale-node",
-        AREAL_DIR="/stale/source/from/environment",
+        AREAL_DIR=str(ROOT.parents[3] / "AReaL"),
         SUBMIT_PYTHON=sys.executable,
     )
     if credentials_from_env:
@@ -359,7 +377,7 @@ def test_controller_loads_credentials_and_auto_selects_wandb(
         + ("export WANDB_BASE_URL=https://wandb.example\n" if has_url else "")
     )
     config = configuration()
-    runtime = submit.runtime_from_config(config, PROFILE, arguments())
+    runtime = submit.runtime_from_config(config, arguments())
     (tmp_path / "train.yaml").write_text(yaml.safe_dump(config))
     values = submit.environment(runtime, tmp_path, "experiment", "trial", str(credentials))
     (tmp_path / "environment.sh").write_text(
@@ -422,7 +440,7 @@ def test_native_swe_structured_config_loads(monkeypatch, tmp_path):
     from omegaconf import OmegaConf
 
     config = configuration()
-    runtime = submit.runtime_from_config(config, PROFILE, arguments())
+    runtime = submit.runtime_from_config(config, arguments())
     config["experiment_name"], config["trial_name"] = "schema-test", "trial"
     config["cluster"]["fileroot"] = str(tmp_path)
     for key, value in submit.environment(runtime, tmp_path, "schema-test", "trial", "").items():
@@ -485,7 +503,7 @@ def test_omitting_reservation_uses_public_pool_and_names_partition_trials(tmp_pa
 def test_native_omegaconf_links_reach_ref_and_both_worker_roles(monkeypatch, tmp_path, reservation):
     omega = pytest.importorskip("omegaconf").OmegaConf
     config = configuration()
-    runtime = submit.runtime_from_config(config, PROFILE, arguments(reservation=reservation))
+    runtime = submit.runtime_from_config(config, arguments(reservation=reservation))
     for key, value in submit.environment(
         runtime, tmp_path, "experiment", "trial", "/private/env"
     ).items():

@@ -39,7 +39,13 @@ ARENA_DATA_KEYS = {
     "stream_id",
 }
 sys.path.insert(0, str(ROOT.parent))
-from profile_config import SAFE_NAME, load_yaml, merge, protect_base  # noqa: E402
+from profile_config import (  # noqa: E402
+    SAFE_NAME,
+    load_yaml,
+    merge,
+    protect_base,
+    resolve_areal_dir,
+)
 
 
 def default_credentials_file() -> str:
@@ -155,12 +161,13 @@ def validate(config: dict[str, Any]) -> None:
             raise ValueError("Each Arena stream must pin its expected reward key/version")
 
 
-def runtime_from_config(config: dict[str, Any], profile: Path, args: argparse.Namespace) -> Runtime:
+def runtime_from_config(
+    config: dict[str, Any], args: argparse.Namespace, credentials: str = ""
+) -> Runtime:
     raw = copy.deepcopy(config.pop("launch"))
-    source = raw["areal_dir"]
-    if not isinstance(source, str) or not source.strip():
-        raise ValueError("launch.areal_dir must be a nonempty source path in base.yaml")
-    raw["areal_dir"] = str((profile / Path(source).expanduser()).resolve())
+    if "areal_dir" in raw:
+        raise ValueError("Move launch.areal_dir out of YAML and set AREAL_DIR instead")
+    raw["areal_dir"] = resolve_areal_dir(credentials)
     slurm = raw.pop("slurm")
     if args.partition:
         slurm["partition"] = args.partition
@@ -327,10 +334,10 @@ def main() -> None:
             parser.error(f"{flag} must contain only letters, digits, '.', '_' and '-'")
     config["experiment_name"] = experiment_name
     config["trial_name"] = trial_name
-    runtime = runtime_from_config(config, profile, args)
     credentials = (
         str(Path(args.credentials_file).expanduser().resolve()) if args.credentials_file else ""
     )
+    runtime = runtime_from_config(config, args, credentials)
     fileroot = (args.fileroot or Path(config["cluster"]["fileroot"])).expanduser().resolve()
     config["cluster"]["fileroot"] = str(fileroot)
     log_root = fileroot / "logs" / getpass.getuser()

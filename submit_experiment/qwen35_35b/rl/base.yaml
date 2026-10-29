@@ -1,7 +1,6 @@
 # Fixed model/runtime/topology. Editable experiment settings live in params.yaml.
 # launch is consumed by submit.py; it is removed from the AReaL training YAML.
 launch:
-  areal_dir: ../../../../AReaL
   actor_image: /storage/openpsi/images/areal-dev-sglang-1014.sif
   rollout_image: /storage/openpsi/images/deepep-base-119b5ffe.sif
   actor_python: python3

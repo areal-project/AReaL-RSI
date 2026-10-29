@@ -2,7 +2,6 @@
 # AREAL_SPMD_MODE=1 bypasses the AReaL controller/scheduler/RPC worker path.
 # No separate CPU controller job; text multi-turn JSONL input.
 launch:
-  areal_dir: ../../../../AReaL
   image: /storage/openpsi/images/areal-dev-sglang-1014.sif
   python: python3
   pythonpath:

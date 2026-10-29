@@ -50,7 +50,7 @@ def test_dry_run_uses_one_gpu_allocation_without_side_effects(tmp_path):
             **os.environ,
             "CREDENTIALS_FILE": str(credentials),
             "SBATCH_RESERVATION": "stale",
-            "AREAL_DIR": "/stale/source/from/environment",
+            "AREAL_DIR": str(ROOT.parents[3] / "AReaL"),
         },
         text=True,
         capture_output=True,
@@ -71,15 +71,33 @@ def test_dry_run_uses_one_gpu_allocation_without_side_effects(tmp_path):
     assert "n_mbs" not in config["actor"]["mb_spec"]
 
 
-@pytest.mark.parametrize("source", ["../../../../AReaL", "/configured/areal", "~/configured-areal"])
-def test_source_directory_comes_only_from_config(monkeypatch, source):
-    monkeypatch.setenv("AREAL_DIR", "/stale/source/from/environment")
+@pytest.fixture(autouse=True)
+def configured_areal_dir(monkeypatch):
+    monkeypatch.setenv("AREAL_DIR", str(ROOT.parents[3] / "AReaL"))
+
+
+@pytest.mark.parametrize("source", ["../AReaL", "/configured/areal", "~/configured-areal"])
+@pytest.mark.parametrize("origin", ["environment", "credentials"])
+def test_source_directory_comes_from_environment_or_credentials(
+    monkeypatch, tmp_path, source, origin
+):
+    monkeypatch.chdir(tmp_path)
+    credentials = tmp_path / "private" / "credentials.env"
+    credentials.parent.mkdir()
+    if origin == "environment":
+        monkeypatch.setenv("AREAL_DIR", source)
+        credentials.write_text("export AREAL_DIR='unclosed quote\n")
+        relative_to = tmp_path
+    else:
+        monkeypatch.delenv("AREAL_DIR")
+        credentials.write_text(f"export AREAL_DIR={shlex.quote(source)} # local source\n")
+        relative_to = credentials.parent
     config = submit.compose(ROOT / "params.yaml", ROOT / "data.yaml")
-    config["launch"]["areal_dir"] = source
+    assert "areal_dir" not in config["launch"]
     runtime = submit.runtime_from_config(
-        config, argparse.Namespace(partition=None, reservation=None)
+        config, argparse.Namespace(partition=None, reservation=None), str(credentials)
     )
-    expected = str((ROOT / Path(source).expanduser()).resolve())
+    expected = str((relative_to / Path(source).expanduser()).resolve())
     assert runtime.areal_dir == expected
     values = submit.environment(runtime, ROOT, False, "")
     assert values["AREAL_DIR"] == expected
@@ -214,3 +232,66 @@ def test_worker_loads_credentials_inside_runtime_and_uses_torchrun(tmp_path, has
     assert "--nproc-per-node=8" in record["args"]
     assert record["mode"] == ("online" if has_key and has_url else "disabled")
     assert "private-test-value" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    "value", ["", "   ", "# only unrelated settings\nexport WANDB_API_KEY=private"]
+)
+def test_missing_source_fails_before_submission(monkeypatch, tmp_path, value):
+    monkeypatch.setenv("AREAL_DIR", "")
+    path = tmp_path / "credentials.env"
+    path.write_text(value)
+    with pytest.raises(ValueError, match="Set AREAL_DIR"):
+        submit.resolve_areal_dir(str(path))
+
+
+@pytest.mark.parametrize(
+    "assignment",
+    [
+        "export AREAL_DIR='$(touch MARKER)'",
+        "export AREAL_DIR=`touch MARKER`",
+        "export AREAL_DIR='/private-unclosed",
+        "export AREAL_DIR=somewhere; touch MARKER",
+    ],
+)
+def test_source_parser_never_executes_credentials_or_discloses_values(
+    monkeypatch, tmp_path, assignment
+):
+    monkeypatch.delenv("AREAL_DIR")
+    marker = tmp_path / "executed"
+    path = tmp_path / "credentials.env"
+    path.write_text(
+        f"touch {shlex.quote(str(marker))}\n" + assignment.replace("MARKER", str(marker))
+    )
+    with pytest.raises(ValueError) as error:
+        submit.resolve_areal_dir(str(path))
+    assert "private-unclosed" not in str(error.value)
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("mode", ["rl", "sft"])
+def test_dry_run_reads_source_from_credentials_without_sourcing_file(tmp_path, mode):
+    credentials = tmp_path / "credentials.env"
+    marker = tmp_path / "executed"
+    credentials.write_text(
+        f"touch {shlex.quote(str(marker))}\n"
+        "export AREAL_DIR='../source with spaces' # relative to this file\n"
+        "export WANDB_API_KEY=private-test-secret\n"
+    )
+    env = {key: value for key, value in os.environ.items() if key != "AREAL_DIR"}
+    env["CREDENTIALS_FILE"] = str(credentials)
+    result = subprocess.run(
+        [sys.executable, str(ROOT.parent / mode / "submit.py"), "--dry-run"],
+        env=env,
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    label = "Planned controller command: " if mode == "rl" else "Planned command: "
+    command = shlex.split(result.stdout.split(label, 1)[1].splitlines()[0])
+    assert command[command.index("--chdir") + 1] == str(
+        (tmp_path / "../source with spaces").resolve()
+    )
+    assert not marker.exists()
+    assert "private-test-secret" not in result.stdout + result.stderr

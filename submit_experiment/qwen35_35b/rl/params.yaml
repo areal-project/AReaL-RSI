@@ -1,0 +1,201 @@
+# All tunable training/sampling/capacity settings. Topology stays in base.yaml.
+seed: 1234
+total_train_epochs: 100
+total_train_steps: 100
+dynamic_bs: false
+should_accept_fn: examples.swe.filter_function.filter_function
+
+gconfig:
+  n_samples: 12
+  min_new_tokens: 0
+  max_new_tokens: 65536
+  max_tokens: 262143  # SGLang requires one token of context headroom.
+  greedy: false
+  temperature: 1.0
+  top_p: 1.0
+  top_k: 1000000
+  ignore_eos: false
+  skip_special_tokens: true
+  frequency_penalty: 0.0
+  reward_normalization: true
+  reward_normalization_use_std: false
+  drop_incomplete_group: false
+  stop_token_ids: []
+  stop: null
+  lora_name: ""
+  use_beam_search: false
+
+eval_gconfig:
+  n_samples: 8
+  min_new_tokens: 0
+  max_new_tokens: 65536
+  max_tokens: 262143
+  greedy: false
+  top_p: 1.0
+  top_k: 1000000
+  temperature: 1.0
+  stop_token_ids: []
+  ignore_eos: false
+  skip_special_tokens: true
+  stop: null
+  frequency_penalty: 0.0
+  lora_name: ""
+  use_beam_search: false
+  reward_normalization: false
+  drop_incomplete_group: false
+
+actor:
+  disable_dropout: true
+  gradient_checkpointing: true
+  min_usable_group_size: 8
+  mb_spec:
+    granularity: 1
+    max_tokens_per_mb: 262144
+    n_mbs_divisor: 8
+  optimizer:
+    type: adam
+    lr: 3.0e-6
+    weight_decay: 0.01
+    beta1: 0.9
+    beta2: 0.95
+    eps: 1.0e-8
+    lr_scheduler_type: constant
+    warmup_steps: 2
+    gradient_clipping: 1.0
+  megatron:
+    cpu_staged_offload:
+      enabled: true
+      buffer_count: 2
+      bucket_size_mb: 128
+    enable_chunked_logits: true
+    lm_head_loss_chunk_size: 1024
+    entropy_requires_grad: false
+    async_save: false
+    use_precision_aware_optimizer: true  # Required by the enabled staged optimizer.
+    main_params_dtype: float32
+    main_grads_dtype: float32
+    exp_avg_dtype: float32
+    exp_avg_sq_dtype: float32
+    enable_fp32_lm_head: false
+    cross_entropy_loss_fusion: false
+    use_deterministic_algorithms: false
+    recompute_granularity: full
+    recompute_method: uniform
+    recompute_num_layers: 1
+    moe_router_dtype: null
+    moe_token_dispatcher_type: alltoall
+    ddp:
+      grad_reduce_in_fp32: true
+      overlap_grad_reduce: false
+      overlap_param_gather: false
+  eps_clip: 0.2
+  eps_clip_higher: 0.28
+  kl_ctl: 0.0
+  ppo_n_minibatches: 1
+  recompute_logprob: false
+  prox_logp_method: reuse_train_logp
+  use_decoupled_loss: true
+  rejection_sampling:
+    level: token
+    action: mask
+    metric: ratio
+    upper: 5.0
+    lower: 0.5
+  discount: 1.0
+  gae_timestep_unit: turn
+  gae_lambda: areal.trainer.ppo.lambda_fn.vapo_length_adaptive_gae
+  gae_lambda_kwargs:
+    alpha: 1.5
+  reward_scaling: 1.0
+  reward_bias: 0.0
+  reward_clip: 5.0
+  reward_norm: null
+  token_rewards_as_adv: true
+  adv_norm:
+    mean_level: null
+    std_level: null
+  # List items are merged by index by submit.py (not replaced wholesale).
+  scheduling_spec:
+    - cpu: 4
+      mem: 128  # Per rank: actor requests 8 x 128 GiB of host RAM.
+
+rollout:
+  max_concurrent_rollouts: 64
+  queue_size: 128  # Must exceed train_dataset.batch_size to leave dispatch capacity.
+  max_head_offpolicyness: 1
+  enable_rollout_tracing: true
+  dump_to_file: true
+  check_trajectory_format: false
+  setup_timeout: 7200
+  request_timeout: 20000
+  request_retries: 0
+  pause_grace_period: 60
+  scheduling_spec:
+    - cpu: 4
+      mem: 64  # Per GPU: TP8 requests 8 x 64 = 512 GiB on the actor node.
+  agent:
+    turn_discount: 1.0
+    drop_retry_orphans: true
+    session_timeout_seconds: 15600
+
+sglang:
+  context_length: 262144
+  max_prefill_tokens: 8192
+  chunked_prefill_size: 8192
+  max_running_requests: 16
+  mem_fraction_static: 0.7
+  # The selected SGLang build's breakable prefill graph rejects memory saver.
+  # Keep decode graphs enabled; disable only the incompatible prefill phase.
+  disable_cuda_graph: false
+  disable_prefill_cuda_graph: true
+  cuda_graph_max_bs: 512
+  attention_backend: null
+  sampling_backend: null
+  log_level: info
+  disable_radix_cache: false
+  mamba_ssm_dtype: bfloat16
+
+train_dataset:
+  batch_size: 64
+  shuffle: true
+  pin_memory: true
+  num_workers: 0
+  drop_last: false
+
+econfig:
+  arena_request_timeout: 180.0
+  arena_request_retries: 1
+  arena_poll_interval: 5.0
+  timeout: 15000.0
+
+saver:
+  freq_epochs: null
+  freq_steps: 5
+  freq_secs: null
+recover:
+  mode: auto
+  retries: 3
+  freq_epochs: null
+  freq_steps: 1
+  freq_secs: null
+  no_save_optim: false
+  no_load_optim: false
+evaluator:
+  freq_epochs: null
+  freq_steps: null
+  freq_secs: null
+stats_logger:
+  wandb:
+    # Controller enables online mode when both W&B credentials are present.
+    mode: ${oc.env:WANDB_MODE,disabled}
+    project: ${experiment_name}
+    name: ${experiment_name}-${trial_name}
+perf_tracer:
+  enabled: false
+  session_tracer:
+    enabled: false
+
+launch:
+  slurm:
+    # Includes Slurm queue time and RPC worker readiness (seconds).
+    worker_startup_timeout: 43200

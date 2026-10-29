@@ -1,0 +1,76 @@
+# SFT runtime/topology; direct Slurm GPU allocation and torchrun SPMD.
+# AREAL_SPMD_MODE=1 bypasses the AReaL controller/scheduler/RPC worker path.
+# No separate CPU controller job; text multi-turn JSONL input.
+launch:
+  areal_dir: ../../../../AReaL
+  image: /storage/openpsi/images/areal-dev-sglang-1014.sif
+  python: python3
+  pythonpath:
+  - /storage/openpsi/users/public/codes/qwen_patches/awex-0.9.0
+  - /storage/openpsi/users/chucai.dzq/areal-experiment-scripts/qwen38-flash-next/swemm-rl64/main-r3-20261016/runtime/transformers-5.16.1
+  binds: /storage:/storage
+  env:
+    AREAL_SPMD_MODE: '1'
+    PYTHONNOUSERSITE: '1'
+    TMS_INIT_ENABLE: '0'
+    TMS_INIT_ENABLE_CPU_BACKUP: '0'
+    CUDA_DEVICE_MAX_CONNECTIONS: '1'
+    PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+    OMP_NUM_THREADS: '4'
+    TOKENIZERS_PARALLELISM: 'false'
+  slurm:
+    partition: all
+    nodes: 1
+    gpus_per_node: 8
+experiment_name: qwen35-35b-sft
+trial_name: ${oc.env:EXPERIMENT_TRIAL}
+tokenizer_path: ${actor.path}
+enable_offload: false
+cluster:
+  n_nodes: 1
+  n_gpus_per_node: 8
+  fileroot: /storage/openpsi/experiments
+  name_resolve:
+    type: nfs
+    nfs_record_root: ${cluster.fileroot}/name_resolve
+scheduler:
+  type: null
+actor:
+  backend: megatron:(attn:d2p1t1c4|ffn:d1p1t1e8)
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  path: /storage/openpsi/models/Qwen__Qwen3.5-35B-A3B
+  dtype: bfloat16
+  grad_reduce_dtype: float32
+  init_from_scratch: false
+  megatron:
+    bridge_type: megatron-bridge
+    wrap_with_ddp: true
+    enable_router_replay: false
+    enable_mtp: false
+    enable_mtp_training: false
+    ddp:
+      use_distributed_optimizer: true
+train_dataset:
+  type: sft
+  scheduling_spec: null
+saver:
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  fileroot: ${cluster.fileroot}
+recover:
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  fileroot: ${cluster.fileroot}
+evaluator:
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  fileroot: ${cluster.fileroot}
+stats_logger:
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  fileroot: ${cluster.fileroot}
+perf_tracer:
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  fileroot: ${cluster.fileroot}

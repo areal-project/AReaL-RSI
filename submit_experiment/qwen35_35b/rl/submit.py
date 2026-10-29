@@ -38,7 +38,17 @@ ARENA_DATA_KEYS = {
     "arena_reward_transform_fn",
     "stream_id",
 }
-SAFE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,100}\Z")
+sys.path.insert(0, str(ROOT.parent))
+from profile_config import SAFE_NAME, load_yaml, merge, protect_base  # noqa: E402
+
+
+def default_credentials_file() -> str:
+    if path := os.environ.get("CREDENTIALS_FILE"):
+        return path
+    for path in (ROOT / "credentials.env", ROOT.parent / "credentials.env"):
+        if path.is_file():
+            return str(path)
+    return str(ROOT / "credentials.env")
 
 
 @dataclass(frozen=True)
@@ -66,61 +76,6 @@ class Runtime:
     slurm: SlurmSettings
     preflight_min_terminal_tasks: int
     preflight_allow_unhealthy: bool = False
-
-
-def load_yaml(path: Path) -> dict[str, Any]:
-    """Reject duplicate keys rather than silently losing a configuration value."""
-
-    class UniqueLoader(yaml.SafeLoader):
-        pass
-
-    def mapping(loader: Any, node: Any) -> dict[str, Any]:
-        result: dict[str, Any] = {}
-        for key_node, value_node in node.value:
-            key = loader.construct_object(key_node)
-            if not isinstance(key, str) or key in result:
-                raise ValueError(f"{path}: duplicate or non-string YAML key")
-            result[key] = loader.construct_object(value_node)
-        return result
-
-    UniqueLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, mapping)
-    value = yaml.load(path.read_text(), Loader=UniqueLoader)
-    if not isinstance(value, dict):
-        raise ValueError(f"{path}: expected a YAML mapping")
-    return value
-
-
-def merge(base: Any, patch: Any) -> Any:
-    """Deep merge mappings; the single scheduling_spec item is merged by index."""
-    if isinstance(base, dict) and isinstance(patch, dict):
-        result = copy.deepcopy(base)
-        for key, value in patch.items():
-            if key == "scheduling_spec" and key in result:
-                if not isinstance(value, list) or len(value) != len(result[key]):
-                    raise ValueError("scheduling_spec must retain the base worker spec count")
-                result[key] = [merge(old, new) for old, new in zip(result[key], value, strict=True)]
-            else:
-                result[key] = merge(result[key], value) if key in result else copy.deepcopy(value)
-        return result
-    return copy.deepcopy(patch)
-
-
-def protect_base(base: Any, patch: Any, prefix: str = "") -> None:
-    """Base owns fixed leaves; params can supply new leaves and Slurm resources."""
-    if prefix == "launch.slurm":
-        return
-    if isinstance(base, dict) and isinstance(patch, dict):
-        for key, value in patch.items():
-            name = f"{prefix}.{key}" if prefix else key
-            if key in base:
-                protect_base(base[key], value, name)
-    elif prefix.endswith("scheduling_spec") and isinstance(base, list) and isinstance(patch, list):
-        if len(base) != len(patch):
-            raise ValueError("scheduling_spec must retain the base worker spec count")
-        for index, (old, new) in enumerate(zip(base, patch, strict=True)):
-            protect_base(old, new, f"{prefix}.{index}")
-    else:
-        raise ValueError(f"{prefix} is fixed in base.yaml; change the base profile deliberately")
 
 
 def compose(profile: Path, params_path: Path, arena_path: Path) -> dict[str, Any]:
@@ -345,8 +300,8 @@ def main() -> None:
     parser.add_argument("--areal-dir")
     parser.add_argument(
         "--credentials-file",
-        default=os.environ.get("CREDENTIALS_FILE") or str(ROOT / "credentials.env"),
-        help="Credentials path (default: CREDENTIALS_FILE or script-local credentials.env)",
+        default=default_credentials_file(),
+        help="Credentials path (default: CREDENTIALS_FILE, local or model-level credentials.env)",
     )
     parser.add_argument("--partition")
     parser.add_argument("--reservation", help="Explicit reservation; omitted means public pool")

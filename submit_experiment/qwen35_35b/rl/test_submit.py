@@ -175,7 +175,7 @@ def test_dry_run_prints_config_without_files_sourcing_credentials_or_submitting(
     assert config["actor"]["megatron"]["enable_chunked_logits"] is True
     assert f"Credentials file: {credentials}" in result.stdout
     command = shlex.split(result.stdout.split("Planned controller command: ", 1)[1].splitlines()[0])
-    assert Path(command[command.index("--chdir") + 1]) == ROOT.parents[2] / "AReaL"
+    assert Path(command[command.index("--chdir") + 1]) == ROOT.parents[3] / "AReaL"
     assert command[command.index("--job-name") + 1] == "test-experiment-offline-controller"
     assert command[command.index("--reservation") + 1] == "test-pool"
     assert "private-test-value" not in result.stdout
@@ -205,8 +205,9 @@ def test_dry_run_prints_config_without_files_sourcing_credentials_or_submitting(
 
 
 @pytest.mark.parametrize("empty_environment", [False, True])
+@pytest.mark.parametrize("credentials_in_parent", [False, True])
 def test_credentials_default_is_discovered_beside_script_from_another_cwd(
-    tmp_path, empty_environment
+    tmp_path, empty_environment, credentials_in_parent
 ):
     model = tmp_path / "model"
     model.mkdir()
@@ -220,7 +221,8 @@ def test_credentials_default_is_discovered_beside_script_from_another_cwd(
         "controller.sbatch",
     ):
         shutil.copyfile(ROOT / name, model / name)
-    credentials = model / "credentials.env"
+    shutil.copyfile(ROOT.parent / "profile_config.py", model.parent / "profile_config.py")
+    credentials = (model.parent if credentials_in_parent else model) / "credentials.env"
     marker = tmp_path / "credentials-were-sourced"
     credentials.write_text(f"touch '{marker}'\n")
     files_before = set(model.iterdir())
@@ -399,7 +401,7 @@ def test_native_swe_structured_config_loads(monkeypatch, tmp_path):
     # may lack AReaL's dependencies. The Slurm preflight also uses this loader.
     pytest.importorskip("httpx")
     pytest.importorskip("mcp")
-    monkeypatch.syspath_prepend(str(ROOT.parents[2] / "AReaL"))
+    monkeypatch.syspath_prepend(str(ROOT.parents[3] / "AReaL"))
     from areal.api.cli_args import to_structured_cfg
     from examples.swe.utils import SWEPPOConfig
     from omegaconf import OmegaConf
@@ -415,6 +417,9 @@ def test_native_swe_structured_config_loads(monkeypatch, tmp_path):
     typed = OmegaConf.to_object(to_structured_cfg(OmegaConf.create(config), SWEPPOConfig))
     assert typed.ref.megatron.enable_chunked_logits is True
     assert typed.ref.mb_spec.max_tokens_per_mb == 262144
+    assert "n_mbs" not in config["actor"]["mb_spec"]
+    assert "n_mbs" not in config["ref"]["mb_spec"]
+    assert typed.actor.mb_spec.n_mbs == typed.ref.mb_spec.n_mbs == 1
 
 
 def test_omitting_reservation_uses_public_pool_and_names_partition_trials(tmp_path):

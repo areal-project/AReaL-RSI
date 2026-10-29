@@ -1,0 +1,98 @@
+# SFT defaults: one Slurm allocation; host memory is --mem=1200G.
+seed: 1234
+total_train_epochs: 1
+total_train_steps: null
+actor:
+  disable_dropout: true
+  gradient_checkpointing: true
+  mb_spec:
+    granularity: 1
+    max_tokens_per_mb: 262144
+    n_mbs_divisor: 1
+  optimizer:
+    type: adam
+    lr: 2.0e-05
+    weight_decay: 0.01
+    beta1: 0.9
+    beta2: 0.95
+    eps: 1.0e-08
+    lr_scheduler_type: cosine
+    warmup_steps: null
+    gradient_clipping: 1.0
+    warmup_steps_proportion: 0.03
+  megatron:
+    cpu_staged_offload:
+      enabled: true
+      buffer_count: 2
+      bucket_size_mb: 128
+    enable_chunked_logits: true
+    lm_head_loss_chunk_size: 1024
+    entropy_requires_grad: false
+    async_save: false
+    use_precision_aware_optimizer: true
+    main_params_dtype: float32
+    main_grads_dtype: float32
+    exp_avg_dtype: float32
+    exp_avg_sq_dtype: float32
+    enable_fp32_lm_head: false
+    cross_entropy_loss_fusion: false
+    use_deterministic_algorithms: false
+    recompute_granularity: full
+    recompute_method: uniform
+    recompute_num_layers: 1
+    moe_router_dtype: null
+    moe_token_dispatcher_type: alltoall
+    ddp:
+      grad_reduce_in_fp32: true
+      overlap_grad_reduce: false
+      overlap_param_gather: false
+train_dataset:
+  batch_size: 32
+  max_length: 262144
+  shuffle: true
+  pin_memory: true
+  num_workers: 0
+  drop_last: true
+saver:
+  freq_epochs: null
+  freq_steps: 150
+  freq_secs: null
+recover:
+  mode: auto
+  retries: 3
+  freq_epochs: null
+  freq_steps: 150
+  freq_secs: null
+  no_save_optim: false
+  no_load_optim: false
+evaluator:
+  freq_epochs: null
+  freq_steps: null
+  freq_secs: null
+stats_logger:
+  wandb:
+    mode: ${oc.env:WANDB_MODE,disabled}
+    project: ${experiment_name}
+    name: ${experiment_name}-${trial_name}
+perf_tracer:
+  enabled: false
+  session_tracer:
+    enabled: false
+launch:
+  slurm:
+    cpus_per_task: 64
+    mem_gb: 1200
+    time: '24:00:00'
+swe:
+  split_mode: trajectory
+  pre_split: false
+  filter_errors: true
+  strip_all_thinking: false
+  filter_empty_tool_calls: false
+  filter_bare_text_tool_calls: false
+  no_tools: false
+  parse_tool_call_args: true
+  skip_pretokenized_filter: false
+  num_proc: 8
+  cleanup_processed_dataset: false
+  dump_samples: 4

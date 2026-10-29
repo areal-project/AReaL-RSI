@@ -1,16 +1,15 @@
-# Dataset selection from the supplied experiment; no credentials in this file.
-# Qwen3.5's Megatron-Bridge MODEL_THD path preserves image/video fusion before
-# the chunked LM Head. Keep the selected AReaL checkout's support patch applied.
+# Text SWE-bench Verified; exact Harness/reward pins checked against Arena.
+# Override the Stream's Claude default with the published AReaL chat Harness.
 econfig:
   arena_mixture_epoch_size: 0
   arena_streams:
-    - name: swemm-rl64
-      stream_id: swemm-rl64-20260922
+    - name: swe-bench-verified
+      stream_id: swe-bench-verified
       sampling_weight: 1
-      harness: areal-harness@0.2.0-oss-rc.6-swe-mm-256k
+      harness: areal-harness@0.2.0-oss-rc.6-swe-mm-256k-t1-p1-k100k
       llm_protocol: chat_completions
       task_envs:
         DSH_LLM_REQUEST_TIMEOUT_SECONDS: "7200"
       expected_reward_ref:
-        key: swebench-mm-official-tests
-        version: 1.2.3-npm-mirror
+        key: swebench-verified-reward
+        version: 1.1.1

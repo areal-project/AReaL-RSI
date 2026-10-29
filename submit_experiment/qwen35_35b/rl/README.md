@@ -22,6 +22,7 @@ Slurm scheduler 再申请一个 8 GPU 节点。actor 使用 8 个 worker，rollo
 | 训练 batch / Rollout 队列 | batch size 64，`queue_size=128`；队列必须大于 batch size 以留出任务提交空间 |
 | 采样 / 过滤 | 训练 `n_samples=12`、最小有效组 8（至少 8/12 有效），评估 `n_samples=8`，使用示例的 `filter_function` 过滤同奖励组 |
 | 并发 / 微批 | rollout 并发 64，SGLang 最大请求数 16；不显式设置 `n_mbs`，按 token 预算自动拆分；`n_mbs_divisor=8` |
+| Arena 数据 | `swe-bench-verified`，文本 SWE-bench Verified |
 | Arena 路由 | `gateway` |
 | R3 / MTP | 关闭 |
 | controller / actor 镜像 | `/storage/openpsi/images/areal-dev-sglang-1014.sif` |
@@ -210,8 +211,15 @@ PY
 ```
 
 调整采样、RL、优化器或资源参数编辑 `params.yaml`（或通过 `--params` 选择自己的副本）；
-换数据编辑 `arena.yaml`（或使用 `--arena`）。默认 stream 为 `swemm-rl64-20260922`，
-harness 为 `areal-harness@0.2.0-oss-rc.6-swe-mm-256k`。
+换数据编辑 `arena.yaml`（或使用 `--arena`）。默认 Stream 为 `swe-bench-verified`，
+2026-10-29 查询到 499 个文本 Verified 实例，reward 固定为 `swebench-verified-reward@1.1.1`。
+Stream 自身默认使用 Claude Harness；本配置显式选择已发布且有历史 DONE 任务的
+`areal-harness@0.2.0-oss-rc.6-swe-mm-256k-t1-p1-k100k`，使用 chat_completions 协议。
+版本名中的 swe-mm 是 Harness 历史命名；输入仍由 Verified Stream 决定。
+这里只修改本次任务的 Harness 选择，不修改平台共享 Stream 的默认值。
+原 SWE-MM 试跑长时间未收齐有效组，因此默认切换为文本 Verified；这不代表整个新数据集已验证可训练。
+CPU 预检 989881 已 COMPLETED / 0:0，验证发布状态、reward、数据可用性和历史健康检查，
+未开启 preflight_allow_unhealthy 覆盖。
 
 ## 预检、产物和运行边界
 
@@ -285,7 +293,7 @@ Qwen4-Exp 被明确排除，而 Qwen3.5 MoE 在白名单中。因此参考实验
 先前的 `trial06` 已验证 256K、CP4、双镜像的服务初始化与实际推理；完整 RL 训练、峰值、
 收敛、权重同步和恢复仍需验证。更改容量参数后也应重新确认启动与采样行为。
 
-默认 `arena.yaml` 保留所给实验的 SWE-MM 数据选择。Qwen3.5 的 Megatron-Bridge
+默认 `arena.yaml` 选择文本 SWE-bench Verified。如另行改回 SWE-MM，Qwen3.5 的 Megatron-Bridge
 `MODEL_THD` 路径在视觉编码、embedding 融合和 mRoPE/CP 切分后返回 hidden states，再执行
 chunked LM Head；不需要因带图输入关闭 chunked loss。所选 AReaL 源码需保留本次修正的
 Qwen3.5 多模准入检查（旧版本会在前向前误拒绝）。这不代表任意 VLM/padded 路径均支持。

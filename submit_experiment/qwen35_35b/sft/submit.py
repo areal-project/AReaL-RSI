@@ -110,8 +110,10 @@ def compose(params_path: Path, data_path: Path) -> dict:
 
 def runtime_from_config(config: dict, args: argparse.Namespace) -> Runtime:
     raw = config.pop("launch")
-    source = args.areal_dir or os.environ.get("AREAL_DIR") or raw["areal_dir"]
-    raw["areal_dir"] = str((ROOT / source).expanduser().resolve())
+    source = raw["areal_dir"]
+    if not isinstance(source, str) or not source.strip():
+        raise ValueError("launch.areal_dir must be a nonempty source path in base.yaml")
+    raw["areal_dir"] = str((ROOT / Path(source).expanduser()).resolve())
     settings = raw.pop("slurm")
     settings.update(partition=args.partition or settings["partition"], reservation=args.reservation)
     for key in ("partition", "reservation"):
@@ -217,7 +219,6 @@ def main() -> None:
     parser.add_argument("--data", type=Path, default=ROOT / "data.yaml")
     parser.add_argument("--experiment-name")
     parser.add_argument("--trial-name", default="trial-" + datetime.now().strftime("%Y%m%d-%H%M%S"))
-    parser.add_argument("--areal-dir")
     parser.add_argument("--credentials-file")
     parser.add_argument("--partition")
     parser.add_argument("--reservation", help="Explicit reservation; omitted means public pool")

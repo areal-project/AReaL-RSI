@@ -157,8 +157,10 @@ def validate(config: dict[str, Any]) -> None:
 
 def runtime_from_config(config: dict[str, Any], profile: Path, args: argparse.Namespace) -> Runtime:
     raw = copy.deepcopy(config.pop("launch"))
-    source = args.areal_dir or os.environ.get("AREAL_DIR") or raw["areal_dir"]
-    raw["areal_dir"] = str((profile / source).resolve())
+    source = raw["areal_dir"]
+    if not isinstance(source, str) or not source.strip():
+        raise ValueError("launch.areal_dir must be a nonempty source path in base.yaml")
+    raw["areal_dir"] = str((profile / Path(source).expanduser()).resolve())
     slurm = raw.pop("slurm")
     if args.partition:
         slurm["partition"] = args.partition
@@ -297,7 +299,6 @@ def main() -> None:
         type=Path,
         help="Shared AReaL log/checkpoint root (default: cluster.fileroot)",
     )
-    parser.add_argument("--areal-dir")
     parser.add_argument(
         "--credentials-file",
         default=default_credentials_file(),

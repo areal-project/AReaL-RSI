@@ -130,8 +130,11 @@ checkpoint 位于同一 fileroot 的 `checkpoints/<user>/<experiment>/<trial>/`�
 短样例只有 2 step，默认 150-step 周期不会产生 checkpoint；如测试保存，可用参数副本修改周期。
 已有正式 trial 不被覆盖，需要新 trial 名称。取消训练只需 `scancel <jobid>`。
 
-可用 `--params`、`--data`、`--areal-dir`、`--fileroot`、`--partition` 和 `--credentials-file`。
-AReaL 路径优先级为 CLI > AREAL_DIR > base 中相对于本目录的路径。
+可用 `--params`、`--data`、`--fileroot`、`--partition` 和 `--credentials-file`。
+AReaL 源码路径只读取本目录 `base.yaml` 的 `launch.areal_dir`，默认 `../../../../AReaL`；
+相对路径以本目录为基准，也支持绝对路径和 `~`。修改源码位置时直接编辑此配置。
+入口不读取外部 `AREAL_DIR`，也不提供 `--areal-dir` 覆盖；解析后的路径通过内部
+`AREAL_DIR` 传给容器，并用于 PYTHONPATH、Slurm chdir 和源码校验。
 凭据优先级为 CLI > CREDENTIALS_FILE > sft/credentials.env > ../credentials.env；
 缺少凭据时可离线训练，W&B 关闭。模板为 `credentials.env.example`，真实文件已忽略。
 凭据在容器内读取，内容不会放进命令行、manifest 或快照。
@@ -146,6 +149,8 @@ bash -n submit.sh train.sbatch worker.sh
 离线检查覆盖单作业资源命令、公共池规则、路径解析、临时预检清理、文本边界及 W&B 自动启用。
 CPU 数据预检通过仍不代表 256K GPU 前后向、optimizer step 或恢复已经验证。
 
-本地验证：RL/SFT 入口测试 50 项、AReaL SFT 数据集与缓存测试 64 项通过。
+本地验证：RL/SFT 入口测试 56 项、AReaL SFT 数据集与缓存测试 64 项通过。
 真实 actor 镜像的 Slurm CPU 预检（989848）通过，64 条训练对话全部保留，长度 152–2459 token；
-成功后预检临时目录已删除。尚未执行 GPU 训练。
+成功后预检临时目录已删除。随后 GPU 试跑 989858 使用默认 ShareGPT 小样例完成 2 step，
+Slurm 状态为 COMPLETED / 0:0，loss/avg 约 0.663、0.515，两个 step 的 update_successful 均为 1。
+本次使用短对话样例，尚未验证满 256K 输入、150-step 保存或恢复。

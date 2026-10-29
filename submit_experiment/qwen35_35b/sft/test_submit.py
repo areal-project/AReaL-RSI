@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import json
 import os
@@ -45,7 +46,12 @@ def test_dry_run_uses_one_gpu_allocation_without_side_effects(tmp_path):
             str(tmp_path / "experiments"),
         ],
         cwd=tmp_path,
-        env={**os.environ, "CREDENTIALS_FILE": str(credentials), "SBATCH_RESERVATION": "stale"},
+        env={
+            **os.environ,
+            "CREDENTIALS_FILE": str(credentials),
+            "SBATCH_RESERVATION": "stale",
+            "AREAL_DIR": "/stale/source/from/environment",
+        },
         text=True,
         capture_output=True,
         check=True,
@@ -54,6 +60,7 @@ def test_dry_run_uses_one_gpu_allocation_without_side_effects(tmp_path):
     assert command.count("sbatch") == 1
     assert "--gres=gpu:8" in command
     assert "--reservation" not in command
+    assert Path(command[command.index("--chdir") + 1]) == ROOT.parents[3] / "AReaL"
     assert not marker.exists()
     assert not (tmp_path / "experiments").exists()
     config = yaml.safe_load(result.stdout.split("Composed config:\n", 1)[1])
@@ -62,6 +69,21 @@ def test_dry_run_uses_one_gpu_allocation_without_side_effects(tmp_path):
     assert "rollout" not in config
     assert "econfig" not in config
     assert "n_mbs" not in config["actor"]["mb_spec"]
+
+
+@pytest.mark.parametrize("source", ["../../../../AReaL", "/configured/areal", "~/configured-areal"])
+def test_source_directory_comes_only_from_config(monkeypatch, source):
+    monkeypatch.setenv("AREAL_DIR", "/stale/source/from/environment")
+    config = submit.compose(ROOT / "params.yaml", ROOT / "data.yaml")
+    config["launch"]["areal_dir"] = source
+    runtime = submit.runtime_from_config(
+        config, argparse.Namespace(partition=None, reservation=None)
+    )
+    expected = str((ROOT / Path(source).expanduser()).resolve())
+    assert runtime.areal_dir == expected
+    values = submit.environment(runtime, ROOT, False, "")
+    assert values["AREAL_DIR"] == expected
+    assert values["SFT_PYTHONPATH"].split(":")[-1] == expected
 
 
 def test_data_paths_resolve_from_data_file_and_validation_is_independent(tmp_path):

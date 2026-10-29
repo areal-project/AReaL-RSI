@@ -47,8 +47,10 @@ optimizer，chunked loss 不计算 entropy 梯度，prefill graph 关闭，请�
 
 训练每组生成 12 条 trajectory，至少 8 条有效才进入后续过滤；对于正常返回无效结果的
 分支，允许最多 4 条无效，并保留 `drop_incomplete_group=false`。最小有效组数由
-`actor.min_usable_group_size=8` 控制。所选 AReaL 的通用 Arena 训练入口应开启
-`reject_terminal_task_failures=True`：受支持的终态失败仅丢弃当前样本，保留同组其他分支，
+`actor.min_usable_group_size=8` 控制。当前 AReaL 的
+`examples/swe/train_swe_rl.py` 在 Arena 训练入口中向 workflow 传入
+`reject_terminal_task_failures=True`，评估传入 False。这是入口代码中的固定策略，
+尚未暴露为 params.yaml / arena.yaml 的配置字段：受支持的终态失败仅丢弃当前样本，保留同组其他分支，
 最后判断 8/12 门槛；评估保持关闭。代理服务错误和其他未处理的 workflow 异常仍会使整组失败。
 达到数量门槛后仍会通过 `filter_function` 检查奖励差异，同奖励组仍被过滤。
 
@@ -88,7 +90,10 @@ graph=`disabled`、memory saver 开启。调度器已提交 16 个并发 rollout
 ## 使用
 
 提交端需要 Python 3 和 PyYAML；不安装新依赖。训练依赖来自已有 SIF 和源码 overlay。
-默认 AReaL 源码为本仓库旁边的 `../AReaL`（从本目录按 `../../../../AReaL` 定位），可用 `--areal-dir` 或 `AREAL_DIR` 指定。
+AReaL 源码路径只读取本目录 `base.yaml` 的 `launch.areal_dir`，默认 `../../../../AReaL`，
+相对路径以本目录为基准，也支持绝对路径和 `~`。修改源码位置时直接编辑此配置；
+入口不读取外部 `AREAL_DIR`，也不提供 `--areal-dir` 覆盖。解析后的路径通过内部
+`AREAL_DIR` 传给 controller / workers，并用于 PYTHONPATH、Slurm chdir 和源码校验。
 
 ```bash
 cd /storage/openpsi/users/wanghaitao.wht/project/rsi/AReaL-RSI/submit_experiment/qwen35_35b/rl
@@ -112,10 +117,10 @@ chmod 600 credentials.env
 # 需要 reservation 时，预检和训练命令都加此选项。
 ./submit.sh --experiment-name qwen35-arena --trial-name exp02 --reservation YOUR_RESERVATION
 
-# 自定义参数、数据、源码、产物目录。
+# 自定义参数、数据、产物目录；源码位置在 base.yaml 的 launch.areal_dir 中修改。
 ./submit.sh --experiment-name another-experiment --trial-name trial01 \
   --params /shared/params.yaml --arena /shared/arena.yaml \
-  --areal-dir /shared/AReaL --fileroot /shared/experiments
+  --fileroot /shared/experiments
 ```
 
 reservation 只认显式的 `--reservation`，不指定就使用公共池；忽略环境变量和旧配置中的

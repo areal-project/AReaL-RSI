@@ -30,7 +30,7 @@ def configuration(params_path: Path | None = None):
 
 
 def arguments(**overrides):
-    values = dict(areal_dir=None, partition=None, reservation=None)
+    values = dict(partition=None, reservation=None)
     values.update(overrides)
     return argparse.Namespace(**values)
 
@@ -40,6 +40,20 @@ def write_params(tmp_path, update):
     path = tmp_path / "params.yaml"
     path.write_text(yaml.safe_dump(params))
     return path
+
+
+@pytest.mark.parametrize("source", ["../../../../AReaL", "/configured/areal", "~/configured-areal"])
+def test_source_directory_comes_only_from_config(monkeypatch, source):
+    monkeypatch.setenv("AREAL_DIR", "/stale/source/from/environment")
+    config = configuration()
+    config["launch"]["areal_dir"] = source
+    runtime = submit.runtime_from_config(config, PROFILE, arguments())
+    expected = str((ROOT / Path(source).expanduser()).resolve())
+    assert runtime.areal_dir == expected
+    values = submit.environment(runtime, ROOT, "experiment", "trial", "")
+    assert values["AREAL_DIR"] == expected
+    assert values["AREAL_ACTOR_PYTHONPATH"].split(":")[-1] == expected
+    assert values["AREAL_ROLLOUT_PYTHONPATH"].split(":")[-1] == expected
 
 
 def test_cpu_memory_override_preserves_role_containers_and_topology(tmp_path):
@@ -133,6 +147,7 @@ def test_dry_run_prints_config_without_files_sourcing_credentials_or_submitting(
         os.environ,
         ARENA_OPENAPI_TOKEN="private-test-value",
         SBATCH_NODELIST="stale-node",
+        AREAL_DIR="/stale/source/from/environment",
         SUBMIT_PYTHON=sys.executable,
     )
     if credentials_from_env:

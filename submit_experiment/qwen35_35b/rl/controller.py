@@ -85,6 +85,27 @@ def rollout_runtime() -> None:
     )
 
 
+def run_training(worker_startup_timeout: int) -> None:
+    """Supply the native Slurm scheduler with this experiment's queue budget."""
+    import areal
+    from areal.infra.scheduler.slurm import SlurmScheduler
+
+    original_trainer = areal.PPOTrainer
+
+    # Use the same scheduler factory hook as AReaL's Qwen recipe. The generic
+    # SWE entry imports areal.PPOTrainer when main runs; its workflow stays intact.
+    class ExperimentTrainer(original_trainer):
+        def _init_scheduler(self):
+            return SlurmScheduler(exp_config=self.config, startup_timeout=worker_startup_timeout)
+
+    areal.PPOTrainer = ExperimentTrainer
+    try:
+        print(f"Slurm worker startup timeout: {worker_startup_timeout}s", flush=True)
+        runpy.run_module("examples.swe.train_swe_rl", run_name="__main__")
+    finally:
+        areal.PPOTrainer = original_trainer
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--rollout-runtime", action="store_true")
@@ -147,7 +168,7 @@ def main() -> None:
 
     signal.signal(signal.SIGTERM, terminate)
     sys.argv = ["examples.swe.train_swe_rl", "--config", str(config_path)]
-    runpy.run_module("examples.swe.train_swe_rl", run_name="__main__")
+    run_training(int(os.environ["AREAL_WORKER_STARTUP_TIMEOUT"]))
 
 
 if __name__ == "__main__":

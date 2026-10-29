@@ -524,3 +524,53 @@ def test_native_omegaconf_links_reach_ref_and_both_worker_roles(monkeypatch, tmp
         spec = resolved[role]["scheduling_spec"][0]
         assert spec["reservation"] == reservation
         assert runtime.areal_dir in spec["srun_additional_args"]
+
+
+@pytest.mark.parametrize("timeout", [0, -1, 1.5, True])
+def test_invalid_worker_wait_fails_before_submission(tmp_path, timeout):
+    config = configuration(
+        write_params(tmp_path, {"launch": {"slurm": {"worker_startup_timeout": timeout}}})
+    )
+    with pytest.raises(ValueError, match="worker_startup_timeout must be positive"):
+        submit.runtime_from_config(config, arguments())
+
+
+@pytest.mark.parametrize("training_fails", [False, True])
+def test_controller_supplies_native_scheduler_wait_and_restores_trainer(
+    monkeypatch, tmp_path, training_fails
+):
+    pytest.importorskip("httpx")
+    pytest.importorskip("mcp")
+    monkeypatch.syspath_prepend(str(ROOT.parents[3] / "AReaL"))
+    import areal
+    from areal.infra.scheduler.slurm import SlurmScheduler
+    from examples.swe.utils import SWEPPOConfig
+
+    spec = importlib.util.spec_from_file_location("qwen35_controller", ROOT / "controller.py")
+    controller = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(controller)
+    original = areal.PPOTrainer
+    config = SWEPPOConfig()
+    config.experiment_name, config.trial_name = "wait-test", "trial"
+    config.cluster.fileroot = str(tmp_path)
+    config.cluster.name_resolve.nfs_record_root = str(tmp_path)
+    seen = []
+
+    def training_entry(module, run_name):
+        assert module == "examples.swe.train_swe_rl" and run_name == "__main__"
+        trainer = object.__new__(areal.PPOTrainer)
+        trainer.config = config
+        scheduler = trainer._init_scheduler()
+        assert isinstance(scheduler, SlurmScheduler)
+        seen.append(scheduler.startup_timeout)
+        if training_fails:
+            raise RuntimeError("training failure")
+
+    monkeypatch.setattr(controller.runpy, "run_module", training_entry)
+    if training_fails:
+        with pytest.raises(RuntimeError, match="training failure"):
+            controller.run_training(43200)
+    else:
+        controller.run_training(43200)
+    assert seen == [43200]
+    assert areal.PPOTrainer is original

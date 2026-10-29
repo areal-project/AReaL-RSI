@@ -28,6 +28,7 @@ Slurm scheduler 再申请一个 8 GPU 节点。actor 使用 8 个 worker，rollo
 | controller / actor 镜像 | `/storage/openpsi/images/areal-dev-sglang-1014.sif` |
 | rollout 镜像 | `/storage/openpsi/images/deepep-base-119b5ffe.sif` |
 | Slurm 分区 / reservation | `all` / 默认不指定 reservation |
+| 等待 worker 就绪 | `launch.slurm.worker_startup_timeout=43200` 秒，含 GPU 排队时间 |
 | AReaL fileroot | `/storage/openpsi/experiments`，与所给实验一致 |
 | W&B | 凭据文件中 key 和 URL 均非空时自动开启 online，否则默认关闭 |
 
@@ -138,6 +139,10 @@ reservation 只认显式的 `--reservation`，不指定就使用公共池；忽�
 reservation。controller、actor、rollout 同步使用所选 reservation。
 默认没有固定 nodelist；rollout 的节点约束由 AReaL 根据 actor 作业确定。
 controller 与 GPU workers 是独立 Slurm job，“单机”指一个 GPU 节点。
+params.yaml 中 `launch.slurm.worker_startup_timeout` 默认 43200 秒（12 小时），
+覆盖原生 SlurmScheduler 的 300 秒默认值，包含排队和 RPC worker 就绪等待。
+入口沿用 AReaL Qwen 示例的 trainer scheduler factory hook，仅传入此超时值；
+训练 workflow、Slurm 资源申请和 AReaL 核心调度代码不变。已失败的 Slurm worker 仍按原生逻辑立即报错。
 不要将 actor 设置为 `exclusive: true`，共卡 rollout 还需要同节点 CPU/内存资源。
 
 停止旧轮次后，旧 sandbox 任务可能因推理服务结束而失败，使 stream 最近的健康率检查

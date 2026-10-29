@@ -194,3 +194,8 @@ perf_tracer:
   enabled: false
   session_tracer:
     enabled: false
+
+launch:
+  slurm:
+    # Includes Slurm queue time and RPC worker readiness (seconds).
+    worker_startup_timeout: 43200

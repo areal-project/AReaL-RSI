@@ -65,6 +65,7 @@ class SlurmSettings:
     controller_mem_gb: int
     controller_time: str
     worker_time: str
+    worker_startup_timeout: int = 43200
 
 
 @dataclass(frozen=True)
@@ -181,9 +182,12 @@ def runtime_from_config(
         if not re.fullmatch(r"(?:\d+-)?\d+:\d{2}:\d{2}", slurm[key]):
             raise ValueError(f"Invalid Slurm {key}; use HH:MM:SS or D-HH:MM:SS")
     for key in ("controller_cpus", "controller_mem_gb"):
-        if not isinstance(slurm[key], int) or slurm[key] < 1:
+        if type(slurm[key]) is not int or slurm[key] < 1:
             raise ValueError(f"Slurm {key} must be positive")
     raw["slurm"] = SlurmSettings(**slurm)
+    timeout = raw["slurm"].worker_startup_timeout
+    if type(timeout) is not int or timeout < 1:
+        raise ValueError("Slurm worker_startup_timeout must be positive")
     return Runtime(**raw)
 
 
@@ -209,6 +213,7 @@ def environment(
         "ARENA_PREFLIGHT_ALLOW_UNHEALTHY": "1" if runtime.preflight_allow_unhealthy else "0",
         "SBATCH_PARTITION": runtime.slurm.partition,
         "SBATCH_TIMELIMIT": runtime.slurm.worker_time,
+        "AREAL_WORKER_STARTUP_TIMEOUT": str(runtime.slurm.worker_startup_timeout),
         "SLURM_EXPORT_ENV": "ALL",
         "HF_HUB_OFFLINE": "1",
         "TRANSFORMERS_OFFLINE": "1",

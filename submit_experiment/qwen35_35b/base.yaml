@@ -6,18 +6,19 @@ launch:
   rollout_image: /storage/openpsi/images/deepep-base-119b5ffe.sif
   actor_python: python3
   rollout_python: /opt/sglang/bin/python3
-  # Reuse the referenced experiment's AWEX and Transformers overlays, not its
-  # Qwen4-specific training entry point or proxy configuration patch.
+  # Shared pinned copies provide AWEX/proxy/common runtime dependencies.
+  # Retain the reference experiment's Transformers overlay for the actor.
   actor_pythonpath:
-    - /storage/openpsi/users/chucai.dzq/areal-experiment-scripts/qwen38-flash-next/swemm-rl64/main-r3-20261016/runtime/awex-0.9.0
+    - /storage/openpsi/users/public/codes/qwen_patches/awex-0.9.0
     - /storage/openpsi/users/chucai.dzq/areal-experiment-scripts/qwen38-flash-next/swemm-rl64/main-r3-20261016/runtime/transformers-5.16.1
   rollout_pythonpath:
-    - /storage/openpsi/users/chucai.dzq/areal-experiment-scripts/qwen38-flash-next/swemm-rl64/main-r3-20261016/runtime/awex-0.9.0
-    - /storage/openpsi/users/chucai.dzq/areal-experiment-scripts/qwen38-27b/graybox19/q27-bs8gs12-1012-2/runtime/proxy-deps
-    - /storage/openpsi/users/public/codes/areal-rollout-runtime-py312-sglang0518
+    - /storage/openpsi/users/public/codes/qwen_patches/awex-0.9.0
+    - /storage/openpsi/users/public/codes/qwen_patches/proxy-deps
+    - /storage/openpsi/users/public/codes/qwen_patches/areal-rollout-runtime-py312-sglang0518
   controller_binds: /storage:/storage,/etc/slurm:/etc/slurm,/run/munge:/run/munge,/etc/passwd:/etc/passwd,/etc/group:/etc/group,/usr/bin/sbatch:/usr/bin/sbatch,/usr/bin/srun:/usr/bin/srun,/usr/bin/squeue:/usr/bin/squeue,/usr/bin/scontrol:/usr/bin/scontrol,/usr/bin/sacct:/usr/bin/sacct,/usr/bin/scancel:/usr/bin/scancel,/usr/lib64/slurm:/usr/lib64/slurm,/usr/lib64/libmunge.so.2.0.0:/usr/lib/x86_64-linux-gnu/libmunge.so.2
   actor_binds: /storage:/storage
-  rollout_binds: /storage:/storage,/storage/openpsi/users/chucai.dzq/areal-experiment-scripts/qwen38-flash-next/swemm-rl64/main-r3-20261016/patches/sglang-0.5.19-gdn/gdn_flashinfer.py:/opt/sglang/lib/python3.12/site-packages/sglang/srt/layers/attention/linear/kernels/gdn_flashinfer.py:ro
+  # AReaL applies the validated GDN fix in each worker's writable container layer.
+  rollout_binds: /storage:/storage
   slurm:
     partition: all
     controller_cpus: 4

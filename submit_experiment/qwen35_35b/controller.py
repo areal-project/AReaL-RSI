@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import importlib.metadata
 import json
 import os
@@ -25,23 +26,38 @@ def check_source() -> Path:
     return expected
 
 
-def record_runtime(role: str) -> None:
+def record_runtime(role: str, extra: dict[str, str] | None = None) -> None:
     check_source()
-    packages = ("awex", "transformers", "torch", "sglang", "megatron-core", "megatron-bridge")
+    packages = (
+        "awex",
+        "transformers",
+        "torch",
+        "sglang",
+        "megatron-core",
+        "megatron-bridge",
+        "flashinfer-python",
+        "flashinfer-cubin",
+        "torch-memory-saver",
+    )
     versions = {}
     for package in packages:
         try:
             versions[package] = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:
             versions[package] = "not installed"
+    versions.update(extra or {})
     root = Path(os.environ["EXPERIMENT_RUN_DIR"])
     (root / f"runtime-{role}.json").write_text(json.dumps(versions, indent=2) + "\n")
     print(f"{role} runtime: {json.dumps(versions)}", flush=True)
 
 
 def rollout_runtime() -> None:
-    record_runtime("rollout")
+    check_source()
+    from areal.engine._sglang_source_patch import installed_sglang_root
     from areal.engine.awex.plugins.sglang_plugin import assert_supported_sglang_version
+    from areal.engine.sglang_gdn_decode_padding import TARGET_RELATIVE, patched_source
+    from areal.engine.sglang_model_patches import apply_model_patches
+    from omegaconf import OmegaConf
 
     assert_supported_sglang_version()
     # Require the actual Qwen3.5 converter, not just an AWEX version label.
@@ -50,6 +66,23 @@ def rollout_runtime() -> None:
 
     assert qwen3_5.__file__
     assert ServerArgs
+    root = Path(os.environ["EXPERIMENT_RUN_DIR"])
+    config = OmegaConf.load(root / "train.yaml")
+    # Exercise the same automatic bootstrap as real workers. This container's
+    # temporary writable layer is discarded; workers apply the fix independently.
+    apply_model_patches(["--model-path", str(config.actor.path)])
+    target = installed_sglang_root() / TARGET_RELATIVE
+    source = target.read_bytes()
+    if patched_source(source) != source:
+        raise RuntimeError("AReaL startup did not apply the required GDN decode padding fix")
+    record_runtime(
+        "rollout",
+        {
+            "gdn_decode_padding": "applied and verified",
+            "gdn_source": str(target),
+            "gdn_sha256": hashlib.sha256(source).hexdigest(),
+        },
+    )
 
 
 def main() -> None:

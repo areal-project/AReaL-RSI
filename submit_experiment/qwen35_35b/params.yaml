@@ -6,7 +6,7 @@ dynamic_bs: false
 should_accept_fn: examples.swe.filter_function.filter_function
 
 gconfig:
-  n_samples: 8
+  n_samples: 12
   min_new_tokens: 0
   max_new_tokens: 65536
   max_tokens: 262143  # SGLang requires one token of context headroom.

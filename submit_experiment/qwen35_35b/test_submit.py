@@ -77,7 +77,7 @@ def test_fixed_runtime_cannot_be_overridden_from_params(tmp_path, update):
     ("update", "message"),
     [
         ({"gconfig": {"max_tokens": 262144}}, "context_length"),
-        ({"actor": {"min_usable_group_size": 9}}, "n_samples"),
+        ({"actor": {"min_usable_group_size": 13}}, "n_samples"),
         ({"actor": {"optimizer": {"type": "sgd"}}}, "CPU staging"),
         ({"actor": {"megatron": {"entropy_requires_grad": True}}}, "Chunked loss"),
         ({"total_train_steps": 1}, "warmup"),

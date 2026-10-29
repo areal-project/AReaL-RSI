@@ -20,7 +20,7 @@ Slurm scheduler 再申请一个 8 GPU 节点。actor 使用 8 个 worker，rollo
 | Chunked logits / loss | 开启，loss chunk size 1024 |
 | SGLang CUDA graph | decode 开启、prefill 关闭，保留 memory saver；配置 max batch size 512 |
 | 训练 batch / Rollout 队列 | batch size 64，`queue_size=128`；队列必须大于 batch size 以留出任务提交空间 |
-| 采样 / 过滤 | 训练和评估 `n_samples=8`，最小有效组 8，使用示例的 `filter_function` 过滤同奖励组 |
+| 采样 / 过滤 | 训练 `n_samples=12`、最小有效组 8（至少 8/12 有效），评估 `n_samples=8`，使用示例的 `filter_function` 过滤同奖励组 |
 | 并发 / 微批 | rollout 并发 64，SGLang 最大请求数 16；`n_mbs=128`、`n_mbs_divisor=8` |
 | Arena 路由 | `gateway` |
 | R3 / MTP | 关闭 |
@@ -44,6 +44,12 @@ RL、过滤、优化器超参、微批、SGLang 显存比例（0.7）及保存�
 关闭、主机内存、W&B 自动发现及 Qwen3.5 兼容设置：CPU staging 使用 precision-aware
 optimizer，chunked loss 不计算 entropy 梯度，prefill graph 关闭，请求总 token 上限
 比 256K 上下文少 1。评估采样配置也沿用示例，并保留同样的 1-token 上下文余量。
+
+训练每组生成 12 条 trajectory，至少 8 条有效才进入后续过滤；对于正常返回无效结果的
+分支，允许最多 4 条无效，并保留 `drop_incomplete_group=false`。最小有效组数由
+`actor.min_usable_group_size=8` 控制。未处理的 workflow 异常仍会取消组内其他任务并丢弃整组，
+8/12 门槛不会覆盖该异常处理。达到数量门槛后仍会通过 `filter_function` 检查奖励差异，
+同奖励组仍被过滤。
 
 `cuda_graph_max_bs=512` 是配置上限；当前 `sglang.max_running_requests=16`，所用 SGLang
 会按请求池大小截断实际 capture batch。rollout workflow 并发 64 与 SGLang 同时执行请求数
@@ -228,8 +234,23 @@ harness 为 `areal-harness@0.2.0-oss-rc.6-swe-mm-256k`。
 实际 CPU controller 会在提交 GPU workers 前检查：
 实际加载的 AReaL 路径、两种镜像的运行时、AWEX Qwen3.5 converter、支持的 SGLang 版本、
 CP4 所需 Megatron Core ≥0.18.2 / Megatron Bridge ≥0.5.1，以及 Arena Stream/Harness/reward。
-复用原实验的 SIF、AWEX/Transformers/proxy overlays 和 GDN 只读补丁；不重建镜像。
-这些路径位于 base，可以在另一个环境中显式替换。
+复用原实验的 SIF 和全部 AWEX/Transformers/proxy/runtime overlays；不重建镜像，
+不在启动时安装或升级依赖。这些路径位于 base，可以在另一个环境中显式替换。
+
+三份 rollout 依赖统一复制到 `/storage/openpsi/users/public/codes/qwen_patches/`：
+`awex-0.9.0`、`proxy-deps`、`areal-rollout-runtime-py312-sglang0518`。
+Actor 共用其中的 AWEX 副本；其 Transformers overlay 仍使用原路径。
+副本与来源目录做过逐文件 SHA256 校验，来源、文件数和目录校验摘要记录在共享目录的
+`copy-manifest.json`。复制保持原有依赖版本，SGLang 和 FlashInfer 继续由镜像提供。
+
+GDN decode padding 修复由 AReaL 的 SGLang 启动 bootstrap 默认应用，不再挂载个人目录的
+`gdn_flashinfer.py`。当前保留 SGLang `0.5.19.dev125+g119b5ffe4` 和 FlashInfer `0.6.17`。
+所选 AReaL 必须包含该构建的源码 hash 支持、FlashInfer 0.6.17 支持和自动启动集成。
+对应修改见 [AReaL PR #1837](https://github.com/areal-project/AReaL/pull/1837)。
+CPU rollout 预检会实际执行相同的 bootstrap，验证补丁结果，并在 `runtime-rollout.json`
+记录 FlashInfer 版本、`gdn_decode_padding`、源码路径及 SHA256；未知源码或不兼容依赖
+直接使预检失败。Slurm 的 `--writable-tmpfs` 让预检和每个 worker 在各自容器临时层
+应用补丁，原始 SIF 不变。CPU 预检的修改不跨容器保留，真实推理 worker 会独立应用。
 
 当前 rollout 镜像的 breakable prefill CUDA graph 不支持 `enable_memory_saver=true`，
 会在启动推理服务时报 `Breakable CUDA graph is not compatible with memory saver mode`。

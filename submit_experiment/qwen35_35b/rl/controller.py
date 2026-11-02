@@ -166,20 +166,6 @@ def main() -> None:
         min_terminal_tasks=int(os.environ["ARENA_PREFLIGHT_MIN_TASKS"]),
         allow_unhealthy=os.environ.get("ARENA_PREFLIGHT_ALLOW_UNHEALTHY", "0") == "1",
     )
-    from examples.swe.arena_client import ArenaOpenAPIClient
-    from examples.swe.arena_dataset_snapshot import load_arena_dataset_snapshot
-
-    for configured, report in zip(streams, summary, strict=True):
-        if configured.dataset_snapshot_file:
-            rows = load_arena_dataset_snapshot(
-                ArenaOpenAPIClient(base_url=config.econfig.arena_base_url),
-                configured.dataset_snapshot_file,
-                configured.stream_id,
-                report["llm_protocol"],
-            )
-            report["live_stream_dataset_total"] = report["dataset_total"]
-            report["dataset_total"] = len(rows)
-            print(f"Arena dataset snapshot validated: {len(rows)} exact Env versions", flush=True)
     (root / "preflight.json").write_text(json.dumps({"streams": summary}, indent=2) + "\n")
     for stream in summary:
         if stream.get("unhealthy_override"):

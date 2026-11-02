@@ -6,7 +6,6 @@ econfig:
     - name: swe-verified483-setup600
       stream_id: qwen35-swe-verified483-setup600
       sampling_weight: 1
-      dataset_snapshot_file: swebench-verified-483-setup600.json
       harness: areal-harness@0.2.0-oss-rc.6-swe-mm-256k-t1-p1-k100k
       llm_protocol: chat_completions
       expected_reward_ref:

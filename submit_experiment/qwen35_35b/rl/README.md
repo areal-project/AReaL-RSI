@@ -257,25 +257,21 @@ PY
 
 调整采样、RL、优化器或资源参数编辑 `params.yaml`（或通过 `--params` 选择自己的副本）；
 换数据编辑 `arena.yaml`（或使用 `--arena`）。默认使用独立 Stream
-`qwen35-swe-verified483-setup600`，快照为 `swebench-verified-483-setup600.json`，
-固定 483 个派生 Env 的版本和内容 hash。其题目来自
-`swebench-verified-golden-offline-full@1.0.2`，与参考运行
-`swe483-sm90-fixed-p095-k20-20261013-2610131624` 的题目范围相同。
+`qwen35-swe-verified483-setup600`，直接读取该 Stream 的完整实时数据。
+当前为 483 道派生题，范围来自 `swebench-verified-golden-offline-full@1.0.2`，
+与参考运行 `swe483-sm90-fixed-p095-k20-20261013-2610131624` 的题目范围相同。
 派生 Env 保留原题目、镜像、oracle、setup/collect 脚本与 agent/collect 超时，
-将 `spec.timeouts.setup_seconds` 从 120 改为 600；另使用独立 key、tags 和来源 metadata。
-快照逐条记录原 `source_data_id` 和内容 hash；原始快照保留为
-`swebench-verified-483.json`。共享 `swe-bench-verified` Stream 的 499 题及其默认值保持原样。
+将 `spec.timeouts.setup_seconds` 从 120 改为 600；使用独立 key、tags 和来源 metadata。
+共享 `swe-bench-verified` Stream 的 499 题及其默认值保持原样。
 
 setup 600 秒是 Arena Env 的配置，不能用 `rollout.setup_timeout` 或任务环境变量覆盖；
 `rollout.setup_timeout=7200` 是 AReaL rollout 引擎初始化等待时间。
-若需要再次调整 sandbox setup 超时，应发布新的独立 Env 版本并更新快照 hash。
+若需要再次调整 sandbox setup 超时，应发布新的独立 Env 版本。
 
-`dataset_snapshot_file` 的相对路径以所选 arena.yaml 所在目录为基准。
-提交时将快照复制到实验日志目录的 `arena-dataset-0.json`，训练配置引用该副本，
-manifest 记录其 SHA-256；之后修改原文件不会改变已经提交的实验。
-CPU 预检会校验快照中的每个 Env 版本仍已发布、内容 hash 一致，并分别记录
-`dataset_total=483` 和独立 Stream 的 `live_stream_dataset_total=483`。
-没有快照字段时，继续使用 Stream 的完整实时数据选择。
+入口不保存本地题目快照，预检和训练均从 Stream 获取数据。
+Stream 选择范围或已发布 latest Env 版本改变后，后续实验的数据也会相应变化。
+CPU 预检仍校验 Stream、Harness、reward、数据可用性和历史健康情况。
+已提交实验目录中的旧文件保留，不影响运行中的作业。
 
 默认 Harness 为 `areal-harness@0.2.0-oss-rc.6-swe-mm-256k-t1-p1-k100k`，
 协议为 `chat_completions`，reward 固定为 `swebench-verified-reward@1.1.1`，路由仍为 gateway。

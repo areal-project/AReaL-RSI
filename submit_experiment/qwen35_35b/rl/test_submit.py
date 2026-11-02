@@ -305,7 +305,6 @@ def test_credentials_default_is_discovered_beside_script_from_another_cwd(
         "base.yaml",
         "params.yaml",
         "arena.yaml",
-        "swebench-verified-483-setup600.json",
         "controller.py",
         "controller.sbatch",
     ):
@@ -381,15 +380,8 @@ def test_only_training_reserves_trial_and_checks_can_repeat(monkeypatch, tmp_pat
         assert (formal / "controller.jobid").read_text() == "12345\n"
         config = yaml.safe_load((formal / "train.yaml").read_text())
         assert config["cluster"]["fileroot"] == str(tmp_path)
-        snapshot = Path(config["econfig"]["arena_streams"][0]["dataset_snapshot_file"])
-        assert snapshot.parent == formal
-        assert snapshot.read_bytes() == (
-            PROFILE / "swebench-verified-483-setup600.json"
-        ).read_bytes()
-        manifest = json.loads((formal / "manifest.json").read_text())
-        import hashlib
-
-        assert manifest["sha256"][snapshot.name] == hashlib.sha256(snapshot.read_bytes()).hexdigest()
+        assert "dataset_snapshot_file" not in config["econfig"]["arena_streams"][0]
+        assert not list(formal.glob("arena-dataset-*.json"))
         with pytest.raises(FileExistsError):
             submit.main()
         assert len(submissions) == 1

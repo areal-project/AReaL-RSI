@@ -100,13 +100,6 @@ def compose(profile: Path, params_path: Path, arena_path: Path) -> dict[str, Any
     protect_base(base, params)
     protect_base(base, arena)
     config = merge(merge(base, params), arena)
-    # Dataset files are relative to their arena.yaml, independent of shell cwd.
-    for stream in config["econfig"].get("arena_streams", []):
-        if filename := stream.get("dataset_snapshot_file"):
-            source = (arena_path.parent / Path(filename).expanduser()).resolve()
-            if not source.is_file():
-                raise ValueError(f"Arena dataset snapshot does not exist: {source}")
-            stream["dataset_snapshot_file"] = str(source)
     # OmegaConf's structured merge rejects whole-dataclass interpolations as
     # strings. Copy these container links after applying actor overrides, while
     # retaining scalar/environment interpolations inside each container.
@@ -393,12 +386,6 @@ def main() -> None:
         shutil.copyfile(source, run_dir / name)
     for name in ("controller.sbatch", "controller.py"):
         shutil.copyfile(ROOT / name, run_dir / name)
-    # Freeze the selected dataset with the submitted config for reproducibility.
-    for index, stream in enumerate(config["econfig"].get("arena_streams", [])):
-        if filename := stream.get("dataset_snapshot_file"):
-            target = run_dir / f"arena-dataset-{index}.json"
-            shutil.copyfile(filename, target)
-            stream["dataset_snapshot_file"] = str(target)
     (run_dir / "train.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
     values = environment(runtime, run_dir, experiment_name, trial_name, credentials)
     # Credentials themselves are never sourced or serialized on the submit host.
@@ -434,8 +421,6 @@ def main() -> None:
             for name in ("base.yaml", "params.yaml", "arena.yaml", "train.yaml")
         },
     }
-    for path in sorted(run_dir.glob("arena-dataset-*.json")):
-        manifest["sha256"][path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
     source = Path(runtime.areal_dir)
     for label, arguments in (
         ("source_head", ["rev-parse", "HEAD"]),

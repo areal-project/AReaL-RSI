@@ -45,10 +45,10 @@ def write_params(tmp_path, update):
 @pytest.mark.parametrize(
     ("update", "requests", "graph"),
     [
-        ({}, 96, 96),
+        ({}, 64, 64),
         ({"rollout": {"max_concurrent_rollouts": 16}, "gconfig": {"n_samples": 8}}, 128, 128),
         ({"sglang": {"max_running_requests": 24}}, 24, 24),
-        ({"sglang": {"cuda_graph_max_bs": 512}}, 96, 512),
+        ({"sglang": {"cuda_graph_max_bs": 512}}, 64, 512),
     ],
 )
 def test_sglang_capacity_uses_native_yaml_resolution(tmp_path, update, requests, graph):
@@ -71,8 +71,8 @@ def test_sglang_capacity_uses_native_yaml_resolution(tmp_path, update, requests,
 
     # Native references remain live when upstream values change before loading.
     if not update:
-        native.rollout.max_concurrent_rollouts = 8
-        assert native.sglang.max_running_requests == native.sglang.cuda_graph_max_bs == 96
+        native.rollout.max_concurrent_rollouts = 16
+        assert native.sglang.max_running_requests == native.sglang.cuda_graph_max_bs == 128
 
 
 @pytest.mark.parametrize("key", ["max_running_requests", "cuda_graph_max_bs"])
@@ -169,8 +169,8 @@ def test_fixed_runtime_cannot_be_overridden_from_params(tmp_path, update):
         ({"actor": {"megatron": {"entropy_requires_grad": True}}}, "Chunked loss"),
         ({"total_train_steps": 1}, "warmup"),
         ({"actor": {"reward_norm": {"mean_level": "group"}}}, "not both"),
-        ({"rollout": {"queue_size": 64}}, "queue_size must exceed"),
-        ({"rollout": {"queue_size": 63}}, "queue_size must exceed"),
+        ({"rollout": {"queue_size": 8}}, "queue_size must exceed"),
+        ({"rollout": {"queue_size": 7}}, "queue_size must exceed"),
     ],
 )
 def test_incompatible_tuning_fails_before_submission(tmp_path, update, message):

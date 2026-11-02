@@ -23,10 +23,10 @@ Slurm scheduler 再申请一个 8 GPU 节点。actor 使用 8 个 worker，rollo
 | 上下文 | 262144（256K）；请求总 token 上限 262143，预留一个 token |
 | CPU-staged optimizer offload | 开启，2 个 buffer，每个 128 MiB |
 | Chunked logits / loss | 开启，loss chunk size 1024 |
-| SGLang CUDA graph | decode 开启、prefill 关闭，保留 memory saver；max batch size 自动跟随请求上限（默认 96） |
-| 训练 batch / Rollout 队列 | batch size 64，`queue_size=128`；队列必须大于 batch size 以留出任务提交空间 |
-| 采样 / 过滤 | 训练 `n_samples=12`、最小有效组 8（至少 8/12 有效），评估 `n_samples=8`，使用示例的 `filter_function` 过滤同奖励组 |
-| 并发 / 微批 | rollout 组并发 8，每组 12 条；SGLang 请求上限自动计算为 96；不显式设置 `n_mbs`，按 token 预算自动拆分；`n_mbs_divisor=8` |
+| SGLang CUDA graph | decode 开启、prefill 关闭，保留 memory saver；max batch size 自动跟随请求上限（默认 64） |
+| 训练 batch / Rollout 队列 | batch size 8，`queue_size=128`；队列必须大于 batch size 以留出任务提交空间 |
+| 采样 / 过滤 | 训练 `n_samples=8`、最小有效组 8（8/8 有效），评估 `n_samples=8`，使用示例的 `filter_function` 过滤同奖励组 |
+| 并发 / 微批 | rollout 组并发 8，每组 8 条；SGLang 请求上限自动计算为 64；不显式设置 `n_mbs`，按 token 预算自动拆分；`n_mbs_divisor=8` |
 | Arena 数据 | `qwen35-swe-verified483-setup600`，固定参考 Benchmark 的 483 题、setup 600 秒 |
 | Arena Harness / 协议 | `areal-harness@0.2.0-oss-rc.6-swe-mm-256k-t1-p1-k100k` / `chat_completions`；发布规格 2 CPU、4 GiB 内存、10 GiB 磁盘 |
 | Arena 路由 | `gateway` |
@@ -53,13 +53,14 @@ RL、过滤、优化器超参、SGLang 显存比例（0.7）及保存恢复策�
 optimizer，chunked loss 不计算 entropy 梯度，prefill graph 关闭，请求总 token 上限
 比 256K 上下文少 1。评估采样配置也沿用示例，并保留同样的 1-token 上下文余量。
 
-训练每组生成 12 条 trajectory，至少 8 条有效才进入后续过滤；对于正常返回无效结果的
-分支，允许最多 4 条无效，并保留 `drop_incomplete_group=false`。最小有效组数由
+训练 batch size 为 8 个有效题组，同时最多运行 8 个题组；两者是独立参数。
+训练每组生成 8 条 trajectory，8 条全部有效才进入后续过滤；保留
+`drop_incomplete_group=false`。最小有效组数由
 `actor.min_usable_group_size=8` 控制。当前 AReaL 的
 `examples/swe/train_swe_rl.py` 在 Arena 训练入口中向 workflow 传入
 `reject_terminal_task_failures=True`，评估传入 False。这是入口代码中的固定策略，
 尚未暴露为 params.yaml / arena.yaml 的配置字段：受支持的终态失败仅丢弃当前样本，保留同组其他分支，
-最后判断 8/12 门槛；评估保持关闭。代理服务错误和其他未处理的 workflow 异常仍会使整组失败。
+最后判断 8/8 门槛；评估保持关闭。代理服务错误和其他未处理的 workflow 异常仍会使整组失败。
 达到数量门槛后仍会通过 `filter_function` 检查奖励差异，同奖励组仍被过滤。
 
 默认日志设置保留 SGLang `info` 和 HTTP `warning`，显式关闭 `sglang.log_requests`。
@@ -79,7 +80,7 @@ sglang:
   cuda_graph_max_bs: ${sglang.max_running_requests}
 ```
 
-默认 8 × 12 = 96，两个上限都是 96。修改组并发或采样数时会一起更新；
+默认 8 × 8 = 64，两个上限都是 64。修改组并发或采样数时会一起更新；
 也可将任一字段改成正整数覆盖。手动修改请求上限时，graph 上限仍会跟随该值，
 除非 graph 字段也被手动覆盖。
 提交脚本将表达式原样保留在 `train.yaml`，不再识别 `auto` 或计算这两个上限。
@@ -91,7 +92,7 @@ CPU 预检会解析并检查两个上限是正整数，之后才允许提交 GPU
 YAML 插值、AReaL 结构化配置加载及 Arena 数据校验；未重启现有训练试验。
 
 所用 SGLang 会按请求池大小截断实际 capture batch。更大的请求池和 graph 会占用
-更多显存，应通过实际启动确认容量；这并不保证 96 条都能同时占满 256K 上下文。
+更多显存，应通过实际启动确认容量；这并不保证 64 条都能同时占满 256K 上下文。
 当前 Megatron 路径还会将 `n_mbs_divisor` 按 PP 大小重设：本模板保留配置
 值 8，但 PP1 下该路径实际使用 1。`n_mbs` 不显式配置，使用 AReaL 默认下限 1，
 由 `max_tokens_per_mb=262144` 与实际样本长度决定每步微批数，actor/ref 均如此。
@@ -293,8 +294,8 @@ Arena 结果中的 schema 若被脱敏为 `[REDACTED].envarena-outcome.v1`，仅
 Arena 终态仍可为 `HARNESS_FAILED`；训练记零不改变 Arena 的任务状态。
 外部信号、收集/适配失败、缺失或冲突的结果文件，以及 Proxy 系统错误仍拒绝。
 
-默认 params.yaml 的 rollout 组并发为 8、每组 12 条、最小有效组 8，
-SGLang 请求上限自动计算为 96。
+默认 params.yaml 的 rollout 组并发为 8、每组 8 条、最小有效组 8，
+SGLang 请求上限自动计算为 64。
 训练配置中的采样缺省值仍为 temperature=1、top_p=1、top_k=1000000。
 所选 Harness 显式设置 temperature=1、top_p=1、top_k=100000，
 请求显式参数优先，因此实际 top_k 为 100000。若需更改 Harness 固定参数，

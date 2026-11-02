@@ -1,5 +1,10 @@
 # Qwen3.5-35B Slurm 实验提交
 
+默认使用已发布的原生 AReaL Harness，执行预算耗尽通过
+`areal.envarena-outcome.v1 / AGENT_RUN_TIMEOUT` 识别。
+经原生结果文件核验且成功导出有效交互时，训练奖励为 0；普通
+`HARNESS_FAILED`、外部终止和基础设施故障仍不自动记零。
+
 本目录独立包含 Qwen3.5-35B-A3B 的脚本、文档、配置和离线测试。
 其他模型在 `submit_experiment/` 下另建目录，维护各自的入口和配置。
 Slurm 申请一个 CPU controller，AReaL 的
@@ -18,11 +23,12 @@ Slurm scheduler 再申请一个 8 GPU 节点。actor 使用 8 个 worker，rollo
 | 上下文 | 262144（256K）；请求总 token 上限 262143，预留一个 token |
 | CPU-staged optimizer offload | 开启，2 个 buffer，每个 128 MiB |
 | Chunked logits / loss | 开启，loss chunk size 1024 |
-| SGLang CUDA graph | decode 开启、prefill 关闭，保留 memory saver；配置 max batch size 512 |
+| SGLang CUDA graph | decode 开启、prefill 关闭，保留 memory saver；max batch size 自动跟随请求上限（默认 384） |
 | 训练 batch / Rollout 队列 | batch size 64，`queue_size=128`；队列必须大于 batch size 以留出任务提交空间 |
 | 采样 / 过滤 | 训练 `n_samples=12`、最小有效组 8（至少 8/12 有效），评估 `n_samples=8`，使用示例的 `filter_function` 过滤同奖励组 |
-| 并发 / 微批 | rollout 并发 64，SGLang 最大请求数 16；不显式设置 `n_mbs`，按 token 预算自动拆分；`n_mbs_divisor=8` |
-| Arena 数据 | `swe-bench-verified`，文本 SWE-bench Verified |
+| 并发 / 微批 | rollout 组并发 32，每组 12 条；SGLang 请求上限自动计算为 384；不显式设置 `n_mbs`，按 token 预算自动拆分；`n_mbs_divisor=8` |
+| Arena 数据 | `qwen35-swe-verified483-setup600`，固定参考 Benchmark 的 483 题、setup 600 秒 |
+| Arena Harness / 协议 | `areal-harness@0.2.0-oss-rc.6-swe-mm-256k-t1-p1-k100k` / `chat_completions`；发布规格 2 CPU、4 GiB 内存、10 GiB 磁盘 |
 | Arena 路由 | `gateway` |
 | R3 / MTP | 关闭 |
 | controller / actor 镜像 | `/storage/openpsi/images/areal-dev-sglang-1014.sif` |
@@ -56,11 +62,45 @@ optimizer，chunked loss 不计算 entropy 梯度，prefill graph 关闭，请�
 最后判断 8/12 门槛；评估保持关闭。代理服务错误和其他未处理的 workflow 异常仍会使整组失败。
 达到数量门槛后仍会通过 `filter_function` 检查奖励差异，同奖励组仍被过滤。
 
-`cuda_graph_max_bs=512` 是配置上限；当前 `sglang.max_running_requests=16`，所用 SGLang
-会按请求池大小截断实际 capture batch。rollout workflow 并发 64 与 SGLang 同时执行请求数
-是两个独立参数。当前 Megatron 路径还会将 `n_mbs_divisor` 按 PP 大小重设：本模板保留配置
+默认日志设置保留 SGLang `info` 和 HTTP `warning`，显式关闭 `sglang.log_requests`。
+actor/rollout 的 `scheduling_spec.env_vars.NCCL_DEBUG=WARN` 抑制每次 collective 的 NCCL INFO；
+rollout 另设 `AREAL_PROXY_WARN_ONCE=1`，相同不支持参数组合只告警一次，首次仍保留参数值。
+该去重要求 AReaL proxy 按字段名生成稳定 key，避免每次变化的 `user` 使告警再次出现。
+这些进程环境设置在下次启动生效；现有 SGLang 的请求日志可通过 `/configure_logging`
+在线关闭，修改 YAML 不会重新配置已运行的进程。
+当前镜像的 SGLang 默认开启请求日志，AReaL 的 AWEX 启动入口需保留显式 false，
+避免 CLI 省略 false 后回落到镜像默认 true；本次同时修正此传递行为。
+
+两个 SGLang 容量上限通过 OmegaConf YAML 插值联动：
+
+```yaml
+sglang:
+  max_running_requests: ${mul:${rollout.max_concurrent_rollouts},${gconfig.n_samples}}
+  cuda_graph_max_bs: ${sglang.max_running_requests}
+```
+
+默认 32 × 12 = 384，两个上限都是 384。修改组并发或采样数时会一起更新；
+也可将任一字段改成正整数覆盖。手动修改请求上限时，graph 上限仍会跟随该值，
+除非 graph 字段也被手动覆盖。
+提交脚本将表达式原样保留在 `train.yaml`，不再识别 `auto` 或计算这两个上限。
+控制器在 AReaL/Hydra 加载配置前注册 `mul`（`operator.mul`）resolver；
+OmegaConf 原生支持字段引用，但乘法需要这个小型 resolver，不使用 `eval`。
+CPU 预检会解析并检查两个上限是正整数，之后才允许提交 GPU worker。
+通过本目录的 controller/submit 入口加载此配置，以确保 resolver 已注册。
+2026-10-30 已通过实际双镜像的 Slurm CPU 预检（作业 `990051`），覆盖
+YAML 插值、AReaL 结构化配置加载及 Arena 数据校验；未重启现有训练试验。
+
+所用 SGLang 会按请求池大小截断实际 capture batch。更大的请求池和 graph 会占用
+更多显存，应通过实际启动确认容量；这并不保证 384 条都能同时占满 256K 上下文。
+当前 Megatron 路径还会将 `n_mbs_divisor` 按 PP 大小重设：本模板保留配置
 值 8，但 PP1 下该路径实际使用 1。`n_mbs` 不显式配置，使用 AReaL 默认下限 1，
 由 `max_tokens_per_mb=262144` 与实际样本长度决定每步微批数，actor/ref 均如此。
+
+2026-10-30 已用此前请求上限 384、graph 配置上限 512 的版本启动验证：controller `990042`、actor `990043`、rollout `990044`。
+运行接口确认请求上限 384、实际 decode capture 最大 batch 384、graph 显存约 1.18 GiB/卡，
+`log_requests=false`；actor/rollout 均未输出 NCCL INFO。已开始正常推理并提交 384 个 Arena
+任务；该验证覆盖初始化和推理，不代表首个训练 step 已完成。新 Stream 首次没有历史任务，
+此次仅在试跑参数副本中设置 `launch.preflight_allow_unhealthy=true`，默认健康检查保持开启。
 
 参数文件不能覆盖 base 的固定字段。字典深度合并；`scheduling_spec` 按现有单条列表项
 合并，因此在 params 中改 CPU/主机内存不会丢失镜像和启动命令。其他列表整体替换。
@@ -216,15 +256,52 @@ PY
 ```
 
 调整采样、RL、优化器或资源参数编辑 `params.yaml`（或通过 `--params` 选择自己的副本）；
-换数据编辑 `arena.yaml`（或使用 `--arena`）。默认 Stream 为 `swe-bench-verified`，
-2026-10-29 查询到 499 个文本 Verified 实例，reward 固定为 `swebench-verified-reward@1.1.1`。
-Stream 自身默认使用 Claude Harness；本配置显式选择已发布且有历史 DONE 任务的
-`areal-harness@0.2.0-oss-rc.6-swe-mm-256k-t1-p1-k100k`，使用 chat_completions 协议。
-版本名中的 swe-mm 是 Harness 历史命名；输入仍由 Verified Stream 决定。
-这里只修改本次任务的 Harness 选择，不修改平台共享 Stream 的默认值。
-原 SWE-MM 试跑长时间未收齐有效组，因此默认切换为文本 Verified；这不代表整个新数据集已验证可训练。
-CPU 预检 989881 已 COMPLETED / 0:0，验证发布状态、reward、数据可用性和历史健康检查，
-未开启 preflight_allow_unhealthy 覆盖。
+换数据编辑 `arena.yaml`（或使用 `--arena`）。默认使用独立 Stream
+`qwen35-swe-verified483-setup600`，快照为 `swebench-verified-483-setup600.json`，
+固定 483 个派生 Env 的版本和内容 hash。其题目来自
+`swebench-verified-golden-offline-full@1.0.2`，与参考运行
+`swe483-sm90-fixed-p095-k20-20261013-2610131624` 的题目范围相同。
+派生 Env 保留原题目、镜像、oracle、setup/collect 脚本与 agent/collect 超时，
+将 `spec.timeouts.setup_seconds` 从 120 改为 600；另使用独立 key、tags 和来源 metadata。
+快照逐条记录原 `source_data_id` 和内容 hash；原始快照保留为
+`swebench-verified-483.json`。共享 `swe-bench-verified` Stream 的 499 题及其默认值保持原样。
+
+setup 600 秒是 Arena Env 的配置，不能用 `rollout.setup_timeout` 或任务环境变量覆盖；
+`rollout.setup_timeout=7200` 是 AReaL rollout 引擎初始化等待时间。
+若需要再次调整 sandbox setup 超时，应发布新的独立 Env 版本并更新快照 hash。
+
+`dataset_snapshot_file` 的相对路径以所选 arena.yaml 所在目录为基准。
+提交时将快照复制到实验日志目录的 `arena-dataset-0.json`，训练配置引用该副本，
+manifest 记录其 SHA-256；之后修改原文件不会改变已经提交的实验。
+CPU 预检会校验快照中的每个 Env 版本仍已发布、内容 hash 一致，并分别记录
+`dataset_total=483` 和独立 Stream 的 `live_stream_dataset_total=483`。
+没有快照字段时，继续使用 Stream 的完整实时数据选择。
+
+默认 Harness 为 `areal-harness@0.2.0-oss-rc.6-swe-mm-256k-t1-p1-k100k`，
+协议为 `chat_completions`，reward 固定为 `swebench-verified-reward@1.1.1`，路由仍为 gateway。
+这是原生 Rust Agent/Core/Runtime，工具和提示词由该 Harness 提供。
+不再设置 Claude 的 API 重试、effort、adaptive thinking 等专属环境变量。
+该已发布 Harness 的 sandbox 规格为 2 CPU、4 GiB 内存、10 GiB 磁盘，
+Arena 优先采用 Harness 的资源规格；不会被 Env 的 resource_hints 覆盖。
+
+Harness 声明的上下文窗口为 262144 tokens，单次最大输出为 65536 tokens；
+不启用 context compaction。Core 时间预算为 `ARENA_AGENT_TIMEOUT_SEC - 90` 秒，
+当前外层预算 7200 秒对应 7110 秒；runner 也有自己的进程期限并预留清理时间。
+两者通过 `harness_result.json` 的 `raw.outcome` 输出 `AGENT_RUN_TIMEOUT`，
+来源分别为 `core_turn_deadline` 和 `runner_deadline`。
+AReaL 下载原生结果文件，核对 outcome、退出状态和收集状态后才接受零奖励。
+Arena 终态仍可为 `HARNESS_FAILED`；训练记零不改变 Arena 的任务状态。
+外部信号、收集/适配失败、缺失或冲突的结果文件，以及 Proxy 系统错误仍拒绝。
+
+默认 params.yaml 的 rollout 组并发为 32、每组 12 条、最小有效组 8，
+SGLang 请求上限自动计算为 384；这些配置保持不变。
+训练配置中的采样缺省值仍为 temperature=1、top_p=1、top_k=1000000。
+所选 Harness 显式设置 temperature=1、top_p=1、top_k=100000，
+请求显式参数优先，因此实际 top_k 为 100000。若需更改 Harness 固定参数，
+应另发布版本并更新本文件及 arena.yaml 中的引用。
+
+Claude 自助 wrapper 保留在 [harness_runtime/README.md](harness_runtime/README.md)，
+默认原生 Harness 不使用它，无需取得 Claude 二进制或发布新的 Claude runtime。
 
 ## 预检、产物和运行边界
 
@@ -289,7 +366,7 @@ CPU rollout 预检会实际执行相同的 bootstrap，验证补丁结果，并�
 已确认支持 `--disable-prefill-cuda-graph`；所选 AReaL 源码还需包含对应的可选配置字段，
 旧版源码会将该字段视为未知配置。该字段与多模 chunked loss 准入修复见
 [AReaL PR #1821](https://github.com/areal-project/AReaL/pull/1821)。参考实验使用 `disable_cuda_graph: false`、
-`cuda_graph_max_bs: 16` 和 `enable_memory_saver: true`；本模板保留开启状态，graph 上限改为 512。
+`cuda_graph_max_bs: 16` 和 `enable_memory_saver: true`；本模板保留开启状态，graph 上限通过 YAML 自动跟随请求上限。
 同一镜像的模型兼容规则会为未进入 breakable 白名单的多模模型自动关闭 prefill graph；
 Qwen4-Exp 被明确排除，而 Qwen3.5 MoE 在白名单中。因此参考实验中的全局 graph 开关开启，
 不代表它启用了 breakable prefill；换到 Qwen3.5 后需要显式关闭这一阶段。

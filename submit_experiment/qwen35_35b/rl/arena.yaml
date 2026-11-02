@@ -1,15 +1,14 @@
-# Text SWE-bench Verified; exact Harness/reward pins checked against Arena.
-# Override the Stream's Claude default with the published AReaL chat Harness.
+# Isolated derivatives of the reference SWE483 Envs with setup timeout 600s.
+# The shared Stream remains unchanged; concurrency and sampling stay in params.yaml.
 econfig:
   arena_mixture_epoch_size: 0
   arena_streams:
-    - name: swe-bench-verified
-      stream_id: swe-bench-verified
+    - name: swe-verified483-setup600
+      stream_id: qwen35-swe-verified483-setup600
       sampling_weight: 1
+      dataset_snapshot_file: swebench-verified-483-setup600.json
       harness: areal-harness@0.2.0-oss-rc.6-swe-mm-256k-t1-p1-k100k
       llm_protocol: chat_completions
-      task_envs:
-        DSH_LLM_REQUEST_TIMEOUT_SECONDS: "7200"
       expected_reward_ref:
         key: swebench-verified-reward
         version: 1.1.1

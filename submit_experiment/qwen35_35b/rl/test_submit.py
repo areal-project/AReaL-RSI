@@ -42,6 +42,61 @@ def write_params(tmp_path, update):
     return path
 
 
+@pytest.mark.parametrize(
+    ("update", "requests", "graph"),
+    [
+        ({}, 384, 384),
+        ({"rollout": {"max_concurrent_rollouts": 16}, "gconfig": {"n_samples": 8}}, 128, 128),
+        ({"sglang": {"max_running_requests": 24}}, 24, 24),
+        ({"sglang": {"cuda_graph_max_bs": 512}}, 384, 512),
+    ],
+)
+def test_sglang_capacity_uses_native_yaml_resolution(tmp_path, update, requests, graph):
+    from omegaconf import OmegaConf
+
+    spec = importlib.util.spec_from_file_location("qwen35_controller", ROOT / "controller.py")
+    controller = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(controller)
+    controller.register_yaml_resolvers()
+    config = configuration(write_params(tmp_path, update))
+    # The submitter preserves expressions, including through YAML serialization.
+    if "max_running_requests" not in update.get("sglang", {}):
+        assert config["sglang"]["max_running_requests"].startswith("${mul:")
+    native = OmegaConf.create(yaml.safe_load(yaml.safe_dump(config)))
+    controller.validate_sglang_capacity(native)
+    assert native.sglang.max_running_requests == requests
+    assert native.sglang.cuda_graph_max_bs == graph
+    assert type(native.sglang.max_running_requests) is int
+    assert type(native.sglang.cuda_graph_max_bs) is int
+
+    # Native references remain live when upstream values change before loading.
+    if not update:
+        native.rollout.max_concurrent_rollouts = 8
+        assert native.sglang.max_running_requests == native.sglang.cuda_graph_max_bs == 96
+
+
+@pytest.mark.parametrize("key", ["max_running_requests", "cuda_graph_max_bs"])
+@pytest.mark.parametrize("value", [0, -1, True, None, "384", "auto"])
+def test_invalid_sglang_capacity_fails_before_submission(tmp_path, key, value):
+    with pytest.raises(ValueError, match=key):
+        configuration(write_params(tmp_path, {"sglang": {key: value}}))
+
+
+@pytest.mark.parametrize("key", ["max_running_requests", "cuda_graph_max_bs"])
+def test_nonpositive_yaml_result_fails_controller_capacity_check(tmp_path, key):
+    from omegaconf import OmegaConf
+
+    spec = importlib.util.spec_from_file_location("qwen35_controller", ROOT / "controller.py")
+    controller = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(controller)
+    controller.register_yaml_resolvers()
+    native = OmegaConf.create(
+        configuration(write_params(tmp_path, {"sglang": {key: "${mul:0,12}"}}))
+    )
+    with pytest.raises(ValueError, match=key):
+        controller.validate_sglang_capacity(native)
+
+
 @pytest.fixture(autouse=True)
 def configured_areal_dir(monkeypatch):
     monkeypatch.setenv("AREAL_DIR", str(ROOT.parents[3] / "AReaL"))
@@ -250,6 +305,7 @@ def test_credentials_default_is_discovered_beside_script_from_another_cwd(
         "base.yaml",
         "params.yaml",
         "arena.yaml",
+        "swebench-verified-483-setup600.json",
         "controller.py",
         "controller.sbatch",
     ):
@@ -325,6 +381,15 @@ def test_only_training_reserves_trial_and_checks_can_repeat(monkeypatch, tmp_pat
         assert (formal / "controller.jobid").read_text() == "12345\n"
         config = yaml.safe_load((formal / "train.yaml").read_text())
         assert config["cluster"]["fileroot"] == str(tmp_path)
+        snapshot = Path(config["econfig"]["arena_streams"][0]["dataset_snapshot_file"])
+        assert snapshot.parent == formal
+        assert snapshot.read_bytes() == (
+            PROFILE / "swebench-verified-483-setup600.json"
+        ).read_bytes()
+        manifest = json.loads((formal / "manifest.json").read_text())
+        import hashlib
+
+        assert manifest["sha256"][snapshot.name] == hashlib.sha256(snapshot.read_bytes()).hexdigest()
         with pytest.raises(FileExistsError):
             submit.main()
         assert len(submissions) == 1

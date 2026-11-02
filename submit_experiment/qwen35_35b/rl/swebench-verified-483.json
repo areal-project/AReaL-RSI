@@ -1,0 +1,2428 @@
+{
+  "format_version": 1,
+  "stream_id": "swe-bench-verified",
+  "count": 483,
+  "source_benchmark_ref": {
+    "key": "swebench-verified-golden-offline-full",
+    "version": "1.0.2",
+    "content_hash": "bebc00cc32d32b7377ec470de2aae5e1aff1186d270c90cb556ea2638aab1fbd"
+  },
+  "reference_job_id": "swe483-sm90-fixed-p095-k20-20261013-2610131624",
+  "rows": [
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-23262@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "77ed80e5016863717759c2082703410da32e3449d32c38d4ba5a3085a278fcbe"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-22914@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "3a3bf5c6595e08e06304d1d79045161df9fc46b799c4419c33d1909a00dd9e28"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-22456@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "b7fc192d5db8a0cef97dfe43fa98d8ee5dbc3d1a9381814e9762064fbf82d562"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-22080@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "a4611ef746026d2a21a80040ba4f3bd5a9e9ad235530db30f1c887182514c3e9"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-22714@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "c21a5fd5cad0a57ecab69ebdf52cac60a581d9fcd0a3d8c590926697a1dbfce3"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-21930@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "c3d80ca9e5cd72757a87545d4713aa5be40f5aefe44bc26ad6f60ba505908839"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-21847@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "63bd708552a7a0d89338a1b7ec9481564c437ec58e6ae3b819d00994b1d0c08a"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-21612@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "86cdb5d49bf50c38f934e4b99b2ebe16660abdbeb803b56f36535b2391ef12db"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-21596@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "336a48f2f52009d6b2127cf0dab15352e639d34a6c5db4c66145f60c013cebcd"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-21379@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "01f96605bcf8f7254f9eec782a574484383a2be2cef57d0fd17b7ed2fb2f178f"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-20590@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "e861454c7aaa55c2bf04ecf8f1aa0ddb1241904c86b80482ea1e81336b85020b"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-20801@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "52028b0305481dbf1f3481ab39126794c415f426786fc98e2148d506e34930e6"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-20438@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "b0479b02b67626afc69c2987c6f55070824c14255adaf43bdf58ea4755370f6b"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-20916@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "2c1733fc5e4484673697d193b809118e6b795f2fd97641de04c15bd01982475f"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-20154@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "6cf18dd9e52784181412bda38376b1b47b37254f3a746c04ef4a45e78fd7c593"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-20428@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "d064f2bb81f1293e013aa8aa99820599d2cac24a2e0eecbb853bc537eb951172"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-19783@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "8ac804d9a20cfaa191e2b1e67868a05e0d34a02ba4d50790ff0ed4de90c42772"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-19954@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "1277b48ab092a7c54b5f10d66c9e3df40040f4d3e84784d0305d52f379f8ecb8"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-19637@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "1d8eaddbab1eb3ea0caba90ff20c60f0268dd750955696bfee2cc0e91e65a7cb"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-19495@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "ca0a550a98562c880fa7ccc9a7215ea9269b62e1bdcbbcbac470ac2292457d82"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-19346@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "3b495829889aee9756882adad0ee1f47b37c451491382b3372256689a3bff0d0"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-18211@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "3dc1615614ccfe18bd5939be43fd18cbbab45f36cbee3379e71594954ebe781e"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-19040@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "de958c7cf0d8b86e6e3f0be0c5eda6a20f52ec309f238e173c84df125fcad5ba"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-18763@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "bb27df9255dffac8e774a58fc28621726fa8497acc9acc10c84cd8fcddfc0605"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-18698@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "b3c767dab228d1a48a3d3478ae756b2d09a00bb8f49c7d43474fc5f1f9869e78"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-18199@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "87d8e5adf403c7d79eb268b6bdfe380e1e3536b7106f74294aca8f6c18daa2e1"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-18189@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "861eeafb7b0e282e65ebbb0d11612fb9db4ea9af0f4bc78fed0406ec073ed00c"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-17630@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "db1d2fc461cc173d17a1e9f69bcb824c3d67484e12dc84ea52845e59321f1401"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-17655@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "9eef08982a2b88665615ae5eb45c65780241371d338f354ed28f18f30bb0043c"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-17318@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "40d2d6b3b6d79e0f1a0b8c942c3affa645dc551b2f9ec461daa61eac06aab2a1"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-17139@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "580db40b7c35295e3c1c5f6f2944cd10fadac4b1e9955ed3a5190c12b1e5a2ce"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-16886@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "1b3b5817fbb674cc88bced0ed8ae867255f626bb2a3b50ef0db03ad7d8104be2"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-16597@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "941760a4c692860b8bc12efa20e6a34a99e2b705b5fac6fb2bf34f79e5bb715b"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-16766@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "1f3fae5b2a78e3598883c412d56edcc0abe47f5fd45be26ddcb29535d660f466"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-16792@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "1e07521b2acfb5efefa5d39533718ce1eac25469287e399e0c16f94b9ec45609"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-16450@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "f2960c813899cb91b64c0ec621f917928ca63c46a8bc662e0f0e7a1026821b7e"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-15875@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "e6802f854a7ac7e22337c82089228942dfc3f918a73c8ddd15560bf89e87b18a"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-15976@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "0ae0412c355b8b230a827724a52b0a1f196dfc069240fa75dbb6af5e9908c5f7"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-15809@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "b9f1c69c2df1757e7d930cf1e386dc2f4f37679dd43d805f60ca35c085834bce"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-15599@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "7253cb4a6655bd24ebbf53f66fe9267714fbf22137443325613aeeda5b6e3274"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-14976@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "10389cbeadb496b1bf2f0f6c0bac9aeb1598900f29ab1095ee3d632152b78b91"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-15349@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "cf01ed2d42aced3c4281e9855e859bf15e2643027a1a44e1e230933b3bfb6ea0"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-15017@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "0c8caa42b6ecb2bc5e50af6cc3e6132f58310db555db3f6e573ec5229a356cb2"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-15345@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "1730f84221b6c404810301c60576b3486962e0f59bdb99e5d3d4a44041acf7eb"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-14711@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "f123576aad962ff8748fdf318e4a31dbce3399cb8df729d7d699b1b1c88c3973"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-14531@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "ab63fa21bbe41ed68086571cd309fa93e79f57c367cb67e52ce2d076167be734"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-14248@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "220c37f6729728b43620dcf1dd28530db7b789b26ea605adf9e9211988945740"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-13878@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "a594103b349ef22495b9e5110558627701961eae2004a87b9a504541be047e33"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-13974@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "00b1589b9795ce21c5c253114d8ac39abba81ad3f5e4b20f597ef20792fcd358"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-13877@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "2044e8ad3f92a479e080b84e1832ae7047f36e6ba0cb14a626a2c16be185513d"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-13852@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "e06be9d2f1ae90f5204b031d3fd73d1a8fa3f827eb338d15c648e5ae08db8a21"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-13757@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "63b967ab6d6a8a377e6426270f99e61ee3c8ec008a7b33767ec1c01b974e65cc"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-13798@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "b8e3b22ef38ca84e0651cf6b0f0796bc91fd176dc3d87617fec8f380dc36757c"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-13647@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "4dda439aedd33e4ed7b5dcec8724a5f1f08e1819b867197b96fe309aecba6d44"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-13615@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "4242f13bd8d4fd6f625708d66e49843286c35362ba2ce25423efb46bc6f51003"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-13480@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "116ebd2689c8bf5382f5ac349735f713a31f74356451d35dfcc9d3b989b16227"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-13551@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "9ffbcac36e4a4a534e9cdd6264fb9266bc002333db8cf64dd211ba2ab6d34242"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-13372@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "7aff311e806e723102ad6cac092be1093d72799283061a475df47db4a0de9126"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-13031@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "34116f30531ca293993be19f9f57631f5f153bc892a6e9ceb95aec6aad05740c"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-12489@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "355b51b9b2640ae60a4a40de9287bc5b965ec550bc96fb36cae777f8f9a5f020"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-12481@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "68835fd4857e19de080d60cbbb49b4e0f25062f9ff07678bbd1dec417ff50199"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-12096@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "2e2ef2f5366a808f7791946d76e6eb2189627d2fb3eef3099f66de9b36dcd20a"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-11618@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "78f0d9a2f2a7107350b8d347ac9b884512ac5f5f41541ebcf7660ca828303c5b"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-12419@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "1ceb9fa85050b25f4362eca47d2e12318e0b7c72dc113528dc38096535d2ea74"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-9711@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "b09287dec4fd22bb1c23a8fafff8e6ac4f618cfc7c4128f0a1653df50373e37c"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-9698@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "c861bfffa130a61193aab63cc669f056de60770a39887054d01eafc994b6addd"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-9673@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "443ebf22d48ab5881af95a6baed4bf981a3b9ab85fad8f17fc7aac61561f7a1d"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-9658@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "134b6e7a8f253a29dbbf8c33e04ea7a22efc4a89367d63082215ba723e2dd516"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-9602@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "d6839b7c2ea6da3f8c9192ffa4875fcba14d68146831da86f4edd283dfc76506"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-9591@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "eba466551a7022b1901666b7fdc1a8d994f1462bdc849ab5ca6324cc41eca99e"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-9461@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "534ed4cad5b13774a570ebb0330a01c5615db1f327b1529fac429e33063d5b17"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-9281@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "4745a1ef3f0027bb6ca6c82ccad3c4b9fe17e4be59f20725f0c27fe9763b8637"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-9367@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "87e99acb24aeb8ab53d58676b5050448afc55213dc83f414d20467ea32fd2b10"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-9230@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "72efb9106bd6ff0afbea695a196f128e087fc75503730e1edd307b49fcddd5e7"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-8721@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "3ac3f0420bf910f572abd1f2d77d9fbf8b5ae297516f90412a60fe8c28bbcd33"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-9258@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "2aedabcf768f14abaae54cfcf81f15fe2518aa3b649f3b85a8a280dc87063c45"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-9320@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "733593e0e50d8bdf092cd4a3b259c08826f1a18533096214993c5ccb18785fc5"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-8638@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "ba1c92a05dc85f89bf3b482c86e4a97e792ef7d27cab54ca2248be718d5c893b"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-9229@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "e3c6652b7904a55454671822ce669ea78d8261a29b498d24c225a181f574518d"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-8621@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "1755fd845cf3517f43fdbaf0d41e0b5aadaaaf0d0e90fbf97d0d2e1f546ddf8f"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-8459@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "9a04e34141ba5f8577011d6fcacad428b470f85cd2355e0ee9b6169b859e2d8f"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-8593@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "7d301f920d3abda7782058a1f616793907bf1583cb57f7b48cc557618e43cef5"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-8551@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "7e493c83a18d4d615cf222c97049e1fa0a1b11e0afea87f4fb4c2ba454d4c237"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-8595@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "2bb044c9c67d3f39a5ed995aa5f141418f4cb0d45b96c327090d22891049a245"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-8265@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "682231c45ad41a49d766dccc309f68554f6886c76e1369018fcc81c3dbf566e0"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-8120@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "fc475a1fcb48a04eba49a1dfdbcac5b6c5562ab5170d3af503890bd9a3f8d084"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-8548@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "12691cd5072afd3b0867c7cbfd4f78c194d8bc81665d340b1c3ad29af8252a14"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-8035@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "9892ba1168925ebc7bc0726611a6fc8416e400b067ddd4712accb76640165fdb"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-8056@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "312eefbf7e4c0395fc8783433ed7e53499184881ab7a49ab350a63690b85cd1c"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-7910@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "d93419943ae3feb32fef1522292720290150c5c09070f11b87b21a6cddcaebdf"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-7889@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "18776758012885fd16eb1f9698e808a7bbf1120d16092872ad63fb5a5dd038c8"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-7748@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "b2db4aee4c712f2e3d6a79e456aa52dc86da67d233b0140bec9fb3b4222bfb03"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-7757@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "55e455a4b288d85e427d59b755b6d5063bf90ae47e1938c27ff04f8451799dde"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-7590@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "aedd7136ce6d882b76849297a5b484125642e679b7e76354b60d7777818e990a"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-7462@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "c0ded035397df721529c2bac7d3e8494cc83d584c80e04711fa42274e27df343"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-7454@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "4cbdf00b961b1f3c3913e566a11db55821520990c7b0d916fb5363c461da16be"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-7440@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "015e65c180363343c6876b06820571bab1ba38da082de8ec1146938665d08f25"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-11445@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "fba6323879711d138f07a7df57d04b4157b1ae61d099c0408db2a0512897ed88"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-10673@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "7a27cb6848e66334b0628e1196e2b87fb6f80be369c0ca7ab0b9e2261a9a33f9"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-11510@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "90c8d443b5970b472557d876ddab1f8a358e3bc29dd277f8c7a7f906ee4f2afc"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-10435@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "0f14908b0da43a1d8fa174f781d9ba51e9c776fa603a7b707ff6773356fdd11b"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-10614@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "c57600f990cf79f81574c98cd7b48ebfcbd31ef841a23fa028f6d555d71b4cb7"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-10466@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "559351a701ee31cc0571974866b8708656ffff008c03773316c9e82335747091"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-10323@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "446c081dbd2dd95d8e4d4cdc937f2f729211f06a8a078b870ede79cc71b37406"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-10449@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "72ba6216e45ea2f2cef7e22a746f945fc55e0881f5373b1929bb79de006aa31c"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-9288@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "9bd73b1ab2083627db3f9a3435c164e2a79e4510fa4f0eadbb954ab23592c213"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-25747@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "4c3c2e7c2f95e7d9f40b930ffa6c839de070cb3e6bd2d468e71b51c3a5686531"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-26194@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "5e577f373db062695618f4769c44454c7d33be4671deebc5c566358723052f29"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-25973@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "7ecde65c5a9328963401668a53bf4d6fe0451ba5de7b1619190630a2ad885fe1"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-26323@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "966a6bbf242d1c5eecc1d62281ab4819dae9ce342121c0529625c0182a0a336a"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-25931@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "9c4f8231a380a1fa227f5f04a370e631eb69e477c780dbc461d6847a89f15760"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-25102@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "39d9360cc74258fbfb6eaee4ea3f2080cd89108c8869bf481371dc6a52abe65c"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-25232@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "157ab50d9cec49e42785e09a27883ec78cde539b7e8d42d087416595bd7f0f33"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-15100@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "fec3ea831948665207b2f10de1e3b4a9d042f6deebde24dd5221bfb72fc68d82"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-14983@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "019c0a2be7d418160b5ff109a66bb5b0bf0aca8b2c65339b36c730f73578cb7e"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-14894@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "7ef8593e395feec9f44aed813dc082752024b6a08448e84420fe217c899a8b67"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-14141@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "a48ab36312a4afcf792c773fc981f404dd8a4f96d92b1bdf9906982cbdbdd0c4"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-14496@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "f8aba8d2a3806bd3f78cfc7a810ff511e11a4bf35a554b9984dec8b5c69d25cc"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-14629@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "da6dbb9cdb674e76a32e69ad446960ea78f8d2db46887248e82e4ffae2f4e0fa"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-14053@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "3db84f24b35ff63d3c83f96fcf3401e16df133d46aae1e156d024c2d4d8b91a4"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-14710@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "ea747e0bcdbb0e0dd5d672a35f32cc57983a8cf65e00f1590d62cb4f1bb4a74b"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-14087@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "6531c2b26338c11a85387ee5c52b7706c9ea447253c337cc24051e959968b769"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-13779@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "88c102871c3ab424c1ca9df92cbc74725d215ee4dca1d4e0447d71b43eeb5eb6"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-13496@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "b8f2278157e8942327c5643b682cba7d9ce8e1e48319536e688d17375156993a"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-13328@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "01d2ad27d210e77a5339e964c4eae9de3efa99ed64fce21bca0448998d80b815"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-13439@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "c739fb7acfb91efbd73fed2d9ceb9cdbee1765a2afa6aaa84a6e7775b4bc4b08"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-11578@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "24f3cbaba7811060d56acbba45f30ae8f186a97749d1acf258cdeb737abe0256"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-11310@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "3bf538132262f1017df9a5a7bf5ee934a486742d91848e8bff9ee1b337ae4e84"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-12973@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "0921e10e3cda024de782be788ec7e70cfa2796873950e10a10f086413e72ff29"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-10908@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "9d1d2fd8d2cd817a2166f0bf8e201ed843e4b6ef8e67beaf2201065585729c76"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-13142@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "f7e34c100d6ab1fd9d59a89784870e424eaa52f0f850c7aa5ca3ef3742584acd"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-13135@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "891278a7199a47a7a2b33e7d87636b1952a11f3ed1199a5ce093fe3af784dd8b"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-13124@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "b3ea33c2ebaf2ad067c45c2d0f27d17fc0b2e5dbbb2e179fdad00c39e28cad0c"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-12585@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "92105a61e82e3f862ef9b82aea8dbcc22d5e1f70037074021e93b66098bbbd62"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-10844@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "97c549c4b0e34ab6783c143b95aae8e3146017a6dfc81f454303fbb6c138c9be"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-12682@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "9396376158260ee3aa01e10f117fd34f1aae0f4df755031f54926d6c2ef56cc4"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-10297@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "5e70d70ceb008a2e1f880c09379e0203ea73bca960a2c7a53e7c2b0b7495198a"
+    },
+    {
+      "data_id": "env:swebench-verified-pytest-dev__pytest-7490@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "28670616a14c8a69b34a7015de7c4d2ef9a915d52f55b2852b2f44b0a9d2cca0"
+    },
+    {
+      "data_id": "env:swebench-verified-pytest-dev__pytest-8399@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "9ebc3f2c5c5ffdc8cb61a278f4f5c071bd4b196f1db801fee4c850eb740163b3"
+    },
+    {
+      "data_id": "env:swebench-verified-pytest-dev__pytest-7571@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "ef699f4da56beb522c8fae5d2c2b3a1a384d8be03d952601f4717088bc1f6dc4"
+    },
+    {
+      "data_id": "env:swebench-verified-pytest-dev__pytest-7982@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "8f38fd652dbf51e8a75adc917a359bd2420b4b0541167a08d0a6d3ab865b5675"
+    },
+    {
+      "data_id": "env:swebench-verified-pytest-dev__pytest-7521@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "336ff575ccf7ca5b76dbc2d515edcd53cb96e074b3cd3752c97fe3224620be45"
+    },
+    {
+      "data_id": "env:swebench-verified-pytest-dev__pytest-7324@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "76f8cdfff07e149df7c654ab20350a68914b6ccb490e99c5d8bad80fa6c9a11e"
+    },
+    {
+      "data_id": "env:swebench-verified-pytest-dev__pytest-7236@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "78a9b4df8dd4601380ecce0d9aa27900ee27a4a00af8d74b5ac2765f4e84fdec"
+    },
+    {
+      "data_id": "env:swebench-verified-pytest-dev__pytest-7205@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "0cf6b485478f8fb50fe41a206ed47abe1bc8802a4b5c23c258c39ef097f9a08d"
+    },
+    {
+      "data_id": "env:swebench-verified-pytest-dev__pytest-7432@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "14cd98c536232739a5b6edcbeb8f287abe8d10d496a1bc87a7b03a85f6114e4b"
+    },
+    {
+      "data_id": "env:swebench-verified-pytest-dev__pytest-6202@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "7c22e0656d81c5785e221c8782ee944ca1266cee0228bcbbaed8f2b6f717f58c"
+    },
+    {
+      "data_id": "env:swebench-verified-pytest-dev__pytest-5809@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "fd250aab850339cbabce8b39d3645ffc3c880587d3f5862091a35ddc258b6fa5"
+    },
+    {
+      "data_id": "env:swebench-verified-pytest-dev__pytest-6197@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "1a729e6a076dab7a33947a48d32863ac24ba1a79d8f528b0bfd5b2ea09978ce2"
+    },
+    {
+      "data_id": "env:swebench-verified-pytest-dev__pytest-5787@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "e7353a2b8e96d733ac8458f952383b9dcc1cac12bd44dfbc65fc96b70197be06"
+    },
+    {
+      "data_id": "env:swebench-verified-pytest-dev__pytest-5840@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "72495a97282f763bca57b4e1f8e661e06349a2e8d67b6753ecf4fa06de0b5e68"
+    },
+    {
+      "data_id": "env:swebench-verified-pytest-dev__pytest-5262@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "86bf6d37c3489e00a46ff2d03963d58212c5e3a83ebabac645b76b85ceb01fb5"
+    },
+    {
+      "data_id": "env:swebench-verified-pytest-dev__pytest-5631@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "cd6892f5f556d8d7ead708d74f02c102a308c2f577ac25743767317331cbddb9"
+    },
+    {
+      "data_id": "env:swebench-verified-pytest-dev__pytest-10081@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "1c22c2bb479dd6adbc34492dfa2fc8ce29098ac32e48960ea68cc0690a1469f5"
+    },
+    {
+      "data_id": "env:swebench-verified-pytest-dev__pytest-10356@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "f66687773b5e8d6ad0afba8400cdfa056853a19abe9523506fd8bb6bff0ec2b5"
+    },
+    {
+      "data_id": "env:swebench-verified-pytest-dev__pytest-10051@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "76cca16085cdb1933fa2733307220e90829af35588b853635c025e36c3e10506"
+    },
+    {
+      "data_id": "env:swebench-verified-pylint-dev__pylint-7277@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "aa339c02b94aa706d2f9ce3c2fd52eb2bfb1fe122dbc40ee969fd0c00436f202"
+    },
+    {
+      "data_id": "env:swebench-verified-pylint-dev__pylint-8898@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "9e58d3f4138c6a1a11460521c679f01ec6cb92f1b8496e92de10fb1147542444"
+    },
+    {
+      "data_id": "env:swebench-verified-pylint-dev__pylint-7080@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "a5065e9614c4d0f1dc5c122c47df4fb5cc8c2a7f11fc6fefd3b0c860de13c22f"
+    },
+    {
+      "data_id": "env:swebench-verified-pylint-dev__pylint-6386@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "8543bbcda180cb10b590341688440589f28a42e7d89e93507aa6f2b0e0602f57"
+    },
+    {
+      "data_id": "env:swebench-verified-pylint-dev__pylint-6903@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "fa439ac531494065d699d2b146f3f279a332664e08792da05b58c09ab0a9f410"
+    },
+    {
+      "data_id": "env:swebench-verified-pylint-dev__pylint-6528@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "a02db86af4927342dc706f8eb062911d02377b9f4c4676a0a804cf073316dfc8"
+    },
+    {
+      "data_id": "env:swebench-verified-pylint-dev__pylint-4970@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "dcd3bbc609506e4cd11bf9b9b5ed8c6b53bddb0af64d472b3208b121060f8e7a"
+    },
+    {
+      "data_id": "env:swebench-verified-pylint-dev__pylint-4604@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "678f8235f8d1767eae0557e6df1401143ad49d01f4e5de29d389e22f12ed941d"
+    },
+    {
+      "data_id": "env:swebench-verified-pylint-dev__pylint-4551@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "5b48bafebade135d52726172d87c552750397ff63e0936038c91a081b08ab6c5"
+    },
+    {
+      "data_id": "env:swebench-verified-pydata__xarray-7393@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "a78abe5bd367f9b5fb62058395a401f379b5df337270cea547911827e409c4f6"
+    },
+    {
+      "data_id": "env:swebench-verified-pydata__xarray-7233@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "a88f0abb6ac98239b592f6f004b1203eea38201f156fe73895964b0aa942e4b5"
+    },
+    {
+      "data_id": "env:swebench-verified-pydata__xarray-6599@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "128f7fd9a3777aeaff9b1e9ca32f91aea4cb1456ebb794eb97a65d742d34e554"
+    },
+    {
+      "data_id": "env:swebench-verified-pydata__xarray-6992@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "260c3772d3da94afbdcbb0697ba841f369a2c431eb9e159b43c07ddde69edd71"
+    },
+    {
+      "data_id": "env:swebench-verified-pydata__xarray-7229@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "349c470e138f8c93f44b9a45cae153db12dea9f810c3e2fd5efec63aa1ece143"
+    },
+    {
+      "data_id": "env:swebench-verified-pydata__xarray-6461@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "80e1c63990fb7959f8cc006c649e8255b247db0556afa925392057db674722a4"
+    },
+    {
+      "data_id": "env:swebench-verified-pydata__xarray-6721@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "64c1f9eef7b0bc2e682259efc73b466d53e0585f1087e03fbe6d4b0a9e1372b5"
+    },
+    {
+      "data_id": "env:swebench-verified-pydata__xarray-6938@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "6d6fce7a6db6e69e3403442a3d80a344ed471c311de873a78035c9ce9f048393"
+    },
+    {
+      "data_id": "env:swebench-verified-pydata__xarray-6744@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "6824464a7649ace69b05d3672930b919698d3dbb311979555a0fb5adc9a38392"
+    },
+    {
+      "data_id": "env:swebench-verified-pydata__xarray-4966@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "e824f4e13e235ffa240edf4ab149255469efcf35816eab0c0f330089ebbd102b"
+    },
+    {
+      "data_id": "env:swebench-verified-pydata__xarray-4629@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "402c68aad008f5dae368efa96988922e880c013a04b4492b6d289fbc370947c4"
+    },
+    {
+      "data_id": "env:swebench-verified-pydata__xarray-3993@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "58728f5f6fcf14f911162013c01a38424209fca73d89fca37956574a539d0ce6"
+    },
+    {
+      "data_id": "env:swebench-verified-pydata__xarray-4094@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "6219cf067b8c5cf2d8e628c61e3a87bc87acde715c21fd01fcd66ed32454073e"
+    },
+    {
+      "data_id": "env:swebench-verified-pydata__xarray-3151@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "c3d5f98b6c7691a439b478c6d7badb2530e93bfdecbd1c3c23f01b38058c3da4"
+    },
+    {
+      "data_id": "env:swebench-verified-pydata__xarray-4695@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "707f882c00a821a10d5a31aec0140aa5b9b8014d9e8b705a0775db196368cada"
+    },
+    {
+      "data_id": "env:swebench-verified-pydata__xarray-4687@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "4ff4c51556c47fc9d713cddbcdf92c58efaccfcb71231890893f871165d352e7"
+    },
+    {
+      "data_id": "env:swebench-verified-pydata__xarray-4075@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "d0f06a88c250bfb92abd0ec786b188fb9b13facfe42f7f6c964188cd84701ef3"
+    },
+    {
+      "data_id": "env:swebench-verified-pydata__xarray-3305@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "de1c061fc8c7281c23c92c6ffec540d230969ec4be17b260a0b76501fc0d81d4"
+    },
+    {
+      "data_id": "env:swebench-verified-pydata__xarray-3677@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "759b46c7c43a075321465810de770090e11edad08ee017ac1c56ace77da9e3f6"
+    },
+    {
+      "data_id": "env:swebench-verified-pydata__xarray-4356@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "fb40a9c957802fd179cba4fd820e2ed7e0f8c38c962314fb597ed90cfce7caaa"
+    },
+    {
+      "data_id": "env:swebench-verified-pydata__xarray-3095@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "5f5aed792043a3929d1452c4ac7546aef9034c17660e4862db84dfe4fe2ea4a9"
+    },
+    {
+      "data_id": "env:swebench-verified-pydata__xarray-2905@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "680f0c2edb2d25dd7b5b3b3fb8460b7f1e508b016f6c11670204ad7411c77ed0"
+    },
+    {
+      "data_id": "env:swebench-verified-psf__requests-6028@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "20026f61dcf0c5ff1d210f236a0c2d42cabf0fb76a274f3283fa93ba0dd29a28"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-26113@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "97e4db58aad7b12de5565434278655edbe64f335fcef0babc96666834c526a06"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-26342@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "50b6facd81903b5c15f78cdfa25a7e7df9ae78ec24946a9bf75f190e6b0a1333"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-26208@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "540a1efbedb6adcd916aa7cd164259c12fa24929509583c7431782b9e711e7d0"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-26291@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "c8e90a2d23deeb0e0a6cd94b9b2fd91ef4eb03dae487a91c9347815155e10fdb"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-25775@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "6aa5b9a3d273189a497cb43245aa1bcfff8c1c18c884d7f5ab6a275d09feaa85"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-25960@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "80ea0c0af0a6c6f4dbdfc9d1eb089d6adc40980550d249698af62c2834638b78"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-26466@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "5cc590e25b61049faf0f9ee547fe9275567177ef3ef289055621ef772f01f74e"
+    },
+    {
+      "data_id": "env:swebench-verified-mwaskom__seaborn-3069@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "f4a027f0b2d774bf76f1911d0f02dfd33785649645adba845450ebc35ee35968"
+    },
+    {
+      "data_id": "env:swebench-verified-mwaskom__seaborn-3187@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "4967283223ddef601f072ca9aa9a65a4725bffb4920088f35c7e39cb403bf0ea"
+    },
+    {
+      "data_id": "env:swebench-verified-pallets__flask-5014@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "9659ebb0a5b5905f2849e830f3e92ba85ad06dac8384a745c6bcd2838edd998b"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-25332@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "c27ce631838e0ef3092472c0f6c475eb8c04af990e1d470b542f4214915cd330"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-25287@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "846bf56cfe250b9dbafb7eba0d70a2c88852142a4db8b8ce11a039020787824c"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-25311@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "17ed99de3a0ffa3531c0df003b82e88303056226acc8ce3fac22b7f6a1e1828f"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-25479@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "e8a0f5f0032aeba8e3a6828006ac1ce8268140aee76b4b0f67957bdf665f0bd2"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-24637@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "eebbd2cbf1a93cd42ecfd69c5ac2e6bb3a443974b0407298e105b58ecd85cb3d"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-24870@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "656e8c740207c5f2f2df17b609072222f34477c63c572743f342d66a0afcc0fd"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-25122@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "ec10569fd96d938f189c3176b0fdf18e219e3c9fab120592727954bb281dea9a"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-24627@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "2748f03a9bb2d1318a1f0d72a62094e5a2fca5ad2387bd4facef57bba568532e"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-24570@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "54170630fc5123443bc2d86c59811273bf85b19010df9255cc0a22f5a99efaa7"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-24970@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "b52ca1818fa5424e4cc2f64a66bf622855255484f524db0129df409ee3326398"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-23412@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "2df36aece42ba12f2572b523c70fa1a9940fe0e6ce1c7d04bd41cafa9b25dcde"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-23314@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "77ae27df37473896802384069e6ac0f8e1b2adf2968fcecd3ac4faaa237ea645"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-22719@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "5a5c9e991ac7f1633131cdf7a446c7ebd327af882e33c683292f1674dda0014b"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-23476@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "414833d32d340f50852f13a42777bb93824bae8a1a65a0dc54818f4b4ddf2bb9"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-23299@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "d3c5c8258d15ff8a55ef20e0b1fe51458e786e2977eb6c498bea0b1c2891a1de"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-22865@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "4327431cdcf4239540997f45b71e2fd342b02ac0501505a13954a446c566071b"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-24026@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "bf6d655c063a98384f6ba54362017dbe73a0038812a2ed1f5c2b2c9331003a08"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-22871@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "fea420fb4c4e85b1d0bd417d70773110316b99e211a4cdce03dee6a17e6e3450"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-24177@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "6a4373671cda6379dcd93650d9d923de139a46bdf0d8986dd4d2dbca6f422682"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-24149@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "1611be0236ee7964cafbdd62e68394e3490db5a12798c6215cda7d7d4f674a60"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-14623@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "13a7f39e5e10b266db8753cbbbf5d934d8c384c3cb31948600bdb2926ef63947"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-20859@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "691c3397b2daca025257d42b0abb42f273b6054fd28f50ef88978a8455c5adb5"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-20676@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "7638f04ba8a42d5d972005d4875b8492f1dbacefacb0943db339b84fcf22ca85"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-20826@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "5c0b130ab813c3cb37e59fa8465bf608167acfd579b523f01ea85dab03ea9235"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-13989@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "f3d6c80e603f127ccdfacc4e294a9fd186286f4511bc083d8410bd920373300a"
+    },
+    {
+      "data_id": "env:swebench-verified-matplotlib__matplotlib-21568@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "5ead59a88e801bdfa917277a49df5dc09740b2911182374402f258a40d472074"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-7530@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "f1a1d1ced18f79284afb57816b61618c962918913b211c196d9acc2f23e6808f"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-9296@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "9d032d548c0012e211bd4ebf707a59f94ce568a0d0501fbf598094bfbeafdbe3"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-17087@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "6fdba1093ef359178bcfb74007ec56305a99bf2a880bd66be6a62a70d81c2f91"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-17084@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "1a75f596c944ab7fbdae065f1e66f6fbed33c85f361c69ddb8c0b4d75a464312"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-17029@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "7ea8d642c3fc632a547d1d0f1a4828b8fb6194d4f0d9070b4b4ad6372b88af93"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16950@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "b032e24c49d52348d03933d0e4cc84d78509bb0ef2fef27d441e75216b890977"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16901@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "add78d81c8f1d3d81468ac4f3e5738503d950c7b6afd0ef1b0d5bfeea93db134"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16899@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "859a14ffff12ab784f86258962a916adb8c39e8caf8356ae35b16ce429e655cc"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16877@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "450dfd19ffcc06c254f04a3f6925aec453c9910aa3297eb5ebf6978683e5e3be"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16819@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "5633b5a95f0777ee6191a4d097cbb72e90066e039a09f9dd92f361979ad4ca3b"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16938@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "2c517a755cb3363d601e00ac785f7660216f8e1aa6ecfc50a940bf0c00491438"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16801@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "fb9b4a840e3a7a1590589636a9329568b402b9acbabe0146af6cd573d7298a62"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16667@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "6d35ce0f1ae6de8a27890392005d765d2a20cfc98043403c54a30ecbd17e2e34"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16662@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "0a21830da4e2d2f484447124e773d8c416f79634a9769c8d28380a79416d57d9"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16661@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "32bb75eda7812593f1838196c7b34c25a3834d2b80a022d6408ebf52a92055da"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16612@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "2172e6fd699a665bdc30f7d0d4fb6bba94bbf9bf6d7b6335644a2d4fe2b474c3"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16502@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "6af8cab67bd40c6b55ca27741cf6c217992e9e906a430c7da01c40bf18359d5e"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16560@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "30292d0cb8e90140f5bf51d6a31a96fd347b1f2a8dc9d8885ecd0e28518b1e2d"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16527@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "a1cdea448d1196fe826f15dfcd2527c51d444e2ced4bc28cbfb3289ec4879b71"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16631@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "9ce122639f7fdf340c0639378af287282ce03123c757d26dce835d02abf2d84e"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16642@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "e6acd5bcea547f62555916c5508c53bc7b8ea34dc725b992a8392c3e64fdc39f"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16595@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "e67493b96683f939048ed728c06356824d99496158521caf7c991e83079d7b52"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16569@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "f20fa6fe448c5a8e6938d3582927469bf5df0e0c92220b4a6cced581b8a3bdd5"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16493@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "345e71360b5ba1dac35a20d63efbd69b7ae9ae420ddcefb9db41c2d45dfe3906"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16429@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "b3a13f21029b066431e9dd5b23cbf6d59be787f345e6e1e286afaad2e13f1937"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16454@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "d7f354ddbd0f9441957cde3c6ccfa424bb872ecd677362c7bb9a4e170ee02d0b"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16485@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "d84bad20e6b56da9e3102fb3eec5b4be7ef3968e3276851b008f81f8109274ef"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16315@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "90e53e13a927650136c0770336603fecb5ffa267f36a1164c23ebcd890fda69a"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16333@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "50823c933d25925aa5c2632ad8dc99118c13dca2bf87cfddbaab6baeceec73f4"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16263@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "59bf05f7980df86e3abbb671a833bc40a100326828752332caff2bae9753f3f1"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16255@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "d7afe3985f5a98243e42e24e82b159a89da289dcba840bd93ce3ed7f0d863918"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16256@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "99aa9a99eca56f46e516c85269ca933bb43d2e25d69a31c0023d9fb4eca6f7c9"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16145@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "a11a1370c9945d53406be73866344c3c85ce3fd3cc3e8f35ba1449364255d25f"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16032@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "791107a4b2f21426d48ce3df0dd69c90a64f48679f2671de5e17e564223be704"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16116@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "811ec2f75c624a4fcb60e8eaeffc04b7c7d0cff226ddf189c5e0eed2ce30916b"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16082@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "8e1687c3bf5b7dedbdf55e5e7e40ed8afe56f66c8fdd39397ede9dcec02c26f9"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16139@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "c9ae8c2de36fe2b4c3ad534097f068a96628e2b9cc01d4d2d9236cc4a843d0cd"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16136@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "cf179f1bf3ecba1b02c4448ffdaaa80c98560bef100b2add35ad60df216c4af5"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15987@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "f03c5f54ee20ec2235d32dc705f29a775d9eef9716a6e4ad82c5766731ab63c8"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-16100@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "46e20bce04fae1f41e5611668f570ebb8e0443f40a8152cb60f3f337233b7baa"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15973@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "071d174d06480b12bc3e4a0514c387167a17c389d55a509854614a0aae8a8dd2"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15957@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "0c2a9d758751f290731b9d49b17d4355b7f2c6225a6a1d06ffa846b368b267b0"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15930@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "640b9503491a4e32180ad81260277d2ce2826521f738e960a278add8fb5eb80d"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15731@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "21b5ca4dc6c2bb2037c18a227a40253789687059b36383583e396297dbf3085e"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15741@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "01f177fcc615db6ec7215af75b3f64714bafa1bf068655d398f8ee13c40096f9"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15863@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "72b966c2547f4827df08d28108f7f6ff752e5df46197b73e76d5f8c17938f208"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15814@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "2b124caeba744e3228edbc86ce940d7a2cae2da1a4c02153cb158b82d15cd685"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15916@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "25193aa504cac5dfb303772692faf8ed028d83835dec1350c3e911c55dcd1095"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15851@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "6ff7dc2c10fe0971a02e8a98df3f5c3225b4b0728a2247dc98f14c45412faff0"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15732@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "2d269dbc10f929ddb9b0d2a87bd3bf848930082c0f1e19c38e7c0eb8c5d616f0"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15695@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "2e60f1e1cf9008db8d1294a5bf158809884a236888ec52e6860f5369c909b4cd"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15572@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "2763443ac69196ce57a5f6e48cc8186af4a1d4c9bd1a02618767c07cd5cf1bab"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15629@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "884cbe278ef93150490a726c7d8339c747a927025c6406f8a766be9c1d8fb3db"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15569@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "b017935aecb260e9ccd18e0abd550b28669d76494d9af5f48ba651578b1f0052"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15563@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "c8efecd8b8dc5f63898c8aedb58621b3cb856488e023bb8fadc7319269bb766c"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15525@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "262eef91f75856e3b9e05b44b38f8449bb78ca0bfcd61f17cdf7a7388b2f2580"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15554@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "c3c5c82d2d882c9c965bb83f3f40091e52203e0c5eb72c1eed60a84e7562d482"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15561@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "065adbb29576d527aa63510e428e9323dc791541aca69c9acf67edde9f114d2e"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15503@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "4b7ede2c412a0bd66b12cde4a96a15776c7a3f37583e5f61eac2badc58eb3b57"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15499@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "ca53e2c4b58f50d26a7640d63a9c235a4c876c2282052218260c29548c53286a"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15467@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "63026bdf2f337dcfebbb9c3eaffc3c0689df77db6a36cf9ac1f627b5a65bbd8f"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15382@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "416128b1ebf64ca2b7bef176ed7e219b7a8271677839ee54eacdf6e95360b1a7"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15380@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "cd753b1858308cb422b28d53899e1a6db3a81eee248e9df38c4b35e87ee4a0fb"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15375@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "7422b5280543d521a10655991e5c042d6d8af091d94b28735580a94aeec885be"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15368@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "8852af58ff9b08017bd8438962a28d8d1a81db8a41332d915c2bbc1fb80c4032"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15277@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "be75208d409d0d86197a57f342850d8a7eb2df7d353d46b8e8eabe62f5b0f888"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15280@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "2531bfd3976fb3fcab92f3d433496ec9b53caeb87b820849229c459c25ad6a11"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15268@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "dc18492016f45ee81296d754eb75a31ff4e5febc52418814fda047e5091061a2"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15252@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "5dd39381fd6133e8296a533b5242a8cd1fceae66f09e08a39269dd480be3e690"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15315@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "faed3870c450352f60a6482a1374ded3c864d7b72e47190603ef2737a91c92a4"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15278@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "0f4279bcbc69e24d2ebec76c9c99a749a568ee1428e5b87a4d833a0bf1da5206"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15161@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "11fe37a198359c7c975c9b26ac159d57997a02d065b79197ef1fed08f9cb1b8a"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15128@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "c43164f85d7ed51274252e32a78d0b4049744a7c98601ba54836c8ca85086950"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15127@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "0ddb07c19840d26343cc9e898f851fcfcd30a016908c3bb23260ab5e2f603a38"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15104@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "b2352f2aae6167567a1feb2738a19120b3e30e7922568d39d1e96abe91546cc9"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15098@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "75b0d3ac9ec4a54ee5cd04c141eab5efeb38fc02887820818e471c826eaac9d4"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15037@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "35297f0c764fc49f2fad2762d12e0d198925b51d38b91558aac4f2c81f3e4316"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15103@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "7721169ad8a4297a8b3e9fb2e9c3b10610805c9d31ca0edd9e355b273963f3d7"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14999@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "96a90ee805d90a40499dfef748041762a6fc67b61441b3dd16b08f3f31671868"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-15022@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "71d7d044fecdfea5ba54b9b91e0f2e32c2de6b78a760a488d966fea638567667"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14915@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "bfcd6509df05691e7bf25ffa807574ba0021c664c82ccb86587d840b42f191db"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14855@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "15be212ba33a2f118eb4bc77bd477a6f3003fdf3ed605426a4ed292c0c216405"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14792@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "03efc8f6e8b1b18907866410f411fdfa82303ff5253a31e623d1b1ed8b27205c"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14771@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "025143e0c31790ad59f1f4be10b4cf2c068e8eb721adffb4d00667b8dbb09816"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14765@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "826d498f0275282b31ffcf087e07e68f020432598cd8c09a9253d8016d5e8e4e"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14725@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "eb563c3d8f5fd8f9602004ae51e8309f8cf04002d858cb0927be33b6f02193d6"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14787@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "38e1f5a9fbadcd2fda128bdcfc663049164d941740186a10ca5644badde686fe"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14752@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "584582701dac9bb1129d238accde16cc1a742c4e0cae9077c30f025442593344"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14672@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "eca13f1cfc75dbf7bd2785233255f3fbb82730c685dd72a1a8d66be5e1973115"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14631@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "86e38b35c1a5e3060a60055355b063d8a635a744c2b4c487a36c1645a0d6e416"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14608@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "0e6bed6332e213d71ead87030eb9157f1afe7e89f0b26e0ff203df9663d833a9"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14580@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "3df856fb0a06140748f9de9731d7daf7a0748caa95b65e99a463db352d201d9c"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14559@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "f906598f4867244893bacc4e7f165e03f0d71d678eddbd365f17f9686058821c"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14539@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "279a7b8a052d899a4634791a140ebf15b8a4b616a890cbf4c7f4e11b2586e52e"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14534@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "3fbb0ebde3d7c63bb5b43f81b7184d4d773dadaa2209d576afdbe35d0d0bba06"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14493@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "0f9fbcb0da0fcbc1981dae1625f268e0b9c4ca83c5dafdcaf20a75efb55b44fe"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14500@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "0d96373abdbe6fa5b6d69c0aec5389504806995ff1abf1fe836541ffbe3c56c8"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14404@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "0d280d10a07d0349b267b028eb3ebad22ae92745d7761ce34fd9b1f015b15591"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14434@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "ded77df56ad0b538a87f86870edc7c493f5f35e4e9816d92060d47c158e0e19e"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14376@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "2d85baacee1bed4323ad51e9aca5335167fb93ebf961402cc69b0cdadf174982"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14373@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "5242c444b462daed60760ce56eca05bef4083163f505f558d445b9589f1520a1"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14351@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "c659e564d1cd88c1a880fb1f5c5df18d3c93ec15e81c966fc37e425b4079d6e9"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14349@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "70dfbd77285ad30156d74c8f88aafecfa929a11cf0661e5b63a90a72fffcdc83"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14315@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "1e85199066f8a4d9ce111dce532d0f381d5d7227652ef7058db7dc37322b47d9"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14311@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "406d89085f1b1d4a99b5261adb8cb877532ca90f2be89857ad1c9489c3e5e0b4"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14238@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "b6d62b358d300dca360c9b91221984a54bcf44a861079a5635186bd18901aff2"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14155@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "fedde7c4017e86ba4e8eae8b1cc90e5be7888aa701a5ee3f5d354dc87aaeab36"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14140@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "c309d12586680d09d71c430454db52e435e83700ef740681180806bd753c1328"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14170@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "95994deb52595145f716a5d0a2a87da7a215793d9d5f349ac7e726341f5895c9"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14122@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "f01c34c68a932a1c874fe428c8a412ef774e9b81ab5dda0b864837ab7fa61756"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14053@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "c94487cac1807f1737d23c643bbf2e70346db9dbdb6f4734a5c55e6c9f9df283"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14089@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "6e8767aa507c5445fda76bba1713dfcff21f3f166937cf1a1bc9bbc4bb7f1453"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14034@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "1b070469d36c95360e9794537230e80545701b474add8b2dde918cc6808ea48b"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13933@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "2e73853a20d51db1ceaeec99f79ee7b36fe2b391797b193a50b875a1c8adfaa0"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13821@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "68f67dc5eea0b62dd73257f52c25b2ae77edd16a5a8216131c30d87683c520c7"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14017@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "d2c0d164867d9f037bb2cbc89997d15abc7addf7b3207e0422d4ceefc626e745"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14007@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "19373ac9d93e5042558e64f3b12542262ceee525f3d1eb1cb63ac81af8c3d728"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13810@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "bb9992ffe9128d8fc7fd5ec58043d38e2c194192d03e6336bc05808cbf1a06ba"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13837@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "77c170f19c96584deea1bef270efc73b37aff19a260fa6b59ca96ea97223770e"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-14011@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "2db746dbbc1fc08108955ccf03a8b8e358b5ecf6092be7d449cbb2cd3b101f4a"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13820@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "cd10e61085433638e131528ffef075072ae85491233d0ef88d04ccaa8de035f6"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13964@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "5d7296ec482b71e698c6be84ca8a0dac387e47e7fd9972731ba9f49bd8fcc14c"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13925@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "3c96ce41b00702ce5664be40cd62ce0417305c993c0a6fe25e81cb34a327962f"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13809@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "51b1095205d19eb69d02f71dc141dda83b8abb762948d0f546a1142f3874016e"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13741@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "b964ecc8264395d4f160d56276f8c1dc549b3d1af70c5e152672850c682669f9"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13794@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "418b50dd3834687818b2837b9dc5045fa4f8e20432f4e0ea93e00b4b3ac6ec1c"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13786@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "d3b75b06ffecc3d503c1644675af1f229f1083d590bed554ea2baabdb7ccdf90"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13658@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "1bdae5096372689bb75e0a66b197a01dcc9647a1b702134c2d6cd743ea569b6a"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13807@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "593ea708c90629dadf5d6bb6792482378768861f170c44a840175becf61ec472"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13569@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "028af7a99806ad46c3556a01ed3bddbbe578c69d5b7e1b0689a629a641ba29f0"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13670@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "64a4a231520da209fef69d8beb2e38ee4a3999433d3545c3300f57e25a66a2ee"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13590@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "8214f9ab17b7008a2466b76bfb3c9282c100abc69604e69e7df996049255f937"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13568@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "35503cedf0968e0408bf84264af8aaf3ed5f8513be67524f515de53f7a08b7d8"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13513@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "f0a3119e4358a74d2983e1b11678022447a49ac224a0217689b54d05c6bd8e7a"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13516@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "f1c84d104a5cedadfc93e24fc8997834a08c7c62fc838ce57ae2fd230227d5b8"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13551@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "2dc79788f2155e0e2c624626b41737f036b670100d17454764dec1b384be70e9"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13449@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "fb6990cd6f84a50d338b446b0038e7bf1b511225573faaae09e32d330b471bf1"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13512@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "e384f77ba47040efd2880344f14e49c94a7febbbc29920bcc8b4fab082fc169b"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13417@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "10beeedcc316770bed8ee4dc643dbc02886056cc9374a3d44fc3f2c33dc497f2"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13410@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "0fbadcc697120422f71b27d4c6011f40db0674425f4b5606884a90c5eb2a6ee3"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13406@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "dedc2b01f782b505d92078e2d6831f6636e359c67232ab0c58aa3bcf96284ae6"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13363@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "06d103b66d3f78dc735f5cb27dab1ace410b1b9346aff4a3221216e6023a9f1d"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13401@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "3ccda38a4d48f44330f5c1ce13adf05253a2080311a98c0eff0efe72abb94554"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13346@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "75fa52b307baa7a11eb4cb5fb4aa3535d57f97baefea446477b3344e2940805b"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13344@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "3693b0a37a69678a1c033fbaccbeb03416ce4fd8daad418407a2ce2692c23c24"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13297@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "3d8ebe58f4d321b008ab9f5c43494753e7dd3404337259d46b38241888ef6032"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13315@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "a3781515ef03e2b66cc56ba66f866ad1e85b3c8d7c8476598f822167e5cee98f"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13343@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "2a8d57b104397a3018a341fe6c504cf3324e0a7c45d07564f918329cf13917a0"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13279@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "2abe483f105a4f03b41cfe1a3fe89e2c0e9d0dc80e5b7acfdfa7328a40d02c70"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13195@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "2a2fbc6a9d773683083f09049b3a15752fb1a38b0711b82f851d2cab5653315b"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13158@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "a2b74d5b91da11969ca18654f7364feab3fbbfd707b91b9a61b9a548e8fc5549"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13128@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "57c4d0709b287d4884da48f0aaa7b8d7ba01526c2cb51c4a2be165d69cf6194b"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13212@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "963837a8ec06ed24d4f13b999450eaab1c35b6b9cc76df1450d77193e3db3963"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13112@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "5085ed3fe2935ab71edfdb634f0faab0b52691dc9702303a3a6722e496c2d2a0"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13121@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "2cbd07199485d16a57177bc6a530ac3b4ec31907568b2ae83b607741f84c26ea"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13033@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "c6cbe53afd3440755be46b610b74216c265a9a72901ce1ad7ff73ceed9054ac0"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13089@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "16d741c573033a929bae355d77b6d83c5a1807431a060158b8ccb9ae370a7f76"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13028@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "a1b8c01d86b8ccf48b58cc4aac3e3a1a740a8a4400e9038d6dd2de1c0946217a"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13109@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "49c5f5c432c6c65ce7fa4777a34f1736fc002a3204a98eabf35006dee778fc49"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-12965@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "ba53c28106a9dcd56fd1631aba1e30a5c4ada5b26ccca7086044c730db393183"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13012@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "092351fa2fec9905cbf23f4182d774a08de9a038c8b74196bec518623e8c348c"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-13023@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "d99753161f91eec7468e47f121a30679483031b7c8ae2194b5bac24954e604ab"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-12858@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "19ad1fa357cdf6a707d4f2530064445562854bd71b44fecfe573dd5f52c151dd"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-12774@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "1078b9d98020034c64f297a84d7312bebf1696f00ade8f8d7ddcd6d33f88fd87"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-12754@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "31280b25018c6689c2f8979a7a110dfcbf9cd51cfdcc6863edbbc0f4af9fc479"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-12708@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "2b07bf491300cf2d9cacc67e84f800a24d9427e64cc083de772cd12326f59a6f"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-12741@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "50a77d96d37a9cb4eb1ef22e390bf87087aee6097bcd5cd6e9bd664da7842167"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-12663@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "a8532a8ea4ee63aa2c2ee9e01bdfb16ea99c70c7704e275c79ebb729d85400ff"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-12419@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "2c4e2ba814025609ca5f0e57ea4f81f59bc9883f07d3ed10602d7a95ef43fed7"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-12713@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "03a1365eeb5e086e8a6b0824ba287a1000c0155092cfe6991006f153b4bcffb1"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-12325@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "96248281bb598ea2e1a13f546fd709f2b37b2aaa49a9d7bf775343f0a14b19b9"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-12406@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "2f93b94d467294a5e2c59ac3c290ab759f10cc1b7bcfb45b9e5b83c994ec65e7"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-12308@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "c83f8c6765374d76297913690c9280ce2c56f6b1e7c402966e448523e4f69bac"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-12304@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "f0c61449d78de30fc3b1f0b841dea47b0ef02cc3a280a73f169ff6dd0ca6b47f"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-12193@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "014418650b2eaea8947a5f03d858202a88fdf57be0aefbfd0081ba70d82f104c"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-12262@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "0a1347f788e90ced5b87a0ff092dcf420e01973e28cb13d9d2a2a31bd712bc10"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-12276@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "27c2ddea2b89745fab820f421d8017cb96b433183b3a3b1cc57772bc7802d893"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-12155@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "85914fadffc314d94c7d880198a00b84befef39801dbc47888e3997edf50783b"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-12209@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "ae0cbdd26ae72d5e6d8f05db9ec163544368f397073b64df761a979663c6ccb6"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-12273@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "728ff15b7a09017fc5659f78ba1fe220ae89bed1194f2b7af50daef6d0b77e14"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-12125@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "3d9222f851a22ec289a9337587194682e2e1ec7a85c13ce6f3e9208bb46ef1d2"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-12143@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "32346aa11404eaf90c1bcdd4602b3af75f8e7272d1a7ad18bcd200a427cd7a90"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-12050@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "08bf78c9fa33c15d8b2f68b3226c8007139ff2daca0b0305d15915f34c264dd1"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-12039@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "9200e0b04e8e139ac8ff68abc25490ea4abccb17f6f2dbb0ca52daf040bb00cc"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11964@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "8a698d1c900360593a084be31b718cfe1ace13b071e5c1fbd180cd93b3f5a8fa"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11951@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "c21f69cc5e76e2ce0177c1e703994fb11d52e7b6f15b8333113ecd38e992ed89"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11999@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "f0bb5e90b36b52cd0936f2c23ef3001b54f2f7f042266d8ffb58e4939d9c393b"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11848@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "26ee972d4ea700c2f3ccddbab36e3380453073efc02bdcb5a58cc58524551b04"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11885@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "ae335a87c4180560ec7959b0a46a5040df081db6e7bebf78aa4a448af86f64df"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11880@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "87273709390526da2927f30e6781da29ea624e19c71a634ac689c3f2c120c0c5"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11820@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "e13ce0e45c89c86b03d575b61f536448e5c7f975c2f3c0fa4c6c83cf1d2386f7"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11815@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "de6da8964ab4c25e36754a5a22c3bee22f8aa160015e3ea606369ca1f1a19aab"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11790@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "e3e231e83d9ff32a19e30ade57e33d40afab5bf1092ed5bb438937a80fefe24b"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11749@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "caeab8f9ad3ffdbaaf05245bb46c74af918578aee76d71e7207f3baf4bb364d9"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11728@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "e8dd23d3bda6e5826c1df78c3717e08f1fa3c809cef4931c1bc4e487023d707a"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11734@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "051248ca15d68660378e407f6fe30da399d2834de4c4eb1cece21988ece6eaac"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11740@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "b438779564193ac5e7768ac52a6d157c425a791a44011976e721dbe023542bd9"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11555@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "92ed7a92496d93cc8f4d2bd249bfab4d9d75f85ebc7f54ef63cafde5b17a2540"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11603@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "7bf0ba94a46cc8f6d638c987f22dcaa979458ac00385c6d4fcb011124230a4df"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11551@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "6eb441173904b7339a31ea5a33245e53483bec10c7a908b3745b484e52951527"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11532@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "7ddd6880ad0ea336cca82f9e2a673fcfd78784079ba4cfc4ba4b17659863f684"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11490@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "de894b805ea24dbfa4237b45e3fdc57ef8ebf2f87848e0a1cd03b68cc5b16aad"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11477@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "0e16f2d554e29714c9d1576bef4772cae274e51c71253f212c9b091586e19486"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11433@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "ecf01135484c7a892533724cfaaa4943e4009475bafb7a6e5e7163c6e527341d"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11400@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "2a791c23a9cdfd973794218fe56156d33dae442f211aa8cc8baa3d34a2449b85"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11299@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "2bb30a44487a86ba77e27d91e70d2b6e2bda4dd05fc6ccd5091bff6068395958"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11451@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "29b21b1d5efd14f3b88b7c8f4dcc58d3162a4fde6843a20de57d2ad041db6b8b"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11333@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "26643bee5c1b5c3dd3031706ff7fde334fcc7d04e50416d81d0b25e39126ae2a"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11292@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "5a31be6541588b746c2949132061c4d3219f7cfd583c6182e5ef104c5c23822c"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11276@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "24545a5f57aad24a7e12b60ba039e9888e697d2548bb09632a6b6c0214c2a5b5"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11239@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "8de5b62bce74bb176efd63b968387fa234eaf871fcc28ecd429df6cdadcc3ed3"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11265@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "5be137d5fff7d9640f2c529b84247ae5b3b6201091bb44ba01c95351adf0501d"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11211@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "1de7e939994d50687ee7cb4e7fc7c6da1897a8b29f2f84d59989cabe6d95d1b6"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11206@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "51e632d270a1f5bcacc8f763e62065fb3396d99c75702b288c8115b8899aba5d"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11179@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "9c9101d699b2faadfe31457fd581c9d549cecb719b656629369c14e0916c6d04"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11163@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "c17be1ad4502d35d4cdb3ebd829007193664aa8a9f7041fbeb8863ab62aa0298"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11149@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "738579539ccb700bb6245b415a7affe3a904d0c3da5a624a14df098760f2394f"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11141@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "cabe28749a464fa769933f167313e42bcd967d3a58e3888b2a068497264e09a1"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11138@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "af36d32cc0f7511ea1b40db0b3048f18feab6982f941a98c4b1a084f5103e76c"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11133@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "6362250e652832435c3914c27ba0605b0f507d0ac3b85ee201833cc4c9269cec"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11119@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "58eb6898d24fca6d13b730b46434681be9255178ee6cfc0c5869a08ba083baad"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11099@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "9521882df063fbd84ffeac7ace39033eb9b01fe33dd3db1fe980618b86645e37"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11095@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "ab133242a2f65ebde92aab4594bf05d04300dae6b935f3c1172d659e81712626"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11066@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "c21c4175e7fff12ddb90e7ba81874edfb8ce7c23b37f63c5eeb4daa5592874f4"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-11087@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "8a7b1327e058318e7b7a6687dcd5e53cae10e84693110d3761f7012ce726e5a5"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-10999@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "54ab17aad187e59c3bc4b59832742d5877cc349c889ca754d09d47015ef71851"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-10914@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "91407e07e9c3d8d718244d4760fa46b8af9fcdc0af64f76eec4b21b9bd0c9093"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-10973@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "165a26f42f2f6248e579f94bca313259cc17e46c3262145cf9ae3288e223bd70"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-10554@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "8b214a197ac11350c128e99d4b287bdc751ceed13d2be515da942bfafa9e83c8"
+    },
+    {
+      "data_id": "env:swebench-verified-django__django-10880@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "68309eabf52d16e7d7695e8d9bb608f33cbdc1f56aa08527053ecde02fc65b0a"
+    },
+    {
+      "data_id": "env:swebench-verified-astropy__astropy-7336@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "c451a3de6d69e14b38c6cf511ed4e68e6e0f5aa025c48869a9ddf0884a7238b2"
+    },
+    {
+      "data_id": "env:swebench-verified-astropy__astropy-7671@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "566679bb6f871d144c780264f573cd6a57c90c65e0a12649e7021f4bcb424fd5"
+    },
+    {
+      "data_id": "env:swebench-verified-astropy__astropy-7166@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "e57025b3411313295c31ceab04d08338f0da442329c993eac72657782a6d3802"
+    },
+    {
+      "data_id": "env:swebench-verified-astropy__astropy-14995@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "e5a583e5e7ff8504f080570b274beeb865b17eafe53cd4e93d48350568bd2961"
+    },
+    {
+      "data_id": "env:swebench-verified-astropy__astropy-14598@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "f7bca450544c08e086679269c9ab6fad1dd1f6182252d7486cccd8a3853fe8f3"
+    },
+    {
+      "data_id": "env:swebench-verified-astropy__astropy-14539@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "07b316c1f5e41d241c215c1a2690a345cb7f282c16f8cae115141354981fbe2a"
+    },
+    {
+      "data_id": "env:swebench-verified-astropy__astropy-14508@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "4cdd45f0ab0af2af7c02aa9f3a396b3d179f9e1c4be2b62f1d7681b06e53aa8a"
+    },
+    {
+      "data_id": "env:swebench-verified-astropy__astropy-14369@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "2d38ea17eeb4aa175dbfe1f248e982295a4d0c9fa0b705c817d6e5df7ba1c97f"
+    },
+    {
+      "data_id": "env:swebench-verified-astropy__astropy-14365@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "3335c22ea8d85ad0972c267bfb267cf4099325445aa780acf284e1427516aa51"
+    },
+    {
+      "data_id": "env:swebench-verified-astropy__astropy-14096@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "dfe767a1acbee07a71590881bd4ec0a8fa03d54af604a1bdd2b2e9b0214f6e52"
+    },
+    {
+      "data_id": "env:swebench-verified-astropy__astropy-13453@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "04a5d516d6e2f7b86ea4304eee908f89736c6ad10f10b488630b611c48df8172"
+    },
+    {
+      "data_id": "env:swebench-verified-astropy__astropy-13398@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "87969e9fcee19910b11f9db68fdb61d8beaa57d707c2ffcaf78596f3c3a8f481"
+    },
+    {
+      "data_id": "env:swebench-verified-astropy__astropy-13033@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "b7b5dc0b1202472fe4c6dcbbc175f815aec4dc1fe59a9116e546cc4b845ae7f2"
+    },
+    {
+      "data_id": "env:swebench-verified-astropy__astropy-13236@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "496a76db71ef8f38a09b17bdfe678845878aa060595a49bdfdf1b099956cd003"
+    },
+    {
+      "data_id": "env:swebench-verified-astropy__astropy-13977@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "12d657f503438c26d51d2f6f50765a46f87016e79866a44f41369e61aefa7379"
+    },
+    {
+      "data_id": "env:swebench-verified-astropy__astropy-14182@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "c027d664a35a6d040b4dad49bcd457ce451743d617d0355a5a64e68220fedc7c"
+    },
+    {
+      "data_id": "env:swebench-verified-astropy__astropy-14309@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "ed10b20f63eccd05e591c02b85da8335da5a4efeef2efa0687c68739b0970d5a"
+    },
+    {
+      "data_id": "env:swebench-verified-astropy__astropy-13579@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "7e60db212d4012397b2976c6eb9564ff88c2e40763d8c48ecaa552417c192cab"
+    },
+    {
+      "data_id": "env:swebench-verified-astropy__astropy-12907@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "ed101934f68b83b563370932b03a772b8cd8d341ccc30f65ca17e80607f4a6bd"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-23413@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "8b9bb178b727d4665554d69ffd7fca7c3a75f3779019db5561415ec357c67bfe"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-23534@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "aa2e5fd5dfa94a1bffe19db074d180437145ac1ceec9a0c3b22d250466644517"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-23824@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "e021da2ef443949d90df43cfec1856ba7a6060718c9a25f958c2e9a8888e7a60"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-23950@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "952e67f7296d90a1c7249e73b86d6346ae0f6008e35179cc8469e938c4526477"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-24066@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "9b31a64ada880b1b83a9a5c418c85244274555546cb42d0fb6266d313b751c23"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-24213@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "abb6bd89e4cfea197925b461ebb0f7e9c7854a7e0f6f402bfe856d118024ee7c"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-24443@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "5ad98261e76958aed309ae737bf6daf8e911d90c7b05c986e15a983782c8b150"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-24539@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "2bac783a69d561d384e33da613b14b52fdfe98d970ba24d53a38f4af1aed77b3"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-24562@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "0f2a05f84b16668dc46669f8354d1851ed5fca1346115234314dbb44610ca345"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-24661@1.0.6-image-offline-golden",
+      "arena_task_type": "unknown",
+      "env_content_hash": "aa4801394ddfeaba6e3d00f5916956aed12e143345cf8f6b9afbefd42c96fdf7"
+    }
+  ]
+}

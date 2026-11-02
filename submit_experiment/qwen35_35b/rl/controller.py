@@ -7,6 +7,7 @@ import base64
 import hashlib
 import importlib.metadata
 import json
+import operator
 import os
 import runpy
 import signal
@@ -15,6 +16,21 @@ from dataclasses import asdict
 from pathlib import Path
 
 import yaml
+
+
+def register_yaml_resolvers() -> None:
+    from omegaconf import OmegaConf
+
+    # OmegaConf provides references, but arithmetic requires a named resolver.
+    # Keep formulas in YAML and avoid an unrestricted eval resolver.
+    OmegaConf.register_new_resolver("mul", operator.mul, replace=True)
+
+
+def validate_sglang_capacity(config) -> None:
+    for key in ("max_running_requests", "cuda_graph_max_bs"):
+        value = getattr(config.sglang, key)
+        if type(value) is not int or value < 1:
+            raise ValueError(f"sglang.{key} must resolve to a positive integer")
 
 
 def check_source() -> Path:
@@ -111,6 +127,7 @@ def main() -> None:
     parser.add_argument("--rollout-runtime", action="store_true")
     parser.add_argument("--check-only", action="store_true")
     args = parser.parse_args()
+    register_yaml_resolvers()
     if args.rollout_runtime:
         rollout_runtime()
         return
@@ -135,6 +152,7 @@ def main() -> None:
     root = Path(os.environ["EXPERIMENT_RUN_DIR"])
     config_path = root / "train.yaml"
     config, _ = load_expr_config(["--config", str(config_path)], SWEPPOConfig)
+    validate_sglang_capacity(config)
     # CPU checks fail before any GPU worker jobs are submitted.
     validate_model_packed_seq_dependencies("qwen3_5_moe", "megatron-bridge", 4)
     from awex.models import qwen3_5
@@ -148,6 +166,20 @@ def main() -> None:
         min_terminal_tasks=int(os.environ["ARENA_PREFLIGHT_MIN_TASKS"]),
         allow_unhealthy=os.environ.get("ARENA_PREFLIGHT_ALLOW_UNHEALTHY", "0") == "1",
     )
+    from examples.swe.arena_client import ArenaOpenAPIClient
+    from examples.swe.arena_dataset_snapshot import load_arena_dataset_snapshot
+
+    for configured, report in zip(streams, summary, strict=True):
+        if configured.dataset_snapshot_file:
+            rows = load_arena_dataset_snapshot(
+                ArenaOpenAPIClient(base_url=config.econfig.arena_base_url),
+                configured.dataset_snapshot_file,
+                configured.stream_id,
+                report["llm_protocol"],
+            )
+            report["live_stream_dataset_total"] = report["dataset_total"]
+            report["dataset_total"] = len(rows)
+            print(f"Arena dataset snapshot validated: {len(rows)} exact Env versions", flush=True)
     (root / "preflight.json").write_text(json.dumps({"streams": summary}, indent=2) + "\n")
     for stream in summary:
         if stream.get("unhealthy_override"):

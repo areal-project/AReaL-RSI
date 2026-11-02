@@ -100,6 +100,13 @@ def compose(profile: Path, params_path: Path, arena_path: Path) -> dict[str, Any
     protect_base(base, params)
     protect_base(base, arena)
     config = merge(merge(base, params), arena)
+    # Dataset files are relative to their arena.yaml, independent of shell cwd.
+    for stream in config["econfig"].get("arena_streams", []):
+        if filename := stream.get("dataset_snapshot_file"):
+            source = (arena_path.parent / Path(filename).expanduser()).resolve()
+            if not source.is_file():
+                raise ValueError(f"Arena dataset snapshot does not exist: {source}")
+            stream["dataset_snapshot_file"] = str(source)
     # OmegaConf's structured merge rejects whole-dataclass interpolations as
     # strings. Copy these container links after applying actor overrides, while
     # retaining scalar/environment interpolations inside each container.
@@ -114,6 +121,14 @@ def validate(config: dict[str, Any]) -> None:
     actor, rollout, generation = config["actor"], config["rollout"], config["gconfig"]
     megatron = actor["megatron"]
     samples, minimum = generation["n_samples"], actor.get("min_usable_group_size", 2)
+    for key in ("max_running_requests", "cuda_graph_max_bs"):
+        value = config["sglang"].get(key)
+        # Preserve native OmegaConf expressions for the container-side loader.
+        # The controller checks their resolved values before any GPU submission.
+        if isinstance(value, str) and re.fullmatch(r"\$\{.+\}", value):
+            continue
+        if type(value) is not int or value < 1:
+            raise ValueError(f"sglang.{key} must be a positive integer or interpolation")
     if not isinstance(samples, int) or isinstance(samples, bool) or not 2 <= minimum <= samples:
         raise ValueError("Require 2 <= actor.min_usable_group_size <= gconfig.n_samples")
     if (
@@ -141,7 +156,11 @@ def validate(config: dict[str, Any]) -> None:
         0 <= actor["optimizer"]["warmup_steps"] < config["total_train_steps"]
     ):
         raise ValueError("Require 0 <= optimizer.warmup_steps < total_train_steps")
-    if config["train_dataset"]["batch_size"] < 1 or rollout["max_concurrent_rollouts"] < 1:
+    if (
+        config["train_dataset"]["batch_size"] < 1
+        or type(rollout["max_concurrent_rollouts"]) is not int
+        or rollout["max_concurrent_rollouts"] < 1
+    ):
         raise ValueError("Batch size and rollout concurrency must be positive")
     if rollout["queue_size"] <= config["train_dataset"]["batch_size"]:
         raise ValueError(
@@ -374,6 +393,12 @@ def main() -> None:
         shutil.copyfile(source, run_dir / name)
     for name in ("controller.sbatch", "controller.py"):
         shutil.copyfile(ROOT / name, run_dir / name)
+    # Freeze the selected dataset with the submitted config for reproducibility.
+    for index, stream in enumerate(config["econfig"].get("arena_streams", [])):
+        if filename := stream.get("dataset_snapshot_file"):
+            target = run_dir / f"arena-dataset-{index}.json"
+            shutil.copyfile(filename, target)
+            stream["dataset_snapshot_file"] = str(target)
     (run_dir / "train.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
     values = environment(runtime, run_dir, experiment_name, trial_name, credentials)
     # Credentials themselves are never sourced or serialized on the submit host.
@@ -409,6 +434,8 @@ def main() -> None:
             for name in ("base.yaml", "params.yaml", "arena.yaml", "train.yaml")
         },
     }
+    for path in sorted(run_dir.glob("arena-dataset-*.json")):
+        manifest["sha256"][path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
     source = Path(runtime.areal_dir)
     for label, arguments in (
         ("source_head", ["rev-parse", "HEAD"]),

@@ -45,10 +45,10 @@ def write_params(tmp_path, update):
 @pytest.mark.parametrize(
     ("update", "requests", "graph"),
     [
-        ({}, 384, 384),
+        ({}, 96, 96),
         ({"rollout": {"max_concurrent_rollouts": 16}, "gconfig": {"n_samples": 8}}, 128, 128),
         ({"sglang": {"max_running_requests": 24}}, 24, 24),
-        ({"sglang": {"cuda_graph_max_bs": 512}}, 384, 512),
+        ({"sglang": {"cuda_graph_max_bs": 512}}, 96, 512),
     ],
 )
 def test_sglang_capacity_uses_native_yaml_resolution(tmp_path, update, requests, graph):

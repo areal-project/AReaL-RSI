@@ -23,10 +23,10 @@ Slurm scheduler 再申请一个 8 GPU 节点。actor 使用 8 个 worker，rollo
 | 上下文 | 262144（256K）；请求总 token 上限 262143，预留一个 token |
 | CPU-staged optimizer offload | 开启，2 个 buffer，每个 128 MiB |
 | Chunked logits / loss | 开启，loss chunk size 1024 |
-| SGLang CUDA graph | decode 开启、prefill 关闭，保留 memory saver；max batch size 自动跟随请求上限（默认 384） |
+| SGLang CUDA graph | decode 开启、prefill 关闭，保留 memory saver；max batch size 自动跟随请求上限（默认 96） |
 | 训练 batch / Rollout 队列 | batch size 64，`queue_size=128`；队列必须大于 batch size 以留出任务提交空间 |
 | 采样 / 过滤 | 训练 `n_samples=12`、最小有效组 8（至少 8/12 有效），评估 `n_samples=8`，使用示例的 `filter_function` 过滤同奖励组 |
-| 并发 / 微批 | rollout 组并发 32，每组 12 条；SGLang 请求上限自动计算为 384；不显式设置 `n_mbs`，按 token 预算自动拆分；`n_mbs_divisor=8` |
+| 并发 / 微批 | rollout 组并发 8，每组 12 条；SGLang 请求上限自动计算为 96；不显式设置 `n_mbs`，按 token 预算自动拆分；`n_mbs_divisor=8` |
 | Arena 数据 | `qwen35-swe-verified483-setup600`，固定参考 Benchmark 的 483 题、setup 600 秒 |
 | Arena Harness / 协议 | `areal-harness@0.2.0-oss-rc.6-swe-mm-256k-t1-p1-k100k` / `chat_completions`；发布规格 2 CPU、4 GiB 内存、10 GiB 磁盘 |
 | Arena 路由 | `gateway` |
@@ -79,7 +79,7 @@ sglang:
   cuda_graph_max_bs: ${sglang.max_running_requests}
 ```
 
-默认 32 × 12 = 384，两个上限都是 384。修改组并发或采样数时会一起更新；
+默认 8 × 12 = 96，两个上限都是 96。修改组并发或采样数时会一起更新；
 也可将任一字段改成正整数覆盖。手动修改请求上限时，graph 上限仍会跟随该值，
 除非 graph 字段也被手动覆盖。
 提交脚本将表达式原样保留在 `train.yaml`，不再识别 `auto` 或计算这两个上限。
@@ -91,7 +91,7 @@ CPU 预检会解析并检查两个上限是正整数，之后才允许提交 GPU
 YAML 插值、AReaL 结构化配置加载及 Arena 数据校验；未重启现有训练试验。
 
 所用 SGLang 会按请求池大小截断实际 capture batch。更大的请求池和 graph 会占用
-更多显存，应通过实际启动确认容量；这并不保证 384 条都能同时占满 256K 上下文。
+更多显存，应通过实际启动确认容量；这并不保证 96 条都能同时占满 256K 上下文。
 当前 Megatron 路径还会将 `n_mbs_divisor` 按 PP 大小重设：本模板保留配置
 值 8，但 PP1 下该路径实际使用 1。`n_mbs` 不显式配置，使用 AReaL 默认下限 1，
 由 `max_tokens_per_mb=262144` 与实际样本长度决定每步微批数，actor/ref 均如此。
@@ -286,11 +286,15 @@ Harness 声明的上下文窗口为 262144 tokens，单次最大输出为 65536 
 两者通过 `harness_result.json` 的 `raw.outcome` 输出 `AGENT_RUN_TIMEOUT`，
 来源分别为 `core_turn_deadline` 和 `runner_deadline`。
 AReaL 下载原生结果文件，核对 outcome、退出状态和收集状态后才接受零奖励。
+Arena 结果中的 schema 若被脱敏为 `[REDACTED].envarena-outcome.v1`，仅触发回执核验；
+必须从同一 task 的同一 attempt 下载原始、未脱敏的 `harness_result.json`，
+并核对 schema、outcome、退出状态和收集状态后才记零。回执 404 最多查询三次；
+缺少 attempt 或最终缺失回执仍拒收，不切换到其他 attempt。
 Arena 终态仍可为 `HARNESS_FAILED`；训练记零不改变 Arena 的任务状态。
 外部信号、收集/适配失败、缺失或冲突的结果文件，以及 Proxy 系统错误仍拒绝。
 
-默认 params.yaml 的 rollout 组并发为 32、每组 12 条、最小有效组 8，
-SGLang 请求上限自动计算为 384；这些配置保持不变。
+默认 params.yaml 的 rollout 组并发为 8、每组 12 条、最小有效组 8，
+SGLang 请求上限自动计算为 96。
 训练配置中的采样缺省值仍为 temperature=1、top_p=1、top_k=1000000。
 所选 Harness 显式设置 temperature=1、top_p=1、top_k=100000，
 请求显式参数优先，因此实际 top_k 为 100000。若需更改 Harness 固定参数，

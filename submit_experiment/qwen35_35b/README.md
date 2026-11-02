@@ -1,12 +1,13 @@
 # Qwen3.5-35B-A3B 实验启动
 
-本模型的两种训练方式独立维护：
+本模型的训练入口独立维护：
 
 - [rl/](rl/README.md)：Arena RL，入口为 `rl/submit.sh`，使用 controller 与共卡 actor/rollout。
+- [rl_codev/](rl_codev/README.md)：CodeV 单轮 Agentic RL，本地 proxy 生成后上传 Arena 评分。
 - [sft/](sft/README.md)：纯文本 JSONL SFT，入口为 `sft/submit.sh`，单个 Slurm GPU 作业内运行 torchrun。
-- `profile_config.py`：两种入口共享的 YAML 检查、配置合并与 AREAL_DIR 解析，不包含训练逻辑。
+- `profile_config.py`：各入口共享的 YAML 检查、配置合并与 AREAL_DIR 解析，不包含训练逻辑。
 
-两种入口均支持 experiment/trial 命名、显式 reservation、`--dry-run` 和同步 CPU
+各入口均支持 experiment/trial 命名、显式 reservation、`--dry-run` 和同步 CPU
 `--check-only`。省略 `--reservation` 即公共池；日志和 checkpoint 使用 AReaL 默认目录，
 不在代码目录创建 `runs/`。
 

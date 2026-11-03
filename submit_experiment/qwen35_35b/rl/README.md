@@ -107,7 +107,8 @@ AWEX 权重同步，以及 KV cache 恢复后继续 rollout。尚未验证长时
 日志位于 AReaL 默认目录：
 `/storage/openpsi/experiments/logs/<user>/qwen35-verified/native-b8-mem05-20261103-1425/`。
 
-所用 AReaL 必须包含 AWEX 视觉缓存接口兼容修复：清理缓存时兼容旧的
+所用 AReaL 的 Arena/代理与 AWEX 修复见 [AReaL PR #1873](https://github.com/areal-project/AReaL/pull/1873)。
+其中必须包含 AWEX 视觉缓存接口兼容修复：清理缓存时兼容旧的
 `sglang.srt.managers.mm_utils.embedding_cache` 和当前镜像中的
 `sglang.srt.managers.mm_schedule.embedding_cache`。即使任务只有文本，阶段切换也会执行此清理。
 此前直接读取旧字段会使推理进程在释放 KV cache 时退出；改成 0.5 还避免了本次环境下

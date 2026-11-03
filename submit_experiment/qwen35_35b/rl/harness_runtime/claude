@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+"""Forward Claude's protocol and record only this runtime's execution deadline."""
+
+import json
+import math
+import os
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+from contextlib import suppress
+from pathlib import Path
+
+SCHEMA = "areal-claude-deadline/v1"
+OUTCOME = "AGENT_RUN_TIMEOUT"
+KILL_GRACE_SECONDS = 5.0
+
+
+def copy_executable(source, destination):
+    """Retry bounded FUSE range reads, as the platform's runtime loader does."""
+    offset = 0
+    with open(destination, "wb") as target:
+        while True:
+            for attempt in range(8):
+                try:
+                    with open(source, "rb") as stream:
+                        block = os.pread(stream.fileno(), 4 * 1024 * 1024, offset)
+                    break
+                except OSError:
+                    if attempt == 7:
+                        raise
+                    time.sleep(0.1)
+            if not block:
+                break
+            target.write(block)
+            offset += len(block)
+    if offset == 0:
+        raise ValueError("Claude executable is empty")
+
+
+def positive_seconds(name, default=None):
+    value = float(os.environ.get(name, default))
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{name} must be a positive finite number")
+    return value
+
+
+def execution_budget():
+    outer = positive_seconds("ARENA_AGENT_TIMEOUT_SEC")
+    margin = positive_seconds("AREAL_CLAUDE_DEADLINE_MARGIN_SEC", "30")
+    if margin < KILL_GRACE_SECONDS + 5:
+        raise ValueError("Deadline margin must leave at least 10 seconds for cleanup")
+    budget = positive_seconds("AREAL_CLAUDE_AGENT_TIMEOUT_SEC", str(outer - margin))
+    if budget + margin > outer:
+        raise ValueError("Claude deadline must precede the platform's agent deadline")
+    return budget
+
+
+def stop_child(child, signum=signal.SIGTERM):
+    """Terminate the dedicated process group without touching other sandbox tasks."""
+    if child.poll() is not None:
+        return False
+    try:
+        os.killpg(child.pid, signum)
+    except ProcessLookupError:
+        child.wait()
+        return False
+    with suppress(subprocess.TimeoutExpired):
+        child.wait(timeout=KILL_GRACE_SECONDS)
+    # Claude tools can outlive the Claude process. Kill remaining group members too.
+    with suppress(ProcessLookupError):
+        os.killpg(child.pid, signal.SIGKILL)
+    child.wait()
+    return True
+
+
+def write_deadline_receipt(path, task_id, attempt, budget, elapsed, returncode):
+    receipt = {
+        "status": "ERROR",
+        "summary": OUTCOME,
+        "raw": {
+            "schema": SCHEMA,
+            "task_id": task_id,
+            "attempt": attempt,
+            "outcome_code": OUTCOME,
+            "trigger": "RUNTIME_EXECUTION_DEADLINE",
+            "budget_seconds": budget,
+            "elapsed_seconds": elapsed,
+            "child_returncode": returncode,
+        },
+    }
+    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as tmp:
+        temporary = Path(tmp.name)
+        try:
+            json.dump(receipt, tmp)
+            tmp.write("\n")
+            tmp.flush()
+            os.fsync(tmp.fileno())
+            os.chmod(temporary, 0o644)
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+def main(argv=None):
+    started = time.monotonic()
+    budget = execution_budget()
+    task_id = os.environ.get("ARENA_TASK_ID", "")
+    if not task_id:
+        raise ValueError("ARENA_TASK_ID is required to bind the deadline receipt")
+    attempt = int(os.environ["ARENA_ATTEMPT"])
+    if attempt <= 0:
+        raise ValueError("ARENA_ATTEMPT must be positive")
+    output = Path(os.environ["ARENA_OUTPUT_DIR"])
+    output.mkdir(parents=True, exist_ok=True)
+    receipt_path = output / "harness_result.json"
+    if receipt_path.exists():
+        old = json.loads(receipt_path.read_text())
+        if old.get("raw", {}).get("schema") != SCHEMA:
+            raise ValueError("Refusing to overwrite an unrelated harness_result.json")
+        receipt_path.unlink()
+
+    source = os.environ.get("AREAL_CLAUDE_REAL_BINARY")
+    if source is None:
+        source = str(Path(os.environ["ARENA_HARNESS_DIR"]) / "bin" / "claude.real")
+    # The published materials can be an OSS/FUSE mount. Execute a local copy,
+    # matching the platform loader's handling of the original Claude binary.
+    with tempfile.TemporaryDirectory(prefix="areal-claude-") as local:
+        binary = Path(local) / "claude"
+        copy_executable(source, binary)
+        binary.chmod(0o700)
+        child = subprocess.Popen(
+            [str(binary), *(sys.argv[1:] if argv is None else argv)],
+            start_new_session=True,
+        )
+        received_signal = None
+
+        def interrupted(signum, frame):
+            nonlocal received_signal
+            received_signal = signum
+
+        signals = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
+        previous = {s: signal.signal(s, interrupted) for s in signals}
+        try:
+            while child.poll() is None:
+                if received_signal is not None:
+                    stop_child(child, received_signal)
+                    return 128 + received_signal
+                remaining = budget - (time.monotonic() - started)
+                if remaining <= 0:
+                    if not stop_child(child):
+                        break  # The child exited independently; no deadline receipt.
+                    if received_signal is not None:
+                        return 128 + received_signal
+                    write_deadline_receipt(
+                        receipt_path,
+                        task_id,
+                        attempt,
+                        budget,
+                        time.monotonic() - started,
+                        child.returncode,
+                    )
+                    print(f"{OUTCOME}: runtime execution budget exhausted", file=sys.stderr)
+                    return 124
+                with suppress(subprocess.TimeoutExpired):
+                    child.wait(timeout=min(0.25, remaining))
+            if received_signal is not None:
+                return 128 + received_signal
+            return child.returncode if child.returncode >= 0 else 128 - child.returncode
+        finally:
+            stop_child(child)
+            for signum, handler in previous.items():
+                signal.signal(signum, handler)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except Exception as error:
+        print(f"Claude deadline runtime failed: {error}", file=sys.stderr)
+        sys.exit(1)

@@ -1,0 +1,5 @@
+# Paths resolve relative to this data.yaml, independently of the calling directory.
+train_dataset:
+  path: data/sharegpt-train.jsonl
+  split: train
+valid_dataset: null

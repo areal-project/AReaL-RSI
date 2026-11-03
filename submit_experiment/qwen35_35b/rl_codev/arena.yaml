@@ -1,0 +1,11 @@
+codev:
+  benchmark_ref:
+    key: codev-r1-rl-20261028-r1-train
+    version: 1.0.3
+  benchmark_content_hash: 0c8f16f99b5487b06d953aed04aa1548a2a95f6766fb4ca8ea6b98209136699b
+  harness_ref:
+    key: codev-r1-rl-20261028-r1-upload
+    version: 1.0.0
+  reward_ref:
+    key: codev-r1-rl-20261028-r1-judge
+    version: 1.0.2

@@ -23,6 +23,7 @@ Slurm scheduler 再申请一个 8 GPU 节点。actor 使用 8 个 worker，rollo
 | 上下文 | 262144（256K）；请求总 token 上限 262143，预留一个 token |
 | CPU-staged optimizer offload | 开启，2 个 buffer，每个 128 MiB |
 | Chunked logits / loss | 开启，loss chunk size 1024 |
+| SGLang 显存预算 | `mem_fraction_static=0.5`，为训练后恢复 KV cache 留出余量 |
 | SGLang CUDA graph | decode 开启、prefill 关闭，保留 memory saver；max batch size 自动跟随请求上限（默认 64） |
 | 训练 batch / Rollout 队列 | batch size 8，`queue_size=128`；队列必须大于 batch size 以留出任务提交空间 |
 | 采样 / 过滤 | 训练 `n_samples=8`、最小有效组 8（8/8 有效），评估 `n_samples=8`，使用示例的 `filter_function` 过滤同奖励组 |
@@ -46,8 +47,10 @@ Slurm scheduler 再申请一个 8 GPU 节点。actor 使用 8 个 worker，rollo
 - `arena.yaml` 仅放 `econfig` 中的数据选择：Streams、Harness、reward 版本、混合权重、
   数据集级环境变量。凭据单独保管。
 
-RL、过滤、优化器超参、SGLang 显存比例（0.7）及保存恢复策略默认沿用参考实验
-`main-r3-20261016/train.yaml`；batch、采样数、并发、队列和 graph 上限使用上表指定值。
+RL、过滤、优化器超参及保存恢复策略参考实验 `main-r3-20261016/train.yaml`。
+当前训练 batch 为 8、采样为 8/8、组并发为 8，队列为 128；
+SGLang 请求和 decode graph 上限通过 YAML 自动计算为 64。
+`mem_fraction_static=0.5` 为训练后恢复 KV cache 留出显存余量。
 其他差异包括约定的模型、单机并行、R3/MTP
 关闭、主机内存、W&B 自动发现及 Qwen3.5 兼容设置：CPU staging 使用 precision-aware
 optimizer，chunked loss 不计算 entropy 梯度，prefill graph 关闭，请求总 token 上限
@@ -96,6 +99,21 @@ YAML 插值、AReaL 结构化配置加载及 Arena 数据校验；未重启现�
 当前 Megatron 路径还会将 `n_mbs_divisor` 按 PP 大小重设：本模板保留配置
 值 8，但 PP1 下该路径实际使用 1。`n_mbs` 不显式配置，使用 AReaL 默认下限 1，
 由 `max_tokens_per_mb=262144` 与实际样本长度决定每步微批数，actor/ref 均如此。
+
+2026-11-03 验证：`qwen35-verified/native-b8-mem05-20261103-1425` 使用本页当前配置，
+controller/actor/rollout 作业分别为 `990806` / `990807` / `990808`，运行于 `rsi` reservation。
+已完成两个训练 step（16:12:50、17:17:17），覆盖 PPO 更新、包含优化器的恢复 checkpoint、
+AWEX 权重同步，以及 KV cache 恢复后继续 rollout。尚未验证长时间训练稳定性。
+日志位于 AReaL 默认目录：
+`/storage/openpsi/experiments/logs/<user>/qwen35-verified/native-b8-mem05-20261103-1425/`。
+
+所用 AReaL 必须包含 AWEX 视觉缓存接口兼容修复：清理缓存时兼容旧的
+`sglang.srt.managers.mm_utils.embedding_cache` 和当前镜像中的
+`sglang.srt.managers.mm_schedule.embedding_cache`。即使任务只有文本，阶段切换也会执行此清理。
+此前直接读取旧字段会使推理进程在释放 KV cache 时退出；改成 0.5 还避免了本次环境下
+训练后恢复 KV cache 的 OOM。单独完成启动或一次空载释放/恢复不能替代完整训练切换验证。
+
+以下为此前配置的历史验证记录，参数以本页顶部表格和 `params.yaml` 为准。
 
 2026-10-30 已用此前请求上限 384、graph 配置上限 512 的版本启动验证：controller `990042`、actor `990043`、rollout `990044`。
 运行接口确认请求上限 384、实际 decode capture 最大 batch 384、graph 显存约 1.18 GiB/卡，

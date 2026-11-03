@@ -149,7 +149,7 @@ sglang:
   chunked_prefill_size: 8192
   # Resolved by OmegaConf in the controller; integers remain valid overrides.
   max_running_requests: ${mul:${rollout.max_concurrent_rollouts},${gconfig.n_samples}}
-  mem_fraction_static: 0.7
+  mem_fraction_static: 0.5  # Leave room for KV restore after colocated training.
   # The selected SGLang build's breakable prefill graph rejects memory saver.
   # Keep decode graphs enabled; disable only the incompatible prefill phase.
   disable_cuda_graph: false
